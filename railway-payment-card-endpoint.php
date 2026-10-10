@@ -117,7 +117,7 @@ try {
             }elseif(($httpResult['funding']['inventory_complete']??false)===true&&
                     (($httpResult['funding']['verification_status']??'')==='NONE'||
                      (($httpResult['funding']['card_credential_count']??null)===0&&
-                      ($httpResult['funding']['wallet_reconcile_stage']??'')==='business_wallet_card_not_observed'))){
+                      ($httpResult['funding']['wallet_reconcile_stage']??'')==='saved_card_identity_not_observed'))){
                 $review=$vault->reconcile($id,$profile,$account,$expected,$httpResult['funding']);
                 if(isset($review['retry_review']))$httpResult=array_replace($httpResult,[
                     'code'=>'CARD_RECONCILE_NO_METHOD','retry_review'=>$review['retry_review']]);
