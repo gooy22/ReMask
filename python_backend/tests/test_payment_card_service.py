@@ -224,6 +224,34 @@ class CardServiceTests(unittest.IsolatedAsyncioTestCase):
         con.close()
         self.assertEqual(phases,[('REVIEWED_EMPTY',),('LINKED',)])
 
+    async def test_saved_card_identity_exists_global_but_unlinked_cannot_replay(self):
+        import sqlite3, time
+        from app.payment_card_http import SAVE_DOC_ID
+        self.web.lose_verification=True
+        await self.call()
+        self.web.lose_verification=False
+        self.web.saved=False
+        original=self.web.graphql
+        async def noncard_but_identity_exists(doc, variables, **kwargs):
+            reply=await original(doc,variables,**kwargs)
+            if doc=='24871928132404465':
+                reply['data']['payment_account']['billing_payment_methods']=[
+                    {'credential':{'id':'unrelated-noncard',
+                                   '__typename':'PaymentPaypalBillingAgreement'}}]
+            return reply
+        self.web.graphql=noncard_but_identity_exists
+        con=sqlite3.connect(self.state.path)
+        con.execute('UPDATE card_http_intents SET updated_at=?',(int(time.time())-240,))
+        con.commit();con.close()
+        self.web.calls.clear()
+        result=await self.call({**self.payload,'attempt_id':'c'*24,
+                                'reviewed_attempt_id':'b'*24})
+        self.assertEqual(result['status'],'SUBMITTED_UNVERIFIED')
+        self.assertEqual(result['verification_stage'],'saved_card_identity_observed_but_not_linked')
+        self.assertNotIn(SAVE_DOC_ID,[c[0] for c in self.web.calls])
+        pending=await CardIntentLedger(self.state.path).pending('15',ACCOUNT)
+        self.assertEqual(pending['attempt_id'],'b'*24)
+
     async def test_reviewed_noncard_requires_business_wallet_response(self):
         import sqlite3, time
         from app.payment_card_http import SAVE_DOC_ID
