@@ -79,7 +79,7 @@ def _bm_scopes(payload):
 
 
 async def read_business_inventory(web, expected=''):
-    rows, complete, diagnostics = {}, False, []
+    rows, complete, diagnostics, create_eligible = {}, False, [], None
     if expected:
         payload = await execute(web, 'CONFIG', business=expected)
         diag = diagnostic('CONFIG', payload)
@@ -95,16 +95,27 @@ async def read_business_inventory(web, expected=''):
         variables['fetchNumberForBusinessScopes'] = count
         payload = await execute(web, 'READ_BM', variables=variables)
         found, complete, more = _bm_scopes(payload)
+        # The current Meta scoping response may explicitly deny creating a
+        # new Business Portfolio. Only a literal boolean is authoritative;
+        # missing/null/complex values cannot be construed as permission.
+        data = payload.get('data') if isinstance(payload, dict) else None
+        viewer = data.get('viewer') if isinstance(data, dict) else None
+        scoping = viewer.get('meta_business_scoping') if isinstance(viewer, dict) else None
+        flag = scoping.get('can_create_business_portfolio') if isinstance(scoping, dict) else None
+        create_eligible = flag if type(flag) is bool and not (payload.get('errors') or payload.get('error')) else None
         # Each request is a fresh full prefix, not a cursor page. Do not merge
         # identities that disappeared between responses into a complete result.
         rows = found
         diag = diagnostic('READ_BM', payload)
-        diag.update(business_ids=sorted(found), complete=complete, requested_count=count)
+        diag.update(business_ids=sorted(found), complete=complete, requested_count=count,
+                    can_create_business_portfolio=create_eligible)
         diagnostics.append(diag)
         log.info('BM static inventory expected=%s verification=%s', expected, json.dumps(diag, separators=(',', ':')))
         if complete or not more or expected in rows:
             break
-    return {'rows': rows, 'complete': complete, 'source': 'static_http_business_scopes', 'diagnostics': diagnostics}
+    return {'rows': rows, 'complete': complete, 'source': 'static_http_business_scopes',
+            'can_create_business_portfolio': create_eligible if complete else None,
+            'diagnostics': diagnostics}
 
 
 async def read_ad_account_inventory(web, business, name, expected=''):
