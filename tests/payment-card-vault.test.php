@@ -386,6 +386,7 @@ try{
     foreach([
         ['wallet_reconcile_stage'=>'business_wallet_read_unavailable'],
         ['wallet_reconcile_stage'=>'business_wallet_card_saved_not_attached_to_rk'],
+        ['wallet_reconcile_stage'=>'saved_card_identity_observed_but_not_linked'],
         ['card_credential_count'=>1],
         ['inventory_complete'=>false],
         ['payment_methods'=>[['type'=>'Visa','last4'=>'1111']]]
