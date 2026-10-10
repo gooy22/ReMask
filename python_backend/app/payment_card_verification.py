@@ -55,7 +55,7 @@ def sdc_candidate_proof(payload, credential_id, brand, last4):
             return base
         if credential.get('__typename') != 'ExternalCreditCard':
             continue
-        if credential.get('card_association_name', '').strip().lower() == brand.lower() and credential.get('last_four_digits') == last4:
+        if str(credential.get('card_association_name') or '').strip().lower() == brand.lower() and credential.get('last_four_digits') == last4:
             found.append((row, credential))
     if len(found) > 1:
         return base
