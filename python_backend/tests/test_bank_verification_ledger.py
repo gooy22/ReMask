@@ -26,6 +26,7 @@ class BankVerificationLedgerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len({x['attempt_id'] for x in values}), 1)
         self.assertTrue(all(x['same_card'] for x in values))
         first = values[0]['attempt_id']
+        self.assertTrue(await self.ledger.mark(first, 'REQUEST_SENT'))
         self.assertTrue(await self.ledger.mark(first, 'RESULT_UNKNOWN'))
         self.assertFalse(await self.ledger.mark(first, 'REQUEST_SENT'))
         replay = await BankVerificationLedger(self.db).reserve(**self.kwargs)
