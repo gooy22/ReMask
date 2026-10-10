@@ -760,6 +760,34 @@ async def run_verification_http_contract_audit() -> None:
                   'relay_operations': result.get('verification_relay_operations', [])}
         log.warning('verification HTTP audit profile=%s account=%s report=%s',
                     profile, account, json.dumps(report, separators=(',', ':'))[:12000])
+        methods = result.get('payment_methods_probe') or {}
+        task_types = [{'card_type': row.get('type'),
+                       'last4': row.get('last4'),
+                       'tasks': row.get('verification_tasks', []),
+                       'confirmation': row.get('card_confirmation_status')}
+                      for row in methods.get('payment_methods', [])
+                      if isinstance(row, dict)]
+        log.warning('verification HTTP task evidence profile=%s account=%s cards=%s',
+                    profile, account, json.dumps(task_types[:8], separators=(',', ':')))
+        sources = [row for row in result.get('modules', []) if
+                   isinstance(row, dict) and isinstance(row.get('name'), str)]
+        focus = ('BillingThreeDSVerificationPageViewManager.react',
+                 'BillingRiskVerifySDCPageViewManager.react',
+                 'BillingGeneratedPaymentRiskMAIBABridge.react',
+                 'useBillingRecordStandardCVCOAddFundsOutcomeMutation',
+                 'BillingThreeDSStatusEffectQuery.graphql')
+        log.warning('verification HTTP source names profile=%s account=%s names=%s',
+                    profile, account, json.dumps(sorted(row['name'] for row in sources
+                        if any(term in row['name'].lower() for term in
+                               ('risk', 'verify', 'verification', 'threeds', 'cvco', 'sdc', 'otp')))[:150]))
+        for module in sources:
+            if module['name'] in focus and isinstance(module.get('source'), str):
+                # CDN modules are public static JS, not session HTML or network
+                # responses. Never expose payment fields, auth tokens or queries.
+                body = module['source']
+                log.warning('verification HTTP public JS profile=%s module=%s sha256=%s bytes=%d body=%s',
+                    profile, module['name'], module.get('sha256'), len(body.encode()),
+                    body[:10000])
     except Exception as exc:
         # Never print source/HTTP exception strings; they may include cookies.
         log.warning('verification HTTP audit failed profile=%s account=%s type=%s code=%s',
