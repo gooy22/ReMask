@@ -218,11 +218,18 @@ Neither exceptions nor responses may export token/PAN/CVV/bank parameters.
                                               business_id=business_id), account, business_id=business_id,
                                               account_evidence=evidence)
         result = confirm_saved_card(saved, verified, business_id=business_id)
-        if result.get('status') != 'LINKED':
+        if result.get('status') == 'VERIFYING':
             verified = await complete_methods(web, verified, business_id=business_id)
             result = confirm_saved_card(saved, verified, business_id=business_id)
-        if result.get('status') == 'LINKED':
-            stage('COMMIT_LINKED')
+        logging.getLogger('remask.payment_card').info(
+            'card exact post-save account=%s methods=%s complete=%s cards=%s '
+            'status=%s reason=%s',
+            account, verified.get('code'), verified.get('inventory_complete'),
+            len(verified.get('payment_methods', [])), result.get('status'),
+            result.get('verification_stage', 'confirmed'))
+        if result.get('status') in {'LINKED', 'ACTION_REQUIRED'}:
+            if result['status'] == 'LINKED':
+                stage('COMMIT_LINKED')
             result['funding'] = verified
         return {**base, **result}
     except BaseException as exc:
