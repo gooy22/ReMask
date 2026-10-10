@@ -3,11 +3,31 @@ from dataclasses import replace
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from app.payment_card_http import SaveContext, save_card_http, KEY_DOC_ID, SAVE_DOC_ID
+from app.payment_card_http import SaveContext, save_card_http, save_error_diagnostic, KEY_DOC_ID, SAVE_DOC_ID
 from app.payment_card_input import build_client_info
 from app.payment_card_requirements import BIN_DOC_ID, TAX_DOC_ID, COUNTRY_BIN_DOC_ID
 from tests.test_payment_ptt import VALUES
 from tests.test_static_payment_card import ACCOUNT, BUSINESS, PAYMENT, NODE, CREDENTIAL, save_payload, payment_node
+
+
+class SaveErrorDiagnosticTests(unittest.TestCase):
+    def test_display_reason_removes_card_fields_tokens_and_bank_urls(self):
+        import json
+        token='secretEncryptedPaymentToken123456789'
+        payload={'errors':[{'message':'Save rejected', 'extensions':{'description':
+            'Invalid card '+VALUES['number']+' CVV='+VALUES['cvv']+' holder '+VALUES['holder']+
+            ' contact private@example.com https://bank.example/auth?otp=secret '+token,
+            'extra_data':{'verification_url':'private-bank-url'}}}]}
+        result=save_error_diagnostic(payload,VALUES,token)
+        serialized=json.dumps(result)
+        self.assertIn('Invalid card',serialized)
+        for secret in (VALUES['number'],VALUES['cvv'],VALUES['holder'],token,'private@example.com','bank.example','private-bank-url'):
+            self.assertNotIn(secret,serialized)
+
+    def test_missing_huge_or_structured_errors_do_not_export_response_data(self):
+        for payload in ({'data':{'private':'bank parameters'}}, {'errors':[{'message':'x'*4001}]},
+                        {'errors':[{'message':'{"private":"bank parameters"}'}]}):
+            self.assertEqual(save_error_diagnostic(payload,VALUES,'token'),{})
 
 
 def read_account():

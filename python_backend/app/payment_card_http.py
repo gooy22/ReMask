@@ -20,6 +20,44 @@ KEY_DOC_ID = '23994203586844376'
 SAVE_DOC_ID = '28619313357728847'
 
 
+def save_error_diagnostic(payload, values, token):
+    """Keep only bounded display errors with card and bank secrets removed.
+
+    Never inspect verification parameters, extra_data, URLs or response data.
+    The user needs Meta's reason for rejecting Save, not the response body.
+    """
+    import html
+    import re
+    if not isinstance(payload, dict) or not isinstance(payload.get('errors'), list):
+        return {}
+    secrets = [token] + [v for v in values.values() if isinstance(v, str) and v]
+    messages = []
+    for error in payload['errors'][:10]:
+        if not isinstance(error, dict):
+            continue
+        extension = error.get('extensions')
+        for source in (extension if isinstance(extension, dict) else {}, error):
+            for key in ('error_user_title', 'error_user_msg', 'summary', 'description', 'message'):
+                raw = source.get(key)
+                if not isinstance(raw, str) or not raw.strip() or len(raw) > 4000:
+                    continue
+                value = html.unescape(raw)
+                for secret in sorted(secrets, key=len, reverse=True):
+                    value = value.replace(secret, '[removed]')
+                value = re.sub(r'<[^>]*>', '', value)
+                value = re.sub(r'https?://\S+|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}', '[removed]', value)
+                value = re.sub(r'\b(?:token|password|nonce|cvv|csc|otp|fb_dtsg|lsd)\s*[:=]\s*\S+', '[removed]', value, flags=re.I)
+                value = re.sub(r'[A-Za-z0-9_+/=-]{24,}|\d+', '[removed]', value)
+                if any(mark in value for mark in ('{', '}', '["', '$e2ee')):
+                    continue
+                value = ' '.join(value.split())[:320]
+                if value and value not in messages:
+                    messages.append(value)
+                if len(messages) >= 4:
+                    return {'meta_error_messages': messages}
+    return {'meta_error_messages': messages} if messages else {}
+
+
 def number_brand(number):
     import re
     return _brand('visa' if number.startswith('4') else 'amex' if re.match(r'^3[47]', number)
@@ -167,8 +205,12 @@ Neither exceptions nor responses may export token/PAN/CVV/bank parameters.
                        else 'discover' if re.match(r'^(?:6011|65|64[4-9])', number) else '')
         saved = save_response_proof(payload, account, account_evidence=evidence,
                                     expected_card={'type': brand, 'last4': values['number'][-4:]})
+        saved.update(save_error_diagnostic(payload, values, token))
         logging.getLogger('remask.payment_card').info('card Save response account=%s stage=%s meta_error_codes=%s',
             account, saved.get('save_response_stage', saved['status']), saved.get('meta_error_codes', []))
+        if saved.get('meta_error_messages'):
+            logging.getLogger('remask.payment_card').info('card Save error account=%s messages=%s',
+                account, saved['meta_error_messages'])
         if saved['status'] != 'VERIFYING':
             return {**base, **saved}
         stage('VERIFY_EXACT_CREDENTIAL')

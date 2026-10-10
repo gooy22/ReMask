@@ -135,6 +135,7 @@ function paymentCardMessage(result){
   return (messages[result.code]||result.code||'Не удалось подтвердить результат')+country+availability+countryMismatch+currentCountry+inventory+
     readFailure+
     (errors.length?' Коды ошибки Meta: '+errors.join(', ')+'.':'')+
+    (Array.isArray(result.meta_error_messages)?' '+result.meta_error_messages.filter(s=>typeof s==='string'&&s.length<=320).slice(0,4).join(' · '):'')+
     (result.missing_fields?.length?' Поля: '+result.missing_fields.map(f=>names[f]||f).join(', ')+'.':'')+
     (fields.length?' Поля формы Meta: '+fields.join(', ')+'.':'');
 }

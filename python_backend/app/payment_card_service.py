@@ -74,7 +74,7 @@ async def profile_payment_card_http(resolver, profile, payload, *, state=None):
                 retained = {**base, 'status': 'SUBMITTED_UNVERIFIED', 'submitted': True,
                             'retry_blocked': True, 'code': 'CARD_BINDING_RECONCILE_REQUIRED'}
                 saved = json.loads(pending['result'])
-                for key in ('save_response_stage','meta_error_codes'):
+                for key in ('save_response_stage','meta_error_codes','meta_error_messages'):
                     if key in saved:
                         retained[key] = saved[key]
                 if pending['card_id'] != card_id or not (saved.get('credential') or saved.get('preexisting_credential_ids') is not None):
