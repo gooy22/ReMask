@@ -456,7 +456,15 @@ async function showFunding(restored=null){
   },false));
   try{
     await refreshCards(restored?.cardId||'');
-    if(restored)$('paymentCardProgress').textContent='Группа из '+rows.length+' РК восстановлена. Состояния загружены с сервера. Для новых привязок введите CVV; незавершённые отправки не повторяются.';
+    // A previously submitted Save needs read-only confirmation on reopen.
+    // Never require CVV or trigger a second Save just to check its result.
+    const existing=targetPlan();
+    const selectedCard=cards.find(card=>card.id===select.value);
+    if(selectedCard&&existing.pending.length){
+      reviews=await reconcilePaymentCard(existing.pending,selectedCard,container);
+      await refreshCards(selectedCard.id);
+    }
+    if(restored)$('paymentCardProgress').textContent='Группа из '+rows.length+' РК восстановлена. Проверка отправленных карт не повторяет сохранение.';
   }catch(e){select.innerHTML='<option value="">Список карт недоступен</option>';const line=document.createElement('div');line.className='ws-result bad';line.textContent=e.message;container.appendChild(line);}
 }
 
