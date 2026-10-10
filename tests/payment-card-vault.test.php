@@ -376,7 +376,7 @@ try{
         'verification_status'=>'UNVERIFIED','payment_methods'=>[],
         'all_credential_ids'=>['unrelated-paypal-node'],'card_credential_count'=>0,
         'non_card_credential_count'=>1,
-        'wallet_reconcile_stage'=>'business_wallet_card_not_observed'
+        'wallet_reconcile_stage'=>'saved_card_identity_not_observed'
     ];
     $noncardReview=$vault->reconcile($card['id'],'Non-card wallet','123456789',
         $noncardOld,$noncardProof);
