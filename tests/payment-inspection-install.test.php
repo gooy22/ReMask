@@ -38,6 +38,7 @@ PHP);
         file_put_contents($directory.'/html/scripts/workspace.js', <<<'JS'
 function fundingStatusValue(f){return 'READY';}
 function fundingCell(f){return 'old';}
+function fundingRow(row){return fundingCell(row.funding);}
 function closeModal(){return;}
 async function showFunding(){return;}
 function annotateDeliveryRows(rows){return rows;}
