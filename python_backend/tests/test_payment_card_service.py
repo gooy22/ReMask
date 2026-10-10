@@ -109,6 +109,29 @@ class CardServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['status'],'LINKED')
         self.assertEqual([x[0] for x in self.web.calls],['28797973873175785','28814526004898205','28797973873175785','24871928132404465'])
 
+    async def test_bank_approved_alias_credential_reconciles_without_second_save(self):
+        # Saved Meta card ID can differ from its separately returned credential_id.
+        self.web.bank_required=True
+        self.assertEqual((await self.call())['status'], 'ACTION_REQUIRED')
+        self.web.bank_required=False
+        original=self.web.graphql
+        async def credential_alias(doc, variables, **kwargs):
+            result=await original(doc, variables, **kwargs)
+            if doc=='28814526004898205':
+                rows=result['data']['billable_account_by_asset_id']['billing_payment_account']['billing_payment_methods_allowlist_customized']
+                for row in rows:
+                    row['credential']['id']='ent-card-credential'
+            if doc=='24871928132404465':
+                for row in result['data']['payment_account']['billing_payment_methods']:
+                    row['credential']['id']='ent-card-credential'
+            return result
+        self.web.graphql=credential_alias
+        self.web.calls.clear()
+        result=await self.call({'operation':'reconcile','card_id':self.payload['card_id']})
+        self.assertEqual(result['status'],'LINKED')
+        self.assertTrue(result['card_linked'])
+        self.assertNotIn('28619313357728847',[c[0] for c in self.web.calls])
+
     async def test_failed_reconcile_reports_read_failure_without_replaying_save(self):
         self.web.lose_save=True
         await self.call()
