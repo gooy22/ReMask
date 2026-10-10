@@ -856,6 +856,22 @@ async def run_verification_http_contract_audit() -> None:
                     audit_variant_sources=True)
             log.info('verification HTTP public contract source profile=%s account=%s modules=%s',
                 profile, account, result.get('module_count_total', 0))
+            # Explicitly opted-in, PUBLIC CDN JS module definitions only;
+            # no responses containing card data, cookies or bank parameters.
+            public_names = {
+                'BillingRiskUtils',
+                'BillingSDCAuthState',
+                'BillingTrySDCAuthState',
+                'BillingSDCAuthButton.react',
+                'BillingSDCAuthScreen.react',
+                'BillingRiskVerifySDCPageViewManager.react',
+                'BillingRiskVerifySDCPage.react',
+            }
+            for module in result.get('modules', []):
+                if (isinstance(module, dict) and module.get('name') in public_names
+                        and isinstance(module.get('source'), str)):
+                    log.warning('verification public contract module=%s source=%s',
+                                module['name'], module['source'][:8500])
     except Exception as exc:
         log.warning('verification HTTP check profile=%s account=%s failed_type=%s',
                     profile, account, type(exc).__name__)
