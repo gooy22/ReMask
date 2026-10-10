@@ -772,14 +772,19 @@ async def run_verification_http_contract_audit() -> None:
         sources = [row for row in result.get('modules', []) if
                    isinstance(row, dict) and isinstance(row.get('name'), str)]
         focus = ('BillingThreeDSVerificationPageViewManager.react',
+                 'BillingThreeDSVerificationPage.react',
+                 'BillingThreeDSStatusEffect.react',
+                 'BillingInit3DSPageViewManager.react',
                  'BillingRiskVerifySDCPageViewManager.react',
                  'BillingGeneratedPaymentRiskMAIBABridge.react',
                  'useBillingRecordStandardCVCOAddFundsOutcomeMutation',
-                 'BillingThreeDSStatusEffectQuery.graphql')
+                 'CreditCardVerificationUtils',
+                 'BillingRiskCheckUtils',
+                 'UserRiskReviewCreditCardVerificationModal.react')
         log.warning('verification HTTP source names profile=%s account=%s names=%s',
                     profile, account, json.dumps(sorted(row['name'] for row in sources
                         if any(term in row['name'].lower() for term in
-                               ('risk', 'verify', 'verification', 'threeds', 'cvco', 'sdc', 'otp')))[:150]))
+                               ('risk', 'verify', 'verification', 'threeds', 'init3ds', 'cvco', 'sdc', 'otp', 'authoriz', 'preauth', 'credential')))[:150]))
         for module in sources:
             if module['name'] in focus and isinstance(module.get('source'), str):
                 # CDN modules are public static JS, not session HTML or network
