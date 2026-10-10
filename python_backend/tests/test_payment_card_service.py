@@ -110,6 +110,18 @@ class CardServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['status'],'LINKED')
         self.assertEqual([x[0] for x in self.web.calls],['28797973873175785','28814526004898205','28797973873175785','24871928132404465'])
 
+    async def test_failed_reconcile_reports_read_failure_without_replaying_save(self):
+        self.web.lose_save=True
+        await self.call()
+        self.web.calls.clear()
+        self.session.facebook_web.side_effect=TimeoutError('private response must not be exposed')
+        result=await self.call({'operation':'reconcile','card_id':self.payload['card_id']})
+        self.assertEqual(result['status'],'SUBMITTED_UNVERIFIED')
+        self.assertTrue(result['retry_blocked'])
+        self.assertEqual(result['reconcile_error_code'],'PAYMENT_HTTP_TIMEOUT')
+        self.assertNotIn('private response',json.dumps(result))
+        self.assertEqual(self.web.calls,[])
+
     async def test_lost_save_reply_recovers_nonprimary_card_from_unfiltered_collection(self):
         self.web.lose_save=True
         await self.call()

@@ -130,7 +130,10 @@ function paymentCardMessage(result){
     ?' Полный список Meta проверен: способов оплаты '+funding.all_credential_ids.length+'.'
     :funding?.code&&/^PAYMENT_[A-Z_]{1,80}$/.test(funding.code)?' Проверка списка: '+funding.code+'.':'';
   const errors=Array.isArray(result.meta_error_codes)?result.meta_error_codes.filter(n=>Number.isInteger(n)&&n>=0&&n<=999999999):[];
+  const readFailure=['PAYMENT_HTTP_TIMEOUT','PAYMENT_HTTP_UNAVAILABLE','CHECKPOINT_REQUIRED','BUSINESS_LOGIN_GATE','SESSION_EXPIRED'].includes(result.reconcile_error_code)
+    ?' Текущая проверка не завершена: '+result.reconcile_error_code+'.':'';
   return (messages[result.code]||result.code||'Не удалось подтвердить результат')+country+availability+countryMismatch+currentCountry+inventory+
+    readFailure+
     (errors.length?' Коды ошибки Meta: '+errors.join(', ')+'.':'')+
     (result.missing_fields?.length?' Поля: '+result.missing_fields.map(f=>names[f]||f).join(', ')+'.':'')+
     (fields.length?' Поля формы Meta: '+fields.join(', ')+'.':'');

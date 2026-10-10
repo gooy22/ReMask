@@ -84,7 +84,7 @@ async def profile_payment_card_http(resolver, profile, payload, *, state=None):
                 if not asset:
                     return retained
                 profile_context = await resolver.resolve(profile)
-                async with ProfileSession(profile_context) as session:
+                async with ProfileSession(profile_context, timeout_seconds=30) as session:
                     web = await session.facebook_web()
                     methods = await inspect_methods(web, account=target, business_id=asset['business_id'])
                     methods = await complete_methods(web, methods, business_id=asset['business_id'])
@@ -136,7 +136,7 @@ async def profile_payment_card_http(resolver, profile, payload, *, state=None):
             profile_context = await resolver.resolve(profile)
             if asset['business_id'] == str(profile_context.cookies.get('c_user') or ''):
                 return {**base, 'code': 'PERSONAL_AD_ACCOUNT_EXCLUDED'}
-            async with ProfileSession(profile_context) as session:
+            async with ProfileSession(profile_context, timeout_seconds=30) as session:
                 web = await session.facebook_web()
                 business = asset['business_id']
                 evidence = account_proof(await execute(web, 'READ_ACCOUNT', account=target,
@@ -175,13 +175,26 @@ async def profile_payment_card_http(resolver, profile, payload, *, state=None):
                     await state.set_payment_link_state(profile, target, True, source='card_http_exact_credential')
                 return {**result, 'profile_id':profile}
     except Exception as exc:
+        auth = private_auth_error(exc)
         if isinstance(result, dict) and result.get('submitted') is True:
             return {**base, **result}
         pending = await ledger.pending(profile, target) if ledger is not None else None
         if pending:
+            # A failed read must not conceal an auth/transport failure behind
+            # the previous Save's unknown result. Retain the submit guard.
+            import logging
+            cause = getattr(exc, '__cause__', None)
+            read_code = auth.code if auth else ('PAYMENT_HTTP_TIMEOUT'
+                if isinstance(exc, TimeoutError) or isinstance(cause, TimeoutError)
+                else 'PAYMENT_HTTP_UNAVAILABLE')
+            stage = getattr(exc, 'transport_stage', '')
+            stage = stage if stage in {'business_auth_precheck', 'graphql_post', 'graphql_response'} else 'payment_read'
+            logging.getLogger('remask.payment_card').warning(
+                'card reconcile failed account=%s code=%s stage=%s exception=%s cause=%s',
+                target, read_code, stage, type(exc).__name__, type(cause).__name__)
             return {**base, 'status':'SUBMITTED_UNVERIFIED', 'submitted':True,
-                    'retry_blocked':True, 'code':'CARD_SAVE_RESULT_UNKNOWN'}
-        auth = private_auth_error(exc)
+                    'retry_blocked':True, 'code':'CARD_SAVE_RESULT_UNKNOWN',
+                    'reconcile_error_code':read_code, 'reconcile_stage':stage}
         allowed = {'CARD_DATA_INVALID', 'CARD_CLIENT_CONTEXT_REQUIRED', 'CARD_SETUP_SCOPE_UNVERIFIED',
                    'PAYMENT_ACCOUNT_SETUP_REQUIRED', 'CARD_BINDING_RECONCILE_REQUIRED'}
         code = str(exc) if isinstance(exc, ValueError) and str(exc) in allowed else 'PAYMENT_HTTP_TIMEOUT' if isinstance(exc, TimeoutError) else 'CARD_HTTP_UNAVAILABLE'
