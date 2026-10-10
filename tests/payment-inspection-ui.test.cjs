@@ -219,7 +219,9 @@ vm.createContext(sandbox);vm.runInContext(fs.readFileSync('railway-payment-inspe
   bindings=[{profile:rows[0].profile,account_id:'123456789',card_id:card.id,status:'IN_PROGRESS'}];
   requests=[];elements.paymentCardCvv.value='';await sandbox.showFunding(recovered);
   assert.equal(elements.paymentCardSelect.value,card.id);
-  assert.deepEqual(requests.map(r=>r.body.action),['list']);
+  assert.deepEqual(requests.map(r=>r.body.action),['list','reconcile','list'],
+    'reopening an unfinished card Save must recheck the selected RK read-only, without replaying Save');
+  assert.ok(requests.every(r=>r.body.cvv===undefined&&r.body.number===undefined));
   assert.ok(elements.paymentCardProgress.textContent.includes('восстановлена'));
   assert.equal(elements.paymentCardBind.textContent,'Продолжить привязку — 1 РК');
   assert.equal(elements.paymentCardCvv.value,'');
