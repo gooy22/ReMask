@@ -10,6 +10,33 @@ DECISION_DOC = '28210215908604615'
 UPDATE_DOC = '29520642304190454'
 INITIALIZE_DOC = '40043022898629616'
 
+def _options(options):
+    return {r['value'] for r in options if isinstance(r, dict)
+            and isinstance(r.get('value'), str) and r['value']} if isinstance(options, list) else set()
+
+
+def _current_timezone(account):
+    """Select only exact account timezone/option evidence; never fuzzy match."""
+    info = account.get('timezone_info')
+    if not isinstance(info, dict):
+        return None
+    options = account.get('supported_timezone_options')
+    values = _options(options)
+    zone = info.get('timezone')
+    if isinstance(zone, str) and zone:
+        if zone in values:
+            return zone
+        alias = {'Europe/Kiev':'Europe/Kyiv','Europe/Kyiv':'Europe/Kiev'}.get(zone)
+        return alias if alias in values else zone
+    label = info.get('display_name')
+    if not isinstance(label, str) or not label.strip() or not isinstance(options, list):
+        return None
+    matches = {row['value'] for row in options if isinstance(row, dict)
+               and isinstance(row.get('value'), str) and row['value']
+               and isinstance(row.get('label'), str)
+               and ' '.join(row['label'].split()).casefold() == ' '.join(label.split()).casefold()}
+    return next(iter(matches)) if len(matches)==1 else None
+
 
 async def _initialize_country(web, *, target, business_id, evidence, payload, desired, setup):
     """Use the observed first-setup sender only for a scoped, empty account."""
@@ -39,27 +66,54 @@ async def _initialize_country(web, *, target, business_id, evidence, payload, de
     config = configs.get('country_currency_timezone') if isinstance(configs, dict) else None
     if not isinstance(config, dict) or config.get('can_select_tax_country') is not True:
         return {'code':'CARD_COUNTRY_INITIAL_SETUP_UNCONFIRMED'}
-    if (not isinstance(context, dict) or not isinstance(context['currency'], str)
-            or not re.fullmatch(r'[A-Z]{3}', context['currency'])
-            or not isinstance(context['timezone'], str) or not context['timezone']
-            or setup.get('currency', context['currency']) != context['currency']):
-        return {'code':'CARD_COUNTRY_UPDATE_OPTIONS_UNCONFIRMED'}
-    for key, selected in [('supported_country_options', desired),
-            ('supported_currency_options', context['currency']),
-            ('supported_timezone_options', context['timezone'])]:
-        options = account.get(key)
-        if not isinstance(options, list) or selected not in [x.get('value') for x in options if isinstance(x, dict)]:
-            return {'code':'CARD_COUNTRY_UPDATE_OPTIONS_UNCONFIRMED'}
+
+    def unknown(stage):
+        logging.getLogger('remask.payment_card').info(
+            'card country initial options account=%s stage=%s', target, stage)
+        return {'code':'CARD_COUNTRY_UPDATE_OPTIONS_UNCONFIRMED','setup_stage':stage}
+
+    if not isinstance(context, dict):
+        return unknown('current_context_missing')
+    country_options = _options(account.get('supported_country_options'))
+    currency_options = _options(account.get('supported_currency_options'))
+    timezone_options = _options(account.get('supported_timezone_options'))
+    if desired not in country_options:
+        return unknown('country_not_in_options')
+    original_currency = context.get('currency')
+    if original_currency not in (None, '') and (
+            not isinstance(original_currency, str) or not re.fullmatch(r'[A-Z]{3}', original_currency)):
+        return unknown('current_currency_invalid')
+    currency = original_currency or setup.get('currency')
+    if not isinstance(currency, str) or not re.fullmatch(r'[A-Z]{3}', currency):
+        return unknown('currency_missing')
+    if setup.get('currency', currency) != currency:
+        return unknown('currency_differs_from_existing')
+    if currency not in currency_options:
+        return unknown('currency_not_in_options')
+    original_timezone = context.get('timezone')
+    zone_info = account.get('timezone_info')
+    display = zone_info.get('display_name') if isinstance(zone_info, dict) else None
+    if not original_timezone and isinstance(display, str) and display.strip():
+        return unknown('timezone_display_unmatched')
+    timezone = original_timezone or setup.get('timezone')
+    if not isinstance(timezone, str) or not timezone:
+        return unknown('timezone_missing')
+    if timezone not in timezone_options:
+        alias = {'Europe/Kiev':'Europe/Kyiv','Europe/Kyiv':'Europe/Kiev'}.get(timezone)
+        if alias in timezone_options:
+            timezone = alias
+        else:
+            return unknown('timezone_not_in_options')
     restrictions = account.get('billing_country_currency_restrictions')
     if not isinstance(restrictions, dict):
-        return {'code':'CARD_COUNTRY_UPDATE_OPTIONS_UNCONFIRMED'}
+        return unknown('restrictions_missing')
     for key in ('country_currency', 'currency_country'):
         rows = restrictions.get(key)
         if not isinstance(rows, list) or any(not isinstance(x, dict)
                 or not isinstance(x.get('country'), str) or not isinstance(x.get('currency'), str) for x in rows):
-            return {'code':'CARD_COUNTRY_UPDATE_OPTIONS_UNCONFIRMED'}
-        if any((x['country'] == desired and x['currency'] != context['currency'])
-                if key == 'country_currency' else (x['currency'] == context['currency'] and x['country'] != desired)
+            return unknown('restrictions_incomplete')
+        if any((x['country'] == desired and x['currency'] != currency)
+                if key == 'country_currency' else (x['currency'] == currency and x['country'] != desired)
                 for x in rows):
             return {'code':'CARD_BILLING_COUNTRY_MISMATCH'}
     ownership = methods_proof(await execute(web, 'READ_METHODS', account=target,
@@ -70,7 +124,7 @@ async def _initialize_country(web, *, target, business_id, evidence, payload, de
         return {'code':'CARD_COUNTRY_INITIAL_SETUP_UNCONFIRMED'}
     result = await web.graphql(INITIALIZE_DOC, {'input':{
         'billable_account_payment_legacy_account_id':payment, 'country_code':desired,
-        'currency':context['currency'], 'timezone':context['timezone']}, 'paymentAccountID':payment,
+        'currency':currency, 'timezone':timezone}, 'paymentAccountID':payment,
         'completedTasks':['set_country_currency_timezone'], 'userIntent':'ADD_PAYMENT_METHOD',
         'boostDurationInDays':None, 'dailyBudget':None, 'skipDeferredFragments':True},
         friendly_name='useBillingSetCountryCurrencyMutation', endpoint_url=ENDPOINT,
@@ -109,7 +163,7 @@ async def _initialize_country(web, *, target, business_id, evidence, payload, de
             or fresh_account.get('payment_account_id') != payment
             or fresh_account.get('payment_account_node_id') != evidence['payment_account_node_id']
             or not isinstance(updated, dict) or updated['country'] != desired
-            or updated['currency'] != context['currency'] or updated['timezone'] != context['timezone']):
+            or updated['currency'] != currency or updated['timezone'] != timezone):
         return {'code':'CARD_COUNTRY_UPDATE_VERIFY_PENDING'}
     return {'code':'CARD_COUNTRY_INITIALIZED_CONFIRMED', 'setup_payload':fresh}
 
@@ -119,11 +173,10 @@ def _context(payload, target, payment):
         return None
     account = payload['data']['payment_account']['billable_account']
     tax = account.get('billable_account_tax_info')
-    timezone = account.get('timezone_info')
-    if not isinstance(tax, dict) or not isinstance(timezone, dict):
+    if not isinstance(tax, dict):
         return None
     return {'country':tax.get('business_country_code'), 'currency':account.get('currency'),
-            'timezone':timezone.get('timezone'), 'account':account}
+            'timezone':_current_timezone(account), 'account':account}
 
 
 async def configure_country(web, *, target, business_id, evidence, current_payload, setup):
