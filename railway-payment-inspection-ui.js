@@ -148,7 +148,18 @@ function paymentCardMessage(result){
     save_credential_not_in_rk:'Карта из ответа сохранения пока не обнаружена в способах оплаты этого РК.',
     save_credential_ambiguous:'Meta вернула несколько совпадений для карты; привязка не подтверждена.',
     save_credential_metadata_mismatch:'Данные карты в списке Meta не совпадают с ответом сохранения.',
-    bank_confirmation_pending:'Банк требует дополнительного подтверждения карты.'
+    bank_confirmation_pending:'Банк требует дополнительного подтверждения карты.',
+    business_wallet_save_identity_missing:'Нельзя проверить предыдущую карту: Meta не вернула её точный идентификатор.',
+    business_wallet_scope_unverified:'Meta не подтвердила список платёжных инструментов именно нужного бизнеса.',
+    business_wallet_payment_account_missing:'Meta не показала платёжный аккаунт владельца бизнеса.',
+    business_wallet_same_as_rk:'Родительский платёжный аккаунт совпадает с текущим РК; отдельная карта не найдена.',
+    business_wallet_methods_unavailable:'Meta не вернула проверяемый список способов оплаты бизнеса.',
+    business_wallet_card_ambiguous:'Meta вернула неоднозначные записи этой карты в бизнес-кошельке.',
+    business_wallet_card_not_observed:'Карта не обнаружена в прочитанном списке бизнес-кошелька; отсутствие не подтверждено.',
+    business_wallet_card_metadata_unverified:'Карта в бизнес-кошельке не прошла точную сверку типа и последних цифр.',
+    business_wallet_reports_rk_link_but_rk_methods_missing:'Бизнес-кошелёк показывает связь с РК, но список способов оплаты самого РК её не подтверждает.',
+    business_wallet_card_saved_not_attached_to_rk:'Meta показывает эту карту в платёжном аккаунте бизнеса, но не подтверждает привязку к выбранному РК.',
+    business_wallet_read_unavailable:'Не удалось проверить бизнес-кошелёк Meta; повторное сохранение остаётся заблокированным.'
   };
   const verificationDetail=typeof result.verification_stage==='string'&&
     Object.prototype.hasOwnProperty.call(verificationStages,result.verification_stage)
