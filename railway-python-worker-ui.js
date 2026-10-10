@@ -4125,8 +4125,8 @@ async function pythonWorkerOpenAutoModal() {
   }
 
   const count = document.createElement('input');
-  count.type = 'number'; count.min = '1'; count.max = '20'; count.value = '1';
-  field('Комплектов BM + РК на профиль (1–20)', count);
+  count.type = 'number'; count.min = '1'; count.max = '2'; count.value = '1';
+  field('Комплектов BM + РК на профиль (1–2)', count);
 
   const category = document.createElement('input');
   category.value = 'Digital creator';
@@ -4162,21 +4162,21 @@ async function pythonWorkerOpenAutoModal() {
     timezone.value = String((params.AD_ACCOUNT || {}).timezone_id || 137);
     [count, category, currency, timezone].forEach(function(input) { input.disabled = true; });
     create.textContent = 'Повторить отправку';
-    note.textContent = 'Восстанавливаем прежний Prepare-запрос для профилей ' + profiles.join(', ') + '. Ключ и desired state сохранены; повторная отправка не меняет план.';
+    note.textContent = 'Восстанавливаем Prepare-запрос для профилей ' + profiles.join(', ') + '. Ключ сохранён; worker ограничивает создание максимум двумя BM + двумя РК на профиль.';
   }
 
   function refresh() {
     const n = Number(count.value);
     const totalRk = profiles.length * n;
-    const valid = Number.isInteger(n) && n >= 1 && n <= 20 && totalRk <= 10000
+    const valid = Number.isInteger(n) && n >= 1 && n <= (acceptedRequest ? 20 : 2) && totalRk <= 10000
       && category.value.trim()
       && /^[A-Z]{3}$/.test(currency.value.trim().toUpperCase())
       && Number.isInteger(Number(timezone.value)) && Number(timezone.value) >= 0
       && timezone.value.trim();
     create.disabled = pythonWorkerUiState.busy || !valid;
     status.textContent = valid
-      ? 'Цель: ' + profiles.length + ' проф., ' + n + ' FP + ' + n + ' BM + ' + n + ' РК на профиль (1 BM = 1 РК). Всего комплектов: ' + totalRk + '. Дополняются недостающие объекты и права.'
-      : 'Нужны категория, 1–20 РК на профиль, валюта и часовой пояс.';
+      ? 'Цель: ' + profiles.length + ' проф., ' + Math.min(n, 2) + ' FP + ' + Math.min(n, 2) + ' BM + ' + Math.min(n, 2) + ' РК на профиль (1 BM = 1 РК). Всего комплектов: ' + (profiles.length * Math.min(n, 2)) + '. Дополняются недостающие объекты и права.' + (n > 2 ? ' Прежний запрос ограничен двумя комплектами на профиль.' : '')
+      : 'Нужны категория, 1–2 РК на профиль, валюта и часовой пояс.';
   }
 
   [count, category, currency, timezone].forEach(function(input) {
@@ -4245,7 +4245,7 @@ async function pythonWorkerOpenAutoModal() {
       localStorage.setItem('remask_python_worker_job_v1', jobId);
       localStorage.removeItem(pendingKey);
       pythonWorkerSetText('pythonPwJob', 'Job: ' + jobId);
-      pythonWorkerSetText('pythonPwStatus', 'Prepare: ' + profiles.length + ' проф., target ' + n + ' РК/профиль.');
+      pythonWorkerSetText('pythonPwStatus', 'Prepare: ' + profiles.length + ' проф., target ' + Math.min(n, 2) + ' РК/профиль.');
       pythonWorkerCloseOwnBmModal();
       pythonWorkerPoll().catch(function(error) {
         pythonWorkerSetText('pythonPwStatus', 'Ошибка polling: ' + String(error.message || error));

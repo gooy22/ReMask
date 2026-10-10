@@ -129,6 +129,39 @@ class PreparePlannerTests(unittest.IsolatedAsyncioTestCase):
         desired = PrepareService._desired({})
         self.assertEqual(desired.ad_accounts, 1)
 
+    def test_four_bundle_request_is_capped_to_two_bms_per_profile(self):
+        requested = PrepareService._desired(self._payload(bundles=4))
+        self.assertEqual(requested.ad_accounts, 2)
+        # Direct RK-only plans (no new BM per RK) keep their own limits.
+        rk_only = PrepareService._desired({
+            "desired": {"business": False, "ad_accounts": 4},
+        })
+        self.assertEqual(rk_only.ad_accounts, 4)
+
+    async def test_existing_two_bundles_satisfy_legacy_four_request_without_new_post(self):
+        await self._confirmed_business(self.business_id)
+        await self._confirmed_rk("111111111111111", self.business_id)
+        await self._confirmed_business(self.business_id_2)
+        await self._confirmed_rk("222222222222222", self.business_id_2)
+
+        provisioning = SimpleNamespace(run=AsyncMock())
+        service = PrepareService(self.state, provisioning)
+        result = await service.run(
+            item_id="legacy-prepare-four",
+            profile_id=self.profile_id,
+            context=self.context,
+            session=self.session,
+            payload=self._payload(bundles=4),
+        )
+
+        provisioning.run.assert_not_awaited()
+        self.assertEqual(result["desired"]["ad_accounts"], 2)
+        self.assertEqual(len(result["actual"]["bundles"]), 2)
+        self.assertEqual(
+            {row["business_id"] for row in result["actual"]["bundles"]},
+            {self.business_id, self.business_id_2},
+        )
+
     async def test_fresh_profile_uses_business_page_flow_with_raw_worker_session(self):
         # Runner passes ProfileSession, not MetaTransportRouter. New profiles
         # have no legacy Page; the bundle must still start with its Business.
