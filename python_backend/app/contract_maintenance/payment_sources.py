@@ -422,7 +422,7 @@ async def capture_payment_sources(web, *, account_id, business_id, loader_docume
         if not (name.endswith('_facebookRelayOperation')
                 and re.search(r'Risk|Verif|ThreeDS|SDC|CVCO|NativeOTP', name, re.I)):
             continue
-        ids = re.findall(r'exports\\s*=\\s*["\\'](\\d{5,40})["\\']', row['source'])
+        ids = re.findall(r'exports\s*=\s*"(\d{5,40})"', row['source'])
         if len(ids) == 1:
             verification_ops.append({'name': name, 'doc_id': ids[0],
                 'mutation_candidate': 'Mutation' in name})
