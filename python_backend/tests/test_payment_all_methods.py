@@ -64,6 +64,9 @@ class CompleteMethodsTests(unittest.IsolatedAsyncioTestCase):
         result = await self.read(self.full([{'credential': {'id':'1234567','__typename':'PaymentPaypalBillingAgreement'}}]))
         self.assertTrue(result['inventory_complete'])
         self.assertEqual(result['all_credential_ids'], ['1234567'])
+        self.assertEqual(result['code'], 'PAYMENT_ALL_METHODS_NON_CARD_ONLY')
+        self.assertEqual(result['card_credential_count'], 0)
+        self.assertEqual(result['non_card_credential_count'], 1)
         self.assertNotEqual(result['verification_status'], 'NONE')
 
     async def test_unverified_business_never_dispatches_unfiltered_query(self):
