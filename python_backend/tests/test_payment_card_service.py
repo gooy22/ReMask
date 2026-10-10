@@ -248,6 +248,7 @@ class CardServiceTests(unittest.IsolatedAsyncioTestCase):
                                 'reviewed_attempt_id':'b'*24})
         self.assertEqual(result['status'],'SUBMITTED_UNVERIFIED')
         self.assertEqual(result['verification_stage'],'saved_card_identity_observed_but_not_linked')
+        self.assertEqual(result['code'],'CARD_SAVED_CREDENTIAL_UNLINKED')
         self.assertNotIn(SAVE_DOC_ID,[c[0] for c in self.web.calls])
         pending=await CardIntentLedger(self.state.path).pending('15',ACCOUNT)
         self.assertEqual(pending['attempt_id'],'b'*24)
