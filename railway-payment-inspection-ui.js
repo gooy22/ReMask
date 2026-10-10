@@ -85,6 +85,7 @@ function paymentCardMessage(result){
     CARD_AND_CVV_REQUIRED:'Для новой привязки нужен CVV. Введите его один раз для выбранной группы РК.',
     CARD_BINDING_RECONCILE_REQUIRED:'Предыдущая привязка ещё не подтверждена. Сначала проверьте состояние карты в Meta; повтор остановлен.',
     CARD_SAVED_CREDENTIAL_UNLINKED:'Карта уже сохранена в Meta, но не прикреплена к выбранному РК. Повторное сохранение не поможет: нужно назначить существующую карту этому РК.',
+    CARD_SAVE_REQUIRES_LINK_VERIFICATION:'Meta приняла сохранение карты. Проверяю, прикреплена ли она к выбранному РК.',
     CARD_RECONCILE_UNVERIFIED:'Meta пока не подтвердила эту карту у выбранного РК. Повторное добавление остаётся заблокированным.',
     CARD_RECONCILE_NO_METHOD:'Meta показывает отсутствие способа оплаты у выбранного РК. Карта не привязана; результат предыдущей отправки требует разбора.',
     PAYMENT_ALL_METHODS_NON_CARD_ONLY:'Meta вернула платёжный инструмент, который не является банковской картой. Привязка карты к этому РК не подтверждена.',
@@ -281,7 +282,7 @@ async function bindPaymentCard(rows,card,cvv,container,reviews={}){
     line.textContent=res?.skipped
       ?r.profile+' / '+r.id+': не запускался — пакет остановлен после '+(res.code==='BATCH_STOPPED_BILLING_FIELDS'?'запроса обязательных платёжных реквизитов':'неподтверждённого результата предыдущего РК')+'.'
       :r.profile+' / '+r.id+' · •••• '+card.last4+': '+paymentCardMessage(result||{code:res?.error||'Результат неизвестен'});
-    r.funding=result?.funding||{funding_verified:false,verification_status:'UNVERIFIED'};
+    paymentApplyFunding(r,result?.funding||{funding_verified:false,verification_status:'UNVERIFIED'});
     container.appendChild(line);setProgress(d,t);
   });render();return [...new Set(missing)];
 }
@@ -292,6 +293,14 @@ function paymentAssetHint(row){
   const assetId=String(row.business_asset_id||'').replace(/^\s+|\s+$/g,'');
   const name=String(row.account_name||row.name||'').trim();
   return {business_id:businessId,...(/^\d{5,30}$/.test(assetId)?{business_asset_id:assetId}:{}),account_name:name};
+}
+
+function paymentApplyFunding(row,funding){
+  row.funding=funding;
+  // Restored batches contain target copies. Update the canonical inventory too.
+  if(typeof state!=='undefined')for(const target of state.inventory?.ad_accounts||[]){
+    if(target.profile===row.profile&&String(target.id).replace(/^act_/,'')===String(row.id).replace(/^act_/,''))target.funding=funding;
+  }
 }
 
 function paymentCardTargetPlan(rows,bindings,cardId){
@@ -319,7 +328,7 @@ async function reconcilePaymentCard(rows,card,container){
     const r=rows[idx],result=res?.result,line=document.createElement('div');
     line.className='ws-result '+(result?.status==='LINKED'?'ok':'bad');
     line.textContent=r.profile+' / '+r.id+' · •••• '+card.last4+': '+paymentCardMessage(result||{code:res?.error||'Результат неизвестен'});
-    r.funding=result?.funding||{funding_verified:false,verification_status:'UNVERIFIED'};
+    paymentApplyFunding(r,result?.funding||{funding_verified:false,verification_status:'UNVERIFIED'});
     if(result?.code==='CARD_RECONCILE_NO_METHOD'&&result.retry_review?.token&&result.retry_review?.expires_at)
       reviews[r.profile+'|'+String(r.id).replace(/^act_/,'')]={...result.retry_review,card_id:card.id};
     container.appendChild(line);
@@ -488,8 +497,10 @@ async function showFunding(restored=null){
     const existing=targetPlan();
     const selectedCard=cards.find(card=>card.id===select.value);
     if(selectedCard&&existing.pending.length){
-      reviews=await reconcilePaymentCard(existing.pending,selectedCard,container);
-      await refreshCards(selectedCard.id);
+      await run(async()=>{
+        reviews=await reconcilePaymentCard(existing.pending,selectedCard,container);
+        await refreshCards(selectedCard.id);
+      },false);
     }
     if(restored)$('paymentCardProgress').textContent='Группа из '+rows.length+' РК восстановлена. Проверка отправленных карт не повторяет сохранение.';
   }catch(e){select.innerHTML='<option value="">Список карт недоступен</option>';const line=document.createElement('div');line.className='ws-result bad';line.textContent=e.message;container.appendChild(line);}

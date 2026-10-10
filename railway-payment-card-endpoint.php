@@ -121,6 +121,8 @@ try {
                 $review=$vault->reconcile($id,$profile,$account,$expected,$httpResult['funding']);
                 if(isset($review['retry_review']))$httpResult=array_replace($httpResult,[
                     'code'=>'CARD_RECONCILE_NO_METHOD','retry_review'=>$review['retry_review']]);
+            }elseif(($httpResult['code']??'')==='CARD_SAVED_CREDENTIAL_UNLINKED'){
+                $vault->recordUnlinked($id,$profile,$account,$expected,$httpResult['funding']??[]);
             }
             card_out(['ok'=>true,'data'=>['result'=>$httpResult]]);
         }

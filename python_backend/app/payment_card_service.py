@@ -60,6 +60,10 @@ async def profile_payment_card_http(resolver, profile, payload, *, state=None):
                 return {**base, 'code': 'CARD_DURABLE_INTENT_REQUIRED'}
             ledger = CardIntentLedger(state.path)
             pending = await ledger.pending(profile, target)
+            confirmed_read = False
+            if operation == 'reconcile' and not pending:
+                pending = await ledger.confirmed_intent(profile, target, card_id)
+                confirmed_read = pending is not None
             if operation == 'reconcile' and not pending:
                 return {**base, 'code': 'CARD_HTTP_INTENT_NOT_FOUND'}
             if pending:
@@ -79,7 +83,12 @@ async def profile_payment_card_http(resolver, profile, payload, *, state=None):
                 async with ProfileSession(profile_context, timeout_seconds=30) as session:
                     web = await session.facebook_web()
                     methods = await inspect_methods(web, account=target, business_id=asset['business_id'])
-                    methods = await complete_methods(web, methods, business_id=asset['business_id'])
+                    # A known Save credential can be positively reverified by
+                    # the scoped card query. The complete inventory is needed
+                    # for absence/retry decisions, not to discard exact presence.
+                    direct = confirm_saved_card({**saved, 'status':'VERIFYING'}, methods, business_id=asset['business_id']) if saved.get('credential') else {}
+                    if not (confirmed_read and direct.get('status') == 'LINKED'):
+                        methods = await complete_methods(web, methods, business_id=asset['business_id'])
                     import logging
                     logging.getLogger('remask.payment_card').info('card reconcile inventory account=%s code=%s complete=%s credentials=%s cards=%s',
                         target, methods.get('code'), methods.get('inventory_complete'),

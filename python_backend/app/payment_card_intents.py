@@ -89,6 +89,17 @@ class CardIntentLedger:
                 con.close()
         return await asyncio.to_thread(read)
 
+    async def confirmed_intent(self, profile, account, card_id):
+        def read():
+            con = self.connect()
+            try:
+                row = con.execute("SELECT * FROM card_http_intents WHERE profile=? AND account=? AND card_id=? AND phase='LINKED' ORDER BY updated_at DESC LIMIT 1",
+                    (profile, account, card_id)).fetchone()
+                return dict(row) if row else None
+            finally:
+                con.close()
+        return await asyncio.to_thread(read)
+
     async def review_empty(self, attempt_id, profile, account, card_id):
         """Retain a stale attempt's history after an explicit reviewed retry.
 

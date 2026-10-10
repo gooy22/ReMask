@@ -400,6 +400,15 @@ try{
             $noncardReview['retry_review']['token'],$noncardOld,$badProof),
             'CARD_RETRY_ACCOUNT_NOT_EMPTY');
     }
+    $unlinkedProof=array_replace($noncardProof,['wallet_reconcile_stage'=>'saved_card_identity_observed_but_not_linked']);
+    rejected(fn()=>$vault->recordUnlinked($card['id'],'Non-card wallet','123456789',$noncardOld,array_replace($unlinkedProof,['inventory_complete'=>false])),'CARD_RECONCILE_UNVERIFIED');
+    $vault->recordUnlinked($card['id'],'Non-card wallet','123456789',$noncardOld,$unlinkedProof);
+    $diagnosed=$vault->binding($card['id'],'Non-card wallet','123456789');
+    expect($diagnosed['last_result_code']==='CARD_SAVED_CREDENTIAL_UNLINKED','Precise unlinked diagnosis was not persisted');
+    foreach(['status','submitted','attempt_id','updated_at'] as $field)expect($diagnosed[$field]===$noncardOld[$field],'Read diagnosis changed submission guard');
+    rejected(fn()=>$vault->recordUnlinked($card['id'],'Non-card wallet','123456789',$noncardOld,$unlinkedProof),'CARD_BINDING_CHANGED');
+    $noncardOld=$diagnosed;
+    $noncardReview=$vault->reconcile($card['id'],'Non-card wallet','123456789',$noncardOld,$noncardProof);
     rejected(fn()=>$vault->begin($card['id'],'Non-card wallet','123456789'),
         'CARD_BINDING_RECONCILE_REQUIRED');
     $reviewed=$vault->beginReviewed($card['id'],'Non-card wallet','123456789',

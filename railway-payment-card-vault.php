@@ -273,6 +273,20 @@ final class RemaskPaymentCardVault {
             return ['status'=>'LINKED','code'=>'CARD_LINK_OBSERVED','submitted'=>false,'funding_verified'=>false,'funding'=>$funding];
         });
     }
+    public function recordUnlinked(string $id,string $profile,string $account,?array $expected,array $funding): void {
+        $this->locked(function(array &$data)use($id,$profile,$account,$expected,$funding){
+            $key=hash('sha256',$profile.'|'.$account);$row=$data['bindings'][$key]??null;
+            if($row!==$expected||!is_array($row)||($row['card_id']??null)!==$id)throw new InvalidArgumentException('CARD_BINDING_CHANGED');
+            if(!in_array($row['status'],['SUBMITTED_UNVERIFIED','ACTION_REQUIRED'],true)||
+                ($funding['profile_id']??null)!==$profile||($funding['account_id']??null)!==$account||
+                ($funding['checked_live']??false)!==true||($funding['account_scope_verified']??false)!==true||
+                !self::liveLinkSource($funding)||($funding['inventory_complete']??false)!==true||
+                ($funding['card_credential_count']??null)!==0||
+                ($funding['wallet_reconcile_stage']??'')!=='saved_card_identity_observed_but_not_linked')throw new InvalidArgumentException('CARD_RECONCILE_UNVERIFIED');
+            // Preserve submission, attempt and age; this diagnostic never unlocks Save.
+            $data['bindings'][$key]['last_result_code']='CARD_SAVED_CREDENTIAL_UNLINKED';
+        });
+    }
     public function finish(string $id,string $profile,string $account,string $status,array $result=[],?string $attemptId=null): void {
         if(!in_array($status,['LINKED','BLOCKED','FAILED','SUBMITTED_UNVERIFIED','ACTION_REQUIRED'],true))$status='SUBMITTED_UNVERIFIED';
         // Only explicit evidence that Save was not attempted allows a new bind.

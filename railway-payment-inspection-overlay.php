@@ -38,6 +38,26 @@ function hierarchy_canonical_account_rows(array $rows, string $profile): array {
 function hierarchy_canonical_account_snapshot(string $profile, array $snapshot): array {
     $snapshot = hierarchy_asset_types_snapshot($snapshot);
     $accounts = hierarchy_canonical_account_rows((array)($snapshot['ad_accounts'] ?? []), $profile);
+    // Rehydrate masked binding information from the durable card vault. This
+    // is cached attachment evidence, never a fresh bank/funding verification.
+    try {
+        require_once __DIR__.'/../classes/RemaskPaymentCardVault.php';
+        $cardData = (new RemaskPaymentCardVault())->all();
+        $cards = array_column($cardData['cards'], null, 'id');
+        foreach ($accounts as &$account) {
+            unset($account['cached_card_binding']);
+            foreach ($cardData['bindings'] as $binding) {
+                if (($binding['profile'] ?? null) !== $profile ||
+                    ($binding['account_id'] ?? null) !== $account['account_id']) continue;
+                $card = $cards[$binding['card_id'] ?? ''] ?? null;
+                if (!is_array($card) || ($binding['last4'] ?? null) !== $card['last4']) continue;
+                $account['cached_card_binding'] = array_intersect_key($binding,
+                    array_flip(['status','last4','updated_at','last_result_code']));
+                $account['cached_card_binding']['brand'] = $card['brand'];
+            }
+        }
+        unset($account);
+    } catch (Throwable $e) { /* An unavailable vault must not hide inventory. */ }
     $snapshot['ad_accounts'] = $accounts;
     $snapshot['ad_accounts_count'] = count($accounts);
     foreach ((array)($snapshot['businesses'] ?? []) as $index => $business) {
@@ -89,9 +109,11 @@ function fundingStatusValue(f){ if(!f)return 'NOT LOADED'; if(f.funding_verified
 STATUS, $js, 1, $count);
 if ($count !== 1) throw new RuntimeException('Funding readiness boundary missing');
 $js = preg_replace('/function fundingCell\(f\)\{[^\n]+\}/', <<<'CELL'
-function fundingCell(f){ const status=fundingStatusValue(f); if(status==='LINKED')return pill('ПРИВЯЗАНА · НЕ ПРОВЕРЕНА','warn'); if(status==='NONE')return pill('НЕТ КАРТЫ','warn'); if(status==='READY')return pill('ПОДТВЕРЖДЕНО','ok'); return pill('НЕ ПРОВЕРЕНО','warn'); }
+function fundingCell(f,cached){ const status=fundingStatusValue(f); const methods=f?.payment_methods||[]; const card=methods.find(m=>/^\d{4}$/.test(String(m.last4||''))); const mask=card?esc((card.type||'Карта')+' •••• '+card.last4):cached&&/^\d{4}$/.test(String(cached.last4||''))?esc((cached.brand||'Карта')+' •••• '+cached.last4):''; const detail=mask?'<div class="sub">'+mask+'</div>':''; if(status==='LINKED')return pill('КАРТА ПРИВЯЗАНА','ok')+detail; if(status==='NONE')return pill('НЕТ КАРТЫ','warn'); if(status==='READY')return pill('ПОДТВЕРЖДЕНО','ok')+detail; if(cached?.status==='LINKED')return pill('КАРТА ПРИВЯЗАНА','ok')+detail+'<div class="sub">Сохранённый результат Meta</div>'; if(cached?.last_result_code==='CARD_SAVED_CREDENTIAL_UNLINKED')return pill('СОХРАНЕНА · НЕ ПРИВЯЗАНА','warn')+detail; return pill('НЕ ПРОВЕРЕНО','warn')+detail; }
 CELL, $js, 1, $count);
 if ($count !== 1) throw new RuntimeException('Funding cell boundary missing');
+$js = str_replace('fundingCell(row.funding)', 'fundingCell(row.funding,row.cached_card_binding)', $js, $count);
+if ($count !== 1) throw new RuntimeException('Funding row boundary missing');
 $js = str_replace("function closeModal(){", "function closeModal(){ if(typeof remaskClearPaymentSecrets==='function')remaskClearPaymentSecrets();", $js);
 file_put_contents($path, $js);
 
@@ -134,3 +156,4 @@ foreach (['accounts.php', 'workspace.php'] as $name) {
     file_put_contents($path, $html);
 }
 fwrite(STDERR, "[private-payment] profile browser inspection and canonical RK display installed\n");
+

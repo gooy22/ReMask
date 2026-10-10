@@ -30,6 +30,23 @@ const sandbox={
     return {funding:{verification_status:'LINKED',account_scope_verified:true,card_linked:true,funding_verified:false,payment_methods:[{type:'Visa',last4:'1111'}]}}}
 };
 vm.createContext(sandbox);vm.runInContext(fs.readFileSync('railway-payment-inspection-ui.js','utf8'),sandbox);
+// A restored target is a copy; exact profile/account updates must reach the table.
+const inventoryRows=[{profile:'Fixture',id:'act_123456789'}, {profile:'Other',id:'act_123456789'}];
+sandbox.state={inventory:{ad_accounts:inventoryRows}};
+const verifiedFunding={verification_status:'LINKED',card_linked:true,account_scope_verified:true,funding_verified:false};
+sandbox.paymentApplyFunding({profile:'Fixture',id:'123456789'},verifiedFunding);
+assert.equal(inventoryRows[0].funding,verifiedFunding);
+assert.equal(inventoryRows[1].funding,undefined);
+const overlay=fs.readFileSync('railway-payment-inspection-overlay.php','utf8');
+vm.runInContext(overlay.match(/function fundingStatusValue\(f\)\{[^\n]+\}/)[0],sandbox);
+vm.runInContext(overlay.match(/function fundingCell\(f,cached\)\{[^\n]+\}/)[0],sandbox);
+sandbox.pill=(label,style)=>label;
+const cached={status:'LINKED',brand:'Visa',last4:'1111'};
+assert.equal(sandbox.fundingStatusValue(null),'NOT LOADED');
+assert.match(sandbox.fundingCell(null,cached),/Visa •••• 1111/);
+assert.match(sandbox.fundingCell(null,cached),/Сохранённый результат Meta/);
+assert.doesNotMatch(sandbox.fundingCell(null,cached),/ПОДТВЕРЖДЕНО/);
+assert.doesNotMatch(sandbox.fundingCell({verification_status:'NONE',account_scope_verified:true},cached),/КАРТА ПРИВЯЗАНА/);
 (async()=>{
   await sandbox.showFunding();assert.equal(requests.length,1);assert.equal(requests[0].body.action,'list');
   assert.ok(elements.paymentCardSelect.children[0].textContent.includes('•••• 1111'));

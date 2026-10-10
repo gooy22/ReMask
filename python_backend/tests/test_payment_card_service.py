@@ -322,6 +322,17 @@ class CardServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.web.calls, [])
         self.resolver.resolve.assert_not_awaited()
 
+    async def test_confirmed_card_reconcile_reuses_exact_credential_read_without_save(self):
+        self.assertEqual((await self.call())['status'],'LINKED')
+        self.web.calls.clear()
+        result=await self.call({'operation':'reconcile','card_id':self.payload['card_id']})
+        self.assertEqual(result['status'],'LINKED')
+        self.assertNotIn('28619313357728847',[call[0] for call in self.web.calls])
+        self.assertTrue(result['funding']['account_scope_verified'])
+        self.assertFalse(result['funding_verified'])
+        wrong=await self.call({'operation':'reconcile','card_id':'card_'+'c'*24})
+        self.assertEqual(wrong['code'],'CARD_HTTP_INTENT_NOT_FOUND')
+
     async def test_foreign_business_scope_stops_dynamic_rk_before_save(self):
         self.web.foreign_business = True
         result = await self.call(profile='17')
