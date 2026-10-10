@@ -781,7 +781,17 @@ async def run_verification_http_contract_audit() -> None:
                  'useBillingRecordStandardCVCOAddFundsOutcomeMutation',
                  'CreditCardVerificationUtils',
                  'BillingRiskCheckUtils',
-                 'UserRiskReviewCreditCardVerificationModal.react')
+                 'UserRiskReviewCreditCardVerificationModal.react',
+                 'useBillingRiskInitThreeDSMutation',
+                 'useBillingRiskInitThreeDSMutation.graphql',
+                 'useBillingRiskVerifyThreeDSMutation',
+                 'useBillingRiskVerifyThreeDSMutation.graphql',
+                 'BillingRiskVerifyThreeDSRoot.react',
+                 'BillingRiskVerifyThreeDSPageViewManager.react',
+                 'BillingRiskVerifySDCRoot.react',
+                 'BillingRiskVerificationStepOptions.react',
+                 'BillingCVCOSoftDescriptorVerificationTask',
+                 'BillingCVCOThreeDSVerificationTask')
         log.warning('verification HTTP source names profile=%s account=%s names=%s',
                     profile, account, json.dumps(sorted(row['name'] for row in sources
                         if any(term in row['name'].lower() for term in
