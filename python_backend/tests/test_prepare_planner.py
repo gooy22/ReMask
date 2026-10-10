@@ -129,6 +129,55 @@ class PreparePlannerTests(unittest.IsolatedAsyncioTestCase):
         desired = PrepareService._desired({})
         self.assertEqual(desired.ad_accounts, 1)
 
+    async def test_fresh_profile_uses_business_page_flow_with_raw_worker_session(self):
+        # Runner passes ProfileSession, not MetaTransportRouter. New profiles
+        # have no legacy Page; the bundle must still start with its Business.
+        await self.page_store.patch(page_id="", name="")
+        self.assertFalse(hasattr(self.session, "private_only"))
+        account = "111111111111111"
+        sequence = []
+
+        async def execute(**kwargs):
+            payload = kwargs["payload"]
+            self.assertEqual(payload["transport_mode"], "private_http_only")
+            action = payload["steps"][0]
+            sequence.append(action)
+            if action == "BUSINESS":
+                await self._confirmed_business(item=kwargs["item_id"])
+                return {"state": {"business_id": self.business_id}}
+            if action == "AD_ACCOUNT":
+                params = payload["parameters"][action]
+                self.assertEqual(params["business_id"], self.business_id)
+                self.assertFalse(params["use_common_page"])
+                await self._confirmed_rk(account, item=kwargs["item_id"],
+                    scope=payload["scope_key"], name=params["name"])
+                return {"state": {"business_id": self.business_id, "ad_account_id": account}}
+            self.assertEqual(action, "PAGE_ACCESS")
+            params = payload["parameters"][action]
+            self.assertEqual(params["page_topology"], "ONE_PAGE_PER_BUSINESS")
+            self.assertEqual((params["business_id"], params["ad_account_id"]),
+                (self.business_id, account))
+            await self.page_store.patch(page_id="1289628847574478", name="PrgssTeam",
+                owner_business_id=self.business_id, owner_business_confirmed=True)
+            await self._confirmed_access(account, item=kwargs["item_id"])
+            return {"state": {}}
+
+        provisioning = SimpleNamespace(run=AsyncMock(side_effect=execute))
+        service = PrepareService(self.state, provisioning)
+        result = await service.run(item_id="fresh-prepare", profile_id=self.profile_id,
+            context=self.context, session=self.session,
+            payload=self._payload(bundles=1, page_access=True))
+        self.assertEqual(sequence, ["BUSINESS", "AD_ACCOUNT", "PAGE_ACCESS"])
+        self.assertEqual(result["status"], "PREPARED")
+        self.assertEqual(result["actual"]["page_id"], "1289628847574478")
+        self.assertTrue(result["actual"]["bundles"][0]["page_access_confirmed"])
+        self.assertFalse(result["ready_to_launch"])
+        # Repeating the same desired state retains all three exact objects.
+        await service.run(item_id="fresh-prepare-retry", profile_id=self.profile_id,
+            context=self.context, session=self.session,
+            payload=self._payload(bundles=1, page_access=True))
+        self.assertEqual(sequence, ["BUSINESS", "AD_ACCOUNT", "PAGE_ACCESS"])
+
     async def test_legacy_multi_rk_inventory_is_preserved_but_not_counted_as_two_bundles(self):
         await self._confirmed_business()
         await self._confirmed_rk("111111111111111")

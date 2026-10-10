@@ -384,8 +384,10 @@ class PrepareService:
         page = await page_store.get()
         page_id = str(page.get("page_id") or "").strip()
 
-        business_owned_page = bool(getattr(session, 'private_only', False)
-            and desired.require_business and desired.require_page_access)
+        # Runner supplies the raw ProfileSession; private_only belongs to the
+        # child action router. Choose topology from the requested bundle, not
+        # a transport attribute absent on every new worker session.
+        business_owned_page = bool(desired.require_business and desired.require_page_access)
         if desired.require_page and not page_id.isdigit() and business_owned_page:
             # The observed Business Suite sender requires an exact Business.
             # Allocate its Page in PAGE_ACCESS after BM/RK exist, rather than
