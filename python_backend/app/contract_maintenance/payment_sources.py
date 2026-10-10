@@ -113,12 +113,14 @@ def payment_deferred_script_urls(document):
                 else:
                     target[key] = row
     def component_priority(name):
+        if re.search(r'Risk|Verif|ThreeDS|Init3DS|Authoriz', name):
+            return -1
         if re.search(r'SaveCard|AddCreditCard', name):
             return 0
         return 1 if re.search(r'PTT|FBPayAuthLibrary', name) else 2
     result, visited, observed_urls = [], set(), set()
     roots = [name for name in components if re.search(
-        r'(?:Billing.*(?:Card|Credential|PaymentMethod|CountryCurrency|PTT)|Payment.*(?:Card|Token)|FBPay.*|PlatformTrustToken.*|modularGeneratePTT|getPTTUtils)', name)]
+        r'(?:Billing.*(?:Card|Credential|PaymentMethod|CountryCurrency|PTT|Risk|Verif|ThreeDS|Init3DS|Authoriz)|Payment.*(?:Card|Token|3DS)|FBPay.*|PlatformTrustToken.*|modularGeneratePTT|getPTTUtils)', name)]
     pending = deque(sorted(roots, key=component_priority))
     while pending:
         name = pending.popleft()
@@ -359,21 +361,34 @@ async def _inspect_profile_payment_sources(resolver, profile, target, *, state):
         # tokenization or card save mutation is dispatched by maintenance.
         try:
             async with asyncio.timeout(20):
-                payload = await execute(web, 'READ_ACCOUNT', account=target, business_id=asset['business_id'])
-                evidence = account_proof(payload, target)
+                # Confirmed saves retain an exact payment scope. Source
+                # maintenance must not fail solely on an unrelated hub query.
+                from ..payment_card_intents import CardIntentLedger
+                intent = await CardIntentLedger(state.path).source_read_intent(profile, target) if state is not None and getattr(state, 'path', None) else None
+                saved = json.loads(intent['result']) if intent else {}
+                if (saved.get('account_id') == target and saved.get('account_scope_verified') is True
+                        and saved.get('business_id') == asset['business_id']
+                        and re.fullmatch(r'\d{5,30}', str(saved.get('payment_account_id', '')))
+                        and isinstance(saved.get('payment_account_node_id'), str)):
+                    evidence = {k: saved[k] for k in ('account_id', 'account_scope_verified',
+                        'payment_account_id', 'payment_account_node_id') if k in saved}
+                else:
+                    payload = await execute(web, 'READ_ACCOUNT', account=target, business_id=asset['business_id'])
+                    evidence = account_proof(payload, target)
                 if evidence['account_scope_verified'] is True:
                     results = await asyncio.gather(
                         execute(web, 'READ_METHODS', account=target, payment=evidence['payment_account_id'], business_id=asset['business_id']),
-                        execute(web, 'READ_OPTIONS', payment=evidence['payment_account_id'], business_id=asset['business_id']),
+                        execute(web, 'READ_VERIFY_OPTIONS', payment=evidence['payment_account_id'], business_id=asset['business_id']),
                         read_card_screen(web, payment=evidence['payment_account_id'], business_id=asset['business_id']),
                         return_exceptions=True)
                     if isinstance(results[0], dict):
                         methods = methods_proof(results[0], target, business_id=asset['business_id'], account_evidence=evidence)
+                        loaders = payment_loader_documents(results[0]) if methods.get('business_scope_verified') is True else []
                     if isinstance(results[1], dict):
                         verified = payment_page_proof(results[1], target, evidence['payment_account_id'])
                         options_probe = {'account_scope_verified': verified, 'submitted': False}
                         if verified:
-                            loaders = payment_loader_documents(results[1])
+                            loaders += payment_loader_documents(results[1])
                             options_probe['loader_maps_observed'] = len(loaders)
                     if isinstance(results[2], dict):
                         card_probe = card_screen_proof(results[2], target, account_evidence=evidence)

@@ -9,6 +9,12 @@ from app.provisioning.models import ProvisioningError
 
 
 class PaymentSourceTests(unittest.IsolatedAsyncioTestCase):
+    def test_verification_modules_are_discovered_from_observed_bootloader_maps(self):
+        maps={'rsrcMap':{'risk':{'type':'js','src':'https://static.xx.fbcdn.net/risk.js'}},
+            'compMap':{'BillingRiskVerifySDCPageViewManager.react':{'r':['risk']}}}
+        self.assertEqual(payment_deferred_script_urls(json.dumps(maps)),
+            ['https://static.xx.fbcdn.net/risk.js'])
+
     async def test_maintenance_reads_missing_sources_after_legacy_script_128(self):
         # Regression: the original 128-script ceiling hid the card input builder
         # and PTT implementation in a later, public JS chunk.
@@ -88,7 +94,7 @@ class PaymentSourceTests(unittest.IsolatedAsyncioTestCase):
                 if failure == 'card_options': card['data']['payment_account']['billing_payment_method_options'] = []
                 web = SimpleNamespace(graphql=AsyncMock(return_value=card))
                 async def execute(web, operation, **kwargs):
-                    return {'READ_ACCOUNT': account_response(), 'READ_METHODS': methods, 'READ_OPTIONS': options}[operation]
+                    return {'READ_ACCOUNT': account_response(), 'READ_METHODS': methods, 'READ_VERIFY_OPTIONS': options}[operation]
                 with patch('app.session.ProfileSession', return_value=Session()), \
                      patch('app.payment_inspection.resolve_payment_asset', AsyncMock(return_value={'business_id': BM})), \
                      patch('app.static_payment_read.execute', AsyncMock(side_effect=execute)), \
@@ -399,13 +405,13 @@ class PaymentSourceTests(unittest.IsolatedAsyncioTestCase):
             async def facebook_business_browser(self):raise AssertionError('No browser')
         resolver=SimpleNamespace(resolve=AsyncMock(return_value=SimpleNamespace(cookies={'c_user':'111222333'})))
         async def execute(web,operation,**kwargs):
-            return {'READ_ACCOUNT':account_response(),'READ_METHODS':methods_response(),'READ_OPTIONS':options}[operation]
+            return {'READ_ACCOUNT':account_response(),'READ_METHODS':methods_response(),'READ_VERIFY_OPTIONS':options}[operation]
         with patch('app.session.ProfileSession',return_value=Session()), \
              patch('app.payment_inspection.resolve_payment_asset',AsyncMock(return_value={'business_id':BM})), \
              patch('app.static_payment_read.execute',AsyncMock(side_effect=execute)) as query, \
              patch('app.contract_maintenance.payment_sources.capture_payment_sources',AsyncMock(return_value={'submitted':False})) as capture:
             result=await inspect_profile_payment_sources(resolver,'fixture',ACCOUNT,state=None)
-        self.assertEqual({c.args[1] for c in query.await_args_list},{'READ_ACCOUNT','READ_METHODS','READ_OPTIONS'})
+        self.assertEqual({c.args[1] for c in query.await_args_list},{'READ_ACCOUNT','READ_METHODS','READ_VERIFY_OPTIONS'})
         self.assertTrue(result['payment_methods_probe']['card_linked'])
         self.assertTrue(result['payment_options_probe']['account_scope_verified'])
         self.assertFalse(result['submitted'])

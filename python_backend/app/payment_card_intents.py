@@ -105,6 +105,22 @@ class CardIntentLedger:
                 con.close()
         return await asyncio.to_thread(read)
 
+    async def source_read_intent(self, profile, account):
+        """Known payment scope for explicit read-only source maintenance.
+
+        A fresh exact-RK/BM methods response is still required before using
+        loader maps. This method cannot initiate a financial action.
+        """
+        def read():
+            con = self.connect()
+            try:
+                row = con.execute("SELECT * FROM card_http_intents WHERE profile=? AND account=? AND phase IN ('LINKED','ACTION_REQUIRED') ORDER BY updated_at DESC LIMIT 1",
+                    (profile, account)).fetchone()
+                return dict(row) if row else None
+            finally:
+                con.close()
+        return await asyncio.to_thread(read)
+
     async def review_empty(self, attempt_id, profile, account, card_id):
         """Retain a stale attempt's history after an explicit reviewed retry.
 

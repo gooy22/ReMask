@@ -110,6 +110,20 @@
       },
       "response_parser": "unfiltered_payment_node_credentials_v1",
       "read_options": "Observed query has no filter, allowlist or pagination. Prove exact returned payment node against a fresh READ_ACCOUNT; hydrate card metadata separately."
+    },
+    "READ_VERIFY_OPTIONS": {
+      "doc_id": "29195809800004536",
+      "friendly_name": "BillingSelectPaymentMethodPageViewManagerQuery",
+      "endpoint_url": "https://business.facebook.com/api/graphql/",
+      "operation_kind": "query",
+      "variables": {
+        "paymentAccountID": "$payment",
+        "userIntent": "VERIFY_PAYMENT_METHOD",
+        "intent": null,
+        "skipDeferredFragments": false
+      },
+      "response_parser": "exact_payment_page_v1",
+      "read_options": "Observed BillingAddPaymentMethodRoot entrypoint forwards userIntent; BillingUserIntent enum includes VERIFY_PAYMENT_METHOD. Query only; does not run a wizard task or bank authorization."
     }
   }
 }

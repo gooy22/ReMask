@@ -13,6 +13,15 @@ ACCOUNT, BUSINESS, PAYMENT = '123456789', '987654321', '555666777'
 
 
 class PaymentReadTests(unittest.IsolatedAsyncioTestCase):
+    async def test_verification_options_use_observed_intent_but_never_dispatch_a_bank_mutation(self):
+        web = SimpleNamespace(graphql=AsyncMock(return_value={}))
+        await execute(web, 'READ_VERIFY_OPTIONS', payment=PAYMENT, business_id=BUSINESS)
+        args, kwargs = web.graphql.await_args
+        self.assertEqual(args[0], '29195809800004536')
+        self.assertEqual(args[1]['userIntent'], 'VERIFY_PAYMENT_METHOD')
+        self.assertEqual(args[1]['paymentAccountID'], PAYMENT)
+        self.assertNotIn('input', args[1]); self.assertNotIn('before_submit', kwargs)
+
     def response(self):
         return {'data': {'billable_account_by_asset_id': {'__typename': 'AdAccount', 'id': ACCOUNT,
             'billing_payment_account': {'payment_legacy_account_id': PAYMENT, 'id': 'relay-ui-id'},
