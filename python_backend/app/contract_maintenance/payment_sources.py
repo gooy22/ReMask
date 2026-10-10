@@ -15,7 +15,7 @@ import json
 import logging
 import re
 import httpx
-from urllib.parse import parse_qs, urlencode, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit, urljoin
 
 from ..private_contract_discovery import _module_nodes, _script_urls
 from ..private_inventory import _auth_gate
@@ -189,6 +189,34 @@ def payment_loader_documents(payload):
     return documents
 
 
+def verification_bootloader_endpoint(document, entry):
+    # Read only the observed loader URI. Never export or execute inline HTML.
+    source = html.unescape(document)
+    values = set()
+    for marker in re.finditer(r'"BootloaderEndpointConfig"', source):
+        part = source[marker.end():marker.end() + 2000]
+        match = re.search(r'"endpointURI"\s*:\s*("(?:[^"\\]|\\.)*")', part)
+        if not match:
+            continue
+        try:
+            uri = urljoin(entry, json.loads(match[1]))
+            parsed = urlsplit(uri)
+            if (parsed.scheme == 'https' and parsed.hostname == urlsplit(entry).hostname
+                    and parsed.path.rstrip('/') == '/ajax/bootloader-endpoint'
+                    and not parsed.query and not parsed.fragment and not parsed.username):
+                values.add(uri)
+        except (ValueError, TypeError):
+            continue
+    return next(iter(values)) if len(values) == 1 else None
+
+
+def verification_lazy_modules(source):
+    # Actual literal JSResource/requireDeferred calls only. No guessed names.
+    candidates = re.findall(r'(?:JSResourceForInteraction|JSResource|requireDeferred(?:ForDisplay)?)"\)\("([A-Za-z0-9_.$-]{1,200})"\)', source)
+    return sorted({name for name in candidates if name.startswith('Billing')
+        and re.search(r'Risk|Verif|ThreeDS|Init3DS|NativeOTP|CVCO|Authenticat', name)})
+
+
 def source_export(rows, *, max_bytes=MAX_EXPORT_BYTES):
     """Keep artifacts and critical senders first; always disclose omissions."""
     def priority(row):
@@ -273,12 +301,16 @@ async def capture_payment_sources(web, *, account_id, business_id, loader_docume
     # consume the fixed maintenance budget. Every URL is observed in Meta's
     # document; this path remains completely separate from card execution.
     deferred = payment_deferred_script_urls('\n'.join([*(document for document, _ in documents), *loader_documents]))
+    bootloader = next((uri for document, _ in documents
+                      if (uri := verification_bootloader_endpoint(document, entry))), None)
     eager = [u for document, location in documents for u in _script_urls(document, location, limit=384) if _public_js_url(u)]
     urls = list(dict.fromkeys([*deferred, *eager]))
     observed = set(urls)
     deferred_observed = set(deferred)
     del body, documents
     modules, total, count, errors = {}, 0, 0, 0
+    lazy_attempted, lazy_pending, lazy_requests = set(), set(), 0
+    loader_protocol_observed = False
 
     async def read(url):
         try:
@@ -305,6 +337,9 @@ async def capture_payment_sources(web, *, account_id, business_id, loader_docume
                 errors += 1
                 continue
             total += len(source.encode())
+            loader_protocol_observed |= ('__d("BootloaderEndpoint"' in source
+                and 'getAsyncParams' in source and '"GET"' in source)
+            lazy_pending.update(verification_lazy_modules(source))
             # Public JS may itself carry another literal loader map. Prioritize
             # these observed deferred resources over unrelated eager bundles.
             nested = payment_deferred_script_urls(source)
@@ -316,6 +351,25 @@ async def capture_payment_sources(web, *, account_id, business_id, loader_docume
                 key = (row['name'], row['sha256'])
                 if key not in modules:
                     modules[key] = row
+        requested = sorted(lazy_pending - lazy_attempted)[:16]
+        if bootloader and loader_protocol_observed and requested and lazy_requests < 2:
+            # Meta's observed BootloaderEndpoint sender uses GET + modules.
+            # Loading source cannot run a verification task or charge a card.
+            lazy_attempted.update(requested); lazy_requests += 1
+            params = {'modules': ','.join(requested), '__a': '1'}
+            actor = str(getattr(getattr(web, 'profile', None), 'cookies', {}).get('c_user', ''))
+            if re.fullmatch(r'\d{5,30}', actor):
+                params['__user'] = actor
+            try:
+                code, loader, final = await asyncio.wait_for(web.fetch_text(
+                    bootloader + '?' + urlencode(params), max_bytes=2_000_000, referer=entry), timeout=10)
+                if code == 200 and urlsplit(final).path.rstrip('/') == '/ajax/bootloader-endpoint':
+                    new_urls = payment_deferred_script_urls(loader)
+                    additions = [url for url in new_urls if url not in observed]
+                    observed.update(additions); deferred_observed.update(new_urls)
+                    urls[offset:offset] = additions
+            except Exception:
+                pass
     exported = source_export(list(modules.values()))
     log.info('payment source audit profile=%s account=%s scripts=%d bytes=%d modules=%d browser_started=False',
              getattr(getattr(web, 'profile', None), 'name', ''), account_id, count, total, len(modules))
@@ -327,6 +381,9 @@ async def capture_payment_sources(web, *, account_id, business_id, loader_docume
             'scripts_observed': len(observed), 'script_limit_reached': count >= MAX_SCRIPTS and offset < len(urls),
             'byte_limit_reached': ((MAX_TOTAL_BYTES - total) // MAX_SCRIPT_BYTES <= 0) and offset < len(urls) and count < MAX_SCRIPTS,
             'document_audit': document_audit,
+            'verification_loader_probe': {'endpoint_observed': bool(bootloader),
+                'protocol_observed': loader_protocol_observed, 'requests': lazy_requests,
+                'modules_requested': sorted(lazy_attempted)},
             **exported}
 
 

@@ -9,6 +9,37 @@ from app.provisioning.models import ProvisioningError
 
 
 class PaymentSourceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_observed_verification_loader_fetches_source_only_and_never_exports_private_response(self):
+        from urllib.parse import urlsplit, parse_qs
+        entry='https://business.facebook.com/billing_hub/payment_settings/'
+        document='["BootloaderEndpointConfig",[],{"endpointURI":"/ajax/bootloader-endpoint/"},1]<script src="https://static.xx.fbcdn.net/root.js"></script>'
+        root='__d("BootloaderEndpoint",[],function(){r("getAsyncParams")("GET")});__d("BillingVerification.entrypoint",[],function(){r("JSResourceForInteraction")("BillingThreeDSVerificationPageViewManager.react")});'
+        loader=json.dumps({'private': 'fixture-secret', 'hsrp': {'hblp': {'rsrcMap': {'v': {'type': 'js', 'src': 'https://static.xx.fbcdn.net/verification.js'}}, 'compMap': {'BillingThreeDSVerificationPageViewManager.react': {'r': ['v']}}}}})
+        async def fetch(url, **kwargs):
+            if urlsplit(url).path.rstrip('/') == '/ajax/bootloader-endpoint':
+                self.assertEqual(parse_qs(urlsplit(url).query)['modules'], ['BillingThreeDSVerificationPageViewManager.react'])
+                return 200, loader, url
+            if url == 'https://static.xx.fbcdn.net/root.js': return 200, root, url
+            if url == 'https://static.xx.fbcdn.net/verification.js':
+                return 200, '__d("BillingThreeDSVerificationPageViewManager.react",[],function(){});', url
+            return 200, document, entry
+        web=SimpleNamespace(fetch_text=AsyncMock(side_effect=fetch))
+        result=await capture_payment_sources(web, account_id='123456789', business_id='987654321')
+        self.assertEqual(result['verification_loader_probe']['requests'], 1)
+        self.assertIn('BillingThreeDSVerificationPageViewManager.react', {r['name'] for r in result['modules']})
+        self.assertNotIn('fixture-secret', json.dumps(result))
+        self.assertFalse(result['submitted'])
+
+    def test_verification_loader_requires_observed_same_origin_endpoint_and_literal_modules(self):
+        from app.contract_maintenance.payment_sources import verification_bootloader_endpoint, verification_lazy_modules
+        entry='https://business.facebook.com/billing_hub/payment_settings/'
+        document='["BootloaderEndpointConfig",[],{"endpointURI":"/ajax/bootloader-endpoint/","private":"never exported"},1]'
+        self.assertEqual(verification_bootloader_endpoint(document, entry),
+            'https://business.facebook.com/ajax/bootloader-endpoint/')
+        self.assertIsNone(verification_bootloader_endpoint(document.replace('/ajax/bootloader-endpoint/','https://foreign.example/ajax/bootloader-endpoint/'), entry))
+        source='r("JSResourceForInteraction")("BillingThreeDSVerificationPageViewManager.react");r("JSResource")("Unrelated.react")'
+        self.assertEqual(verification_lazy_modules(source), ['BillingThreeDSVerificationPageViewManager.react'])
+
     def test_verification_modules_are_discovered_from_observed_bootloader_maps(self):
         maps={'rsrcMap':{'risk':{'type':'js','src':'https://static.xx.fbcdn.net/risk.js'}},
             'compMap':{'BillingRiskVerifySDCPageViewManager.react':{'r':['risk']}}}
