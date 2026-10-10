@@ -216,12 +216,41 @@ function paymentCardMessage(result){
   const errors=Array.isArray(result.meta_error_codes)?result.meta_error_codes.filter(n=>Number.isInteger(n)&&n>=0&&n<=999999999):[];
   const readFailure=['PAYMENT_HTTP_TIMEOUT','PAYMENT_HTTP_UNAVAILABLE','CHECKPOINT_REQUIRED','BUSINESS_LOGIN_GATE','SESSION_EXPIRED'].includes(result.reconcile_error_code)
     ?' Текущая проверка не завершена: '+result.reconcile_error_code+'.':'';
-  // One meaningful sentence per result. Detailed Meta/transport evidence stays
-  // in server logs and the optional diagnostics; not in the user's payment UI.
-  const message=messages[result.code]||'Не удалось завершить проверку карты в Meta.';
-  const missing=result.missing_fields?.length
-    ?' Нужны поля: '+result.missing_fields.map(f=>names[f]||f).join(', ')+'.':'';
-  return message+missing;
+  return (messages[result.code]||result.code||'Не удалось подтвердить результат')+paymentSetupDetail+verificationDetail+businessWalletNote+country+availability+countryMismatch+currentCountry+inventory+
+    readFailure+
+    (errors.length?' Коды ошибки Meta: '+errors.join(', ')+'.':'')+
+    (Array.isArray(result.meta_error_messages)?' '+result.meta_error_messages.filter(s=>typeof s==='string'&&s.length<=320).slice(0,4).join(' · '):'')+
+    (result.missing_fields?.length?' Поля: '+result.missing_fields.map(f=>names[f]||f).join(', ')+'.':'')+
+    (fields.length?' Поля формы Meta: '+fields.join(', ')+'.':'');
+}
+
+
+function paymentCardBriefMessage(result){
+  // User-visible status has no protocol, contract or inventory description.
+  // The original structured metadata remains available to diagnostics.
+  const brief={
+    CARD_LINK_CONFIRMED:'Карта привязана к РК.',
+    CARD_LINK_OBSERVED:'Карта найдена в РК.',
+    CARD_SAVE_RESULT_UNKNOWN:'Результат добавления не получен. Повторная отправка остановлена.',
+    CARD_SAVED_CREDENTIAL_UNLINKED:'Карта сохранена, но не прикреплена к РК.',
+    CARD_BANK_CONFIRMATION_REQUIRED:'Карта привязана. Требуется подтверждение в банке.',
+    SDC_AUTH_READY:'Meta разрешает запрос временного списания.',
+    SDC_AUTH_PENDING_WAIT_CODE:'Meta уже ожидает подтверждения временной операции. Новый запрос в банк не отправлен.',
+    SDC_AUTH_SENT_WAIT_CODE:'Meta приняла запрос временной операции. Проверьте её в банке.',
+    SDC_AUTH_ALREADY_ATTEMPTED:'Запрос уже выполнялся. Второй запрос в банк не отправлен.',
+    SDC_AUTH_PRECHECK_UNAVAILABLE:'Meta недоступна. Запрос в банк не отправлен.',
+    SDC_AUTH_RESULT_UNKNOWN:'Ответ о временной операции не получен. Повторная отправка остановлена.',
+    SDC_AUTH_REJECTED:'Meta отклонила временную операцию.',
+    CARD_VERIFICATION_NO_REQUIRED_TASK:'Meta не требует дополнительной проверки карты.',
+    CARD_VERIFICATION_MUTATION_NOT_PINNED:'Meta требует другого подтверждения. Запрос в банк не отправлен.',
+    CARD_VERIFICATION_SDC_READ_UNVERIFIED:'Не удалось узнать статус временной операции.',
+    SESSION_EXPIRED:'Нужно обновить Facebook-сессию.',
+    BUSINESS_LOGIN_GATE:'Нужно восстановить доступ к Meta Business.',
+    CHECKPOINT_REQUIRED:'Meta требует подтверждения Facebook-профиля.'
+  };
+  if(result?.code in brief)return brief[result.code];
+  if(!result?.code)return 'Не удалось получить результат.';
+  return paymentCardMessage({code:result.code,missing_fields:result.missing_fields});
 }
 
 function paymentCardAuthEvidence(result){
@@ -331,7 +360,7 @@ async function bindPaymentCard(rows,card,cvv,container,reviews={}){
     line.className='ws-result '+(result?.status==='LINKED'?'ok':'bad');
     line.textContent=res?.skipped
       ?r.profile+' / '+r.id+': не запускался — пакет остановлен после '+(res.code==='BATCH_STOPPED_BILLING_FIELDS'?'запроса обязательных платёжных реквизитов':'неподтверждённого результата предыдущего РК')+'.'
-      :r.profile+' / '+r.id+' · •••• '+card.last4+': '+paymentCardMessage(result||{code:res?.error||'Результат неизвестен'});
+      :r.profile+' / '+r.id+' · •••• '+card.last4+': '+paymentCardBriefMessage(result||{code:res?.error||'Результат неизвестен'});
     paymentApplyFunding(r,result?.funding||{funding_verified:false,verification_status:'UNVERIFIED'});
     container.appendChild(line);
     const follow=res?.verification_follow_up;
@@ -340,7 +369,7 @@ async function bindPaymentCard(rows,card,cvv,container,reviews={}){
       const summary=document.createElement('div');
       summary.className='ws-result '+(check?.status==='VERIFIED'?'ok':'bad');
       summary.textContent='Банковская проверка · '+r.profile+' / '+r.id+': '+
-        paymentCardMessage(check||{code:follow?.error||'CARD_VERIFICATION_HTTP_UNAVAILABLE'});
+        paymentCardBriefMessage(check||{code:follow?.error||'CARD_VERIFICATION_HTTP_UNAVAILABLE'});
       container.appendChild(summary);
       if(check)paymentConfirmationPanel(r,{...check,card_id:card.id},container);
     }
@@ -428,7 +457,7 @@ async function inspectCardVerificationHTTP(rows,card,container){
     const row=rows[idx],result=res?.result,line=document.createElement('div');
     line.className='ws-result '+(result?.code==='CARD_VERIFICATION_NO_REQUIRED_TASK'?'ok':'bad');
     line.textContent=row.profile+' / '+row.id+' · •••• '+card.last4+': '+
-      paymentCardMessage(result||{code:res?.error||'CARD_VERIFICATION_HTTP_UNAVAILABLE'});
+      paymentCardBriefMessage(result||{code:res?.error||'CARD_VERIFICATION_HTTP_UNAVAILABLE'});
     container.appendChild(line);
     if(result?.funding)paymentApplyFunding(row,result.funding);
     if(result)paymentConfirmationPanel(row,result,container);
@@ -457,7 +486,7 @@ async function reconcilePaymentCard(rows,card,container){
   },(d,t,res,idx)=>{
     const r=rows[idx],result=res?.result,line=document.createElement('div');
     line.className='ws-result '+(result?.status==='LINKED'?'ok':'bad');
-    line.textContent=r.profile+' / '+r.id+' · •••• '+card.last4+': '+paymentCardMessage(result||{code:res?.error||'Результат неизвестен'});
+    line.textContent=r.profile+' / '+r.id+' · •••• '+card.last4+': '+paymentCardBriefMessage(result||{code:res?.error||'Результат неизвестен'});
     paymentApplyFunding(r,result?.funding||{funding_verified:false,verification_status:'UNVERIFIED'});
     if(result?.code==='CARD_RECONCILE_NO_METHOD'&&result.retry_review?.token&&result.retry_review?.expires_at)
       reviews[r.profile+'|'+String(r.id).replace(/^act_/,'')]={...result.retry_review,card_id:card.id};
@@ -467,7 +496,7 @@ async function reconcilePaymentCard(rows,card,container){
     if(check){
       const statusLine=document.createElement('div');statusLine.className='ws-result';
       statusLine.textContent='Банковское подтверждение · '+r.profile+' / '+r.id+': '+
-        paymentCardMessage(check?.result||{code:check?.error||'CARD_VERIFICATION_HTTP_UNAVAILABLE'});
+        paymentCardBriefMessage(check?.result||{code:check?.error||'CARD_VERIFICATION_HTTP_UNAVAILABLE'});
       container.appendChild(statusLine);
       if(check?.result)paymentConfirmationPanel(r,{...check.result,card_id:card.id},container);
     }
@@ -549,7 +578,7 @@ async function showFunding(restored=null){
       const line=document.createElement('div');
       const status={LINKED:'видна в Meta у этого РК',BLOCKED:'не привязана',FAILED:'ошибка',IN_PROGRESS:'операция начата',SUBMITTED_UNVERIFIED:'результат требует проверки',ACTION_REQUIRED:'требуется подтверждение'}[binding.status]||binding.status;
       line.textContent=binding.profile+' / act_'+binding.account_id+' · •••• '+binding.last4+' · '+status+
-        (binding.last_result_code?' · '+paymentCardMessage({...binding,code:binding.last_result_code}):'');assignments.appendChild(line);
+        (binding.last_result_code?' · '+paymentCardBriefMessage({...binding,code:binding.last_result_code}):'');assignments.appendChild(line);
     });
     if(preferred)select.value=preferred;
     else if(!select.value&&rows.length===1&&bindings.length===1)select.value=bindings[0].card_id;
@@ -577,7 +606,7 @@ async function showFunding(restored=null){
     finally{if(clearSecrets)remaskClearPaymentSecrets();controls.forEach(el=>el.disabled=false);$('paymentCardProgress').textContent='';busy=false;updatePrimary();}
   };
   const save=async(bind)=>{
-    if(bind&&pending())throw new Error(paymentCardMessage({code:'CARD_BINDING_RECONCILE_REQUIRED'}));
+    if(bind&&pending())throw new Error(paymentCardBriefMessage({code:'CARD_BINDING_RECONCILE_REQUIRED'}));
     const cvv=$('paymentCardCvv').value;
     const card=await savePaymentCard();paymentCardResumeWrite(rows,card.id);await refreshCards(card.id);$('paymentCardNew').open=false;
     const line=document.createElement('div');line.className='ws-result ok';line.textContent='Карта •••• '+card.last4+' сохранена в ReMask.';container.appendChild(line);
@@ -625,8 +654,8 @@ async function showFunding(restored=null){
     for(let i=0;i<rows.length;i++){
       const r=rows[i],data=await apiJson('ajax/paymentCards.php',post({action:'prepare',...(select.value?{card_id:select.value}:{}),profile:r.profile,account_id:r.id,...paymentAssetHint(r),...paymentSetupPayload()}));
       const line=document.createElement('div');line.className='ws-result '+(['FORM_READY','FORM_CONFIRMED'].includes(data.result.status)?'ok':'bad');
-      line.textContent=r.profile+' / '+r.id+': '+paymentCardMessage(data.result)+paymentCardAuthEvidence(data.result)
-        +(data.result.country_policy?' '+paymentCardMessage(data.result.country_policy):'');container.appendChild(line);setProgress(i+1,rows.length);
+      line.textContent=r.profile+' / '+r.id+': '+paymentCardBriefMessage(data.result)+paymentCardAuthEvidence(data.result)
+        +(data.result.country_policy?' '+paymentCardBriefMessage(data.result.country_policy):'');container.appendChild(line);setProgress(i+1,rows.length);
       if(data.result.code==='CARD_BILLING_FIELDS_REQUIRED')showMissingBilling([...billingMissing,...(data.result.missing_fields||[])]);
       if(data.result.ui_preview&&/^[A-Za-z0-9+/=]+$/.test(data.result.ui_preview)){
         const preview=document.createElement('details'),summary=document.createElement('summary'),image=document.createElement('img');
