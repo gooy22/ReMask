@@ -8,11 +8,11 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from app.payment_card_intents import CardIntentLedger
-from app.payment_card_service import profile_payment_card_http, CANARY_SCOPE
+from app.payment_card_service import profile_payment_card_http
 from app.payment_card_input import build_client_info
 from tests.test_payment_card_http import FakeHTTP, read_screen
 from tests.test_payment_ptt import VALUES
-from tests.test_static_payment_card import BUSINESS, PAYMENT
+from tests.test_static_payment_card import ACCOUNT, BUSINESS, PAYMENT
 
 
 class ServiceHTTP(FakeHTTP):
@@ -39,22 +39,21 @@ class CardServiceTests(unittest.IsolatedAsyncioTestCase):
         self.session = SimpleNamespace(facebook_web=AsyncMock(return_value=self.web))
         self.cm = AsyncMock()
         self.cm.__aenter__.return_value = self.session
-        self.payload = {'operation':'bind', 'account_id':CANARY_SCOPE[1], 'card_id':'card_'+'a'*24,
+        self.payload = {'operation':'bind', 'account_id':ACCOUNT, 'card_id':'card_'+'a'*24,
             'attempt_id':'b'*24, 'card':{k:v for k,v in VALUES.items() if k != 'cvv'}, 'cvv':VALUES['cvv'],
             'client_info':build_client_info(color_depth=24, viewport_width=1440, viewport_height=900)}
 
     async def asyncTearDown(self):
         self.tmp.cleanup()
 
-    async def call(self, payload=None):
-        # Test engine scope uses fixture IDs; canary is explicitly isolated.
-        from tests.test_static_payment_card import ACCOUNT
+    async def call(self, payload=None, *, profile='15'):
+        # Fixtures replace the live Meta transport while retaining the exact
+        # profile/RK resolution, card intent, and save-then-verify boundaries.
         effective = {**(payload or self.payload), 'account_id':ACCOUNT}
-        with patch('app.payment_card_service.CANARY_SCOPE', ('15', ACCOUNT)), \
-             patch('app.payment_card_service.resolve_payment_asset', AsyncMock(return_value={'business_id':BUSINESS})), \
+        with patch('app.payment_card_service.resolve_payment_asset', AsyncMock(return_value={'business_id':BUSINESS})), \
              patch('app.session.ProfileSession', return_value=self.cm), \
              patch('app.payment_card_http.encrypt_card_token', return_value='synthetic_token'):
-            return await profile_payment_card_http(self.resolver,'15',effective,state=self.state)
+            return await profile_payment_card_http(self.resolver,profile,effective,state=self.state)
 
     async def test_button_envelope_to_save_to_exact_verification_and_durable_state(self):
         result = await self.call()
@@ -162,33 +161,47 @@ class CardServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['status'],'LINKED')
         self.assertNotIn('28619313357728847',[c[0] for c in self.web.calls])
 
-    async def test_second_canary_requires_confirmed_first_canary_for_same_card(self):
-        from app.payment_card_service import SECONDARY_CANARY_SCOPE
-        from tests.test_static_payment_card import ACCOUNT
-        with patch('app.payment_card_service.CANARY_SCOPE',('15',ACCOUNT)):
-            result=await profile_payment_card_http(self.resolver,'15',
-                {**self.payload,'account_id':SECONDARY_CANARY_SCOPE[1]},state=self.state)
-        self.assertEqual(result['code'],'CARD_HTTP_FIRST_CANARY_REQUIRED')
+    async def test_selected_profile_17_can_complete_without_profile_15_success(self):
+        # Dynamic selected RK on profile 17 is independent of any other RK.
+        result = await self.call(profile='17')
+        self.assertEqual(result['status'], 'LINKED')
+        self.assertTrue(result['submitted'])
+        self.resolver.resolve.assert_awaited_once_with('17')
+        confirmed = await CardIntentLedger(self.state.path).confirmed(
+            '17', ACCOUNT, self.payload['card_id'])
+        self.assertTrue(confirmed)
+
+    async def test_new_profile_or_rk_reaches_durable_guard_without_allowlist(self):
+        for profile, account in (
+            ('17', '120251439661740682'),
+            ('16', '120247991367350146'),
+            ('41', '120251352568830122'),
+        ):
+            with self.subTest(profile=profile, account=account):
+                result = await profile_payment_card_http(
+                    self.resolver, profile, {'operation':'bind', 'account_id':account},
+                    state=self.state)
+                self.assertEqual(result['code'], 'CARD_DURABLE_INTENT_REQUIRED')
+                self.assertFalse(result['submitted'])
         self.resolver.resolve.assert_not_awaited()
 
-    async def test_authorized_fresh_profile_canary_reaches_durable_guard_without_old_profile_success(self):
-        from app.payment_card_service import FRESH_PROFILE_CANARY_SCOPE
-        profile, target = FRESH_PROFILE_CANARY_SCOPE
-        result = await profile_payment_card_http(self.resolver, profile,
-            {'operation':'bind', 'account_id':target}, state=self.state)
-        self.assertEqual(result['code'], 'CARD_DURABLE_INTENT_REQUIRED')
+    async def test_unknown_selected_rk_never_submits_before_meta_scope_proof(self):
+        with patch('app.payment_card_service.resolve_payment_asset', AsyncMock(return_value={})), \
+             patch('app.session.ProfileSession', return_value=self.cm):
+            result = await profile_payment_card_http(
+                self.resolver, '17', self.payload, state=self.state)
+        self.assertEqual(result['code'], 'PAYMENT_ACCOUNT_BINDING_MISSING')
         self.assertFalse(result['submitted'])
+        self.assertEqual(self.web.calls, [])
         self.resolver.resolve.assert_not_awaited()
 
-    async def test_fresh_canary_does_not_enable_other_profiles_or_accounts(self):
-        from app.payment_card_service import FRESH_PROFILE_CANARY_SCOPE
-        profile, target = FRESH_PROFILE_CANARY_SCOPE
-        for wrong_profile, wrong_target in [('17', target), (profile, '120253561846570725')]:
-            result = await profile_payment_card_http(self.resolver, wrong_profile,
-                {**self.payload, 'account_id':wrong_target}, state=self.state)
-            self.assertEqual(result['code'], 'CARD_HTTP_CANARY_SCOPE_REQUIRED')
-            self.assertFalse(result['submitted'])
-        self.resolver.resolve.assert_not_awaited()
+    async def test_foreign_business_scope_stops_dynamic_rk_before_save(self):
+        self.web.foreign_business = True
+        result = await self.call(profile='17')
+        self.assertNotEqual(result['status'], 'LINKED')
+        self.assertFalse(result['submitted'])
+        self.assertNotIn('28619313357728847', [call[0] for call in self.web.calls])
+        self.state.set_payment_link_state.assert_not_awaited()
 
     async def test_lost_reply_never_commits_foreign_business_or_ambiguous_new_credentials(self):
         self.web.lose_save=True
@@ -243,10 +256,8 @@ class CardServiceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_public_reconciliation_finishes_lost_save_without_replaying_card_fields(self):
         from app.payment_card_binding import profile_payment_card
-        from tests.test_static_payment_card import ACCOUNT
         self.web.lose_save = True
-        with patch('app.payment_card_service.CANARY_SCOPE', ('15', ACCOUNT)), \
-             patch('app.payment_card_service.resolve_payment_asset', AsyncMock(return_value={'business_id':BUSINESS})), \
+        with patch('app.payment_card_service.resolve_payment_asset', AsyncMock(return_value={'business_id':BUSINESS})), \
              patch('app.session.ProfileSession', return_value=self.cm), \
              patch('app.payment_card_http.encrypt_card_token', return_value='synthetic_token'):
             first = await profile_payment_card(self.resolver, '15', {**self.payload, 'account_id':ACCOUNT}, state=self.state)
