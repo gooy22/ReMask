@@ -121,6 +121,7 @@ async def profile_payment_card_http(resolver, profile, payload, *, state=None):
                         # absent in BOTH the complete child RK inventory and
                         # the independently scoped business wallet response.
                         methods['wallet_reconcile_stage'] = wallet_stage
+                        retained['funding'] = {**methods, 'profile_id': profile}
                     can_review_noncard = (
                         result.get('verification_stage') == 'business_wallet_card_not_observed'
                         and methods.get('inventory_complete') is True
