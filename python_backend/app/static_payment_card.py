@@ -167,6 +167,16 @@ def card_screen_proof(payload, account, *, account_evidence):
         return {**base, 'code': 'CARD_SCREEN_OPTIONS_INCONCLUSIVE'}
     result = {**base, 'code': 'CARD_SCREEN_CONFIRMED', 'account_scope_verified': True,
               'card_form_verified': True, 'options': {k: option[k] for k in names}}
+    # Evidence-only: the observed Meta Save sender can route a non-sharable
+    # card via a business wallet with share_to_child_payment_account_id.
+    # The current Save adapter uses the selected RK directly; never infer
+    # that switching wallets is safe from this signal alone.
+    owner = payment['billable_account'].get('owner_business_payment_account')
+    parent = owner.get('id') if isinstance(owner, dict) else None
+    result['business_wallet_route_possible'] = bool(
+        option['can_save_to_business'] and _node_id(parent))
+    result['business_wallet_route_unresolved'] = bool(
+        option['can_save_to_business'] and not _node_id(parent))
     safe = payment['billable_account'].get('billing_safe_mode_state')
     if isinstance(safe, dict) and safe.get('status') in {'PLACED', 'ENROLLED'}:
         result['bank_verification_required'] = True
