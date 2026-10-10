@@ -111,6 +111,25 @@ class StaticPaymentCardTests(unittest.IsolatedAsyncioTestCase):
         payload = self.screen(); payload['data']['payment_account']['id'] = 'foreign-payment'
         self.assertFalse(card_screen_proof(payload, ACCOUNT, account_evidence=account_evidence())['card_form_verified'])
 
+    def test_form_reports_business_wallet_route_without_changing_or_exposing_parent_id(self):
+        p=self.screen()
+        node=p['data']['payment_account']['billable_account']
+        node['owner_business_payment_account']={'id':'parent-payment-account'}
+        option=p['data']['payment_account']['billing_payment_method_options'][0]
+        option['can_save_to_business']=True
+        proof=card_screen_proof(p, ACCOUNT, account_evidence=account_evidence())
+        self.assertTrue(proof['card_form_verified'])
+        self.assertTrue(proof['business_wallet_route_possible'])
+        self.assertNotIn('parent-payment-account', json.dumps(proof))
+        option['can_save_to_business']=False
+        direct=card_screen_proof(p, ACCOUNT, account_evidence=account_evidence())
+        self.assertFalse(direct['business_wallet_route_possible'])
+        option['can_save_to_business']=True
+        node['owner_business_payment_account']=None
+        unresolved=card_screen_proof(p, ACCOUNT, account_evidence=account_evidence())
+        self.assertFalse(unresolved['business_wallet_route_possible'])
+        self.assertTrue(unresolved['business_wallet_route_unresolved'])
+
     def test_form_unknown_duplicate_or_malformed_options_and_partial_reads_are_inconclusive(self):
         for change in ('duplicate', 'wrong_type', 'not_boolean', 'foreign_account', 'errors', 'partial'):
             with self.subTest(change=change):
