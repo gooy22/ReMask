@@ -18,6 +18,7 @@ from .payment_inspection import account_id, resolve_payment_asset
 from .private_auth import private_auth_error
 from .payment_country_setup import configure_country
 from .static_payment_card import prepare_profile_card_form, confirm_saved_card
+from .payment_card_business_wallet import inspect_business_wallet_card
 from .static_payment_read import execute, account_proof, payment_page_proof, inspect_methods, complete_methods
 
 def setup_context(payload, target, payment):
@@ -115,6 +116,13 @@ async def profile_payment_card_http(resolver, profile, payload, *, state=None):
                             for row in methods.get('payment_methods', [])):
                         return {**retained, 'status':'ACTION_REQUIRED','code':'CARD_BANK_CONFIRMATION_REQUIRED'}
                     result = confirm_saved_card({**saved, 'status': 'VERIFYING'}, methods, business_id=asset['business_id'])
+                    if (result.get('status') == 'VERIFYING'
+                            and result.get('verification_stage') == 'save_credential_not_in_rk'
+                            and methods.get('inventory_complete') is True):
+                        wallet_stage = await inspect_business_wallet_card(
+                            web, account=target, business_id=asset['business_id'],
+                            saved=saved)
+                        result['verification_stage'] = wallet_stage
                     logging.getLogger('remask.payment_card').info(
                         'card reconcile verification account=%s status=%s stage=%s',
                         target, result.get('status'), result.get('verification_stage', 'confirmed'))
