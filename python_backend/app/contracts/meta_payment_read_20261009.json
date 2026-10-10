@@ -124,6 +124,15 @@
       },
       "response_parser": "exact_payment_page_v1",
       "read_options": "Observed BillingAddPaymentMethodRoot entrypoint forwards userIntent; BillingUserIntent enum includes VERIFY_PAYMENT_METHOD. Query only; does not run a wizard task or bank authorization."
+    },
+    "READ_SDC_CANDIDATES": {
+      "doc_id": "25160732503612508",
+      "endpoint_url": "https://business.facebook.com/api/graphql/",
+      "friendly_name": "BillingSDCAuthScreenQuery",
+      "operation_kind": "query",
+      "variables": {
+        "paymentAccountID": "$payment"
+      }
     }
   }
 }

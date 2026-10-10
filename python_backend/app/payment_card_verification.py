@@ -30,6 +30,46 @@ def _card_identity(payload):
     return brand, last4
 
 
+def sdc_candidate_proof(payload, credential_id, brand, last4):
+    """Check Meta's unverified-card screen without inferring status from empties.
+
+    Never return a full credential, bank amount, or request token.
+    The payment-account/BM linkage must already have been proven by the
+    independent exact-RK account and methods reads.
+    """
+    base = {'sdc_screen_verified': False, 'sdc_candidate': False,
+            'sdc_credential_match': False}
+    if (not isinstance(payload, dict) or payload.get('errors') or payload.get('error')
+            or payload.get('hasNext') is True):
+        return base
+    account = payload.get('data', {}).get('payment_account') if isinstance(payload.get('data'), dict) else None
+    rows = account.get('billing_payment_methods') if isinstance(account, dict) else None
+    if not isinstance(rows, list) or len(rows) > 500:
+        return base
+    found = []
+    for row in rows:
+        if not isinstance(row, dict):
+            return base
+        credential = row.get('credential')
+        if not isinstance(credential, dict):
+            return base
+        if credential.get('__typename') != 'ExternalCreditCard':
+            continue
+        if str(credential.get('card_association_name') or '').strip().lower() == brand.lower() and credential.get('last_four_digits') == last4:
+            found.append((row, credential))
+    if len(found) > 1:
+        return base
+    if not found:
+        return {**base, 'sdc_screen_verified': True}
+    row, credential = found[0]
+    exact = credential_id in (credential.get('id'), credential.get('credential_id'))
+    # An SDC form may contain only a credential_id where the methods read
+    # returned the Relay node id. In that case, never claim exact identity.
+    return {**base, 'sdc_screen_verified': True, 'sdc_candidate': True,
+            'sdc_credential_match': exact,
+            'sdc_usability': str(row.get('usability') or '')[:48]}
+
+
 async def verify_payment_card_http(resolver, profile, payload, *, state=None):
     """Read exact scoped card/tasks over the profile's cookie/proxy HTTP session.
 
@@ -100,9 +140,19 @@ async def verify_payment_card_http(resolver, profile, payload, *, state=None):
                         'verification_tasks_observed': chosen.get('verification_tasks_observed') is True}
             common = {**base, **selected, 'card_linked': True,
                       'funding': {**methods, 'profile_id': profile}}
+            sdc = sdc_candidate_proof(
+                await execute(web, 'READ_SDC_CANDIDATES',
+                              payment=evidence['payment_account_id'], business_id=business),
+                chosen['credential_id'], *card)
+            common = {**common, **sdc}
+            if not sdc['sdc_screen_verified']:
+                return {**common, 'code': 'CARD_VERIFICATION_SDC_READ_UNVERIFIED'}
+            if sdc['sdc_candidate'] and not sdc['sdc_credential_match']:
+                return {**common, 'code': 'CARD_VERIFICATION_SDC_CARD_UNVERIFIED'}
             if (chosen.get('needs_verification') is False
                     and chosen.get('verification_tasks_observed') is True
-                    and not chosen.get('verification_tasks')):
+                    and not chosen.get('verification_tasks')
+                    and not sdc['sdc_candidate']):
                 return {**common, 'status': 'OBSERVED',
                         'code': 'CARD_VERIFICATION_NO_REQUIRED_TASK'}
 
