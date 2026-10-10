@@ -176,6 +176,78 @@ class CardServiceTests(unittest.IsolatedAsyncioTestCase):
         phases=con.execute('SELECT phase FROM card_http_intents ORDER BY attempt_id').fetchall();con.close()
         self.assertEqual(phases,[('REVIEWED_EMPTY',),('LINKED',)])
 
+    async def test_reviewed_retry_allows_noncard_inventory_only_with_exact_wallet_absence(self):
+        import sqlite3, time
+        from app.payment_card_http import SAVE_DOC_ID
+        self.web.lose_verification=True
+        first=await self.call()
+        self.assertTrue(first['submitted'])
+        self.assertEqual(first['status'],'SUBMITTED_UNVERIFIED')
+        self.web.lose_verification=False
+        self.web.saved=False
+        original=self.web.graphql
+        async def noncard(doc, variables, **kwargs):
+            reply=await original(doc,variables,**kwargs)
+            if doc=='24871928132404465':
+                reply['data']['payment_account']['billing_payment_methods']=[
+                    {'credential':{'id':'noncard-fixture-credential',
+                                   '__typename':'PaymentPaypalBillingAgreement'}}]
+            return reply
+        self.web.graphql=noncard
+        self.web.calls.clear()
+        pending=await self.call({'operation':'reconcile','card_id':self.payload['card_id']})
+        self.assertEqual(pending['status'],'SUBMITTED_UNVERIFIED')
+        self.assertEqual(pending['verification_stage'],'business_wallet_card_not_observed')
+        self.assertEqual(pending['funding']['card_credential_count'],0)
+        self.assertEqual(pending['funding']['non_card_credential_count'],1)
+        self.assertEqual(pending['funding']['wallet_reconcile_stage'],
+                         'business_wallet_card_not_observed')
+        self.assertNotIn(SAVE_DOC_ID,[c[0] for c in self.web.calls])
+        con=sqlite3.connect(self.state.path)
+        con.execute('UPDATE card_http_intents SET updated_at=?',(int(time.time())-240,))
+        con.commit();con.close()
+        self.web.calls.clear()
+        # No replay is allowed without the operator's matching reviewed token.
+        blocked=await self.call({**self.payload,'attempt_id':'c'*24})
+        self.assertEqual(blocked['code'],'CARD_BINDING_RECONCILE_REQUIRED')
+        self.assertNotIn(SAVE_DOC_ID,[c[0] for c in self.web.calls])
+        self.web.calls.clear()
+        result=await self.call({**self.payload,'attempt_id':'c'*24,
+                                'reviewed_attempt_id':'b'*24})
+        self.assertEqual(result['status'],'LINKED')
+        self.assertEqual([c[0] for c in self.web.calls].count(SAVE_DOC_ID),1)
+        con=sqlite3.connect(self.state.path)
+        phases=con.execute('SELECT phase FROM card_http_intents ORDER BY attempt_id').fetchall()
+        con.close()
+        self.assertEqual(phases,[('REVIEWED_EMPTY',),('LINKED',)])
+
+    async def test_reviewed_noncard_requires_business_wallet_response(self):
+        import sqlite3, time
+        from app.payment_card_http import SAVE_DOC_ID
+        self.web.lose_verification=True
+        await self.call()
+        self.web.lose_verification=False;self.web.saved=False
+        original=self.web.graphql
+        async def wallet_unavailable(doc, variables, **kwargs):
+            if doc=='28635882856071901':
+                raise TimeoutError('business wallet unavailable')
+            reply=await original(doc,variables,**kwargs)
+            if doc=='24871928132404465':
+                reply['data']['payment_account']['billing_payment_methods']=[
+                    {'credential':{'id':'synthetic-noncard',
+                                   '__typename':'PaymentPaypalBillingAgreement'}}]
+            return reply
+        self.web.graphql=wallet_unavailable
+        con=sqlite3.connect(self.state.path)
+        con.execute('UPDATE card_http_intents SET updated_at=?',(int(time.time())-240,))
+        con.commit();con.close()
+        self.web.calls.clear()
+        result=await self.call({**self.payload,'attempt_id':'c'*24,
+                                'reviewed_attempt_id':'b'*24})
+        self.assertEqual(result['status'],'SUBMITTED_UNVERIFIED')
+        self.assertEqual(result['verification_stage'],'business_wallet_read_unavailable')
+        self.assertNotIn(SAVE_DOC_ID,[c[0] for c in self.web.calls])
+
     async def test_reviewed_retry_cannot_supersede_existing_card_or_pending_bank_action(self):
         self.web.lose_save=True
         await self.call()

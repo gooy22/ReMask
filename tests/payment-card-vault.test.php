@@ -355,6 +355,57 @@ try{
     $data=json_decode(file_get_contents($path),true);$data['bindings'][$key]['updated_at']=gmdate('c',time()-240);file_put_contents($path,json_encode($data));
     $old=$vault->binding($card['id'],'Other profile','123456789');
     expect(!isset($vault->reconcile($card['id'],'Other profile','123456789',$old,$empty)['retry_review']),'Bank action was made retryable');
+    // The real profile 17 case has a non-card billing instrument. The
+    // complete RK inventory and business-wallet credential-specific check
+    // must both show no card before one explicit reviewed retry is offered.
+    $pending=$vault->begin($card['id'],'Non-card wallet','123456789');
+    $vault->finish($card['id'],'Non-card wallet','123456789',
+        'SUBMITTED_UNVERIFIED',['submitted'=>true],$pending['attempt_id']);
+    $noncardKey=hash('sha256','Non-card wallet|123456789');
+    $noncardPath=$directory.'/cards.json';
+    $storage=json_decode(file_get_contents($noncardPath),true);
+    $storage['bindings'][$noncardKey]['updated_at']=gmdate('c',time()-240);
+    file_put_contents($noncardPath,json_encode($storage));
+    $noncardOld=$vault->binding($card['id'],'Non-card wallet','123456789');
+    $noncardProof=[
+        'profile_id'=>'Non-card wallet','account_id'=>'123456789',
+        'account_scope_verified'=>true,'checked_live'=>true,
+        'source'=>'private_facebook_billing_static_methods',
+        'business_scope_verified'=>true,'payment_account_relation_verified'=>true,
+        'methods_query_verified'=>true,'inventory_complete'=>true,'browser_started'=>false,
+        'verification_status'=>'UNVERIFIED','payment_methods'=>[],
+        'all_credential_ids'=>['unrelated-paypal-node'],'card_credential_count'=>0,
+        'non_card_credential_count'=>1,
+        'wallet_reconcile_stage'=>'business_wallet_card_not_observed'
+    ];
+    $noncardReview=$vault->reconcile($card['id'],'Non-card wallet','123456789',
+        $noncardOld,$noncardProof);
+    expect(($noncardReview['code']??'')==='CARD_RECONCILE_NO_METHOD'&&
+        isset($noncardReview['retry_review']['token']),
+        'Non-card payment instrument incorrectly blocks explicit reviewed card retry');
+    foreach([
+        ['wallet_reconcile_stage'=>'business_wallet_read_unavailable'],
+        ['wallet_reconcile_stage'=>'business_wallet_card_saved_not_attached_to_rk'],
+        ['card_credential_count'=>1],
+        ['inventory_complete'=>false],
+        ['payment_methods'=>[['type'=>'Visa','last4'=>'1111']]]
+    ] as $bad) {
+        $badProof=array_replace($noncardProof,$bad);
+        $checked=$vault->reconcile($card['id'],'Non-card wallet','123456789',
+            $noncardOld,$badProof);
+        expect(!isset($checked['retry_review']),
+            'Unconfirmed wallet or existing RK card allowed replay');
+        rejected(fn()=>$vault->beginReviewed($card['id'],'Non-card wallet','123456789',
+            $noncardReview['retry_review']['token'],$noncardOld,$badProof),
+            'CARD_RETRY_ACCOUNT_NOT_EMPTY');
+    }
+    rejected(fn()=>$vault->begin($card['id'],'Non-card wallet','123456789'),
+        'CARD_BINDING_RECONCILE_REQUIRED');
+    $reviewed=$vault->beginReviewed($card['id'],'Non-card wallet','123456789',
+        $noncardReview['retry_review']['token'],$noncardOld,$noncardProof);
+    expect($reviewed['reviewed_retry']===true&&$reviewed['attempt_id']!==$pending['attempt_id'],
+        'Reviewed retry did not mint new scoped attempt');
+
     // Pre-submit Meta gates remain actionable; bank/unknown submissions do not.
     $countryAttempt=$vault->begin($card['id'],'Country mismatch','123456789');
     $vault->finish($card['id'],'Country mismatch','123456789','BLOCKED',
