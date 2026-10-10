@@ -132,11 +132,11 @@ async def profile_payment_card_http(resolver, profile, payload, *, state=None):
                         # credit card. Permit the *explicitly* reviewed, stale
                         # attempt to be retired only after the exact card is
                         # absent in BOTH the complete child RK inventory and
-                        # the independently scoped business wallet response.
+                        # the independently scoped business wallet AND direct saved-card identity read.
                         methods['wallet_reconcile_stage'] = wallet_stage
                         retained['funding'] = {**methods, 'profile_id': profile}
                     can_review_noncard = (
-                        result.get('verification_stage') == 'business_wallet_card_not_observed'
+                        result.get('verification_stage') == 'saved_card_identity_not_observed'
                         and methods.get('inventory_complete') is True
                         and methods.get('card_credential_count') == 0
                         and methods.get('payment_methods') == [])
