@@ -27,6 +27,7 @@ const sandbox={
     if(body.action==='bind')return {result:bindResult||{status:'SUBMITTED_UNVERIFIED',code:'CARD_LINK_NOT_VERIFIED',submitted:true}};
     if(body.action==='prepare')return {result:prepareResult||{status:'FORM_READY',code:'CARD_FORM_READY',submitted:false}};
     if(body.action==='reconcile')return {result:reviewResult||{status:'SUBMITTED_UNVERIFIED',code:'CARD_RECONCILE_UNVERIFIED',submitted:false,funding:{verification_status:'UNVERIFIED',funding_verified:false}}};
+    if(body.action==='verify')return {result:{status:'ACTION_REQUIRED',code:'CARD_VERIFICATION_MUTATION_NOT_PINNED',verification_triggered:false,browser_started:false,submitted:false,card_confirmation_status:'REQUIRED',verification_tasks:['statement_code']}};
     return {funding:{verification_status:'LINKED',account_scope_verified:true,card_linked:true,funding_verified:false,payment_methods:[{type:'Visa',last4:'1111'}]}}}
 };
 vm.createContext(sandbox);vm.runInContext(fs.readFileSync('railway-payment-inspection-ui.js','utf8'),sandbox);
@@ -51,12 +52,19 @@ const requiredCard={type:'Visa',last4:'1111',needs_verification:false,verificati
 assert.match(sandbox.fundingCell({verification_status:'LINKED',card_linked:true,account_scope_verified:true,payment_methods:[requiredCard]},cached),/ТРЕБУЕТ ПОДТВЕРЖДЕНИЯ/);
 const panel=element();sandbox.paymentConfirmationPanel(rows[0],{card_confirmation_status:'REQUIRED',verification_tasks:['statement_code'],funding:{payment_methods:[requiredCard]}},panel);
 assert.ok(panel.children[0].children.some(e=>e.textContent.includes('код из выписки')));
-assert.ok(panel.children[0].children.some(e=>e.href==='https://business.facebook.com/billing_hub/payment_settings/?asset_id=123456789&business_id=123450001'));
+assert.ok(!panel.children[0].children.some(e=>e.href), 'verification must not require manual Meta navigation');
 assert.doesNotMatch(sandbox.fundingCell({verification_status:'LINKED',card_linked:true,account_scope_verified:true,payment_methods:[{...requiredCard,verification_tasks:[],card_confirmation_status:'CLEAR'}]}, {...cached,status:'ACTION_REQUIRED',last_result_code:'CARD_BANK_CONFIRMATION_REQUIRED'}),/ТРЕБУЕТ ПОДТВЕРЖДЕНИЯ/);
 (async()=>{
   await sandbox.showFunding();assert.equal(requests.length,1);assert.equal(requests[0].body.action,'list');
   assert.ok(elements.paymentCardSelect.children[0].textContent.includes('•••• 1111'));
   assert.ok(elements.paymentCardBind.handlers.click);assert.ok(elements.paymentCardSaveBind.handlers.click);
+  requests=[];const verifyPanel=element();
+  await sandbox.inspectCardVerificationHTTP(rows,card,verifyPanel);
+  assert.deepEqual(requests.map(r=>r.body.action),['verify','verify']);
+  assert.ok(requests.every(r=>r.body.cvv===undefined&&r.body.number===undefined));
+  assert.ok(!JSON.stringify(verifyPanel.children).includes('business.facebook.com'));
+  assert.ok(verifyPanel.children.some(r=>String(r.textContent||'').includes('Запрос в банк не отправлен')));
+  requests=[];
   sandbox.$('paymentCardNumber').value='4111111111111111';sandbox.$('paymentCardExpiry').value='12/99';
   for(const key of ['holder','country','address','city','region','postal_code','label'])sandbox.$('paymentCard_'+key).value='';
   await sandbox.savePaymentCard();assert.equal(elements.paymentCardNumber.value,'');
