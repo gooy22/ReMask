@@ -98,3 +98,56 @@ async def inspect_business_wallet_card(web, *, account, business_id, saved):
                                           business_id=business_id, saved=saved)
     except Exception:
         return 'business_wallet_read_unavailable'
+
+
+async def resolve_business_parent_for_new_card(web, *, account, business_id, child_payment,
+                                               card_type, last4):
+    """Prove the business wallet payment ID before a NEW parent->child Save.
+
+    The selected Meta form must separately confirm that this is its owning
+    business. No caller may provide the business payment ID, and no mutation is
+    performed here. A wallet card with the same mask blocks duplicate Save.
+    """
+    account, business_id, child_payment = (_identity(account), _identity(business_id),
+                                           _identity(child_payment))
+    if not isinstance(card_type, str) or not isinstance(last4, str):
+        return {'code': 'CARD_BUSINESS_PARENT_UNVERIFIED'}
+    variables = {
+        'assetID': account, 'businessID': business_id,
+        'paymentAccountID': child_payment, 'preloadPaymentAccount': True,
+        'billable_account_types': ['FB_ADS'], 'connected_asset_limit': 10,
+        'connected_asset_detail_limit': 10, 'include_billable_accounts_with_credentials': True,
+        'only_show_account_info_tooltip': False,
+    }
+    try:
+        async with asyncio.timeout(18):
+            web.private_only = True
+            payload = await web.graphql(DOC_ID, variables, friendly_name=FRIENDLY_NAME,
+                                        endpoint_url=ENDPOINT, business_context_id=business_id)
+    except Exception:
+        return {'code': 'CARD_BUSINESS_PARENT_QUERY_UNAVAILABLE'}
+    data = payload.get('data') if isinstance(payload, dict) else None
+    business = data.get('business') if isinstance(data, dict) else None
+    if (not _clean_payload(payload) or not isinstance(business, dict)
+            or str(business.get('id')) != business_id):
+        return {'code': 'CARD_BUSINESS_PARENT_SCOPE_UNVERIFIED'}
+    wallet = business.get('billing_payment_account')
+    try:
+        parent = _identity(wallet.get('id')) if isinstance(wallet, dict) else ''
+    except ValueError:
+        return {'code': 'CARD_BUSINESS_PARENT_UNVERIFIED'}
+    if not parent or parent == child_payment:
+        return {'code': 'CARD_BUSINESS_PARENT_UNVERIFIED'}
+    methods = wallet.get('billing_payment_methods')
+    if not isinstance(methods, list) or len(methods) > 500:
+        return {'code': 'CARD_BUSINESS_PARENT_METHODS_UNVERIFIED'}
+    for item in methods:
+        candidate = item.get('credential') if isinstance(item, dict) else None
+        if not isinstance(candidate, dict):
+            return {'code': 'CARD_BUSINESS_PARENT_METHODS_UNVERIFIED'}
+        if (candidate.get('__typename') == 'ExternalCreditCard'
+                and _brand(candidate.get('card_association_name')) == card_type
+                and candidate.get('last_four_digits') == last4):
+            return {'code': 'CARD_BUSINESS_WALLET_MASK_COLLISION'}
+    return {'code': 'CARD_BUSINESS_PARENT_CONFIRMED',
+            'parent_payment_account_id': parent}
