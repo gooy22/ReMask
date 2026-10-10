@@ -181,7 +181,7 @@ class BankVerificationLedger(CardIntentLedger):
         for item in (account, payment_account):
             if not isinstance(item, str) or not re.fullmatch(r'\d{5,30}', item):
                 raise ValueError('VERIFY_INVALID_SCOPE')
-        if not isinstance(credential, str) or not re.fullmatch(r'[A-Za-z0-9_:+-]{1,200}', credential):
+        if not isinstance(credential, str) or not re.fullmatch(r'[A-Za-z0-9_:+/=-]{1,200}', credential):
             raise ValueError('VERIFY_INVALID_CREDENTIAL')
         if not isinstance(card_id, str) or not re.fullmatch(r'card_[a-f0-9]{24}', card_id):
             raise ValueError('VERIFY_INVALID_CARD')
