@@ -85,6 +85,16 @@ async def profile_payment_card_http(resolver, profile, payload, *, state=None):
                         target, methods.get('code'), methods.get('inventory_complete'),
                         len(methods.get('all_credential_ids', [])), len(methods.get('payment_methods', [])))
                     retained['funding'] = {**methods, 'profile_id': profile}
+                    if (operation == 'bind' and payload.get('reviewed_attempt_id') == pending['attempt_id']
+                            and methods.get('inventory_complete') is True
+                            and methods.get('all_credential_ids') == []
+                            and methods.get('verification_status') == 'NONE'
+                            and saved.get('status') != 'ACTION_REQUIRED'):
+                        await ledger.review_empty(pending['attempt_id'], profile, target, card_id)
+                        return await profile_payment_card_http(
+                            resolver, profile,
+                            {k:v for k,v in payload.items() if k != 'reviewed_attempt_id'},
+                            state=state)
                     if not saved.get('credential'):
                         matches = [row for row in methods.get('payment_methods', [])
                             if row.get('last4') == saved.get('last4') and row.get('type') == saved.get('expected_card_type')
