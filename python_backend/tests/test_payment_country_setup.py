@@ -81,6 +81,50 @@ class CountrySetupTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn('setup_payload', result, mode)
             self.assertNotIn(INITIALIZE_DOC, [c[0] for c in web.calls], mode)
 
+    async def test_initial_setup_uses_explicit_supported_currency_when_meta_has_not_selected_it(self):
+        web=self.fresh()
+        account=web.setup['data']['payment_account']['billable_account']
+        account['currency']=None
+        original=web.graphql
+        async def fill_currency(doc,variables,**kwargs):
+            if doc==INITIALIZE_DOC:
+                account['currency']=variables['input']['currency']
+            return await original(doc,variables,**kwargs)
+        web.graphql=fill_currency
+        result=await self.call(web)
+        self.assertEqual(result['code'], 'CARD_COUNTRY_INITIALIZED_CONFIRMED')
+        saved=next(row for row in web.calls if row[0]==INITIALIZE_DOC)
+        self.assertEqual(saved[1]['input']['currency'],'USD')
+
+    async def test_initial_setup_resolves_existing_timezone_from_unique_live_option_label(self):
+        web=self.fresh()
+        a=web.setup['data']['payment_account']['billable_account']
+        a['timezone_info']={'display_name':'Kyiv time (UTC+3)'}
+        a['supported_timezone_options']=[{'label':'Kyiv time (UTC+3)','value':'Europe/Kyiv'}]
+        result=await self.call(web)
+        self.assertEqual(result['code'],'CARD_COUNTRY_INITIALIZED_CONFIRMED')
+        sent=next(row for row in web.calls if row[0]==INITIALIZE_DOC)
+        self.assertEqual(sent[1]['input']['timezone'],'Europe/Kyiv')
+
+    async def test_existing_unknown_timezone_label_stops_with_exact_safe_reason(self):
+        web=self.fresh()
+        a=web.setup['data']['payment_account']['billable_account']
+        a['timezone_info']={'display_name':'Unidentified configured time zone'}
+        result=await self.call(web)
+        self.assertEqual(result['code'],'CARD_COUNTRY_UPDATE_OPTIONS_UNCONFIRMED')
+        self.assertEqual(result['setup_stage'],'timezone_display_unmatched')
+        self.assertNotIn(INITIALIZE_DOC,[row[0] for row in web.calls])
+
+    async def test_initial_setup_accepts_live_kyiv_kiev_alias_without_guessing_other_zone(self):
+        web=self.fresh()
+        a=web.setup['data']['payment_account']['billable_account']
+        a['timezone_info']={'timezone':'Europe/Kyiv'}
+        a['supported_timezone_options']=[{'value':'Europe/Kiev'}]
+        result=await self.call(web)
+        self.assertEqual(result['code'],'CARD_COUNTRY_INITIALIZED_CONFIRMED')
+        sent=next(row for row in web.calls if row[0]==INITIALIZE_DOC)
+        self.assertEqual(sent[1]['input']['timezone'],'Europe/Kiev')
+
     async def test_fresh_country_reply_never_replaces_independent_persisted_readback(self):
         web = self.fresh(); web.readback_wrong = True
         result = await self.call(web)
