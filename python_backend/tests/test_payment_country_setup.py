@@ -96,6 +96,39 @@ class CountrySetupTests(unittest.IsolatedAsyncioTestCase):
         saved=next(row for row in web.calls if row[0]==INITIALIZE_DOC)
         self.assertEqual(saved[1]['input']['currency'],'USD')
 
+    async def test_fresh_existing_meta_currency_overrides_ui_default_without_changing_currency(self):
+        # The workspace bootstraps new accounts with USD, but a real RK may
+        # already have a different currency before its tax country is set.
+        web=self.fresh()
+        account=web.setup['data']['payment_account']['billable_account']
+        account['currency']='EUR'
+        account['supported_currency_options']=[{'value':'EUR'},{'value':'USD'}]
+        result=await self.call(web)
+        self.assertEqual(result['code'],'CARD_COUNTRY_INITIALIZED_CONFIRMED')
+        mutation=next(row for row in web.calls if row[0]==INITIALIZE_DOC)
+        self.assertEqual(mutation[1]['input']['currency'],'EUR')
+        self.assertEqual(result['setup_payload']['data']['payment_account']['billable_account']['currency'],'EUR')
+
+    async def test_fresh_existing_currency_restricted_by_meta_stays_blocked(self):
+        web=self.fresh()
+        account=web.setup['data']['payment_account']['billable_account']
+        account['currency']='EUR'
+        account['supported_currency_options']=[{'value':'EUR'},{'value':'USD'}]
+        account['billing_country_currency_restrictions']['country_currency']=[
+            {'country':'UA','currency':'USD'}]
+        result=await self.call(web)
+        self.assertEqual(result['code'],'CARD_BILLING_COUNTRY_MISMATCH')
+        self.assertNotIn(INITIALIZE_DOC,[row[0] for row in web.calls])
+
+    async def test_fresh_existing_currency_must_still_appear_in_meta_supported_options(self):
+        web=self.fresh()
+        account=web.setup['data']['payment_account']['billable_account']
+        account['currency']='EUR'
+        result=await self.call(web)
+        self.assertEqual(result['code'],'CARD_COUNTRY_UPDATE_OPTIONS_UNCONFIRMED')
+        self.assertEqual(result['setup_stage'],'currency_not_in_options')
+        self.assertNotIn(INITIALIZE_DOC,[row[0] for row in web.calls])
+
     async def test_initial_setup_resolves_existing_timezone_from_unique_live_option_label(self):
         web=self.fresh()
         a=web.setup['data']['payment_account']['billable_account']

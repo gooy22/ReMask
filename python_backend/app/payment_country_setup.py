@@ -86,8 +86,8 @@ async def _initialize_country(web, *, target, business_id, evidence, payload, de
     currency = original_currency or setup.get('currency')
     if not isinstance(currency, str) or not re.fullmatch(r'[A-Z]{3}', currency):
         return unknown('currency_missing')
-    if setup.get('currency', currency) != currency:
-        return unknown('currency_differs_from_existing')
+    if not original_currency and setup.get('currency') != currency:
+        return unknown('currency_selection_unconfirmed')
     if currency not in currency_options:
         return unknown('currency_not_in_options')
     original_timezone = context.get('timezone')
