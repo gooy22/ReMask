@@ -150,6 +150,8 @@ class PaymentHTTPTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(body['biz_credential_is_sharable'],False)
         self.assertEqual(body['upl_logging_data']['share_to_payment_account_id'],PAYMENT)
         self.assertEqual(save[1]['paymentAccountID'],PAYMENT)
+        key=next(x for x in web.calls if x[0]==KEY_DOC_ID)
+        self.assertEqual(key[1]['input']['target_account_id'],'999998888777')
         lookup=next(x for x in web.calls if x[0]=='28635882856071901')
         self.assertEqual(lookup[1]['businessID'],BUSINESS)
         self.assertEqual(lookup[1]['paymentAccountID'],PAYMENT)
