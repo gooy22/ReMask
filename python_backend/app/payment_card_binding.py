@@ -763,7 +763,7 @@ async def _profile_payment_card_execute(resolver:Any,profile:str,payload:dict[st
 
 async def profile_payment_card(resolver:Any,profile:str,payload:dict[str,Any],*,state:Any=None) -> dict[str,Any]:
     target=account_id(payload.get('account_id',''));operation=payload.get('operation','')
-    if operation not in {'prepare','bind','reconcile'}:raise ValueError('CARD_OPERATION_INVALID')
+    if operation not in {'prepare','bind','reconcile','verify'}:raise ValueError('CARD_OPERATION_INVALID')
     try:
         from .payment_card_service import profile_payment_card_http
         result=await asyncio.wait_for(profile_payment_card_http(resolver,profile,payload,state=state),timeout=110)
