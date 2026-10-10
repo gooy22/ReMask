@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import logging
 from typing import Any
 
 from fb_worker import (
@@ -18,6 +19,9 @@ from .facebook_business_create import (
     DocIdMutationError,
     set_business_primary_page,
 )
+
+
+log = logging.getLogger("remask_worker")
 
 
 class BusinessCreateError(RuntimeError):
@@ -286,7 +290,10 @@ async def _create_business_via_web(
     selected from the runtime doc_id registry.
     """
     try:
+        profile = str(getattr(getattr(session, "context", None), "profile_id", ""))
+        log.info("[%s] BM private stage=controller_open", profile)
         controller = await session.facebook_controller()
+        log.info("[%s] BM private stage=controller_ready", profile)
         if require_page_backed and not str(user_email or "").strip():
             raise BusinessCreateError(
                 "BUSINESS_EMAIL_REQUIRED",
@@ -298,6 +305,7 @@ async def _create_business_via_web(
                 diagnostics=diagnostics,
             )
 
+        log.info("[%s] BM private stage=create_pipeline_enter", profile)
         web_result = await controller.create_business_manager_detailed(
             name=business_name,
             page_id=clean_page,

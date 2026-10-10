@@ -106,6 +106,8 @@ class PrivateHttpClient:
         if requested_proxy != self.proxy:
             raise httpx.ProxyError("Private request cannot change profile proxy")
         redirects = kwargs.pop("allow_redirects", False)
+        log.info("[%s] private_http start method=%s host=%s", self.profile_name,
+                 method.upper(), httpx.URL(url).host)
         # HTTPX timeouts bound individual I/O phases. Also preserve the old
         # whole-request deadline, including stream consumption and redirects.
         async with asyncio.timeout(self.timeout_seconds):
