@@ -62,7 +62,9 @@ class CountrySetupTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(UPDATE_DOC, docs)
         mutation = next(c for c in web.calls if c[0] == INITIALIZE_DOC)
         self.assertEqual(mutation[1], {'input':{'billable_account_payment_legacy_account_id':PAYMENT,
-            'country_code':'UA','currency':'USD','timezone':'America/Los_Angeles'},'paymentAccountID':PAYMENT})
+            'country_code':'UA','currency':'USD','timezone':'America/Los_Angeles'},'paymentAccountID':PAYMENT,
+            'completedTasks':['set_country_currency_timezone'],'userIntent':'ADD_PAYMENT_METHOD',
+            'boostDurationInDays':None,'dailyBudget':None,'skipDeferredFragments':True})
         self.assertEqual(docs[-2:], ['28797973873175785','28388533884149241'])
 
     async def test_fresh_country_missing_permission_options_restrictions_or_foreign_business_never_mutates(self):

@@ -70,7 +70,9 @@ async def _initialize_country(web, *, target, business_id, evidence, payload, de
         return {'code':'CARD_COUNTRY_INITIAL_SETUP_UNCONFIRMED'}
     result = await web.graphql(INITIALIZE_DOC, {'input':{
         'billable_account_payment_legacy_account_id':payment, 'country_code':desired,
-        'currency':context['currency'], 'timezone':context['timezone']}, 'paymentAccountID':payment},
+        'currency':context['currency'], 'timezone':context['timezone']}, 'paymentAccountID':payment,
+        'completedTasks':['set_country_currency_timezone'], 'userIntent':'ADD_PAYMENT_METHOD',
+        'boostDurationInDays':None, 'dailyBudget':None, 'skipDeferredFragments':True},
         friendly_name='useBillingSetCountryCurrencyMutation', endpoint_url=ENDPOINT,
         business_context_id=business_id)
     data = result.get('data') if isinstance(result, dict) else None
