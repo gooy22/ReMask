@@ -826,6 +826,20 @@ async def run_verification_http_contract_audit() -> None:
                                                    row['type'], row['last4'])})
                 log.warning('verification HTTP fallback SDC profile=%s account=%s cards=%s',
                             profile, account, json.dumps(cards, separators=(',', ':'))[:4500])
+                if os.getenv('REMASK_VERIFY_AUDIT_SOURCE') == '1':
+                    from app.contract_maintenance.payment_sources import inspect_profile_payment_sources
+                    async with asyncio.timeout(110):
+                        audit = await inspect_profile_payment_sources(
+                            pool.resolver, profile, account, state=pool.provisioning_state,
+                            audit_variant_sources=True)
+                    for module in audit.get('modules', []):
+                        if (isinstance(module, dict)
+                                and module.get('name') in {'BillingRiskUtils', 'BillingSDCAuthState',
+                                    'BillingTrySDCAuthState', 'BillingSDCAuthButton.react',
+                                    'BillingSDCAuthScreen.react', 'BillingRiskVerifySDCPageViewManager.react'}
+                                and isinstance(module.get('source'), str)):
+                            log.warning('verification public contract module=%s source=%s',
+                                        module['name'], module['source'][:8500])
                 return
             methods = methods_proof(await execute(web, 'READ_METHODS', account=account,
                 payment=proof['payment_account_id'], business_id=business),
