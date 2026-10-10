@@ -257,6 +257,10 @@ def source_export(rows, *, max_bytes=MAX_EXPORT_BYTES):
     """Keep artifacts and critical senders first; always disclose omissions."""
     def priority(row):
         name = row['name']
+        if name in {'useBillingVerifySDCCodeMutation', 'useBillingVerifySDCMutation',
+                    'BillingSDCVerifyScreen.react', 'BillingRiskVerifySDCCodePage.react',
+                    'BillingRiskVerifySDCCodePageViewManager.react'}:
+            return -4
         if re.search(r'(?:Risk|Verif|ThreeDS|3DS|SDC|CVCO|NativeOTP)', name, re.I):
             return -2
         if name in REQUIRED_SOURCE_MODULES:
