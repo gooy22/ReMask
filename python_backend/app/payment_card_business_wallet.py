@@ -71,10 +71,17 @@ def business_wallet_card_stage(payload, *, account, business_id, saved):
 async def inspect_business_wallet_card(web, *, account, business_id, saved):
     """Query owner Business wallet, never POST card or confirm a financial action."""
     account, business_id = _identity(account), _identity(business_id)
+    # The combined Meta view also reads payment_account. Bind its parameter
+    # to this exact previously proven RK payment account, not an empty default
+    # and never a guessed parent identifier.
+    try:
+        payment_id = _identity(saved.get('payment_account_id'))
+    except (ValueError, AttributeError):
+        return 'business_wallet_save_identity_missing'
     variables = {
         'assetID': account,
         'businessID': business_id,
-        'paymentAccountID': '',
+        'paymentAccountID': payment_id,
         'preloadPaymentAccount': True,
         'billable_account_types': ['FB_ADS'],
         'connected_asset_limit': 10,
