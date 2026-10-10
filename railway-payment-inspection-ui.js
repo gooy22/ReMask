@@ -250,7 +250,8 @@ function paymentCardBriefMessage(result){
   };
   if(result?.code in brief)return brief[result.code];
   if(!result?.code)return 'Не удалось получить результат.';
-  return paymentCardMessage({code:result.code,missing_fields:result.missing_fields});
+  const described=paymentCardMessage({code:result.code,missing_fields:result.missing_fields});
+  return described===result.code?'Не удалось завершить действие в Meta.':described;
 }
 
 function paymentCardAuthEvidence(result){
@@ -394,7 +395,8 @@ function paymentApplyFunding(row,funding){
 }
 
 function paymentConfirmationPanel(row,result,container){
-  if(!result)return;
+  if(!result||String(result.code||'').startsWith('SDC_')
+      ||result.code==='CARD_VERIFICATION_NO_REQUIRED_TASK')return;
   const methods=result.funding?.payment_methods||[];
   const ids=[result.credential?.id,result.credential?.credential_id].filter(Boolean);
   const card=methods.find(m=>ids.includes(m.credential_id))||(methods.length===1?methods[0]:null);
