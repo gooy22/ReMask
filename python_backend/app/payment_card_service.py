@@ -149,6 +149,9 @@ async def profile_payment_card_http(resolver, profile, payload, *, state=None):
                 setup_payload = await execute(web, 'READ_SETUP', payment=payment, business_id=business)
                 configured = await configure_country(web, target=target, business_id=business,
                     evidence=evidence, current_payload=setup_payload, setup=setup)
+                import logging
+                logging.getLogger('remask.payment_card').info('card country setup result account=%s code=%s',
+                    target, configured.get('code'))
                 if 'setup_payload' not in configured:
                     return {**base, 'code':configured['code']}
                 country, currency = setup_context(configured['setup_payload'], target, payment)

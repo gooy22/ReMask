@@ -3,7 +3,7 @@ import hashlib
 from pathlib import Path
 import unittest
 
-from app.payment_country_setup import configure_country, DECISION_DOC, UPDATE_DOC
+from app.payment_country_setup import configure_country, DECISION_DOC, UPDATE_DOC, INITIALIZE_DOC
 from app.static_payment_read import account_proof
 from tests.test_payment_card_http import FakeHTTP, read_account, read_screen
 from tests.test_static_payment_card import ACCOUNT, BUSINESS, PAYMENT, NODE
@@ -28,7 +28,7 @@ class CountryHTTP(FakeHTTP):
             p=copy.deepcopy(self.setup)
             p['data']['payment_account']['billable_account']['billable_account_tax_info']['can_update_tax_country']=self.editable
             return self.decision_override if self.decision_override is not None else p
-        if doc==UPDATE_DOC:
+        if doc in {UPDATE_DOC, INITIALIZE_DOC}:
             self.calls.append((doc,copy.deepcopy(variables),kwargs))
             country=variables['input']['country_code']
             tax=self.setup['data']['payment_account']['billable_account']['billable_account_tax_info']
@@ -43,8 +43,53 @@ class CountryHTTP(FakeHTTP):
 
 
 class CountrySetupTests(unittest.IsolatedAsyncioTestCase):
+    def fresh(self):
+        web = CountryHTTP()
+        account = web.setup['data']['payment_account']['billable_account']
+        account['billable_account_tax_info']['business_country_code'] = None
+        account['billing_page_configs'] = {'country_currency_timezone':{'can_select_tax_country':True}}
+        account['supported_currency_options'] = [{'value':'USD'}]
+        account['supported_timezone_options'] = [{'value':'America/Los_Angeles'}]
+        account['billing_country_currency_restrictions'] = {'country_currency':[], 'currency_country':[]}
+        return web
+
+    async def test_fresh_country_uses_initial_sender_after_complete_empty_and_preserves_currency_timezone(self):
+        web = self.fresh()
+        result = await self.call(web)
+        self.assertEqual(result['code'], 'CARD_COUNTRY_INITIALIZED_CONFIRMED')
+        docs = [c[0] for c in web.calls]
+        self.assertLess(docs.index('24871928132404465'), docs.index(INITIALIZE_DOC))
+        self.assertNotIn(UPDATE_DOC, docs)
+        mutation = next(c for c in web.calls if c[0] == INITIALIZE_DOC)
+        self.assertEqual(mutation[1], {'input':{'billable_account_payment_legacy_account_id':PAYMENT,
+            'country_code':'UA','currency':'USD','timezone':'America/Los_Angeles'},'paymentAccountID':PAYMENT})
+        self.assertEqual(docs[-2:], ['28797973873175785','28388533884149241'])
+
+    async def test_fresh_country_missing_permission_options_restrictions_or_foreign_business_never_mutates(self):
+        for mode in ['permission','currency','timezone','restriction','foreign_business','existing_card']:
+            web = self.fresh()
+            a = web.setup['data']['payment_account']['billable_account']
+            if mode == 'permission': a['billing_page_configs']['country_currency_timezone']['can_select_tax_country'] = False
+            if mode == 'currency': a['supported_currency_options'] = []
+            if mode == 'timezone': a['supported_timezone_options'] = []
+            if mode == 'restriction': a['billing_country_currency_restrictions']['country_currency'] = [{'country':'UA','currency':'UAH'}]
+            if mode == 'foreign_business': web.foreign_business = True
+            if mode == 'existing_card': web.saved = True
+            result = await self.call(web)
+            self.assertNotIn('setup_payload', result, mode)
+            self.assertNotIn(INITIALIZE_DOC, [c[0] for c in web.calls], mode)
+
+    async def test_fresh_country_reply_never_replaces_independent_persisted_readback(self):
+        web = self.fresh(); web.readback_wrong = True
+        result = await self.call(web)
+        self.assertEqual(result['code'], 'CARD_COUNTRY_UPDATE_VERIFY_PENDING')
+        self.assertNotIn('setup_payload', result)
+
     def test_current_country_documents_and_update_sender_are_pinned(self):
         hashes={
+            'useBillingSetCountryCurrencyMutation':'16d3e22587a4ac4e6fcfe5ee697e0f3cd725fe40ab580363e421fa0c16419b8b',
+            'useBillingSetCountryCurrencyMutation.graphql':'dca44bd1e653d5ca7df971343f128074f513ac747bed9be682f2d13b31e9033a',
+            'useBillingSetCountryCurrencyMutation_facebookRelayOperation':'b2d67135b4ff171dcb7ae9e043fa855491e7ce25b2ee3f5022aff534a9028c00',
             'BillingCountryCurrencyDecisionStateQuery_facebookRelayOperation':'aff628e18b369a7a1868a4b8c73f44d08d7afd05e5b8bb3800b4f51c9135838a',
             'BillingCountryCurrencyDecisionStateQuery.graphql':'ea721a2401976c33c5133c2440b9b36f7070c9c73b55e5f2983aa9e6968895b3',
             'BillingCountryCurrencyDecisionStateSetCountryCurrencyTimezoneMutation_facebookRelayOperation':'147f5a0dead3401e5fd1d92cfdd3cf4ca33bc0d2873e5ab361f4bbd08ae1e82e',
@@ -56,6 +101,7 @@ class CountrySetupTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(hashlib.sha256(source.encode()).hexdigest(),digest)
         self.assertIn(DECISION_DOC,(root/'BillingCountryCurrencyDecisionStateQuery_facebookRelayOperation.current.js').read_text())
         self.assertIn(UPDATE_DOC,(root/'BillingCountryCurrencyDecisionStateSetCountryCurrencyTimezoneMutation_facebookRelayOperation.current.js').read_text())
+        self.assertIn(INITIALIZE_DOC,(root/'useBillingSetCountryCurrencyMutation_facebookRelayOperation.current.js').read_text())
 
     async def call(self,web,setup=None):
         return await configure_country(web,target=ACCOUNT,business_id=BUSINESS,
