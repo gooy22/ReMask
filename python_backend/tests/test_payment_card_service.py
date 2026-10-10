@@ -187,6 +187,9 @@ class CardServiceTests(unittest.IsolatedAsyncioTestCase):
         self.web.saved=False
         original=self.web.graphql
         async def noncard(doc, variables, **kwargs):
+            # A retryable attempt must have no surviving Meta card identity.
+            if doc=='27586872297608269':
+                return {'data':{'node':None}}
             reply=await original(doc,variables,**kwargs)
             if doc=='24871928132404465':
                 reply['data']['payment_account']['billing_payment_methods']=[
@@ -197,11 +200,11 @@ class CardServiceTests(unittest.IsolatedAsyncioTestCase):
         self.web.calls.clear()
         pending=await self.call({'operation':'reconcile','card_id':self.payload['card_id']})
         self.assertEqual(pending['status'],'SUBMITTED_UNVERIFIED')
-        self.assertEqual(pending['verification_stage'],'business_wallet_card_not_observed')
+        self.assertEqual(pending['verification_stage'],'saved_card_identity_not_observed')
         self.assertEqual(pending['funding']['card_credential_count'],0)
         self.assertEqual(pending['funding']['non_card_credential_count'],1)
         self.assertEqual(pending['funding']['wallet_reconcile_stage'],
-                         'business_wallet_card_not_observed')
+                         'saved_card_identity_not_observed')
         self.assertNotIn(SAVE_DOC_ID,[c[0] for c in self.web.calls])
         con=sqlite3.connect(self.state.path)
         con.execute('UPDATE card_http_intents SET updated_at=?',(int(time.time())-240,))
