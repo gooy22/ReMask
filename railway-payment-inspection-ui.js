@@ -306,7 +306,7 @@ async function showFunding(restored=null){
     </div>
     <details class="mt-2"><summary>Настройки оплаты</summary><div class="ws-form mt-2">
       <div><label for="paymentSetupCountry">Страна оплаты РК</label><select id="paymentSetupCountry"><option value="UA">Украина; если поле заблокировано — текущая страна Meta</option><option value="CURRENT">Текущая страна Meta</option></select></div>
-      <div><label for="paymentSetupCurrency">Валюта оплаты РК</label><select id="paymentSetupCurrency"><option value="USD">USD — доллар США</option></select></div>
+      <div><label for="paymentSetupCurrency">Валюта, если РК ещё не настроен</label><select id="paymentSetupCurrency"><option value="USD">USD — доллар США</option></select></div>
       <div><label for="paymentSetupTimezone">Часовой пояс РК</label><input id="paymentSetupTimezone" value="Europe/Kyiv"></div>
     </div></details>
     <details id="paymentCardNew" class="mt-3"><summary>Добавить новую карту</summary>
