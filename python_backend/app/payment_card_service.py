@@ -1,7 +1,8 @@
-"""Public card service: profile/proxy-bound HTTP only; no Chromium fallback.
+"""Public card service: selected, profile/proxy-bound RK over HTTP only.
 
-Save canaries are confined to the operator's selected RKs. Other
-accounts remain disabled until that exact pinned contract is verified live.
+Any explicitly selected RK must independently pass the live Meta account,
+Business, payment-scope, card-policy and durable no-replay verification.
+No profile-specific allowlist or cross-RK success dependency is used.
 """
 from __future__ import annotations
 
@@ -18,12 +19,6 @@ from .private_auth import private_auth_error
 from .payment_country_setup import configure_country
 from .static_payment_card import prepare_profile_card_form, confirm_saved_card
 from .static_payment_read import execute, account_proof, payment_page_proof, inspect_methods, complete_methods
-
-# Explicit integration canary, not a blanket enablement of an archived builder.
-CANARY_SCOPE = ('15', '120251650486340295')
-SECONDARY_CANARY_SCOPE = ('15', '120251352568830122')
-FRESH_PROFILE_CANARY_SCOPE = ('16', '52556523535473')
-
 
 def setup_context(payload, target, payment):
     if not payment_page_proof(payload, target, payment):
@@ -50,8 +45,6 @@ async def profile_payment_card_http(resolver, profile, payload, *, state=None):
                                               asset_hint=payload.get('asset_hint'))
     if operation not in {'bind', 'reconcile'}:
         raise ValueError('CARD_OPERATION_INVALID')
-    if operation == 'bind' and (profile, target) not in {CANARY_SCOPE, SECONDARY_CANARY_SCOPE, FRESH_PROFILE_CANARY_SCOPE}:
-        return {**base, 'code': 'CARD_HTTP_CANARY_SCOPE_REQUIRED'}
     ledger = None
     attempt_id = payload.get('attempt_id')
     card_id = payload.get('card_id')
@@ -65,9 +58,6 @@ async def profile_payment_card_http(resolver, profile, payload, *, state=None):
             if state is None or not getattr(state, 'path', None):
                 return {**base, 'code': 'CARD_DURABLE_INTENT_REQUIRED'}
             ledger = CardIntentLedger(state.path)
-            if (operation == 'bind' and (profile, target) == SECONDARY_CANARY_SCOPE
-                    and not await ledger.confirmed(*CANARY_SCOPE, card_id)):
-                return {**base, 'code':'CARD_HTTP_FIRST_CANARY_REQUIRED'}
             pending = await ledger.pending(profile, target)
             if operation == 'reconcile' and not pending:
                 return {**base, 'code': 'CARD_HTTP_INTENT_NOT_FOUND'}
