@@ -149,11 +149,23 @@ final class RemaskPaymentCardVault {
         $completeStatic=$source==='private_facebook_billing_static_methods'&&
             ($funding['business_scope_verified']??false)===true&&($funding['payment_account_relation_verified']??false)===true&&
             ($funding['methods_query_verified']??false)===true&&($funding['inventory_complete']??false)===true&&
-            ($funding['all_credential_ids']??null)===[]&&($funding['browser_started']??null)===false;
+            is_array($funding['all_credential_ids']??null)&&
+            ($funding['browser_started']??null)===false;
+        $allEmpty=$completeStatic&&$funding['all_credential_ids']===[]&&
+            ($funding['verification_status']??'')==='NONE';
+        // A complete selected-RK collection with a non-card instrument must
+        // not block an explicitly reviewed card retry forever. Require a
+        // separate scoped read of the exact previous Save in the business
+        // wallet. No auto-retry, and no exception for pending bank action.
+        $cardAbsentReviewed=$completeStatic&&($funding['card_credential_count']??null)===0&&
+            ($funding['non_card_credential_count']??0)>0&&
+            ($funding['wallet_reconcile_stage']??'')==='business_wallet_card_not_observed'&&
+            ($funding['verification_status']??'')==='UNVERIFIED';
+        $uiEmpty=in_array($source,['private_facebook_billing_ui','private_facebook_selected_rk_payment_tab'],true)&&
+            ($funding['verification_status']??'')==='NONE';
         return ($funding['profile_id']??null)===$profile&&($funding['account_id']??null)===$account&&
             ($funding['account_scope_verified']??false)===true&&($funding['checked_live']??false)===true&&
-            ($funding['verification_status']??'')==='NONE'&&($funding['payment_methods']??null)===[]&&
-            ($completeStatic||in_array($source,['private_facebook_billing_ui','private_facebook_selected_rk_payment_tab'],true));
+            ($funding['payment_methods']??null)===[]&&($allEmpty||$cardAbsentReviewed||$uiEmpty);
     }
     private static function liveLinkSource(array $funding): bool {
         if(in_array($funding['source']??'',['private_facebook_billing_ui','private_facebook_selected_rk_payment_tab'],true))return true;
@@ -241,7 +253,7 @@ final class RemaskPaymentCardVault {
                 }
             }
             if(!$observed){
-                $result=['status'=>'SUBMITTED_UNVERIFIED','code'=>$scope&&($funding['verification_status']??'')==='NONE'?'CARD_RECONCILE_NO_METHOD':'CARD_RECONCILE_UNVERIFIED','submitted'=>false,'funding_verified'=>false,'funding'=>$funding];
+                $result=['status'=>'SUBMITTED_UNVERIFIED','code'=>$scope&&self::exactEmpty($profile,$account,$funding)?'CARD_RECONCILE_NO_METHOD':'CARD_RECONCILE_UNVERIFIED','submitted'=>false,'funding_verified'=>false,'funding'=>$funding];
                 // Fresh evidence for this exact RK supersedes a cached link.
                 // Keep the original attempt time and submission metadata: this
                 // read does not submit anything or unlock an automatic retry.
