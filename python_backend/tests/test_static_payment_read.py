@@ -92,6 +92,15 @@ class PaymentReadTests(unittest.IsolatedAsyncioTestCase):
         metadata = QueryArtifacts()
         metadata.modules = {name: {'observed': node} for name, node in nodes.items()}
         for operation, row in manifest['operations'].items():
+            if operation == 'READ_SDC_CANDIDATES':
+                # Observed 2026-10-10 as BillingSDCAuthScreenQuery, after
+                # the historical 2026-10-09 captured module fixture. Keep
+                # the independent query-only contract strict rather than
+                # fabricating a historical JS module in that fixture.
+                self.assertEqual(row['doc_id'], '25160732503612508')
+                self.assertEqual(row['operation_kind'], 'query')
+                self.assertEqual(row['variables'], {'paymentAccountID': '$payment'})
+                continue
             candidates = []
             for node in _walk(nodes[row['friendly_name'] + '.graphql']):
                 if node.type != 'object': continue
