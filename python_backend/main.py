@@ -776,9 +776,56 @@ async def run_verification_http_contract_audit() -> None:
                             meta = err.get('extensions') if isinstance(err.get('extensions'), dict) else {}
                             error_classes.append({'code': str(err.get('code') or meta.get('code') or '')[:50],
                                                   'type': str(err.get('type') or '')[:50]})
+                for idx, err in enumerate((account_result.get('errors') or [])[:4] if isinstance(account_result, dict) else []):
+                    if not isinstance(err, dict):
+                        continue
+                    message = str(err.get('message') or '').lower()[:800]
+                    markers = ('document', 'doc_id', 'invalid', 'permission', 'authorization',
+                               'authentication', 'session', 'business', 'account',
+                               'checkpoint', 'rate limit', 'field', 'variable',
+                               'timeout', 'unknown', 'not found')
+                    if idx < len(error_classes):
+                        error_classes[idx]['markers'] = [key for key in markers if key in message]
+                        error_classes[idx]['fields'] = sorted(err.keys())[:8]
                 log.warning('verification HTTP check profile=%s account=%s code=%s error_classes=%s',
                             profile, account, proof.get('code', 'ACCOUNT_UNVERIFIED'),
                             json.dumps(error_classes, separators=(',', ':')))
+                # A previously confirmed Save can provide an immutable exact
+                # payment account hint for *read-only* reconciliation. The
+                # independent live methods response must still prove RK/BM
+                # ownership and the exact payment node before any SDC read.
+                from app.payment_card_intents import CardIntentLedger
+                prior = await CardIntentLedger(pool.provisioning_state.path).source_read_intent(profile, account)
+                saved = json.loads(prior['result']) if prior else {}
+                payment_hint = saved.get('payment_account_id')
+                node_hint = saved.get('payment_account_node_id')
+                if (saved.get('account_id') != account or saved.get('business_id') != business
+                        or not isinstance(payment_hint, str) or not payment_hint.isdigit()
+                        or not isinstance(node_hint, str) or not node_hint):
+                    return
+                previous = {'account_id': account, 'account_scope_verified': True,
+                            'payment_account_id': payment_hint, 'payment_account_node_id': node_hint}
+                candidate = methods_proof(await execute(
+                    web, 'READ_METHODS', account=account, payment=payment_hint, business_id=business),
+                    account, business_id=business, account_evidence=previous)
+                valid = all(candidate.get(key) is True for key in (
+                    'account_scope_verified', 'business_scope_verified',
+                    'payment_account_relation_verified', 'methods_query_verified'))
+                log.warning('verification HTTP fallback readonly profile=%s account=%s relation=%s code=%s',
+                            profile, account, valid, candidate.get('code'))
+                if not valid:
+                    return
+                sdc = await execute(web, 'READ_SDC_CANDIDATES',
+                                    payment=payment_hint, business_id=business)
+                cards = []
+                for row in candidate.get('payment_methods', [])[:8]:
+                    cards.append({'last4': row['last4'], 'type': row['type'],
+                        'confirmation': row.get('card_confirmation_status'),
+                        'tasks': row.get('verification_tasks', []),
+                        'sdc': sdc_candidate_proof(sdc, row['credential_id'],
+                                                   row['type'], row['last4'])})
+                log.warning('verification HTTP fallback SDC profile=%s account=%s cards=%s',
+                            profile, account, json.dumps(cards, separators=(',', ':'))[:4500])
                 return
             methods = methods_proof(await execute(web, 'READ_METHODS', account=account,
                 payment=proof['payment_account_id'], business_id=business),
