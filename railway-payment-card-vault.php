@@ -159,7 +159,7 @@ final class RemaskPaymentCardVault {
         // wallet. No auto-retry, and no exception for pending bank action.
         $cardAbsentReviewed=$completeStatic&&($funding['card_credential_count']??null)===0&&
             ($funding['non_card_credential_count']??0)>0&&
-            ($funding['wallet_reconcile_stage']??'')==='business_wallet_card_not_observed'&&
+            ($funding['wallet_reconcile_stage']??'')==='saved_card_identity_not_observed'&&
             ($funding['verification_status']??'')==='UNVERIFIED';
         $uiEmpty=in_array($source,['private_facebook_billing_ui','private_facebook_selected_rk_payment_tab'],true)&&
             ($funding['verification_status']??'')==='NONE';

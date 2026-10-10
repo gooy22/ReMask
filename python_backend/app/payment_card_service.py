@@ -132,11 +132,11 @@ async def profile_payment_card_http(resolver, profile, payload, *, state=None):
                         # credit card. Permit the *explicitly* reviewed, stale
                         # attempt to be retired only after the exact card is
                         # absent in BOTH the complete child RK inventory and
-                        # the independently scoped business wallet response.
+                        # the independently scoped business wallet AND direct saved-card identity read.
                         methods['wallet_reconcile_stage'] = wallet_stage
                         retained['funding'] = {**methods, 'profile_id': profile}
                     can_review_noncard = (
-                        result.get('verification_stage') == 'business_wallet_card_not_observed'
+                        result.get('verification_stage') == 'saved_card_identity_not_observed'
                         and methods.get('inventory_complete') is True
                         and methods.get('card_credential_count') == 0
                         and methods.get('payment_methods') == [])
@@ -162,6 +162,13 @@ async def profile_payment_card_http(resolver, profile, payload, *, state=None):
                     logging.getLogger('remask.payment_card').info(
                         'card reconcile verification account=%s status=%s stage=%s',
                         target, result.get('status'), result.get('verification_stage', 'confirmed'))
+                    if (result.get('status') == 'VERIFYING'
+                            and result.get('verification_stage') == 'saved_card_identity_observed_but_not_linked'):
+                        # The original Save credential still exists in Meta.
+                        # Do NOT invite another Save or claim a linked RK; the
+                        # missing step is explicit attachment of this credential.
+                        return {**retained, 'code': 'CARD_SAVED_CREDENTIAL_UNLINKED',
+                                'verification_stage': 'saved_card_identity_observed_but_not_linked'}
                     if result.get('status') in {'LINKED', 'ACTION_REQUIRED'}:
                         await ledger.finish(pending['attempt_id'], result)
                         if result['status'] == 'LINKED':
