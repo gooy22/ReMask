@@ -227,7 +227,7 @@ assert.doesNotMatch(sandbox.fundingCell({verification_status:'LINKED',card_linke
     funding:{verification_status:'LINKED',account_scope_verified:true,funding_verified:false}};
   const autoConfirmedBatch=element();await sandbox.bindPaymentCard(ten.slice(0,3),card,'123',autoConfirmedBatch);
   assert.deepEqual(requests.map(r=>r.body.action),['bind','reconcile','bind','reconcile','bind','reconcile']);
-  assert.equal(autoConfirmedBatch.children.filter(child=>String(child.textContent||'').includes('Meta показывает карту у выбранного РК')).length,3,
+  assert.equal(autoConfirmedBatch.children.filter(child=>String(child.textContent||'').includes('Карта найдена в РК')).length,3,
     'live Meta confirmation should allow the selected-account batch to continue');
   requests=[];reviewResult=null;
   const uncertainBatch=element();await sandbox.bindPaymentCard(ten.slice(0,3),card,'123',uncertainBatch);
