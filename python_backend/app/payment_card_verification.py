@@ -300,11 +300,18 @@ async def verify_payment_card_http(resolver, profile, payload, *, state=None):
                     return {**common, 'code': 'SDC_ACTION_CREDENTIAL_UNVERIFIED'}
                 if usability == 'PENDING_VERIFICATION':
                     if operation == 'authorize':
-                        # Meta's own screen skips sending a second hold in
-                        # this state, proceeding to the descriptor code.
-                        return {**common, 'status': 'ACTION_REQUIRED',
-                                'code': 'SDC_AUTH_PENDING_WAIT_CODE',
-                                'verification_stage': 'PENDING_VERIFICATION'}
+                        # Explicit "request bank confirmation" click only.
+                        # The automatic verify/read-only path below never
+                        # sends another authorization. A single durable ledger
+                        # reservation forbids any ReMask duplicate after POST.
+                        # An earlier challenge may exist outside ReMask; Meta
+                        # remains the authority for accepting/rejecting a
+                        # requested new temporary bank authorization.
+                        return await _send_sdc_once(web, state=state,
+                            profile=profile, account=target,
+                            payment_account=evidence['payment_account_id'],
+                            business=business, credential=action_credential,
+                            card_id=card_id, common=common)
                     if operation == 'verify_code':
                         return await _verify_sdc_code(web,
                             code=payload.get('verification_code'),
