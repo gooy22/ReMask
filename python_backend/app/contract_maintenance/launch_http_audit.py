@@ -157,6 +157,8 @@ async def run(pool):
                     if os.getenv("REMASK_LAUNCH_HTTP_AUDIT_SOURCES") == "1":
                         source = await collect_sources(web, account=account, business=business)
                         log.info("launch HTTP source audit browser_started=False result=%s", json.dumps(source))
+                        if os.getenv("REMASK_LAUNCH_HTTP_AUDIT_SAVED") == "1":
+                            inspect_saved_sources()
                     pages, funding = await asyncio.gather(inspect_pages(web, account=account, business_id=business),
                         inspect_methods(web, account=account, business_id=business))
             log.info("launch HTTP readiness profile=%s account=%s browser_started=False mutation_posts=0 result=%s",
