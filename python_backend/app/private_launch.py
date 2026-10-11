@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import hashlib
 import logging
 import os
 import re
@@ -24,8 +25,9 @@ from .facebook_docids import (
     registry_view,
     upsert_candidate,
 )
-from .page_access_inspection import inspect_browser_pages
-from .payment_inspection import inspect_payment_methods
+from .private_launch_read import inspect_pages
+from .static_payment_read import inspect_methods
+from .private_auth import private_auth_error
 from .provisioning.models import ProvisioningError
 from .provisioning.meta_transport import MetaTransportRouter
 from .provisioning.state import ProvisioningStateStore
@@ -281,6 +283,8 @@ class PrivateLaunchContractStore:
             parsed.scheme != "https"
             or (parsed.hostname or "").lower() not in cls.ALLOWED_HOSTS
             or parsed.path.rstrip("/") != "/api/graphql"
+            or parsed.username is not None or parsed.password is not None
+            or parsed.port not in (None, 443) or parsed.query or parsed.fragment
         ):
             raise ProvisioningError(
                 "PRIVATE_LAUNCH_CONTRACT_CONFIG_ERROR",
@@ -809,6 +813,14 @@ def _normalize_entity_id(value: Any) -> str:
     return candidate if re.fullmatch(r"\d{5,40}", candidate) else ""
 
 
+def _complete_response(payload: Any) -> bool:
+    return (isinstance(payload, dict) and isinstance(payload.get("data"), dict)
+            and not payload.get("errors") and not payload.get("error")
+            and payload.get("hasNext") is not True
+            and not (isinstance(payload.get("extensions"), dict)
+                     and payload["extensions"].get("is_final") is False))
+
+
 def _auto_entity_id(
     payload: Any,
     step: PrivateLaunchStep,
@@ -816,6 +828,8 @@ def _auto_entity_id(
     excluded_ids: set[str],
 ) -> tuple[str, str]:
     """Return one unambiguous new entity ID and its response path."""
+    if not _complete_response(payload):
+        return "", ""
     aliases = {
         PrivateLaunchStep.CAMPAIGN: {
             "campaign_id", "campaignid",
@@ -851,7 +865,7 @@ def _auto_entity_id(
                 child_path = f"{path}.{index}" if path else str(index)
                 walk(child, child_path)
 
-    walk(payload)
+    walk(payload["data"], "data")
 
     def unique(rows: list[tuple[str, str]]) -> tuple[str, str]:
         by_id: dict[str, list[str]] = {}
@@ -870,7 +884,11 @@ def _auto_entity_id(
 
 
 def _extract_entity_id(payload: Any, paths: tuple[str, ...]) -> tuple[str, str]:
+    if not _complete_response(payload):
+        return "", ""
     for path in paths:
+        if not path.startswith("data."):
+            continue
         value = _lookup(payload, path)
         candidate = str(value or "").removeprefix("act_").strip()
         if re.fullmatch(r"\d{5,40}", candidate):
@@ -1055,7 +1073,7 @@ class PrivateLaunchService:
         self.contracts = contracts or PrivateLaunchContractStore()
         self.state = PrivateLaunchStateStore(provisioning_state.path)
         self._preflight_cache: dict[
-            tuple[str, str, str, str, str, str],
+            tuple[str, str, str, str, str, str, str],
             tuple[float, int, dict[str, Any]],
         ] = {}
 
@@ -1141,21 +1159,30 @@ class PrivateLaunchService:
                 retryable=False,
             )
 
-        account_name = str(row.get("name") or row.get("account_name") or ad_account_id).strip()
-        transport = transport or MetaTransportRouter(context=context)
-        progress: dict[str, Any] = {}
-        async with transport.browser_lease(v8_old_space_mb=256) as browser:
-            pages = await asyncio.wait_for(
-                inspect_browser_pages(
-                    browser,
-                    ad_account_id,
-                    business_id,
-                    timeout=45,
-                    progress=progress,
-                    open_identity=True,
-                ),
-                timeout=60,
+        if transport is None:
+            raise ProvisioningError(
+                "PRIVATE_LAUNCH_HTTP_SESSION_REQUIRED",
+                "Launch review requires the selected profile HTTP session",
+                retryable=False,
             )
+        web = await transport.facebook_web()
+        web.private_only = True
+        try:
+            await web.bootstrap()
+            # Both reads share the profile connection pool, cookies and proxy.
+            # Queries may overlap; create operations remain ordered separately.
+            pages, funding = await asyncio.wait_for(asyncio.gather(
+                inspect_pages(web, account=ad_account_id, business_id=business_id),
+                inspect_methods(web, account=ad_account_id, business_id=business_id),
+            ), timeout=65)
+        except AuthenticationError as exc:
+            raise private_auth_error(exc) from exc
+        except (RemoteRequestError, asyncio.TimeoutError) as exc:
+            raise ProvisioningError(
+                "PRIVATE_LAUNCH_HTTP_PREFLIGHT_FAILED",
+                "Meta HTTP readiness reads did not complete; no advertising CREATE was sent",
+                retryable=True,
+            ) from exc
         page_ids = {
             str(value.get("id") or "").strip()
             for value in (pages.get("data") or [])
@@ -1173,24 +1200,6 @@ class PrivateLaunchService:
                 retryable=False,
             )
 
-        # inspect_browser_pages intentionally keeps a write barrier installed
-        # until its browser context closes. Billing therefore gets a fresh
-        # context so read-only payment hydration cannot inherit that route gate.
-        async with transport.browser_lease(v8_old_space_mb=256) as browser:
-            funding = await asyncio.wait_for(
-                inspect_payment_methods(
-                    browser,
-                    ad_account_id,
-                    business_id=business_id,
-                    asset={
-                        "id": ad_account_id,
-                        "business_id": business_id,
-                        "name": account_name,
-                    },
-                    fresh_billing_context=True,
-                ),
-                timeout=65,
-            )
         if (
             funding.get("account_scope_verified") is not True
             or funding.get("checked_live") is not True
@@ -1221,6 +1230,15 @@ class PrivateLaunchService:
                     payment_selector,
                 )
             )
+            selected = [method for method in funding["payment_methods"]
+                if method.get("last4") == selected_payment_method["last4"]
+                and str(method.get("type") or "").casefold() == selected_payment_method["type"].casefold()]
+            if any(method.get("is_expired") is True for method in selected):
+                raise ProvisioningError("PRIVATE_LAUNCH_PAYMENT_EXPIRED",
+                    "The selected linked card is expired", retryable=False)
+            if any(method.get("needs_verification") is True or method.get("verification_tasks") for method in selected):
+                raise ProvisioningError("PRIVATE_LAUNCH_PAYMENT_CONFIRMATION_REQUIRED",
+                    "Meta requires confirmation of the selected linked card before advertising Launch", retryable=False)
 
         return {
             "profile_id": profile_id,
@@ -1229,9 +1247,13 @@ class PrivateLaunchService:
             "page_id": page_id,
             "account_status": 1,
             "inventory_updated_at": inventory_at,
+            "transport": "private_http_h2",
+            "browser_started": False,
             "page_access_checked_live": True,
             "payment_checked_live": True,
             "payment_method_count": len(funding.get("payment_methods") or []),
+            "page_read_source": pages.get("source", ""),
+            "payment_read_source": funding.get("source", ""),
             "selected_payment_method": selected_payment_method,
             "payment_selection_source": payment_selection_source,
             "payment_selection_required": payment_selection_required,
@@ -1273,6 +1295,11 @@ class PrivateLaunchService:
             page_id,
             selector_type,
             selector_last4,
+            hashlib.sha256(json.dumps({
+                "cookies": getattr(context, "cookies", {}),
+                "proxy": getattr(context, "proxy", None),
+                "user_agent": getattr(context, "user_agent", ""),
+            }, sort_keys=True).encode()).hexdigest(),
         )
         cached = self._preflight_cache.get(key)
         now = time.monotonic()
@@ -1305,6 +1332,14 @@ class PrivateLaunchService:
         payload: dict[str, Any],
         transport: MetaTransportRouter | None = None,
     ) -> dict[str, Any]:
+        if transport is None:
+            from .session import ProfileSession
+            async with ProfileSession(context) as session:
+                return await self.review(
+                    profile_id=profile_id, context=context, payload=payload,
+                    transport=MetaTransportRouter(session, private_only=True),
+                )
+        transport = MetaTransportRouter(transport.session, context=context, private_only=True)
         if not isinstance(payload, dict):
             raise ProvisioningError(
                 "PRIVATE_LAUNCH_INVALID_INPUT",
@@ -1386,7 +1421,7 @@ class PrivateLaunchService:
             )
 
         await self.state.init()
-        meta_transport = MetaTransportRouter(session)
+        meta_transport = MetaTransportRouter(session, private_only=True)
         prior_by_step: dict[PrivateLaunchStep, dict[str, Any] | None] = {}
         current_target = (profile_id, business_id, ad_account_id)
         for step in STEP_ORDER:
@@ -1556,6 +1591,7 @@ class PrivateLaunchService:
                     friendly_name=contract.friendly_name,
                     endpoint_url=contract.endpoint_url,
                     request_envelope=contract.request_envelope,
+                    business_context_id=business_id,
                 )
             except AuthenticationError:
                 _record_contract_result(

@@ -91,7 +91,7 @@ console.log('Private Launch catalog and funding truth checks passed');
       if(body.action==='private_launch_contracts')
         return {ok:true,status:200,json:async()=>({ok:true,contracts:{
           CAMPAIGN:{configured:true,friendly_name:'CampaignMutation'},
-          AD_SET:{configured:true,friendly_name:'AdSetMutation'},
+          ADSET:{configured:true,friendly_name:'AdSetMutation'},
           CREATIVE:{configured:true,friendly_name:'CreativeMutation'},
           AD:{configured:true,friendly_name:'AdMutation'}
         }})};
@@ -185,7 +185,7 @@ console.log('Private Launch catalog and funding truth checks passed');
     const body=JSON.parse(options.body);
     if(body.action==='private_launch_contracts')
       return {ok:true,status:200,json:async()=>({ok:true,contracts:{
-        CAMPAIGN:{configured:true},AD_SET:{configured:true},
+        CAMPAIGN:{configured:true},ADSET:{configured:true},
         CREATIVE:{configured:true},AD:{configured:true}
       }})};
     if(body.action==='private_launch_review')

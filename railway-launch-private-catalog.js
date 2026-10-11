@@ -203,7 +203,7 @@ async function remaskPrivateWorker(payload) {
 async function remaskPrivateContractStatus({render=true}={}) {
     const response=await remaskPrivateWorker({action:'private_launch_contracts'});
     const contracts=response?.contracts||{};
-    const order=['CAMPAIGN','AD_SET','CREATIVE','AD'];
+    const order=['CAMPAIGN','ADSET','CREATIVE','AD'];
     const rows=order.map(step=>{
         const row=contracts[step]||{};
         return {

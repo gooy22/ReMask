@@ -242,7 +242,7 @@ class PageAccessApiTests(unittest.IsolatedAsyncioTestCase):
             {'id':PAGE,'main_business_id':BM,'main_business_confirmed':True},
             {'id':'123456','main_business_id':BM,'main_business_confirmed':False}]))
         with patch.object(api,'pool',SimpleNamespace(resolver=object(),provisioning_state=state)), \
-             patch('app.page_access_inspection.inspect_profile_pages',AsyncMock(side_effect=asyncio.TimeoutError)):
+             patch('app.private_launch_read.inspect_profile_pages_http',AsyncMock(side_effect=asyncio.TimeoutError)):
             result=await api.profile_page_access('9','act_'+RK)
         self.assertEqual(result['account_id'],RK)
         self.assertEqual(result['diagnostic']['code'],'PAGE_ACCESS_INSPECTION_TIMEOUT')
@@ -256,7 +256,7 @@ class PageAccessApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_invalid_target_cannot_return_confirmation_or_run_browser(self):
         import main as api
         inspector=AsyncMock()
-        with patch('app.page_access_inspection.inspect_profile_pages',inspector):
+        with patch('app.private_launch_read.inspect_profile_pages_http',inspector):
             with self.assertRaises(api.HTTPException) as caught:
                 await api.profile_page_access('9','not-an-account')
         self.assertEqual(caught.exception.status_code,400)

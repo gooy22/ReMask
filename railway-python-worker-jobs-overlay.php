@@ -42,6 +42,15 @@ function rmx_pwj_out(array $payload, int $status = 200): void {
 
 function rmx_pwj_input(): array {
     $input = $_POST;
+    // Authenticated maintenance GETs are read-only. Never accept a GET action
+    // that creates/retries a job or changes a contract.
+    if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+        $requested = trim((string)($_GET['action'] ?? ''));
+        if (in_array($requested, ['private_launch_contracts','private_launch_sources'], true)) {
+            $input['action'] = $requested;
+        }
+        return $input;
+    }
     $raw = (string)file_get_contents('php://input');
     if ($raw !== '') {
         $json = json_decode($raw, true);
@@ -255,7 +264,7 @@ try {
             ? $result['contracts']
             : [];
         $safe = [];
-        foreach (['CAMPAIGN','AD_SET','CREATIVE','AD'] as $step) {
+        foreach (['CAMPAIGN','ADSET','CREATIVE','AD'] as $step) {
             $row = is_array($contracts[$step] ?? null)
                 ? $contracts[$step]
                 : [];
@@ -269,6 +278,11 @@ try {
             ];
         }
         rmx_pwj_out(['ok'=>true,'contracts'=>$safe]);
+    }
+
+    if ($action === 'private_launch_sources') {
+        $result = rmx_pwj_worker_request('GET', '/api/v1/private-launch/maintenance-candidate');
+        rmx_pwj_out($result);
     }
 
     if ($action === 'private_launch_review') {

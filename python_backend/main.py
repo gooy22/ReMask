@@ -960,6 +960,8 @@ async def lifespan(app: FastAPI):
         run_live_inventory_readonly_canary(),
         name='remask-live-inventory-readonly-canary',
     )
+    from app.contract_maintenance.launch_http_audit import run as run_launch_http_audit
+    launch_http_audit_task=asyncio.create_task(run_launch_http_audit(pool), name='remask-launch-http-audit')
     verification_audit_task=asyncio.create_task(
         run_verification_http_contract_audit(), name='remask-verification-http-contract-audit')
     yield
@@ -967,11 +969,13 @@ async def lifespan(app: FastAPI):
     bm_canary_task.cancel()
     live_inventory_canary_task.cancel()
     verification_audit_task.cancel()
+    launch_http_audit_task.cancel()
     await asyncio.gather(
         smoke_task,
         bm_canary_task,
         live_inventory_canary_task,
         verification_audit_task,
+        launch_http_audit_task,
         return_exceptions=True,
     )
     await pool.stop()
@@ -1442,7 +1446,8 @@ async def profile_preflight(profile_id: str, purpose: str = 'business'):
 
 @app.get('/api/v1/profiles/{profile_id}/page-access',dependencies=[Depends(require_key)])
 async def profile_page_access(profile_id: str, account_id: str):
-    from app.page_access_inspection import inspect_profile_pages, unverified_result
+    from app.private_launch_read import inspect_profile_pages_http as inspect_profile_pages
+    from app.page_access_inspection import unverified_result
     from app.payment_inspection import account_id as normalize_account
     profile=str(profile_id or '').strip()
     if not profile or len(profile)>160:
@@ -3554,6 +3559,16 @@ async def private_launch_contract_status():
         'ok':True,
         'contracts':pool.private_launch.contracts.status(),
     }
+
+@app.get('/api/v1/private-launch/maintenance-candidate',dependencies=[Depends(require_key)])
+async def private_launch_maintenance_candidate():
+    from pathlib import Path
+    target=Path(DATA_ROOT)/'maintenance'/'ads-public-modules-candidate.json'
+    if not target.is_file():
+        return {'ok':True,'scope':'candidate_only_not_installed','modules':[]}
+    if target.stat().st_size>8_000_000:
+        raise HTTPException(status_code=413,detail='MAINTENANCE_CANDIDATE_TOO_LARGE')
+    return json.loads(target.read_text())
 
 @app.post('/api/v1/private-launch/contracts/{step_name}',dependencies=[Depends(require_key)])
 async def private_launch_contract_register(step_name: str, payload: dict = Body(...)):
