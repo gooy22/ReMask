@@ -783,6 +783,17 @@ async def profile_payment_card(resolver:Any,profile:str,payload:dict[str,Any],*,
             profile,target,operation,str(result.get('status') or '')[:40],
             str(result.get('code') or '')[:80],result.get('submitted'),
         )
+        if result.get('code') == 'SDC_AUTH_PENDING_WAIT_CODE':
+            # Diagnostic only: never log bank codes or payment credentials.
+            origin = result.get('bank_request_evidence')
+            stage = result.get('previous_request_stage')
+            logging.getLogger('remask.payment_card').info(
+                'bank pending origin profile=%s account=%s evidence=%s previous_stage=%s',
+                profile, target,
+                origin if origin in ('REMASK_LOCAL_REQUEST', 'META_PENDING_ONLY') else 'UNKNOWN',
+                stage if stage in ('REQUEST_SENT', 'RESULT_UNKNOWN',
+                                  'CHALLENGE_READY', 'META_CONFIRMED',
+                                  'SERVER_REJECTED', 'RESERVED') else 'NONE')
         return result
     except asyncio.TimeoutError:
         result={'profile_id':profile,'account_id':target,'submitted':None if operation=='bind' else False,'funding_verified':False,
