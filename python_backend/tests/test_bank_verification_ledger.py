@@ -53,3 +53,23 @@ class BankVerificationLedgerTests(unittest.IsolatedAsyncioTestCase):
         data = self.db.read_bytes()
         self.assertNotIn(b'4111111111111111',data)
         self.assertNotIn(b'bank_url',data)
+
+    async def test_external_meta_confirmation_blocks_future_authorizations(self):
+        recorded = await self.ledger.record_meta_confirmation(**self.kwargs)
+        self.assertTrue(recorded)
+        repeat = await self.ledger.reserve(**self.kwargs)
+        self.assertFalse(repeat['reserved'])
+        self.assertEqual(repeat['stage'], 'META_CONFIRMED')
+        self.assertTrue(await self.ledger.record_meta_confirmation(**self.kwargs))
+        collision = await self.ledger.record_meta_confirmation(
+            **{**self.kwargs, 'card_id': 'card_'+'c'*24})
+        self.assertFalse(collision)
+        self.assertEqual((await self.ledger.reserve(**self.kwargs))['stage'], 'META_CONFIRMED')
+
+    async def test_sent_authorization_transitions_to_confirmed_without_secrets(self):
+        first = await self.ledger.reserve(**self.kwargs)
+        self.assertTrue(await self.ledger.mark(first['attempt_id'], 'REQUEST_SENT'))
+        self.assertTrue(await self.ledger.mark(first['attempt_id'], 'CHALLENGE_READY'))
+        self.assertTrue(await self.ledger.record_meta_confirmation(**self.kwargs))
+        self.assertEqual((await self.ledger.reserve(**self.kwargs))['stage'],'META_CONFIRMED')
+        self.assertNotIn(b'METAPAY',self.db.read_bytes())
