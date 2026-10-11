@@ -620,6 +620,10 @@ class PrivateLaunchTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_per_rk_override_is_merged_before_contract_render(self):
+        cfg = contracts()
+        cfg["ADSET"]["variables"]["input"]["targeting"] = "{{payload.adset.targeting}}"
+        cfg["CREATIVE"]["variables"]["input"]["message"] = "{{payload.creative.message}}"
+        self.service.contracts = PrivateLaunchContractStore(__import__("json").dumps(cfg))
         payload = {
             **self.payload,
             "launch_key": "launch-override",
@@ -657,6 +661,33 @@ class PrivateLaunchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(effective["adset"]["targeting"], {"age_min": 18, "age_max": 35})
         self.assertEqual(effective["creative"]["message"], "RK override")
         self.assertEqual(effective["creative"]["name"], "Base creative")
+        self.assertEqual(self.web.graphql.await_args_list[1].args[1]["input"]["targeting"], {"age_min": 18, "age_max": 35})
+        self.assertEqual(self.web.graphql.await_args_list[2].args[1]["input"]["message"], "RK override")
+
+    async def test_unsupported_budget_blocks_before_preflight_and_create(self):
+        self.payload["launch"]["campaign"]["daily_budget"] = 1000
+        probe = AsyncMock()
+        with patch.object(self.service, "_live_preflight", probe):
+            with self.assertRaises(ProvisioningError) as caught:
+                await self.service.run(item_id="unsupported", profile_id="7", context=self.context,
+                    session=self.session, payload=self.payload)
+        self.assertEqual(caught.exception.code, "PRIVATE_LAUNCH_OPTIONS_UNSUPPORTED")
+        self.assertIn("campaign.daily_budget", str(caught.exception))
+        probe.assert_not_awaited()
+        self.web.graphql.assert_not_awaited()
+
+    async def test_missing_downstream_input_blocks_before_campaign_create(self):
+        cfg = contracts()
+        cfg["AD"]["variables"]["input"]["tracking"] = "{{payload.ad.tracking_specs}}"
+        self.service.contracts = PrivateLaunchContractStore(__import__("json").dumps(cfg))
+        probe = AsyncMock()
+        with patch.object(self.service, "_live_preflight", probe):
+            with self.assertRaises(ProvisioningError) as caught:
+                await self.service.run(item_id="missing", profile_id="7", context=self.context,
+                    session=self.session, payload=self.payload)
+        self.assertEqual(caught.exception.code, "PRIVATE_LAUNCH_CONTRACT_INPUT_MISSING")
+        probe.assert_not_awaited()
+        self.web.graphql.assert_not_awaited()
 
     async def test_crash_after_submit_checkpoint_never_replays_mutation(self):
         self.web.graphql.side_effect = RuntimeError("process-crash-fixture")

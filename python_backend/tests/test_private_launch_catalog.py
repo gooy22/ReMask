@@ -160,7 +160,7 @@ class PrivateLaunchCatalogTests(unittest.TestCase):
             subprocess.run(['php',str(installer)],capture_output=True,check=True,timeout=10)
         for file in [*root.glob('classes/*.php'),*root.glob('ajax/*.php')]:
             subprocess.run(['php','-l',str(file)],capture_output=True,check=True,timeout=10)
-        self.assertIn('20261002-private-catalog-v1', (root/'launch.php').read_text())
+        self.assertIn('20261011-advertising-worker-v2', (root/'launch.php').read_text())
         self.assertEqual((root/'scripts/launch.js').read_text().count('/* REMASK_PRIVATE_LAUNCH_CATALOG_V1 */'), 1)
         for name in ['metaLaunchReview.php','metaDryRun.php','metaJobCreate.php','metaLaunch.php']:
             self.assertIn('PRIVATE_LAUNCH_VERIFICATION_REQUIRED',(root/'ajax'/name).read_text())

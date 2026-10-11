@@ -22,7 +22,7 @@ assert.equal(label({account_status:1,funding_source_details:{id:'123'}}),'SOURCE
 assert.equal(controls.launchButton.disabled,true);
 assert.equal(controls.reviewLaunch.disabled,true);
 assert.equal(controls.dryRunPlan.disabled,true);
-assert.match(controls.reviewStatus.textContent,/Private Launch/);
+assert.match(controls.reviewStatus.textContent,/Перед созданием рекламы/);
 assert.equal(controls.preflight.textContent,'Загрузить сохранённые РК');
 console.log('Private Launch catalog and funding truth checks passed');
 
@@ -90,10 +90,10 @@ console.log('Private Launch catalog and funding truth checks passed');
       const body=JSON.parse(options.body);requests.push({url,body});
       if(body.action==='private_launch_contracts')
         return {ok:true,status:200,json:async()=>({ok:true,contracts:{
-          CAMPAIGN:{configured:true,friendly_name:'CampaignMutation'},
-          ADSET:{configured:true,friendly_name:'AdSetMutation'},
-          CREATIVE:{configured:true,friendly_name:'CreativeMutation'},
-          AD:{configured:true,friendly_name:'AdMutation'}
+          CAMPAIGN:{configured:true,active:true,verification_configured:true,friendly_name:'CampaignMutation'},
+          ADSET:{configured:true,active:true,verification_configured:true,friendly_name:'AdSetMutation'},
+          CREATIVE:{configured:true,active:true,verification_configured:true,friendly_name:'CreativeMutation'},
+          AD:{configured:true,active:true,verification_configured:true,friendly_name:'AdMutation'}
         }})};
       if(body.action==='private_launch_review')
         return {ok:true,status:200,json:async()=>({ok:true,review:{
@@ -119,6 +119,18 @@ console.log('Private Launch catalog and funding truth checks passed');
   assert.equal(buttons.reviewLaunch.disabled,false);
   assert.equal(typeof captureHandler,'function');
 
+  const originalFetch=privateCtx.fetch;
+  privateCtx.fetch=async()=>({ok:true,json:async()=>({ok:true,contracts:{
+    CAMPAIGN:{configured:true,active:false,verification_configured:true},
+    ADSET:{configured:true,active:true,verification_configured:false},
+    CREATIVE:{configured:true,active:true,verification_configured:true},
+    AD:{configured:true,active:true,verification_configured:true}
+  }})});
+  const blocked=await privateCtx.remaskPrivateContractStatus({render:true});
+  assert.equal(blocked.ready,false);
+  assert.deepEqual(Array.from(blocked.missing,r=>r.step),['CAMPAIGN','ADSET']);
+  assert.doesNotMatch(buttons.launchResult.textContent,/doc_id|mutation|contracts/i);
+  privateCtx.fetch=originalFetch;
   const reviewed=await privateCtx.remaskPrivateReviewConfig(config,{render:false});
   assert.equal(reviewed.length,2);
   assert.deepEqual(requests.map(r=>r.body.action),['private_launch_contracts','private_launch_review','private_launch_review']);
@@ -164,6 +176,39 @@ console.log('Private Launch catalog and funding truth checks passed');
   privateCtx.remaskPrivatePendingClear();
   assert.equal(storage.has('remask_private_launch_pending_v1'),false);
 
+  privateCtx.creativeFormat=()=> 'CAROUSEL';
+  privateCtx.carouselFiles=()=>[];
+  privateCtx.carouselCardsPayload=()=>[{headline:'First',link:'https://example.com/a'},
+    {headline:'Second',link:'https://example.com/b'}];
+  vm.runInContext(`let remaskSelectedCreativePreset={format:'CAROUSEL',carousel:[
+    {media_library_id:'m-first'},{media_library_id:'m-second'}]}`,privateCtx);
+  const carousel=await privateCtx.remaskPrivatePrepareConfig();
+  assert.equal(carousel.payload.creative.format,'CAROUSEL');
+  assert.equal(carousel.payload.creative.carousel_cards[1].headline,'Second');
+  assert.deepEqual(Array.from(carousel.payload.creative.carousel_media_library_ids),['m-first','m-second']);
+  assert.equal(config.payload.creative.format,undefined,'preparation must not mutate the form config');
+  privateCtx.creativeFormat=()=> 'SINGLE';
+  privateCtx.state.pendingWorkspaceMedia={type:'image_hash',image_hash:'media-a',account_id:'111111111'};
+  await assert.rejects(()=>privateCtx.remaskPrivatePrepareConfig(),/другому РК/);
+  privateCtx.state.pendingWorkspaceMedia=null;
+  privateCtx.FormData=class {constructor(){this.fields=[];} append(...args){this.fields.push(args);}};
+  buttons.media={files:[{name:'ad.png',size:68}]};
+  let uploadCount=0;
+  privateCtx.fetch=async(url,options)=>{
+    uploadCount++;
+    assert.equal(options.body.fields[0][1],'private_launch_media');
+    assert.equal(options.body.fields[1][1],buttons.media.files[0]);
+    assert.equal(options.headers,undefined,'the browser must set the multipart boundary');
+    return {ok:true,json:async()=>({ok:true,media:{id:'m-'+'a'.repeat(24),sha256:'a'.repeat(64),media_type:'image',size_bytes:68}})};
+  };
+  const uploaded=await privateCtx.remaskPrivatePrepareConfig();
+  const uploadedAgain=await privateCtx.remaskPrivatePrepareConfig();
+  assert.equal(uploadCount,1,'same selected file must reuse content-addressed staging');
+  assert.equal(uploaded.payload.creative.staged_media[0].sha256,'a'.repeat(64));
+  assert.equal(JSON.stringify(uploadedAgain),JSON.stringify(uploaded));
+  assert.equal(config.payload.creative.staged_media,undefined);
+  buttons.media.files=[];
+
   // Multiple live cards must stop before Job creation and expose only masked
   // choices for the exact RK.
   const paymentHost={children:[],insertBefore(node){this.children.push(node);node.parentNode=this;}};
@@ -185,8 +230,8 @@ console.log('Private Launch catalog and funding truth checks passed');
     const body=JSON.parse(options.body);
     if(body.action==='private_launch_contracts')
       return {ok:true,status:200,json:async()=>({ok:true,contracts:{
-        CAMPAIGN:{configured:true},ADSET:{configured:true},
-        CREATIVE:{configured:true},AD:{configured:true}
+        CAMPAIGN:{configured:true,active:true,verification_configured:true},ADSET:{configured:true,active:true,verification_configured:true},
+        CREATIVE:{configured:true,active:true,verification_configured:true},AD:{configured:true,active:true,verification_configured:true}
       }})};
     if(body.action==='private_launch_review')
       return {ok:true,status:200,json:async()=>({ok:true,review:{
@@ -203,7 +248,7 @@ console.log('Private Launch catalog and funding truth checks passed');
   const oneConfig={...config,accountIds:['111111111']};
   await assert.rejects(
     ()=>privateCtx.remaskPrivateReviewConfig(oneConfig,{render:false}),
-    /выберите карту для RK 111111111/
+    /Выберите карту для РК 111111111/
   );
   assert.equal(paymentHost.children.length,1);
   const selectorBlock=paymentHost.children[0].children[0];

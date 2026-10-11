@@ -986,6 +986,25 @@ def _effective_launch_payload(value: Any) -> dict[str, Any]:
         if row.get("status", "PAUSED") != "PAUSED":
             raise ProvisioningError("PRIVATE_LAUNCH_PAUSED_REQUIRED", "Initial Launch only supports PAUSED advertising", retryable=False)
         effective[section] = {**row, "status": "PAUSED"}
+    creative = effective.get("creative")
+    if not isinstance(creative, dict):
+        raise ProvisioningError("PRIVATE_LAUNCH_INVALID_INPUT", "launch.creative must be an object", retryable=False)
+    if "format" in creative:
+        creative = dict(creative)
+        effective["creative"] = creative
+        format_name = creative["format"]
+        if format_name not in {"SINGLE", "CAROUSEL", "INSTAGRAM_POST"}:
+            raise ProvisioningError("PRIVATE_LAUNCH_CREATIVE_FORMAT_INVALID", "Unsupported advertising format", retryable=False)
+        if creative.get("staged_media") or creative.get("media_library_id") or creative.get("carousel_media_library_ids"):
+            raise ProvisioningError("PRIVATE_LAUNCH_MEDIA_CONTRACT_REQUIRED",
+                "Media is saved locally; a verified private Meta upload contract is required before publication.", retryable=False)
+        if format_name == "CAROUSEL":
+            raise ProvisioningError("PRIVATE_LAUNCH_CAROUSEL_CONTRACT_REQUIRED",
+                "A verified private carousel sender contract is required before publication.", retryable=False)
+        media_keys = ("source_instagram_media_id",) if format_name == "INSTAGRAM_POST" else (
+            "existing_image_hash", "existing_video_id", "existing_creative_id")
+        if not any(creative.get(key) for key in media_keys):
+            raise ProvisioningError("PRIVATE_LAUNCH_MEDIA_REQUIRED", "Select media for this ad account", retryable=False)
     return effective
 
 
@@ -1006,6 +1025,34 @@ def _require_paused_contract(contract: MutationContract) -> None:
     if not statuses or any(value not in ("PAUSED", expected) for value in statuses):
         raise ProvisioningError("PRIVATE_LAUNCH_PAUSED_CONTRACT_REQUIRED",
             f"{contract.step.value} request template must explicitly transmit PAUSED status", retryable=False)
+
+
+def _require_payload_coverage(contracts, payload):
+    """Reject unsupported options before CREATE instead of silently dropping them."""
+    bindings = set()
+    for contract in contracts.values():
+        bindings.update(_PLACEHOLDER.findall(json.dumps(contract.variables)))
+    missing = []
+    def visit(value, path):
+        if any(path == bound or path.startswith(bound + ".") for bound in bindings):
+            return
+        # PAUSED is enforced independently, and format selects the local
+        # creative adapter rather than being an outgoing Meta field.
+        if path in {"payload.campaign.status", "payload.adset.status", "payload.ad.status", "payload.creative.format"}:
+            return
+        if path == "payload.creative.page_id" and "page_id" in bindings:
+            return
+        if isinstance(value, dict) and value:
+            for key, child in value.items():
+                visit(child, path + "." + key)
+        elif value is not None:
+            missing.append(path.removeprefix("payload."))
+    for section in ("campaign", "adset", "creative", "ad"):
+        visit(payload[section], "payload." + section)
+    if missing:
+        raise ProvisioningError("PRIVATE_LAUNCH_OPTIONS_UNSUPPORTED",
+            "The pinned advertising sender does not transmit these options: " + ", ".join(sorted(missing)[:20]),
+            retryable=False)
 
 
 def _launch_fingerprint(payload: dict[str, Any], page_id: str) -> str:
@@ -1153,7 +1200,10 @@ class PrivateLaunchService:
         contracts: PrivateLaunchContractStore | None = None,
     ) -> None:
         self.provisioning_state = provisioning_state
-        self.contracts = contracts or PrivateLaunchContractStore()
+        if contracts is None:
+            from .static_launch_contracts import StaticLaunchContractStore
+            contracts = StaticLaunchContractStore()
+        self.contracts = contracts
         self.state = PrivateLaunchStateStore(provisioning_state.path)
         self._preflight_cache: dict[
             tuple[str, str, str, str, str, str, str],
@@ -1439,10 +1489,23 @@ class PrivateLaunchService:
         # request. A missing downstream contract must never leave an orphaned
         # Campaign or Ad Set behind.
         contracts = {step: self.contracts.get(step) for step in STEP_ORDER}
+        _require_payload_coverage(contracts, launch_payload)
+        validation_values = {
+            "profile_id": profile_id, "business_id": business_id,
+            "ad_account_id": ad_account_id, "page_id": page_id,
+            "payload": launch_payload,
+            "campaign_id": "<pending>", "adset_id": "<pending>", "creative_id": "<pending>",
+        }
         for contract in contracts.values():
             _require_paused_contract(contract)
             from .private_launch_verify import validate_contract
             validate_contract(contract.verification, contract.step.value)
+            # Rendering checks every downstream required input now, before any
+            # Campaign CREATE. Dependency IDs are validated after actual reads.
+            _render(contract.variables, validation_values)
+            if not _candidate_is_active(contract.step, _contract_candidate(contract.step, contract)):
+                raise ProvisioningError(f"PRIVATE_LAUNCH_{contract.step.value}_CONTRACT_STALE",
+                    "The advertising contract is disabled and must be reviewed before publication.", retryable=False)
         preflight = await self._review_preflight(
             context=context,
             profile_id=profile_id,
