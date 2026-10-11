@@ -1,4 +1,5 @@
 """Meta-observed SDC authorisation and descriptor-code HTTP contracts."""
+import asyncio
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -67,6 +68,24 @@ class CardSDCHttpTests(IsolatedAsyncioTestCase):
         await _send_sdc_once(web, state=self.state, common=self.common, **self.scope)
         self.assertEqual(mock.await_count,1)
 
+    async def test_concurrent_dispatch_reaches_meta_once_and_other_scope_is_independent(self):
+        mock = AsyncMock(return_value={'data':{'send_dynamic_descriptor_auth':{'sent':True}}})
+        async def fenced(*args, **kwargs):
+            await kwargs['before_submit']()
+            return await mock(*args, **kwargs)
+        web = SimpleNamespace(graphql=fenced)
+        results = await asyncio.gather(*(
+            _send_sdc_once(web, state=self.state, common=self.common, **self.scope)
+            for _ in range(2)))
+        self.assertCountEqual([r['code'] for r in results],
+                              ['SDC_AUTH_SENT_WAIT_CODE', 'SDC_AUTH_ALREADY_ATTEMPTED'])
+        self.assertEqual(mock.await_count, 1)
+        other = {**self.scope, 'profile':'17', 'account':'987654321',
+                 'payment_account':'777888999'}
+        result = await _send_sdc_once(web, state=self.state, common=self.common, **other)
+        self.assertEqual(result['code'], 'SDC_AUTH_SENT_WAIT_CODE')
+        self.assertEqual(mock.await_count, 2)
+
     async def test_auth_precheck_failure_does_not_reserve_or_charge(self):
         first_web = SimpleNamespace(graphql=AsyncMock(side_effect=ValueError('business login gate')))
         first = await _send_sdc_once(first_web, state=self.state,
@@ -115,8 +134,8 @@ class CardSDCHttpTests(IsolatedAsyncioTestCase):
         self.assertEqual(invalid['code'],'SDC_CODE_REQUIRED')
         mock.assert_not_awaited()
 
-    async def test_pending_state_refuses_new_authorization_even_when_requested(self):
-        payload = {'operation':'authorize','account_id':'123456789',
+    async def pending_result(self, operation):
+        payload = {'operation':operation,'account_id':'123456789',
             'card_id':'card_'+'f'*24,'card_brand':'Visa','card_last4':'1234'}
         evidence = {'account_id':'123456789','account_scope_verified':True,
                     'payment_account_id':'555666777','payment_account_node_id':'node_55'}
@@ -126,7 +145,6 @@ class CardSDCHttpTests(IsolatedAsyncioTestCase):
                                       'last4':'1234','needs_verification':False,
                                       'verification_tasks_observed':True,'verification_tasks':[],
                                       'card_confirmation_status':'CLEAR'}]}
-        HttpFixture.graphql = AsyncMock()
         with patch('app.payment_card_verification.resolve_payment_asset',
                    AsyncMock(return_value={'business_id':'987654321'})), \
              patch('app.session.ProfileSession',HttpFixture), \
@@ -140,13 +158,55 @@ class CardSDCHttpTests(IsolatedAsyncioTestCase):
             result=await verify_payment_card_http(
                 SimpleNamespace(resolve=AsyncMock(return_value=SimpleNamespace(cookies={'c_user':'1'}))),
                 '16',payload,state=self.state)
-        self.assertEqual(result['code'],'SDC_AUTH_PENDING_WAIT_CODE')
-        self.assertFalse(result['verification_triggered'])
-        self.assertEqual(result['bank_request_evidence'], 'META_PENDING_ONLY')
-        self.assertIsNone(result['previous_request_stage'])
-        HttpFixture.graphql.assert_not_awaited()
         self.assertEqual([r.args[1] for r in read.await_args_list],
                          ['READ_ACCOUNT','READ_METHODS','READ_SDC_CANDIDATES'])
+        return result
+
+    async def test_pending_without_local_attempt_is_ready_but_read_does_not_dispatch(self):
+        HttpFixture.graphql = AsyncMock()
+        result = await self.pending_result('verify')
+        self.assertEqual(result['code'], 'SDC_AUTH_READY')
+        self.assertEqual(result['verification_stage'], 'PENDING_VERIFICATION')
+        self.assertFalse(result['submitted'])
+        self.assertFalse(result['verification_triggered'])
+        HttpFixture.graphql.assert_not_awaited()
+
+    async def test_pending_first_authorization_sends_exact_meta_action_id_once(self):
+        mock = AsyncMock(return_value={'data':{'send_dynamic_descriptor_auth':{'sent':True}}})
+        async def fenced(*args, **kwargs):
+            await kwargs['before_submit']()
+            return await mock(*args, **kwargs)
+        HttpFixture.graphql = staticmethod(fenced)
+        first = await self.pending_result('authorize')
+        self.assertEqual(first['code'], 'SDC_AUTH_SENT_WAIT_CODE')
+        self.assertTrue(first['submitted'])
+        self.assertTrue(first['verification_triggered'])
+        self.assertEqual(mock.await_args.args[1]['input']['credential_id'], 'meta_sdc_credential_123')
+        second = await self.pending_result('authorize')
+        self.assertEqual(second['code'], 'SDC_AUTH_PENDING_WAIT_CODE')
+        self.assertEqual(second['bank_request_evidence'], 'REMASK_LOCAL_REQUEST')
+        self.assertEqual(second['previous_request_stage'], 'CHALLENGE_READY')
+        self.assertEqual(mock.await_count, 1)
+
+    async def test_pending_unreadable_history_never_dispatches(self):
+        HttpFixture.graphql = AsyncMock()
+        with patch.object(BankVerificationLedger, 'read_existing',
+                          AsyncMock(side_effect=OSError('unavailable'))):
+            result = await self.pending_result('authorize')
+        self.assertEqual(result['code'], 'SDC_AUTH_PENDING_WAIT_CODE')
+        self.assertEqual(result['bank_request_evidence'], 'LOCAL_HISTORY_UNAVAILABLE')
+        HttpFixture.graphql.assert_not_awaited()
+
+    async def test_pending_prior_attempts_including_crash_and_confirmed_never_dispatch(self):
+        HttpFixture.graphql = AsyncMock()
+        for stage in ('RESERVED', 'REQUEST_SENT', 'RESULT_UNKNOWN',
+                      'CHALLENGE_READY', 'SERVER_REJECTED', 'META_CONFIRMED'):
+            with self.subTest(stage=stage), patch.object(BankVerificationLedger, 'read_existing',
+                    AsyncMock(return_value={'same_card': True, 'stage': stage})):
+                result = await self.pending_result('authorize')
+                self.assertEqual(result['code'], 'SDC_AUTH_PENDING_WAIT_CODE')
+                self.assertEqual(result['previous_request_stage'], stage)
+        HttpFixture.graphql.assert_not_awaited()
 
     async def test_previous_bank_attempt_can_be_inspected_without_new_request(self):
         ledger = BankVerificationLedger(self.state.path)

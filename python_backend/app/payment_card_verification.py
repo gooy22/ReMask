@@ -204,11 +204,11 @@ async def _verify_sdc_code(web, *, code, account, payment_account,
 
 
 async def verify_payment_card_http(resolver, profile, payload, *, state=None):
-    """Read exact scoped card/tasks over the profile's cookie/proxy HTTP session.
+    """Read exact scoped card/tasks; authorize only on the explicit operation.
 
-    A future pinned financial mutation may be dispatched ONLY after its
-    request/response contract and once-only intent persistence are verified.
-    Until then return a distinct NOT_DISPATCHED state, never success.
+    Meta's pending usability is a requirement, not evidence that this worker
+    has already dispatched SDC. The durable HTTP-boundary ledger is the
+    authority for preventing a second local request.
     """
     from .session import ProfileSession
 
@@ -313,9 +313,10 @@ async def verify_payment_card_http(resolver, profile, payload, *, state=None):
                         and not action_credential):
                     return {**common, 'code': 'SDC_ACTION_CREDENTIAL_UNVERIFIED'}
                 if usability == 'PENDING_VERIFICATION':
-                    # An observed Meta pending state does not establish whether
-                    # this installation sent the original bank request.
-                    # Read only: a second authorization would risk a new hold.
+                    # Pending alone must not strand the automatic flow before
+                    # its first requested authorization. Preserve a recorded
+                    # attempt (including ambiguous/crashed dispatches); require
+                    # readable history before making a new local request.
                     previous = None
                     history_checked = False
                     if state is not None and getattr(state, 'path', None) and action_credential:
@@ -343,6 +344,18 @@ async def verify_payment_card_http(resolver, profile, payload, *, state=None):
                             business=business, credential=action_credential,
                             common=common, state=state, profile=profile,
                             card_id=card_id)
+                    if history_checked and previous is None:
+                        if operation == 'authorize':
+                            return await _send_sdc_once(web, state=state,
+                                profile=profile, account=target,
+                                payment_account=evidence['payment_account_id'],
+                                business=business, credential=action_credential,
+                                card_id=card_id, common=common)
+                        return {**common, 'status': 'ACTION_REQUIRED',
+                                'code': 'SDC_AUTH_READY',
+                                'verification_stage': 'PENDING_VERIFICATION',
+                                'bank_request_evidence': bank_evidence,
+                                'previous_request_stage': None}
                     return {**common, 'status': 'ACTION_REQUIRED',
                             'code': 'SDC_AUTH_PENDING_WAIT_CODE',
                             'verification_stage': 'PENDING_VERIFICATION',
@@ -382,3 +395,4 @@ async def verify_payment_card_http(resolver, profile, payload, *, state=None):
         return {**base, 'code': auth.code if auth else
                 ('PAYMENT_HTTP_TIMEOUT' if isinstance(exc, TimeoutError)
                  else 'CARD_VERIFICATION_HTTP_UNAVAILABLE')}
+
