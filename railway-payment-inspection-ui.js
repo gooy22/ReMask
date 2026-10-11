@@ -248,6 +248,12 @@ function paymentCardBriefMessage(result){
     BUSINESS_LOGIN_GATE:'Нужно восстановить доступ к Meta Business.',
     CHECKPOINT_REQUIRED:'Meta требует подтверждения Facebook-профиля.'
   };
+  if(result?.code==='SDC_AUTH_PENDING_WAIT_CODE'){
+    if(result.bank_request_evidence==='REMASK_LOCAL_REQUEST')
+      return 'Meta ожидает подтверждения временной операции. В ReMask есть запись предыдущей попытки, новую операцию не отправляли.';
+    if(result.bank_request_evidence==='META_PENDING_ONLY')
+      return 'Meta ожидает подтверждения, но в ReMask нет подтверждённой записи об отправке запроса. Повторная операция не запускалась.';
+  }
   if(result?.code in brief)return brief[result.code];
   if(!result?.code)return 'Не удалось получить результат.';
   const described=paymentCardMessage({code:result.code,missing_fields:result.missing_fields});
@@ -604,8 +610,8 @@ async function showFunding(restored=null){
     <div class="mt-3"><button id="paymentCardBind" type="button" class="btn btn-primary">Привязать карту</button></div>
     <details class="mt-2"><summary>Диагностика</summary>
       <button id="paymentCardPrepare" type="button">Проверить форму Meta</button>
-      <button id="paymentCardInspect" type="button">Проверить привязанные карты</button></details>
-    <button id="paymentCardVerify" type="button" class="mt-2">Запросить подтверждение карты в банке</button>
+      <button id="paymentCardInspect" type="button">Проверить привязанные карты</button>
+      <button id="paymentCardVerify" type="button">Проверить статус подтверждения</button></details>
     <div id="paymentCardAssignments" class="ws-muted mt-2"></div>
     <div id="paymentCardProgress" class="ws-muted mt-2" aria-live="polite"></div>
     <div id="fundingResults" aria-live="polite"></div>`,'',null);
