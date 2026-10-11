@@ -21,7 +21,7 @@ from app.provisioning.state import ProvisioningStateStore
 
 
 def contracts():
-    return {
+    rows = {
         "CAMPAIGN": {
             "doc_id": "111111",
             "friendly_name": "CampaignCreateMutation",
@@ -72,6 +72,16 @@ def contracts():
             "result_id_paths": ["data.create.id"],
         },
     }
+    relations = {"CAMPAIGN": {}, "ADSET": {"campaign_id": "data.node.campaign_id"},
+                 "CREATIVE": {"page_id": "data.node.page_id"},
+                 "AD": {"campaign_id": "data.node.campaign_id", "adset_id": "data.node.adset_id", "creative_id": "data.node.creative_id"}}
+    for index, (step, row) in enumerate(rows.items()):
+        row["verification"] = {"operation_kind": "query", "doc_id": str(900001 + index),
+            "friendly_name": "Fixture" + step + "ReadQuery", "variables": {"id": "{{entity_id}}"},
+            "id_path": "data.node.id", "account_path": "data.node.account_id", "relations": relations[step]}
+        if step != "CREATIVE":
+            row["verification"]["status_path"] = "data.node.status"
+    return rows
 
 
 class PrivateLaunchContractRegistryTests(unittest.TestCase):
@@ -408,6 +418,10 @@ class PrivateLaunchTests(unittest.IsolatedAsyncioTestCase):
             self.state,
             contracts=PrivateLaunchContractStore(__import__("json").dumps(contracts())),
         )
+        self.verify_patch = patch.object(PrivateLaunchService, "_verify_entity", AsyncMock(return_value={
+            "verified": True, "code": "READ_CONFIRMED", "source": "test_fixture_independent_read"}))
+        self.verify_patch.start()
+        self.addCleanup(self.verify_patch.stop)
         self.context = SimpleNamespace(profile_id="7")
         self.web = SimpleNamespace(
             bootstrap=AsyncMock(return_value=SimpleNamespace(actor_id="61594993341059")),

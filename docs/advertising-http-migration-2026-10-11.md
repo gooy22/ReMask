@@ -54,3 +54,47 @@ SHA256 is 79c658d11ac8137e56574376e2a3d4b7ca4f008f6edd3b74a60a4f95da926d26.
 Mandatory local build suite: 932 tests passed (18 skips). The broader local
 discovery run is not a clean full-suite result: its PHP-dependent checks need
 the complete PHP environment. No successful real advertising CREATE is claimed.
+
+Continuation: the server now enforces PAUSED both in the effective payload and
+the outgoing mutation template. Existing Launch keys bind a SHA256 of the
+effective configuration, Page and masked funding choice. Changed configurations
+cannot splice into an earlier chain. SQLite's unique INSERT claims each CREATE
+atomically, including concurrent worker processes, rather than overwriting an
+existing submit checkpoint.
+
+Every step additionally requires a pinned private READ query contract before
+the first CREATE. After a returned ID, the worker saves READ_PENDING with that ID
+durably and issues an independent query. Only complete response data matching
+the exact object, RK, PAUSED state and preceding object/Page relations can mark
+SUCCESS or promote a learned result path. A failed or interrupted read retains
+the ID in RECONCILE_REQUIRED and cannot replay CREATE. Query IDs and response
+paths are operator-reviewed contracts; the release supplies no invented Meta
+IDs. Legacy SUCCESS records without immutable configuration and independent
+READ evidence cannot silently resume.
+
+Public source maintenance now follows only literal, unambiguous Meta Bootloader
+maps and observed CDN URLs. It retains dependency lists, prioritizes core
+publication modules, has download/time/source budgets, and never executes JS.
+Exact module selection can inspect already saved public code without another
+Meta request. Empty failed capture no longer overwrites previous evidence.
+
+Production source evidence: the HTTP capture read 80 public scripts and retained
+4376 advertising modules. adsDraftPublishingPublishAction calls
+AdsDraftPublishDataManager.startPublish(draftID, fragmentIDs, isCurrentlyPublishing,
+{ignore_errors, include_fragment_statuses:true}, fakePublishID, creationSource,
+shouldPublishImmediately, isFirstBlockingError). The create-fragment flow calls
+startCreateFragmentAndPublish. These are draft publishing entry points, not
+evidence for four guessed independent CREATE doc_ids; the actual request sender
+and resulting object READ artifacts still need to be pinned.
+
+The subsequent profile 16 Business HTTP preflight returned BUSINESS_LOGIN_GATE
+(an observed /business/loginpage route). Advertising source reads themselves
+used HTTP/2; advertising mutation_posts stayed zero. Restoring that profile's
+Business HTTP session is required before a live PAUSED canary. The current
+creative library is empty and no saved Launch bundle is selected.
+
+Continuation validation: the final mandatory suite ran 943 tests successfully
+(18 skips). Independent READ fixtures exercise all four stages with eight
+separate private requests, foreign RK/ID/state/parent rejection, missing
+downstream READ contracts and durable no-replay after an unconfirmed READ.
+This is code verification; no real production advertising CREATE is claimed.

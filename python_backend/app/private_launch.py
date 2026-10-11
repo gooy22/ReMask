@@ -68,6 +68,7 @@ class MutationContract:
     variables: dict[str, Any]
     result_id_paths: tuple[str, ...]
     request_envelope: dict[str, Any]
+    verification: dict[str, Any] | None = None
 
 
 def _contract_variables_mode(step: PrivateLaunchStep) -> str:
@@ -200,7 +201,7 @@ class PrivateLaunchContractStore:
     }
     ALLOWED_CONTRACT_KEYS = {
         "doc_id", "friendly_name", "endpoint_url", "variables",
-        "result_id_paths", "request_envelope", "source", "observed_at",
+        "result_id_paths", "request_envelope", "source", "observed_at", "verification",
     }
     FORBIDDEN_AUTH_KEYS = {
         "fb_dtsg", "access_token", "authorization", "cookie", "cookies",
@@ -391,6 +392,7 @@ class PrivateLaunchContractStore:
             variables=variables,
             result_id_paths=tuple(path.strip() for path in result_paths),
             request_envelope=self._clean_envelope(row.get("request_envelope")),
+            verification=row.get("verification"),
         )
 
     def status(self) -> dict[str, dict[str, Any]]:
@@ -404,6 +406,12 @@ class PrivateLaunchContractStore:
                     source="private_launch_contract",
                 )
                 active = _candidate_is_active(step, candidate)
+                from .private_launch_verify import validate_contract
+                verification_code = ""
+                try:
+                    validate_contract(contract.verification, step.value)
+                except ProvisioningError as exc:
+                    verification_code = exc.code
                 stats = {}
                 try:
                     registry = registry_view(
@@ -430,7 +438,9 @@ class PrivateLaunchContractStore:
                     stats = {}
                 output[step.value] = {
                     "configured": True,
-                    "active": active,
+                    "active": active and not verification_code,
+                    "verification_configured": not bool(verification_code),
+                    "verification_code": verification_code,
                     "friendly_name": contract.friendly_name,
                     "endpoint_host": urlsplit(contract.endpoint_url).hostname or "",
                     "result_paths": len(contract.result_id_paths),
@@ -1397,6 +1407,8 @@ class PrivateLaunchService:
         contracts = {step: self.contracts.get(step) for step in STEP_ORDER}
         for contract in contracts.values():
             _require_paused_contract(contract)
+            from .private_launch_verify import validate_contract
+            validate_contract(contract.verification, contract.step.value)
         preflight = await self._review_preflight(
             context=context,
             profile_id=profile_id,
@@ -1498,7 +1510,9 @@ class PrivateLaunchService:
                 )
         fingerprint = _launch_fingerprint(payload, page_id)
         for prior in prior_by_step.values():
-            if prior and str(prior.get("status") or "").upper() == "SUCCESS" and prior.get("result", {}).get("evidence", {}).get("launch_fingerprint") != fingerprint:
+            if prior and str(prior.get("status") or "").upper() == "SUCCESS" and (
+                    prior.get("result", {}).get("evidence", {}).get("launch_fingerprint") != fingerprint
+                    or prior.get("result", {}).get("evidence", {}).get("verification", {}).get("verified") is not True):
                 raise ProvisioningError("PRIVATE_LAUNCH_KEY_PAYLOAD_MISMATCH",
                     "Saved Launch is bound to another configuration or lacks an immutable configuration proof; resubmission is blocked",
                     retryable=False)
@@ -1770,19 +1784,6 @@ class PrivateLaunchService:
                     step,
                     excluded_ids=excluded_ids,
                 )
-                if entity_id and response_path:
-                    try:
-                        self.contracts.promote_result_path(
-                            step,
-                            response_path,
-                        )
-                    except Exception as exc:
-                        log.warning(
-                            "private Launch result path promotion failed "
-                            "step=%s type=%s",
-                            step.value,
-                            exc.__class__.__name__,
-                        )
             if not entity_id:
                 _record_contract_result(
                     step,
@@ -1822,6 +1823,36 @@ class PrivateLaunchService:
                 )
                 raise ProvisioningError(result.code, result.message, retryable=False)
 
+            pending_read = ActionResult.reconcile(step.value,
+                code=f"PRIVATE_LAUNCH_{step.value}_READ_PENDING",
+                message="CREATE returned an ID; independent Meta READ is pending", submitted=True,
+                evidence={"launch_fingerprint": fingerprint, "response_path": response_path})
+            await self.state.save(launch_key=launch_key, profile_id=profile_id, business_id=business_id,
+                ad_account_id=ad_account_id, step=step, status=pending_read.status.value,
+                entity_id=entity_id, result=pending_read.as_dict(), error_code=pending_read.code, submitted=True)
+            try:
+                verification = await asyncio.wait_for(self._verify_entity(web, contract,
+                    {**values, "entity_id": entity_id}), timeout=40)
+            except AuthenticationError as exc:
+                verification = {"verified": False, "code": private_auth_error(exc).code}
+            except Exception:
+                # Save the returned ID, never arbitrary exception/auth text.
+                verification = {"verified": False, "code": "READ_UNAVAILABLE"}
+            if verification.get("verified") is not True:
+                result = ActionResult.reconcile(step.value,
+                    code=f"PRIVATE_LAUNCH_{step.value}_READ_UNCONFIRMED",
+                    message="CREATE returned an ID but independent Meta READ did not confirm the exact paused object",
+                    submitted=True, evidence={"launch_fingerprint": fingerprint, "verification": verification})
+                await self.state.save(launch_key=launch_key, profile_id=profile_id, business_id=business_id,
+                    ad_account_id=ad_account_id, step=step, status=result.status.value,
+                    entity_id=entity_id, result=result.as_dict(), error_code=result.code, submitted=True)
+                raise ProvisioningError(result.code, result.message, retryable=False)
+            if AUTO_RESULT_ID_PATH in contract.result_id_paths and response_path:
+                try:
+                    self.contracts.promote_result_path(step, response_path)
+                except Exception as exc:
+                    log.warning("private Launch verified result path promotion failed step=%s type=%s", step.value, type(exc).__name__)
+
             _record_contract_result(
                 step,
                 candidate,
@@ -1835,6 +1866,7 @@ class PrivateLaunchService:
                 code=f"PRIVATE_LAUNCH_{step.value}_CONFIRMED",
                 evidence={
                     "launch_fingerprint": fingerprint,
+                    "verification": verification,
                     **_response_summary(response),
                     "response_path": response_path,
                     "friendly_name": contract.friendly_name,
@@ -1875,3 +1907,8 @@ class PrivateLaunchService:
                 "ad_id": values.get("ad_id", ""),
             },
         }
+
+    @staticmethod
+    async def _verify_entity(web, contract, values):
+        from .private_launch_verify import verify
+        return await verify(web, contract.verification, contract.step.value, values)
