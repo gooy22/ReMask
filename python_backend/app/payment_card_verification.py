@@ -185,9 +185,11 @@ async def _verify_sdc_code(web, *, code, account, payment_account,
                 recorded = await BankVerificationLedger(state.path).record_meta_confirmation(
                     profile=profile, account=account, payment_account=payment_account,
                     credential=credential, card_id=card_id)
-            except (OSError, ValueError, RuntimeError):
-                # The bank response remains authoritative even if the local
-                # durable record needs repair; never claim it was recorded.
+            except Exception:
+                # Meta's positive verification remains authoritative even if
+                # SQLite or local disk persistence fails. Report the failure
+                # separately; do not turn a successful bank verification into
+                # a potentially retryable financial action.
                 recorded = False
         return {**common, 'status': 'VERIFIED',
                 'code': 'SDC_CODE_VERIFIED_BY_META',
