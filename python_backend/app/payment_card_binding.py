@@ -790,7 +790,8 @@ async def profile_payment_card(resolver:Any,profile:str,payload:dict[str,Any],*,
             logging.getLogger('remask.payment_card').info(
                 'bank pending origin profile=%s account=%s evidence=%s previous_stage=%s',
                 profile, target,
-                origin if origin in ('REMASK_LOCAL_REQUEST', 'META_PENDING_ONLY') else 'UNKNOWN',
+                origin if origin in ('REMASK_LOCAL_REQUEST', 'META_PENDING_ONLY',
+                                     'LOCAL_HISTORY_UNAVAILABLE') else 'UNKNOWN',
                 stage if stage in ('REQUEST_SENT', 'RESULT_UNKNOWN',
                                   'CHALLENGE_READY', 'META_CONFIRMED',
                                   'SERVER_REJECTED', 'RESERVED') else 'NONE')
