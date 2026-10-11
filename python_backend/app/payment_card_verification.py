@@ -317,19 +317,23 @@ async def verify_payment_card_http(resolver, profile, payload, *, state=None):
                     # this installation sent the original bank request.
                     # Read only: a second authorization would risk a new hold.
                     previous = None
+                    history_checked = False
                     if state is not None and getattr(state, 'path', None) and action_credential:
                         try:
                             previous = await BankVerificationLedger(state.path).read_existing(
                                 profile=profile, account=target,
                                 payment_account=evidence['payment_account_id'],
                                 credential=action_credential, card_id=card_id)
+                            history_checked = True
                         except Exception:
-                            # A broken local ledger never justifies another debit.
-                            previous = None
+                            # Missing or unreadable history is not evidence of
+                            # never having sent a financial authorization.
+                            history_checked = False
                     if previous is not None and not previous['same_card']:
                         return {**common, 'code': 'SDC_DIFFERENT_CARD_ATTEMPT_BLOCKED'}
                     previous_stage = previous['stage'] if previous else None
-                    bank_evidence = ('REMASK_LOCAL_REQUEST' if previous_stage in
+                    bank_evidence = ('LOCAL_HISTORY_UNAVAILABLE' if not history_checked
+                                     else 'REMASK_LOCAL_REQUEST' if previous_stage in
                                      ('REQUEST_SENT', 'RESULT_UNKNOWN', 'CHALLENGE_READY')
                                      else 'META_PENDING_ONLY')
                     if operation == 'verify_code':
