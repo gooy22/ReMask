@@ -248,6 +248,17 @@ function paymentCardBriefMessage(result){
     BUSINESS_LOGIN_GATE:'Нужно восстановить доступ к Meta Business.',
     CHECKPOINT_REQUIRED:'Meta требует подтверждения Facebook-профиля.'
   };
+  if(result?.code==='CARD_SAVE_RESULT_UNKNOWN' && result.reconcile_error_code){
+    const reason=result.reconcile_error_code;
+    if(reason==='SESSION_EXPIRED')
+      return 'Результат добавления карты пока неизвестен: Facebook-сессия истекла при проверке. Обновите сессию профиля, затем проверьте результат. Карту повторно не отправляйте.';
+    if(reason==='CHECKPOINT_REQUIRED')
+      return 'Результат добавления карты пока неизвестен: Facebook требует подтверждения профиля. После его прохождения проверьте результат без повторной отправки карты.';
+    if(reason==='BUSINESS_LOGIN_GATE')
+      return 'Результат добавления карты пока неизвестен: Meta Business требует повторный вход. После восстановления доступа проверьте результат. Карту повторно не отправляйте.';
+    if(reason==='PAYMENT_HTTP_TIMEOUT'||reason==='PAYMENT_HTTP_UNAVAILABLE')
+      return 'Результат добавления карты пока неизвестен: проверка Meta недоступна. Повторное сохранение заблокировано во избежание дубликата.';
+  }
   if(result?.code==='SDC_AUTH_PENDING_WAIT_CODE'){
     if(result.bank_request_evidence==='REMASK_LOCAL_REQUEST')
       return 'Meta ожидает подтверждения временной операции. В ReMask есть запись предыдущей попытки, новую операцию не отправляли.';
