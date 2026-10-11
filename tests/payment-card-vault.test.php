@@ -506,7 +506,8 @@ try{
         ['sdc_credential_match'=>false]
     ] as $invalid){
         rejected(fn()=>$vault->recordMetaBankVerified($card['id'],'Verification','123456789',
-            array_replace($verifiedMeta,$invalid)),'CARD_META_VERIFICATION_NOT_CONFIRMED');
+            array_replace($verifiedMeta,$invalid)),
+            isset($invalid['credential_id'])?'CARD_VERIFICATION_CREDENTIAL_UNVERIFIED':'CARD_META_VERIFICATION_NOT_CONFIRMED');
     }
     rejected(fn()=>$vault->recordMetaBankVerified($card['id'],'Other profile','123456789',$verifiedMeta),
         'CARD_META_VERIFICATION_NOT_CONFIRMED');
