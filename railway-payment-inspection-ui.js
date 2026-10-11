@@ -446,9 +446,11 @@ async function inspectCardVerificationHTTP(rows,card,container){
       const original=await apiJson('ajax/paymentCards.php',post({action:'verify',
         card_id:card.id,profile:r.profile,account_id:r.id,...paymentAssetHint(r)}));
       let outcome=original;
-      if(original?.result?.code==='SDC_AUTH_READY'){
-        // Once-only authorization, only after Meta's exact-card screen says
-        // UNVERIFIED_OR_PENDING_AUTH. The SQLite ledger blocks all replays.
+      if(original?.result?.code==='SDC_AUTH_READY'||
+          original?.result?.code==='SDC_AUTH_PENDING_WAIT_CODE'){
+        // Only this explicit bank-confirmation button can authorize a pending
+        // card. Background sync and passive Save reconciliation never repeat
+        // a financial authorization. Backend enforces once-only persistence.
         outcome=await apiJson('ajax/paymentCards.php',post({action:'authorize',
           card_id:card.id,profile:r.profile,account_id:r.id,...paymentAssetHint(r)}));
       }
