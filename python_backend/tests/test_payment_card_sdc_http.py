@@ -29,7 +29,9 @@ class CardSDCHttpTests(IsolatedAsyncioTestCase):
         self.state = SimpleNamespace(path=str(Path(self.tmp.name)/'state.sqlite'))
         self.common = {'profile_id':'16', 'account_id':'123456789',
                        'browser_started':False, 'verification_triggered':False,
-                       'funding_verified':False}
+                       'funding_verified':False,
+                       'verification_tasks_observed':True,
+                       'verification_tasks':['statement_code']}
         self.scope = {'profile':'16', 'account':'123456789',
                       'payment_account':'555666777','business':'987654321',
                       'credential':'creditcard_node','card_id':'card_'+'f'*24}
@@ -134,7 +136,7 @@ class CardSDCHttpTests(IsolatedAsyncioTestCase):
         self.assertEqual(invalid['code'],'SDC_CODE_REQUIRED')
         mock.assert_not_awaited()
 
-    async def pending_result(self, operation):
+    async def pending_result(self, operation, tasks=None, usability='PENDING_VERIFICATION'):
         payload = {'operation':operation,'account_id':'123456789',
             'card_id':'card_'+'f'*24,'card_brand':'Visa','card_last4':'1234'}
         evidence = {'account_id':'123456789','account_scope_verified':True,
@@ -143,7 +145,8 @@ class CardSDCHttpTests(IsolatedAsyncioTestCase):
                    'payment_account_relation_verified':True,'methods_query_verified':True,
                    'payment_methods':[{'credential_id':'creditcard_node','type':'Visa',
                                       'last4':'1234','needs_verification':False,
-                                      'verification_tasks_observed':True,'verification_tasks':[],
+                                      'verification_tasks_observed':True,
+                                      'verification_tasks':['statement_code'] if tasks is None else tasks,
                                       'card_confirmation_status':'CLEAR'}]}
         with patch('app.payment_card_verification.resolve_payment_asset',
                    AsyncMock(return_value={'business_id':'987654321'})), \
@@ -152,7 +155,7 @@ class CardSDCHttpTests(IsolatedAsyncioTestCase):
              patch('app.payment_card_verification.methods_proof',return_value=methods), \
              patch('app.payment_card_verification.sdc_candidate_proof',return_value={
                  'sdc_screen_verified':True,'sdc_candidate':True,'sdc_credential_match':True,
-                 'sdc_usability':'PENDING_VERIFICATION',
+                 'sdc_usability':usability,
                  'sdc_action_credential_id':'meta_sdc_credential_123'}), \
              patch('app.payment_card_verification.execute',AsyncMock(return_value={})) as read:
             result=await verify_payment_card_http(
@@ -161,6 +164,36 @@ class CardSDCHttpTests(IsolatedAsyncioTestCase):
         self.assertEqual([r.args[1] for r in read.await_args_list],
                          ['READ_ACCOUNT','READ_METHODS','READ_SDC_CANDIDATES'])
         return result
+
+    async def test_native_empty_and_ambiguous_tasks_cannot_start_sdc_from_card_status(self):
+        for usability in ('PENDING_VERIFICATION','UNVERIFIED_OR_PENDING_AUTH'):
+            for tasks in ([],['three_ds'],['cvv'],['bank_app'],['meta_action'],
+                          ['statement_code','three_ds']):
+                for operation in ('verify','authorize'):
+                    with self.subTest(usability=usability,tasks=tasks,operation=operation):
+                        HttpFixture.graphql=AsyncMock()
+                        result=await self.pending_result(operation,tasks,usability)
+                        self.assertEqual(result['code'],'CARD_VERIFICATION_FLOW_UNRESOLVED')
+                        self.assertFalse(result['submitted'])
+                        self.assertFalse(result['verification_triggered'])
+                        HttpFixture.graphql.assert_not_awaited()
+
+    async def test_dispatch_boundary_also_requires_exact_meta_sdc_task(self):
+        web=SimpleNamespace(graphql=AsyncMock())
+        for common in ({}, {'verification_tasks_observed':False,'verification_tasks':['statement_code']},
+                       {'verification_tasks_observed':True,'verification_tasks':['three_ds']}):
+            result=await _send_sdc_once(web,state=self.state,common=common,**self.scope)
+            self.assertEqual(result['code'],'CARD_VERIFICATION_FLOW_UNRESOLVED')
+        web.graphql.assert_not_awaited()
+
+    async def test_existing_sdc_challenge_is_retained_when_no_new_task_is_offered(self):
+        HttpFixture.graphql=AsyncMock()
+        with patch.object(BankVerificationLedger,'read_existing',
+                          AsyncMock(return_value={'same_card':True,'stage':'CHALLENGE_READY'})):
+            result=await self.pending_result('verify',[])
+        self.assertEqual(result['code'],'SDC_AUTH_PENDING_WAIT_CODE')
+        self.assertEqual(result['previous_request_stage'],'CHALLENGE_READY')
+        HttpFixture.graphql.assert_not_awaited()
 
     async def test_failed_code_preserves_reason_without_secrets_or_new_auth(self):
         async def graphql(doc, variables, **kw):

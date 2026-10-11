@@ -81,6 +81,23 @@ SDC_VERIFY_CODE_DOC_ID = '28322139410820855'
 BILLING_GRAPHQL = 'https://business.facebook.com/api/graphql/'
 
 
+def _sdc_task_proven(common):
+    # The SDC screen lists candidates, not the flow chosen by Meta's
+    # Verify Payment Method launcher. Pending usability is not a bank task.
+    return (common.get('verification_tasks_observed') is True
+            and common.get('verification_tasks') == ['statement_code'])
+
+
+def _unresolved_verification_flow(common):
+    tasks = common.get('verification_tasks')
+    route = tasks[0] if isinstance(tasks, list) and len(tasks) == 1 and tasks[0] in (
+        'three_ds', 'cvv', 'bank_app', 'meta_action') else 'unknown'
+    return {**common, 'status': 'ACTION_REQUIRED',
+            'code': 'CARD_VERIFICATION_FLOW_UNRESOLVED',
+            'verification_route': route,
+            'submitted': False, 'verification_triggered': False}
+
+
 def _code_response_diagnostic(response, *, candidate, credential, payment_account):
     """Keep display errors, never bank codes, credentials or raw responses."""
     from .payment_card_http import save_error_diagnostic
@@ -125,6 +142,8 @@ async def _send_sdc_once(web, *, state, profile, account, payment_account,
     not before a cookie/Business login precheck. Failed prechecks therefore
     do not permanently consume a card's one permitted bank request.
     """
+    if not _sdc_task_proven(common):
+        return _unresolved_verification_flow(common)
     if state is None or not getattr(state, 'path', None):
         return {**common, 'code': 'SDC_DURABLE_GUARD_REQUIRED'}
     ledger = BankVerificationLedger(state.path)
@@ -371,10 +390,8 @@ async def verify_payment_card_http(resolver, profile, payload, *, state=None):
                         and not action_credential):
                     return {**common, 'code': 'SDC_ACTION_CREDENTIAL_UNVERIFIED'}
                 if usability == 'PENDING_VERIFICATION':
-                    # Pending alone must not strand the automatic flow before
-                    # its first requested authorization. Preserve a recorded
-                    # attempt (including ambiguous/crashed dispatches); require
-                    # readable history before making a new local request.
+                    # Retain an existing SDC challenge, but never infer a new
+                    # descriptor operation from this legacy pending status.
                     previous = None
                     history_checked = False
                     if state is not None and getattr(state, 'path', None) and action_credential:
@@ -403,6 +420,8 @@ async def verify_payment_card_http(resolver, profile, payload, *, state=None):
                             common=common, state=state, profile=profile,
                             card_id=card_id)
                     if history_checked and previous is None:
+                        if not _sdc_task_proven(common):
+                            return _unresolved_verification_flow(common)
                         if operation == 'authorize':
                             return await _send_sdc_once(web, state=state,
                                 profile=profile, account=target,
@@ -422,6 +441,8 @@ async def verify_payment_card_http(resolver, profile, payload, *, state=None):
                 if usability == 'UNVERIFIED_OR_PENDING_AUTH':
                     if operation == 'verify_code':
                         return {**common, 'code': 'SDC_AUTH_NOT_STARTED'}
+                    if not _sdc_task_proven(common):
+                        return _unresolved_verification_flow(common)
                     if operation == 'authorize':
                         return await _send_sdc_once(web, state=state,
                             profile=profile, account=target,

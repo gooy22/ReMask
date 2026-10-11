@@ -96,6 +96,24 @@ assert.doesNotMatch(sandbox.fundingCell({verification_status:'LINKED',card_linke
   const precharge=element();sandbox.paymentConfirmationPanel(rows[0],
     {code:'SDC_AUTH_READY',card_id:challenge.card_id},precharge);
   assert.equal(precharge.children.length,0,'before a bank challenge the code input is absent');
+  assert.equal(sandbox.paymentSDCTaskReady({code:'SDC_AUTH_READY'}),false);
+  assert.equal(sandbox.paymentSDCTaskReady({code:'SDC_AUTH_READY',
+    verification_tasks_observed:true,verification_tasks:['three_ds']}),false);
+  assert.equal(sandbox.paymentSDCTaskReady({code:'SDC_AUTH_READY',
+    verification_tasks_observed:true,verification_tasks:['statement_code','three_ds']}),false);
+  assert.equal(sandbox.paymentSDCTaskReady({code:'SDC_AUTH_READY',
+    verification_tasks_observed:true,verification_tasks:['statement_code']}),true);
+  const originalApi=sandbox.apiJson;
+  requests=[];
+  sandbox.apiJson=async(url,body)=>{
+    requests.push({url,body});
+    return {result:{code:'SDC_AUTH_READY',sdc_usability:'PENDING_VERIFICATION'}};
+  };
+  await sandbox.paymentVerifyConfirmedLink(rows[0],card);
+  await sandbox.inspectCardVerificationHTTP([rows[0]],card,element());
+  assert.deepEqual(requests.map(r=>r.body.action),['verify','verify'],
+    'neither automatic path authorizes from an old worker pending-only result');
+  sandbox.apiJson=originalApi;
   requests=[];const verifyPanel=element();
   await sandbox.inspectCardVerificationHTTP(rows,card,verifyPanel);
   assert.deepEqual(requests.map(r=>r.body.action),['verify','verify']);

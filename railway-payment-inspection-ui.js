@@ -250,6 +250,7 @@ function paymentCardBriefMessage(result){
     SDC_AUTH_REJECTED:'Meta отклонила временную операцию.',
     CARD_VERIFICATION_NO_REQUIRED_TASK:'Meta не требует дополнительной проверки карты.',
     CARD_VERIFICATION_MUTATION_NOT_PINNED:'Meta требует другого подтверждения. Запрос в банк не отправлен.',
+    CARD_VERIFICATION_FLOW_UNRESOLVED:'Способ подтверждения Meta ещё не определён. Запрос удержания не отправлялся.',
     CARD_VERIFICATION_SDC_READ_UNVERIFIED:'Не удалось узнать статус временной операции.',
     SESSION_EXPIRED:'Нужно обновить Facebook-сессию.',
     BUSINESS_LOGIN_GATE:'Нужно восстановить доступ к Meta Business.',
@@ -325,12 +326,18 @@ async function savePaymentCard(){
   finally{$('paymentCardNumber').value='';payload.number='';}
 }
 
+function paymentSDCTaskReady(result){
+  return result?.code==='SDC_AUTH_READY'&&result.verification_tasks_observed===true&&
+    Array.isArray(result.verification_tasks)&&result.verification_tasks.length===1&&
+    result.verification_tasks[0]==='statement_code';
+}
+
 async function paymentVerifyConfirmedLink(row,card){
   // Only after a confirmed exact-card link, ask Meta which financial action
   // is necessary. No independent/manual bank charge and no blind retries.
   const base={card_id:card.id,profile:row.profile,account_id:row.id,...paymentAssetHint(row)};
   const observed=await apiJson('ajax/paymentCards.php',post({action:'verify',...base}));
-  if(observed?.result?.code==='SDC_AUTH_READY')
+  if(paymentSDCTaskReady(observed?.result))
     return await apiJson('ajax/paymentCards.php',post({action:'authorize',...base}));
   return observed;
 }
@@ -551,9 +558,9 @@ async function inspectCardVerificationHTTP(rows,card,container){
       const original=await apiJson('ajax/paymentCards.php',post({action:'verify',
         card_id:card.id,profile:r.profile,account_id:r.id,...paymentAssetHint(r)}));
       let outcome=original;
-      if(original?.result?.code==='SDC_AUTH_READY'){
-        // Once-only authorization, only after Meta's exact-card screen says
-        // UNVERIFIED_OR_PENDING_AUTH. The SQLite ledger blocks all replays.
+      if(paymentSDCTaskReady(original?.result)){
+        // Pending card usability cannot select a descriptor hold. Require
+        // the exact current Meta statement-code task; preserve replay guards.
         outcome=await apiJson('ajax/paymentCards.php',post({action:'authorize',
           card_id:card.id,profile:r.profile,account_id:r.id,...paymentAssetHint(r)}));
       }
