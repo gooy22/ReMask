@@ -252,7 +252,9 @@ function paymentCardBriefMessage(result){
     if(result.bank_request_evidence==='REMASK_LOCAL_REQUEST')
       return 'Meta ожидает подтверждения временной операции. В ReMask есть запись предыдущей попытки, новую операцию не отправляли.';
     if(result.bank_request_evidence==='META_PENDING_ONLY')
-      return 'Meta ожидает подтверждения, но в ReMask нет подтверждённой записи об отправке запроса. Повторная операция не запускалась.';
+      return 'Meta ожидает подтверждения, но в ReMask нет записи о предыдущей отправке. Новый запрос не запускался.';
+    if(result.bank_request_evidence==='LOCAL_HISTORY_UNAVAILABLE')
+      return 'Meta ожидает подтверждения. Историю запросов ReMask сейчас проверить не удалось. Новый запрос не запускался.';
   }
   if(result?.code in brief)return brief[result.code];
   if(!result?.code)return 'Не удалось получить результат.';
