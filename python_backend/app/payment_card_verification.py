@@ -139,8 +139,8 @@ async def _send_sdc_once(web, *, state, profile, account, payment_account,
         # financial mutation without invoking the durability fence.
         return {**common, 'code': 'SDC_AUTH_SUBMIT_FENCE_MISSING',
                 'submitted': False, 'verification_triggered': False}
-    sent = (response.get('data', {}).get('send_dynamic_descriptor_auth', {}).get('sent')
-            if isinstance(response, dict) and isinstance(response.get('data'), dict) else None)
+    response_body = response.get('data', {}).get('send_dynamic_descriptor_auth') if isinstance(response, dict) and isinstance(response.get('data'), dict) else None
+    sent = response_body.get('sent') if isinstance(response_body, dict) else None
     if not isinstance(response, dict) or response.get('errors') or type(sent) is not bool:
         await ledger.mark(submitted_attempt, 'RESULT_UNKNOWN')
         return {**common, 'status': 'ACTION_REQUIRED',
@@ -203,7 +203,7 @@ async def verify_payment_card_http(resolver, profile, payload, *, state=None):
             'submitted': False, 'verification_triggered': False,
             'browser_started': False, 'funding_verified': False}
     operation = payload.get('operation', 'verify')
-    if operation not in ('verify', 'authorize', 'verify_code'):
+    if operation not in ('verify', 'authorize', 'verify_code', 'request_hold'):
         raise ValueError('CARD_OPERATION_INVALID')
     card_id = payload.get('card_id')
     if not isinstance(card_id, str) or re.fullmatch(r'card_[a-f0-9]{24}', card_id) is None:
@@ -295,10 +295,21 @@ async def verify_payment_card_http(resolver, profile, payload, *, state=None):
                 return {**common, 'code': 'CARD_VERIFICATION_SDC_CARD_UNVERIFIED'}
             if sdc['sdc_candidate']:
                 usability = sdc.get('sdc_usability')
-                if (operation in ('authorize', 'verify_code')
+                if (operation in ('authorize', 'verify_code', 'request_hold')
                         and not action_credential):
                     return {**common, 'code': 'SDC_ACTION_CREDENTIAL_UNVERIFIED'}
                 if usability == 'PENDING_VERIFICATION':
+                    if operation == 'request_hold':
+                        # An explicit new bank-action click may ask Meta for
+                        # one fresh temporary authorization even when an older
+                        # descriptor hold is still pending. A durable unique
+                        # intent prevents any second ReMask submit for the
+                        # same card/account; Meta may decline the request.
+                        return await _send_sdc_once(web, state=state,
+                            profile=profile, account=target,
+                            payment_account=evidence['payment_account_id'],
+                            business=business, credential=action_credential,
+                            card_id=card_id, common=common)
                     if operation == 'authorize':
                         # Meta's own screen skips sending a second hold in
                         # this state, proceeding to the descriptor code.
@@ -317,7 +328,7 @@ async def verify_payment_card_http(resolver, profile, payload, *, state=None):
                 if usability == 'UNVERIFIED_OR_PENDING_AUTH':
                     if operation == 'verify_code':
                         return {**common, 'code': 'SDC_AUTH_NOT_STARTED'}
-                    if operation == 'authorize':
+                    if operation in ('authorize', 'request_hold'):
                         return await _send_sdc_once(web, state=state,
                             profile=profile, account=target,
                             payment_account=evidence['payment_account_id'],
