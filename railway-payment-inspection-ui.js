@@ -642,9 +642,13 @@ async function showFunding(restored=null){
   const retryConfirmed=()=>retryAvailable()&&$('paymentCardRetryConfirmed').checked===true;
   const updatePrimary=()=>{
     const plan=targetPlan(),checking=pending(),retry=retryConfirmed();
+    const bankConfirmed=bindings.filter(b=>b.card_id===select.value
+      && b.status==='LINKED'&&b.bank_verification_status==='META_CONFIRMED').length;
     $('paymentCardBind').textContent=checking?(retry?'Повторить привязку':'Проверить результат'):
       plan.fresh.length?(plan.pending.length||plan.linked.length||plan.blocked.length?'Продолжить привязку — '+plan.fresh.length+' РК':'Привязать карту'):
-      plan.blocked.length?'Выберите карту незавершённой привязки':'Все выбранные РК уже привязаны';
+      plan.blocked.length?'Выберите карту незавершённой привязки':
+      plan.linked.length>bankConfirmed?'Карта привязана; банковское подтверждение не завершено':
+      'Все выбранные РК подтверждены';
     $('paymentCardBind').disabled=busy||(!plan.fresh.length&&!plan.pending.length);
     $('paymentCardRetryField').hidden=!retryAvailable();
     $('paymentCardCvvField').hidden=(checking&&!retry)||(plan.fresh.length===0&&!retry);
@@ -660,7 +664,10 @@ async function showFunding(restored=null){
     bindings.forEach(binding=>{
       const line=document.createElement('div');
       const status={LINKED:'видна в Meta у этого РК',BLOCKED:'не привязана',FAILED:'ошибка',IN_PROGRESS:'операция начата',SUBMITTED_UNVERIFIED:'результат требует проверки',ACTION_REQUIRED:'требуется подтверждение'}[binding.status]||binding.status;
-      line.textContent=binding.profile+' / act_'+binding.account_id+' · •••• '+binding.last4+' · '+status+
+      const bank=binding.status==='LINKED'
+        ?binding.bank_verification_status==='META_CONFIRMED'?' · банковская проверка подтверждена Meta':' · банковская проверка не подтверждена'
+        :'';
+      line.textContent=binding.profile+' / act_'+binding.account_id+' · •••• '+binding.last4+' · '+status+bank+
         (binding.last_result_code?' · '+paymentCardBriefMessage({...binding,code:binding.last_result_code}):'');assignments.appendChild(line);
     });
     if(preferred)select.value=preferred;
