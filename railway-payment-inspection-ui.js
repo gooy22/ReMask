@@ -403,9 +403,9 @@ function paymentApplyFunding(row,funding){
 }
 
 function paymentDescriptorCompletionPanel(row,result,container){
-  // Meta's pending state alone is NOT evidence ReMask initiated a new bank
-  // hold. Never show a verification-code field before the card owner has
-  // actually found a Meta transaction in their bank statement.
+  // Meta's pending state alone is not evidence that ReMask initiated a
+  // bank hold. Never claim one was sent. The user submits a real statement
+  // descriptor only if the operation is visible in their bank.
   const confirmedRequest=result.code==='SDC_AUTH_SENT_WAIT_CODE'
     && result.verification_triggered===true;
   const preexistingChallenge=result.code==='SDC_AUTH_PENDING_WAIT_CODE'
@@ -413,17 +413,15 @@ function paymentDescriptorCompletionPanel(row,result,container){
   if(!(confirmedRequest||preexistingChallenge)||
      !/^card_[a-f0-9]{24}$/.test(String(result.card_id||'')))return;
   const box=document.createElement('div');box.className='ws-result';
-  const reveal=document.createElement('button');reveal.type='button';
-  reveal.textContent='Операция Meta уже появилась в банке';
-  reveal.addEventListener('click',()=>{
-    reveal.disabled=true;
-    const field=document.createElement('input');
-    field.type='text';field.maxLength=4;field.autocomplete='off';
-    field.placeholder='4 символа из описания операции';
-    const send=document.createElement('button');send.type='button';
-    send.textContent='Завершить подтверждение карты';
-    const status=document.createElement('div');
-    send.addEventListener('click',async()=>{
+  const hint=document.createElement('div');
+  hint.textContent='Если в выписке банка появилась временная операция Meta, введите 4 символа из её описания. Без операции код не требуется.';
+  const field=document.createElement('input');
+  field.type='text';field.maxLength=4;field.autocomplete='off';
+  field.placeholder='4 символа из описания операции';
+  const send=document.createElement('button');send.type='button';
+  send.textContent='Подтвердить код в Meta';
+  const status=document.createElement('div');
+  send.addEventListener('click',async()=>{
       const code=String(field.value||'').trim().toUpperCase();
       field.value='';
       if(!/^[A-Z0-9]{4}$/.test(code)){
@@ -447,10 +445,10 @@ function paymentDescriptorCompletionPanel(row,result,container){
         status.textContent='Meta не подтвердила операцию. Повторите проверку результата.';
         send.disabled=false;
       }
-    });
-    box.appendChild(field);box.appendChild(send);box.appendChild(status);
   });
-  box.appendChild(reveal);container.appendChild(box);
+  box.appendChild(hint);box.appendChild(field);
+  box.appendChild(send);box.appendChild(status);
+  container.appendChild(box);
 }
 
 function paymentConfirmationPanel(row,result,container){
