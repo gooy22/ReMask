@@ -44,7 +44,7 @@ async def profile_payment_card_http(resolver, profile, payload, *, state=None):
     if operation == 'prepare':
         return await prepare_profile_card_form(resolver, profile, target, state=state,
                                               asset_hint=payload.get('asset_hint'))
-    if operation in {'verify', 'authorize', 'verify_code'}:
+    if operation in {'verify', 'authorize', 'verify_code', 'request_hold'}:
         from .payment_card_verification import verify_payment_card_http
         return await verify_payment_card_http(resolver, profile, payload, state=state)
     if operation not in {'bind', 'reconcile'}:
