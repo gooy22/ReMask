@@ -223,6 +223,52 @@ class BankVerificationLedger(CardIntentLedger):
         finally:
             con.close()
 
+    async def record_meta_confirmation(self, *, profile, account, payment_account,
+                                       credential, card_id, flow='SDC'):
+        """Persist a real Meta verified response, including external challenges.
+
+        Never turn a confirmed bank challenge into an automatic fresh debit.
+        This writes only scoped identifiers and state, not the descriptor.
+        """
+        self._validate(profile, account, payment_account, credential, card_id, flow)
+        return await asyncio.to_thread(self._record_meta_confirmation,
+            profile, account, payment_account, credential, card_id, flow)
+
+    def _record_meta_confirmation(self, profile, account, payment_account,
+                                  credential, card_id, flow):
+        import secrets
+        con = self.connect()
+        try:
+            con.execute('BEGIN IMMEDIATE')
+            now = int(time.time())
+            row = con.execute('''SELECT attempt_id,card_id,stage
+                FROM card_bank_verification_intents
+                WHERE profile=? AND account=? AND payment_account=?
+                  AND credential_id=? AND flow=?''',
+                (profile,account,payment_account,credential,flow)).fetchone()
+            if row is None:
+                con.execute('''INSERT INTO card_bank_verification_intents
+                    (attempt_id,profile,account,payment_account,credential_id,
+                     card_id,flow,stage,created_at,updated_at)
+                    VALUES(?,?,?,?,?,?,?,?,?,?)''',
+                    (secrets.token_hex(12),profile,account,payment_account,
+                     credential,card_id,flow,'META_CONFIRMED',now,now))
+                result = True
+            elif row['card_id'] == card_id:
+                con.execute('''UPDATE card_bank_verification_intents
+                    SET stage='META_CONFIRMED',updated_at=?
+                    WHERE attempt_id=?''', (now,row['attempt_id']))
+                result = True
+            else:
+                result = False
+            con.commit()
+            return result
+        except BaseException:
+            con.rollback()
+            raise
+        finally:
+            con.close()
+
     async def mark(self, attempt_id, stage):
         if not isinstance(attempt_id, str) or len(attempt_id) != 24:
             raise ValueError('VERIFY_ATTEMPT_INVALID')
