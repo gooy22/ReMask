@@ -579,6 +579,13 @@ try{
     expect($persistent['bank_verification_status']==='META_CONFIRMED','Bank confirmation was lost on restart');
     expect(!str_contains(file_get_contents($directory.'/cards.json'),'verification_code'),
         'Bank descriptor input was persisted');
+    $nativeMeta=array_replace($verifiedMeta,['code'=>'BANK_CARD_VERIFIED_BY_META',
+        'bank_verified_by_meta'=>true,'bank_page_verified'=>true]);
+    rejected(fn()=>$vault->recordMetaBankVerified($card['id'],'Verification','123456789',
+        array_replace($nativeMeta,['bank_verified_by_meta'=>false])), 'CARD_META_VERIFICATION_NOT_CONFIRMED');
+    $bankConfirmed=$vault->recordMetaBankVerified($card['id'],'Verification','123456789',$nativeMeta);
+    expect($bankConfirmed['last_result_code']==='BANK_CARD_VERIFIED_BY_META',
+        'Native bank confirmation must reach exact RK vault');
     $data=json_decode(file_get_contents($directory.'/cards.json'),true);$bytes=base64_decode($data['cards'][$card['id']]['encrypted']);$bytes[30]=chr(ord($bytes[30])^1);
     $data['cards'][$card['id']]['encrypted']=base64_encode($bytes);file_put_contents($directory.'/cards.json',json_encode($data));
     try{$vault->secret($card['id']);throw new RuntimeException('Tamper accepted');}catch(RuntimeException $e){expect($e->getMessage()==='CARD_DECRYPTION_FAILED','Authenticated encryption');}

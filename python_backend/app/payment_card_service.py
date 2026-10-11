@@ -44,7 +44,7 @@ async def profile_payment_card_http(resolver, profile, payload, *, state=None):
     if operation == 'prepare':
         return await prepare_profile_card_form(resolver, profile, target, state=state,
                                               asset_hint=payload.get('asset_hint'))
-    if operation in {'verify', 'authorize', 'verify_code'}:
+    if operation in {'verify', 'authorize', 'verify_code', 'authorize_bank', 'verify_bank'}:
         from .payment_card_verification import verify_payment_card_http
         return await verify_payment_card_http(resolver, profile, payload, state=state)
     if operation not in {'bind', 'reconcile'}:
@@ -283,3 +283,4 @@ async def profile_payment_card_http(resolver, profile, payload, *, state=None):
                    'PAYMENT_ACCOUNT_SETUP_REQUIRED', 'CARD_BINDING_RECONCILE_REQUIRED'}
         code = str(exc) if isinstance(exc, ValueError) and str(exc) in allowed else 'PAYMENT_HTTP_TIMEOUT' if isinstance(exc, TimeoutError) else 'CARD_HTTP_UNAVAILABLE'
         return {**base, 'code':auth.code if auth else code}
+

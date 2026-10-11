@@ -161,8 +161,10 @@ class CardSDCHttpTests(IsolatedAsyncioTestCase):
             result=await verify_payment_card_http(
                 SimpleNamespace(resolve=AsyncMock(return_value=SimpleNamespace(cookies={'c_user':'1'}))),
                 '16',payload,state=self.state)
-        self.assertEqual([r.args[1] for r in read.await_args_list],
-                         ['READ_ACCOUNT','READ_METHODS','READ_SDC_CANDIDATES'])
+        expected=['READ_ACCOUNT','READ_METHODS','READ_SDC_CANDIDATES']
+        if result.get('code') in ('BANK_CARD_VERIFIED_BY_META','BANK_CONFIRMED_LINK_RECHECK_REQUIRED'):
+            expected.append('READ_METHODS')
+        self.assertEqual([r.args[1] for r in read.await_args_list], expected)
         return result
 
     async def test_native_empty_and_ambiguous_tasks_cannot_start_sdc_from_card_status(self):
@@ -176,7 +178,8 @@ class CardSDCHttpTests(IsolatedAsyncioTestCase):
                         self.assertEqual(result['code'],'CARD_VERIFICATION_FLOW_UNRESOLVED')
                         self.assertFalse(result['submitted'])
                         self.assertFalse(result['verification_triggered'])
-                        HttpFixture.graphql.assert_not_awaited()
+                        self.assertTrue(all(call.args[0]=='26336474412707714'
+                            for call in HttpFixture.graphql.await_args_list), 'only a read-only bank page may be inspected')
 
     async def test_dispatch_boundary_also_requires_exact_meta_sdc_task(self):
         web=SimpleNamespace(graphql=AsyncMock())
@@ -193,7 +196,34 @@ class CardSDCHttpTests(IsolatedAsyncioTestCase):
             result=await self.pending_result('verify',[])
         self.assertEqual(result['code'],'SDC_AUTH_PENDING_WAIT_CODE')
         self.assertEqual(result['previous_request_stage'],'CHALLENGE_READY')
-        HttpFixture.graphql.assert_not_awaited()
+        self.assertTrue(all(call.args[0]=='26336474412707714'
+            for call in HttpFixture.graphql.await_args_list), 'existing descriptor must not be reinitialized')
+
+    async def test_native_route_connects_ready_init_and_validation_without_sdc(self):
+        with patch('app.payment_card_bank.bank_page_proof',AsyncMock(return_value={'currency':'EUR'})):
+            HttpFixture.graphql=AsyncMock()
+            ready=await self.pending_result('verify',['three_ds'])
+            self.assertEqual(ready['code'],'BANK_AUTH_READY')
+            HttpFixture.graphql.assert_not_awaited()
+            async def init(doc,variables,**kw):
+                self.assertEqual(doc,'28721030687535476')
+                await kw['before_submit']()
+                # No usable challenge: unknown is retained and never retried.
+                return {}
+            HttpFixture.graphql=AsyncMock(side_effect=init)
+            first=await self.pending_result('authorize_bank',['three_ds'])
+            self.assertEqual(first['code'],'BANK_AUTH_RESULT_UNKNOWN')
+            again=await self.pending_result('authorize_bank',['three_ds'])
+            self.assertEqual(again['code'],'BANK_AUTH_ALREADY_ATTEMPTED')
+            self.assertEqual(HttpFixture.graphql.await_count,2) # second stopped before POST
+            async def validate(doc,variables,**kw):
+                self.assertEqual(doc,'28694795333509169')
+                await kw['before_submit']()
+                return {'data':{'validate_risk_credential_verification':{'verified':True,
+                    'client_result':{'__typename':'XFBIBillingClientSuccess'}}}}
+            HttpFixture.graphql=AsyncMock(side_effect=validate)
+            result=await self.pending_result('verify_bank',['three_ds'])
+            self.assertEqual(result['code'],'BANK_CARD_VERIFIED_BY_META')
 
     async def test_failed_code_preserves_reason_without_secrets_or_new_auth(self):
         async def graphql(doc, variables, **kw):

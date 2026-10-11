@@ -763,7 +763,7 @@ async def _profile_payment_card_execute(resolver:Any,profile:str,payload:dict[st
 
 async def profile_payment_card(resolver:Any,profile:str,payload:dict[str,Any],*,state:Any=None) -> dict[str,Any]:
     target=account_id(payload.get('account_id',''));operation=payload.get('operation','')
-    if operation not in {'prepare','bind','reconcile','verify','authorize','verify_code'}:raise ValueError('CARD_OPERATION_INVALID')
+    if operation not in {'prepare','bind','reconcile','verify','authorize','verify_code','authorize_bank','verify_bank'}:raise ValueError('CARD_OPERATION_INVALID')
     try:
         from .payment_card_service import profile_payment_card_http
         result=await asyncio.wait_for(profile_payment_card_http(resolver,profile,payload,state=state),timeout=110)
@@ -797,10 +797,12 @@ async def profile_payment_card(resolver:Any,profile:str,payload:dict[str,Any],*,
                                   'SERVER_REJECTED', 'RESERVED') else 'NONE')
         return result
     except asyncio.TimeoutError:
-        result={'profile_id':profile,'account_id':target,'submitted':None if operation=='bind' else False,'funding_verified':False,
-            'status':'SUBMITTED_UNVERIFIED' if operation=='bind' else 'BLOCKED',
-            'code':'PAYMENT_HTTP_TIMEOUT' if operation in {'verify','authorize','verify_code'} else 'CARD_FLOW_TIMEOUT',
-            **({'verification_triggered':False,'browser_started':False} if operation in {'verify','authorize','verify_code'} else {})}
+        financial=operation in {'bind','authorize','authorize_bank'}
+        verification=operation in {'verify','authorize','verify_code','authorize_bank','verify_bank'}
+        result={'profile_id':profile,'account_id':target,'submitted':None if financial else False,'funding_verified':False,
+            'status':'SUBMITTED_UNVERIFIED' if financial else 'BLOCKED',
+            'code':'PAYMENT_HTTP_TIMEOUT' if verification else 'CARD_FLOW_TIMEOUT',
+            **({'verification_triggered':None if financial else False,'browser_started':False} if verification else {})}
         logging.getLogger('remask.payment_card').info(
             'payment card result profile=%s account=%s operation=%s status=%s code=%s submitted=%s',
             profile,target,operation,result['status'],result['code'],result['submitted'],

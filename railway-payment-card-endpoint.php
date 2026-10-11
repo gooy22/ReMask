@@ -95,7 +95,7 @@ try {
         $patch=$input;unset($patch['action'],$patch['card_id']);
         card_out(['ok'=>true,'data'=>['card'=>$vault->updateBilling($id,$patch)]]);
     }
-    if(!in_array($action,['prepare','bind','reconcile','verify','authorize','verify_code'],true))throw new InvalidArgumentException('CARD_ACTION_INVALID');
+    if(!in_array($action,['prepare','bind','reconcile','verify','authorize','verify_code','authorize_bank','verify_bank'],true))throw new InvalidArgumentException('CARD_ACTION_INVALID');
     $profile=trim((string)($input['profile']??''));$account=preg_replace('/^act_/','',trim((string)($input['account_id']??'')));
     if($profile===''||strlen($profile)>160||!preg_match('/^\d{5,30}$/D',$account))throw new InvalidArgumentException('INVALID_PAYMENT_TARGET');
     $assetHint=card_asset_hint($input);
@@ -103,7 +103,7 @@ try {
     // accepts both synced inventory and an exact confirmed RK creation, while
     // rejecting personal or ambiguous accounts. Requiring the PHP-side launch
     // catalog here made a newly created RK fail until a separate inventory sync.
-    if(in_array($action,['verify','authorize','verify_code'],true)){
+    if(in_array($action,['verify','authorize','verify_code','authorize_bank','verify_bank'],true)){
         // Only an existing vault binding can request an SDC operation.
         // Never send PAN/CVV, repeat Save, or launch Chromium.
         $id=(string)($input['card_id']??'');
@@ -141,7 +141,7 @@ try {
                 throw new InvalidArgumentException('CARD_BINDING_NOT_FOUND');
             $result['binding_recorded']=true;
         }
-        if($action==='verify_code'&&($result['code']??'')==='SDC_CODE_VERIFIED_BY_META'){
+        if(in_array($action,['verify_code','verify_bank'],true)&&in_array($result['code']??'', ['SDC_CODE_VERIFIED_BY_META','BANK_CARD_VERIFIED_BY_META'],true)){
             // The server already received Meta's positive code verification.
             // Retain this outcome in the exact-card vault; never persist the
             // descriptor itself or claim ad delivery / a settled charge.
@@ -255,4 +255,5 @@ try {
         get_class($e),$code));
     card_out(['ok'=>false,'error'=>['message'=>$code]],503);
 }
+
 

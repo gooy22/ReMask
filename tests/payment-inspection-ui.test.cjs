@@ -11,11 +11,13 @@ assert.doesNotMatch(cardEndpoint,/card_worker_inspect\(\$profile,\$account\)/);
 const rows=[{profile:'Fixture',id:'act_123456789',business_id:'123450001',name:'Fixture RK'},{profile:'Other',id:'act_987654321',business:{id:'987650001'},account_name:'Other RK'}];
 const elements={};
 function element(){return {value:'',innerHTML:'',children:[],handlers:{},disabled:false,checked:false,style:{},
+  setAttribute(k,v){this[k]=v},submit(){this.submitted=true},remove(){this.removed=true},
   appendChild(n){this.children.push(n)},addEventListener(event,fn){this.handlers[event]=fn},querySelectorAll(){return []}};}
 let requests=[],bindings=[],reviewResult=null,prepareResult=null,bindResult=null;const card={id:'card_fixture',brand:'Visa',last4:'1111',month:12,year:2099,label:'Fixture'};
 const resumeStorage=new Map();
 const resumeLocalStorage=new Map();
 const sandbox={
+  URL,
   window:{screen:{colorDepth:24},innerHeight:900,innerWidth:1440,addEventListener:()=>{}},
   sessionStorage:{getItem:k=>resumeStorage.get(k)||null,setItem:(k,v)=>resumeStorage.set(k,v),removeItem:k=>resumeStorage.delete(k)},
   localStorage:{getItem:k=>resumeLocalStorage.get(k)||null,setItem:(k,v)=>resumeLocalStorage.set(k,v),removeItem:k=>resumeLocalStorage.delete(k)},
@@ -113,6 +115,31 @@ assert.doesNotMatch(sandbox.fundingCell({verification_status:'LINKED',card_linke
   await sandbox.inspectCardVerificationHTTP([rows[0]],card,element());
   assert.deepEqual(requests.map(r=>r.body.action),['verify','verify'],
     'neither automatic path authorizes from an old worker pending-only result');
+  sandbox.apiJson=async(url,body)=>{
+    requests.push({url,body});
+    return {result:{code:body.action==='verify'?'BANK_AUTH_READY':'BANK_AUTH_ALREADY_ATTEMPTED',
+      bank_page_verified:true,status:'ACTION_REQUIRED'}};
+  };
+  requests=[];
+  await sandbox.paymentVerifyConfirmedLink(rows[0],card);
+  assert.deepEqual(requests.map(r=>r.body.action),['verify','authorize_bank']);
+  assert.ok(requests.every(r=>r.body.profile===rows[0].profile&&r.body.account_id===rows[0].id));
+  requests=[];
+  await sandbox.inspectCardVerificationHTTP([rows[1]],card,element());
+  assert.deepEqual(requests.map(r=>r.body.action),['verify','authorize_bank']);
+  assert.ok(requests.every(r=>r.body.profile===rows[1].profile&&r.body.account_id===rows[1].id));
+  const nativePanel=element();
+  const nativeResult={card_id:'card_'+'a'.repeat(24),bank_page_verified:true,
+    bank_challenge:{url:'https://www.facebook.com/fixture/bank',params:[{key:'fb_dtsg',value:'ephemeral_fixture'}]}};
+  sandbox.paymentBankConfirmationPanel(rows[0],nativeResult,nativePanel);
+  assert.equal(nativeResult.bank_challenge,undefined,'bank form must not remain in a result object');
+  const form=nativePanel.children[0].children.find(n=>n.method==='POST');
+  assert.equal(form.submitted,true);assert.equal(form.removed,true);
+  assert.ok(![...resumeStorage.values(),...resumeLocalStorage.values()].join('').includes('ephemeral_fixture'));
+  sandbox.apiJson=async(url,body)=>{requests.push({url,body});return {result:{code:'BANK_CARD_VERIFIED_BY_META'}}};
+  requests=[];
+  await nativePanel.children[0].children.find(n=>n.textContent==='Я подтвердил в банке — проверить Meta').handlers.click();
+  assert.deepEqual(requests.map(r=>r.body.action),['verify_bank'],'completion never initializes another bank request');
   sandbox.apiJson=originalApi;
   requests=[];const verifyPanel=element();
   await sandbox.inspectCardVerificationHTTP(rows,card,verifyPanel);

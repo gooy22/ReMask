@@ -832,6 +832,15 @@ async def run_verification_http_contract_audit() -> None:
                         'ids_same': bool(details.get('sdc_action_credential_id') == row['credential_id'])})
                 log.warning('verification HTTP fallback SDC profile=%s account=%s cards=%s',
                             profile, account, json.dumps(cards, separators=(',', ':'))[:4500])
+                from app.payment_card_bank import bank_page_proof
+                for row in candidate.get('payment_methods', []):
+                    if row.get('type') == 'Visa' and row.get('last4') == '0574':
+                        details = sdc_candidate_proof(sdc, row['credential_id'], 'Visa', '0574')
+                        if details.get('sdc_action_credential_id'):
+                            native_page = await bank_page_proof(web, payment=payment_hint,
+                                business=business, node=row['credential_id'], credential=details['sdc_action_credential_id'])
+                            log.warning('verification native bank page profile=%s account=%s verified=%s',
+                                        profile, account, native_page is not None)
                 if os.getenv('REMASK_VERIFY_AUDIT_SOURCE') == '1':
                     from app.contract_maintenance.payment_sources import inspect_profile_payment_sources
                     async with asyncio.timeout(110):
@@ -877,6 +886,16 @@ async def run_verification_http_contract_audit() -> None:
                               'ids_same': bool(check.get('sdc_action_credential_id') == row['credential_id'])})
             log.warning('verification HTTP exact-card check profile=%s account=%s cards=%s',
                         profile, account, json.dumps(cards, separators=(',', ':'))[:5000])
+            from app.payment_card_bank import bank_page_proof
+            for row in methods.get('payment_methods', []):
+                if row.get('type') != 'Visa' or row.get('last4') != '0574':
+                    continue
+                check = sdc_candidate_proof(sdc, row['credential_id'], 'Visa', '0574')
+                if check.get('sdc_action_credential_id'):
+                    native_page = await bank_page_proof(web, payment=proof['payment_account_id'],
+                        business=business, node=row['credential_id'], credential=check['sdc_action_credential_id'])
+                    log.warning('verification native bank page profile=%s account=%s verified=%s',
+                                profile, account, native_page is not None)
         if os.getenv('REMASK_VERIFY_AUDIT_SOURCE') == '1':
             from app.contract_maintenance.payment_sources import inspect_profile_payment_sources
             async with asyncio.timeout(110):
@@ -907,8 +926,11 @@ async def run_verification_http_contract_audit() -> None:
                     log.warning('verification public contract module=%s source=%s',
                                 module['name'], module['source'][:8500])
     except Exception as exc:
-        log.warning('verification HTTP check profile=%s account=%s failed_type=%s',
-                    profile, account, type(exc).__name__)
+        from app.private_auth import private_auth_error
+        auth = private_auth_error(exc)
+        log.warning('verification HTTP check profile=%s account=%s failed_type=%s code=%s diagnostics=%s',
+                    profile, account, type(exc).__name__, auth.code if auth else 'READ_UNAVAILABLE',
+                    json.dumps(getattr(auth, 'inventory_diagnostics', []), separators=(',', ':')))
 
 
 @asynccontextmanager
@@ -1511,7 +1533,7 @@ async def profile_payment_card_action(profile_id: str, payload: dict = Body(...)
         code=exc.code if isinstance(exc,BrowserBusinessError) else 'PROFILE_CONTEXT_ERROR' if isinstance(exc,ProfileContextError) else 'CARD_VERIFICATION_HTTP_UNAVAILABLE' if payload.get('operation')=='verify' else 'CARD_BROWSER_INTERRUPTED'
         # A session/cleanup failure may occur after card submission. Without
         # an observed result, bind must require reconciliation instead of retry.
-        uncertain=payload.get('operation')=='bind'
+        uncertain=payload.get('operation') in {'bind','authorize','authorize_bank'}
         return {'profile_id':profile,'account_id':target,'status':'SUBMITTED_UNVERIFIED' if uncertain else 'BLOCKED','submitted':None if uncertain else False,'funding_verified':False,'code':code}
 
 
@@ -3728,3 +3750,4 @@ async def retry_failed(job_id: str, consent: dict | None = Body(default=None)) -
         blocked_profiles=sorted(excluded_profiles),
         blocked_reason='FACEBOOK_AUTH_REQUIRED' if excluded_profiles else '',
     )
+

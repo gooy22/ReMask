@@ -135,6 +135,17 @@ function paymentCardMessage(result){
     SDC_CODE_RESULT_UNVERIFIED:'Не удалось подтвердить результат кода в Meta. Повторный запрос в банк не отправлялся.',
     SDC_CODE_REJECTED:'Meta не приняла код банковского подтверждения.',
     SDC_CODE_VERIFIED_BY_META:'Meta подтвердила код банковской операции для этой карты.',
+    BANK_AUTH_READY:'Доступна проверка через банк или платёжного провайдера.',
+    BANK_AUTH_CHALLENGE_READY:'Meta открыла банковскую проверку. Подтвердите её в приложении банка.',
+    BANK_AUTH_ALREADY_ATTEMPTED:'Банковская проверка уже запускалась. Повторный запрос не отправлен; проверьте результат.',
+    BANK_AUTH_RESULT_UNKNOWN:'Ответ запуска проверки не подтверждён. Повторный запрос заблокирован.',
+    BANK_AUTH_PRECHECK_UNAVAILABLE:'Доступ к Meta не подтверждён до запуска банковской проверки.',
+    BANK_PAGE_UNVERIFIED:'Не удалось подтвердить страницу банковской проверки для выбранной карты.',
+    META_AUTH_TOKEN_UNAVAILABLE:'Worker не получил данные доступа Meta. Чекпоинт не подтверждён; банковский запрос не отправлен.',
+    BANK_VERIFICATION_NOT_CONFIRMED:'Meta ещё не подтвердила проверку этой карты.',
+    BANK_VERIFY_RESULT_UNKNOWN:'Не удалось получить ответ Meta после банковского подтверждения.',
+    BANK_CARD_VERIFIED_BY_META:'Meta подтвердила карту для этого РК.',
+    BANK_CONFIRMED_LINK_RECHECK_REQUIRED:'Meta подтвердила банковскую проверку, но повторное чтение привязки ещё не завершено.',
     SDC_AUTH_NOT_STARTED:'Сначала требуется временная авторизация карты.',
     SDC_DURABLE_GUARD_REQUIRED:'Нет устойчивой записи защиты от повторного банковского списания.',
     SDC_DIFFERENT_CARD_ATTEMPT_BLOCKED:'Попытка для другой карты заблокирована.',
@@ -337,6 +348,8 @@ async function paymentVerifyConfirmedLink(row,card){
   // is necessary. No independent/manual bank charge and no blind retries.
   const base={card_id:card.id,profile:row.profile,account_id:row.id,...paymentAssetHint(row)};
   const observed=await apiJson('ajax/paymentCards.php',post({action:'verify',...base}));
+  if(observed?.result?.code==='BANK_AUTH_READY'&&observed.result.bank_page_verified===true)
+    return await apiJson('ajax/paymentCards.php',post({action:'authorize_bank',...base}));
   if(paymentSDCTaskReady(observed?.result))
     return await apiJson('ajax/paymentCards.php',post({action:'authorize',...base}));
   return observed;
@@ -500,8 +513,65 @@ function paymentDescriptorCompletionPanel(row,result,container){
   container.appendChild(box);
 }
 
+function paymentBankConfirmationPanel(row,result,container){
+  const box=document.createElement('div');box.className='ws-result';
+  const hint=document.createElement('div');
+  hint.textContent='Подтвердите проверку в приложении банка, затем проверьте ответ Meta. Сумму показывает банк.';
+  box.appendChild(hint);
+  const challenge=result.bank_challenge;
+  // Ephemeral form values never enter restored batches, localStorage or the
+  // card vault. Only the Meta-returned HTTPS Facebook form receives CSRF.
+  delete result.bank_challenge;
+  if(challenge&&typeof challenge.url==='string'&&Array.isArray(challenge.params)){
+    let url;try{url=new URL(challenge.url);}catch(e){}
+    if(url&&url.protocol==='https:'&&!url.username&&!url.password&&!url.port&&
+       (url.hostname==='facebook.com'||url.hostname.endsWith('.facebook.com'))){
+      const frame=document.createElement('iframe');
+      frame.name='remask_bank_'+Math.random().toString(36).slice(2);
+      frame.title='Подтверждение карты в банке';
+      frame.setAttribute('sandbox','allow-forms allow-same-origin allow-scripts');
+      frame.setAttribute('referrerpolicy','no-referrer');
+      frame.style.cssText='width:100%;height:520px;border:0;background:white';
+      box.appendChild(frame);
+      if(challenge.params.length){
+        const form=document.createElement('form');form.method='POST';form.action=url.href;form.target=frame.name;
+        let valid=challenge.params.length<=81;
+        for(const p of challenge.params){
+          if(!p||typeof p.key!=='string'||!/^[A-Za-z0-9_.-]{1,100}$/.test(p.key)||typeof p.value!=='string'){valid=false;break;}
+          const field=document.createElement('input');field.type='hidden';field.name=p.key;field.value=p.value;form.appendChild(field);
+        }
+        if(valid){box.appendChild(form);container.appendChild(box);form.submit();form.remove();}
+      }else frame.src=url.href;
+    }
+  }
+  const check=document.createElement('button');check.type='button';check.className='ws-button';
+  check.textContent='Я подтвердил в банке — проверить Meta';
+  const output=document.createElement('div');
+  check.addEventListener('click',async()=>{
+    check.disabled=true;
+    try{
+      const response=await apiJson('ajax/paymentCards.php',post({action:'verify_bank',
+        card_id:result.card_id,profile:row.profile,account_id:row.id,...paymentAssetHint(row)}));
+      const verified=response?.result;
+      output.textContent=paymentCardBriefMessage(verified||{code:'BANK_VERIFY_RESULT_UNKNOWN'});
+      if(verified?.funding)paymentApplyFunding(row,verified.funding);
+      if(verified?.code==='BANK_CARD_VERIFIED_BY_META'){
+        for(const iframe of box.querySelectorAll('iframe'))iframe.remove();
+        hint.textContent='Meta подтвердила карту для этого РК.';
+      }else check.disabled=false;
+      render();
+    }catch(e){output.textContent=e.message;check.disabled=false;}
+  });
+  box.appendChild(check);box.appendChild(output);container.appendChild(box);
+}
+
 function paymentConfirmationPanel(row,result,container){
   if(!result)return;
+  if(String(result.code||'').startsWith('BANK_')){
+    if(result.status==='ACTION_REQUIRED'&&result.bank_page_verified===true&&result.card_id)
+      paymentBankConfirmationPanel(row,result,container);
+    return;
+  }
   if(result.code==='SDC_AUTH_SENT_WAIT_CODE'||
      result.code==='SDC_AUTH_PENDING_WAIT_CODE'){
     paymentDescriptorCompletionPanel(row,result,container);
@@ -558,7 +628,10 @@ async function inspectCardVerificationHTTP(rows,card,container){
       const original=await apiJson('ajax/paymentCards.php',post({action:'verify',
         card_id:card.id,profile:r.profile,account_id:r.id,...paymentAssetHint(r)}));
       let outcome=original;
-      if(paymentSDCTaskReady(original?.result)){
+      if(original?.result?.code==='BANK_AUTH_READY'&&original.result.bank_page_verified===true){
+        outcome=await apiJson('ajax/paymentCards.php',post({action:'authorize_bank',
+          card_id:card.id,profile:r.profile,account_id:r.id,...paymentAssetHint(r)}));
+      }else if(paymentSDCTaskReady(original?.result)){
         // Pending card usability cannot select a descriptor hold. Require
         // the exact current Meta statement-code task; preserve replay guards.
         outcome=await apiJson('ajax/paymentCards.php',post({action:'authorize',

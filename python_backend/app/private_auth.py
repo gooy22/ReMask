@@ -17,6 +17,8 @@ def private_auth_error(exc):
         code = "CHECKPOINT_REQUIRED"
     elif any(isinstance(row, dict) and "/business/loginpage" in str(row.get("final_url", "")) for row in attempts):
         code = "BUSINESS_LOGIN_GATE"
+    elif not reasons and getattr(exc, 'transport_stage', '') == 'bootstrap':
+        code = 'META_AUTH_TOKEN_UNAVAILABLE'
     else:
         code = "SESSION_EXPIRED"
     unsent = getattr(exc, "request_may_have_been_sent", None) is False
@@ -26,5 +28,7 @@ def private_auth_error(exc):
     error = ProvisioningError(code, message, retryable=True)
     error.inventory_diagnostics = [{"auth_gate": code,
         "transport_stage": str(getattr(exc, "transport_stage", "")),
+        "observed_reasons": sorted(str(r) for r in reasons if r in
+            ('checkpoint_redirect', 'login_redirect', 'login_form', 'redirected_host', 'http_auth')),
         "post_not_sent": unsent}]
     return error

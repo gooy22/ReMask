@@ -294,7 +294,7 @@ async def verify_payment_card_http(resolver, profile, payload, *, state=None):
             'submitted': False, 'verification_triggered': False,
             'browser_started': False, 'funding_verified': False}
     operation = payload.get('operation', 'verify')
-    if operation not in ('verify', 'authorize', 'verify_code'):
+    if operation not in ('verify', 'authorize', 'verify_code', 'authorize_bank', 'verify_bank'):
         raise ValueError('CARD_OPERATION_INVALID')
     card_id = payload.get('card_id')
     if not isinstance(card_id, str) or re.fullmatch(r'card_[a-f0-9]{24}', card_id) is None:
@@ -380,6 +380,52 @@ async def verify_payment_card_http(resolver, profile, payload, *, state=None):
             action_credential = sdc.get('sdc_action_credential_id')
             common = {**common, **{key: value for key, value in sdc.items()
                                     if key != 'sdc_action_credential_id'}}
+            # Meta's bank/provider option uses its native issuer challenge.
+            # Unknown legacy pending status is never converted into SDC.
+            # An explicit bank action still requires live account, card,
+            # action-credential and page proof before its dispatch fence.
+            native = operation in ('authorize_bank', 'verify_bank') or (
+                operation == 'verify' and (selected['verification_tasks'] == ['three_ds']
+                    or (not selected['verification_tasks'] and sdc.get('sdc_usability') in
+                        ('PENDING_VERIFICATION', 'UNVERIFIED_OR_PENDING_AUTH'))))
+            if native and sdc.get('sdc_screen_verified') and sdc.get('sdc_credential_match') and action_credential:
+                from .payment_card_bank import bank_page_proof, bank_existing, start_bank_once, verify_bank_result
+                page = await bank_page_proof(web, payment=evidence['payment_account_id'],
+                    business=business, node=chosen['credential_id'], credential=action_credential)
+                if page:
+                    bank_common = {**common, 'verification_route': 'three_ds', 'bank_page_verified': True}
+                    scope = dict(state=state, profile=profile, account=target,
+                        payment_account=evidence['payment_account_id'], credential=action_credential, card_id=card_id)
+                    previous = await bank_existing(**scope)
+                    if previous and not previous['same_card']:
+                        return {**bank_common, 'code': 'BANK_CONFIRMATION_SCOPE_CONFLICT'}
+                    if operation == 'verify_bank':
+                        result = await verify_bank_result(web, **scope, business=business, common=bank_common)
+                        if result.get('code') == 'BANK_CARD_VERIFIED_BY_META':
+                            fresh = methods_proof(await execute(web, 'READ_METHODS', account=target,
+                                payment=evidence['payment_account_id'], business_id=business), target,
+                                business_id=business, account_evidence=evidence)
+                            exact = [m for m in fresh.get('payment_methods', [])
+                                if m.get('credential_id') == chosen['credential_id']
+                                and m.get('type') == card[0] and m.get('last4') == card[1]]
+                            if not all(fresh.get(k) is True for k in ('account_scope_verified',
+                                    'business_scope_verified','payment_account_relation_verified','methods_query_verified')) or len(exact) != 1:
+                                return {**result, 'status': 'ACTION_REQUIRED',
+                                    'code': 'BANK_CONFIRMED_LINK_RECHECK_REQUIRED', 'funding': fresh}
+                            # Meta's positive validation overrides a delayed
+                            # legacy flag only for this independently reread card.
+                            exact[0].update(card_confirmation_status='CLEAR', verification_tasks=[],
+                                needs_verification=False, bank_verification_status='META_CONFIRMED')
+                            result['funding'] = {**fresh, 'profile_id': profile}
+                        return result
+                    if operation == 'authorize_bank':
+                        return await start_bank_once(web, **scope, business=business,
+                            currency=page['currency'], common=bank_common)
+                    return {**bank_common, 'status': 'ACTION_REQUIRED',
+                        'code': 'BANK_AUTH_ALREADY_ATTEMPTED' if previous else 'BANK_AUTH_READY',
+                        'verification_stage': previous['stage'] if previous else 'NOT_STARTED'}
+            if operation in ('authorize_bank', 'verify_bank'):
+                return {**common, 'code': 'BANK_PAGE_UNVERIFIED'}
             if not sdc['sdc_screen_verified']:
                 return {**common, 'code': 'CARD_VERIFICATION_SDC_READ_UNVERIFIED'}
             if sdc['sdc_candidate'] and not sdc['sdc_credential_match']:

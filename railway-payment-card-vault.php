@@ -301,8 +301,10 @@ final class RemaskPaymentCardVault {
         // saved card to verified. No synthetic card success and no user-entered
         // descriptor code is stored in the vault.
         if(($result['profile_id']??null)!==$profile||($result['account_id']??null)!==$account||
-           ($result['status']??null)!=='VERIFIED'||($result['code']??null)!=='SDC_CODE_VERIFIED_BY_META'||
+           ($result['status']??null)!=='VERIFIED'||!in_array($result['code']??'', ['SDC_CODE_VERIFIED_BY_META','BANK_CARD_VERIFIED_BY_META'],true)||
            ($result['verification_stage']??null)!=='META_CONFIRMED'||
+           (($result['code']??'')==='BANK_CARD_VERIFIED_BY_META'&&
+             (($result['bank_verified_by_meta']??false)!==true||($result['bank_page_verified']??false)!==true))||
            ($result['sdc_screen_verified']??false)!==true||
            ($result['sdc_credential_match']??false)!==true||
            ($result['card_linked']??false)!==true||
@@ -336,7 +338,7 @@ final class RemaskPaymentCardVault {
                 throw new InvalidArgumentException('CARD_VERIFICATION_CREDENTIAL_UNVERIFIED');
             $data['bindings'][$key]=array_replace($row,[
                 'status'=>'LINKED','updated_at'=>gmdate('c'),
-                'last_result_code'=>'SDC_CODE_VERIFIED_BY_META',
+                'last_result_code'=>$result['code'],
                 'bank_verification_status'=>'META_CONFIRMED',
                 'card_confirmation_status'=>'CLEAR','checked_live'=>true
             ]);
@@ -377,4 +379,5 @@ final class RemaskPaymentCardVault {
         });
     }
 }
+
 
