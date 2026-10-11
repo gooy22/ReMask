@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock, patch
 
+from app.payment_card_intents import BankVerificationLedger
 from app.payment_card_verification import (
     SDC_SEND_DOC_ID, SDC_VERIFY_CODE_DOC_ID, _send_sdc_once,
     _verify_sdc_code, verify_payment_card_http,
@@ -93,8 +94,15 @@ class CardSDCHttpTests(IsolatedAsyncioTestCase):
         mock = AsyncMock(return_value={'data':{'billing_verify_sdc_code':{'verified': True}}})
         result = await _verify_sdc_code(SimpleNamespace(graphql=mock),
             code='A9B2', account='123456789',payment_account='555666777',
-            business='987654321', credential='creditcard_node', common=self.common)
+            business='987654321', credential='creditcard_node', common=self.common,
+            state=self.state, profile='16', card_id='card_'+'f'*24)
         self.assertEqual(result['code'],'SDC_CODE_VERIFIED_BY_META')
+        self.assertTrue(result['verification_recorded'])
+        proof=await BankVerificationLedger(self.state.path).reserve(
+            profile='16',account='123456789',payment_account='555666777',
+            credential='creditcard_node',card_id='card_'+'f'*24,flow='SDC')
+        self.assertFalse(proof['reserved'])
+        self.assertEqual(proof['stage'], 'META_CONFIRMED')
         self.assertEqual(result['status'],'VERIFIED')
         self.assertNotIn('A9B2',str(result))
         args, kwargs = mock.await_args

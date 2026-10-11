@@ -127,6 +127,18 @@ try {
         $result=card_worker($profile,$request);
         if(($result['profile_id']??'')!==$profile||($result['account_id']??'')!==$account)
             throw new RuntimeException('CARD_WORKER_RESULT_UNKNOWN');
+        if($action==='verify_code'&&($result['code']??'')==='SDC_CODE_VERIFIED_BY_META'){
+            // The server already received Meta's positive code verification.
+            // Retain this outcome in the exact-card vault; never persist the
+            // descriptor itself or claim ad delivery / a settled charge.
+            try {
+                $vault->recordMetaBankVerified($id,$profile,$account,$result);
+                $result['binding_recorded']=true;
+            } catch(Throwable $persistFailure) {
+                $result['binding_recorded']=false;
+                error_log('[payment-card] Meta bank verification confirmed, but vault persistence failed for selected RK');
+            }
+        }
         card_out(['ok'=>true,'data'=>['result'=>$result]]);
     }
     if($action==='reconcile'){

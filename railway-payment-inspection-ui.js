@@ -394,8 +394,65 @@ function paymentApplyFunding(row,funding){
   }
 }
 
+function paymentDescriptorCompletionPanel(row,result,container){
+  // Meta's pending state alone is NOT evidence ReMask initiated a new bank
+  // hold. Never show a verification-code field before the card owner has
+  // actually found a Meta transaction in their bank statement.
+  const confirmedRequest=result.code==='SDC_AUTH_SENT_WAIT_CODE'
+    && result.verification_triggered===true;
+  const preexistingChallenge=result.code==='SDC_AUTH_PENDING_WAIT_CODE'
+    && result.sdc_screen_verified===true && result.sdc_credential_match===true;
+  if(!(confirmedRequest||preexistingChallenge)||
+     !/^card_[a-f0-9]{24}$/.test(String(result.card_id||'')))return;
+  const box=document.createElement('div');box.className='ws-result';
+  const reveal=document.createElement('button');reveal.type='button';
+  reveal.textContent='Операция Meta уже появилась в банке';
+  reveal.addEventListener('click',()=>{
+    reveal.disabled=true;
+    const field=document.createElement('input');
+    field.type='text';field.maxLength=4;field.autocomplete='off';
+    field.placeholder='4 символа из описания операции';
+    const send=document.createElement('button');send.type='button';
+    send.textContent='Завершить подтверждение карты';
+    const status=document.createElement('div');
+    send.addEventListener('click',async()=>{
+      const code=String(field.value||'').trim().toUpperCase();
+      field.value='';
+      if(!/^[A-Z0-9]{4}$/.test(code)){
+        status.textContent='Нужны четыре символа из описания операции в банке.';
+        return;
+      }
+      send.disabled=true;
+      try{
+        // The descriptor is sent once, only to Meta. It is never persisted
+        // in ReMask, localStorage or the URL.
+        const response=await apiJson('ajax/paymentCards.php',post({
+          action:'verify_code',card_id:result.card_id,
+          profile:row.profile,account_id:row.id,
+          verification_code:code,...paymentAssetHint(row)}));
+        const completed=response?.result;
+        status.textContent=paymentCardBriefMessage(completed||
+          {code:'SDC_CODE_RESULT_UNVERIFIED'});
+        if(completed?.funding)paymentApplyFunding(row,completed.funding);
+        if(completed?.code!=='SDC_CODE_VERIFIED_BY_META')send.disabled=false;
+      }catch(_){
+        status.textContent='Meta не подтвердила операцию. Повторите проверку результата.';
+        send.disabled=false;
+      }
+    });
+    box.appendChild(field);box.appendChild(send);box.appendChild(status);
+  });
+  box.appendChild(reveal);container.appendChild(box);
+}
+
 function paymentConfirmationPanel(row,result,container){
-  if(!result||String(result.code||'').startsWith('SDC_')
+  if(!result)return;
+  if(result.code==='SDC_AUTH_SENT_WAIT_CODE'||
+     result.code==='SDC_AUTH_PENDING_WAIT_CODE'){
+    paymentDescriptorCompletionPanel(row,result,container);
+    return;
+  }
+  if(String(result.code||'').startsWith('SDC_')
       ||result.code==='CARD_VERIFICATION_NO_REQUIRED_TASK')return;
   const methods=result.funding?.payment_methods||[];
   const ids=[result.credential?.id,result.credential?.credential_id].filter(Boolean);

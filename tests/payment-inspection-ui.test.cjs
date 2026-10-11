@@ -28,6 +28,7 @@ const sandbox={
     if(body.action==='prepare')return {result:prepareResult||{status:'FORM_READY',code:'CARD_FORM_READY',submitted:false}};
     if(body.action==='reconcile')return {result:reviewResult||{status:'SUBMITTED_UNVERIFIED',code:'CARD_RECONCILE_UNVERIFIED',submitted:false,funding:{verification_status:'UNVERIFIED',funding_verified:false}}};
     if(body.action==='verify')return {result:{status:'ACTION_REQUIRED',code:'CARD_VERIFICATION_MUTATION_NOT_PINNED',verification_triggered:false,browser_started:false,submitted:false,card_confirmation_status:'REQUIRED',verification_tasks:['statement_code']}};
+    if(body.action==='verify_code')return {result:{status:'VERIFIED',code:'SDC_CODE_VERIFIED_BY_META',funding:{account_scope_verified:true}}};
     return {funding:{verification_status:'LINKED',account_scope_verified:true,card_linked:true,funding_verified:false,payment_methods:[{type:'Visa',last4:'1111'}]}}}
 };
 vm.createContext(sandbox);vm.runInContext(fs.readFileSync('railway-payment-inspection-ui.js','utf8'),sandbox);
@@ -59,6 +60,30 @@ assert.doesNotMatch(sandbox.fundingCell({verification_status:'LINKED',card_linke
   await sandbox.showFunding();assert.equal(requests.length,1);assert.equal(requests[0].body.action,'list');
   assert.ok(elements.paymentCardSelect.children[0].textContent.includes('•••• 1111'));
   assert.ok(elements.paymentCardBind.handlers.click);assert.ok(elements.paymentCardSaveBind.handlers.click);
+  const challenge={code:'SDC_AUTH_PENDING_WAIT_CODE',card_id:'card_'+'a'.repeat(24),
+    sdc_screen_verified:true,sdc_credential_match:true};
+  const pendingPanel=element();sandbox.paymentConfirmationPanel(rows[0],challenge,pendingPanel);
+  assert.equal(pendingPanel.children.length,1);
+  assert.equal(pendingPanel.children[0].children.length,1,'do not show code input before owner sees bank transaction');
+  const noProofPanel=element();
+  sandbox.paymentConfirmationPanel(rows[0],{...challenge,sdc_credential_match:false},noProofPanel);
+  assert.equal(noProofPanel.children.length,0);
+  requests=[];pendingPanel.children[0].children[0].handlers.click();
+  const entry=pendingPanel.children[0].children[1],complete=pendingPanel.children[0].children[2];
+  assert.ok(entry.placeholder.includes('описания операции'));
+  assert.equal(requests.length,0,'revealing code entry does not initiate an authorization');
+  entry.value='A9B2';await complete.handlers.click();
+  assert.equal(requests.length,1);
+  assert.equal(requests[0].body.action,'verify_code');
+  assert.equal(requests[0].body.card_id,challenge.card_id);
+  assert.equal(requests[0].body.verification_code,'A9B2');
+  assert.equal(entry.value,'','descriptor must not remain in input');
+  assert.ok(pendingPanel.children[0].children[3].textContent.includes('подтвердила'));
+  assert.equal(complete.disabled,true);
+  requests=[];
+  const precharge=element();sandbox.paymentConfirmationPanel(rows[0],
+    {code:'SDC_AUTH_READY',card_id:challenge.card_id},precharge);
+  assert.equal(precharge.children.length,0,'before a bank challenge the code input is absent');
   requests=[];const verifyPanel=element();
   await sandbox.inspectCardVerificationHTTP(rows,card,verifyPanel);
   assert.deepEqual(requests.map(r=>r.body.action),['verify','verify']);
