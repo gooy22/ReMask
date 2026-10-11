@@ -159,7 +159,8 @@ async def _send_sdc_once(web, *, state, profile, account, payment_account,
             'verification_stage': 'SERVER_REJECTED'}
 
 async def _verify_sdc_code(web, *, code, account, payment_account,
-                           business, credential, common):
+                           business, credential, common,
+                           state=None, profile='', card_id=''):
     # No automatic code guessing or retries. Never log/persist the code.
     candidate = str(code or '').strip().upper()
     if re.fullmatch(r'[A-Z0-9]{4}', candidate) is None:
@@ -178,10 +179,21 @@ async def _verify_sdc_code(web, *, code, account, payment_account,
         return {**common, 'status': 'ACTION_REQUIRED',
                 'code': 'SDC_CODE_RESULT_UNVERIFIED'}
     if body.get('verified') is True:
+        recorded = False
+        if state is not None and getattr(state, 'path', None) and profile and card_id:
+            try:
+                recorded = await BankVerificationLedger(state.path).record_meta_confirmation(
+                    profile=profile, account=account, payment_account=payment_account,
+                    credential=credential, card_id=card_id)
+            except (OSError, ValueError, RuntimeError):
+                # The bank response remains authoritative even if the local
+                # durable record needs repair; never claim it was recorded.
+                recorded = False
         return {**common, 'status': 'VERIFIED',
                 'code': 'SDC_CODE_VERIFIED_BY_META',
                 'card_confirmation_status': 'CLEAR',
                 'verification_stage': 'META_CONFIRMED',
+                'verification_recorded': recorded,
                 'submitted': True}
     remaining = body.get('num_tries_left')
     return {**common, 'status': 'ACTION_REQUIRED',
@@ -310,7 +322,8 @@ async def verify_payment_card_http(resolver, profile, payload, *, state=None):
                             code=payload.get('verification_code'),
                             account=target, payment_account=evidence['payment_account_id'],
                             business=business, credential=action_credential,
-                            common=common)
+                            common=common, state=state, profile=profile,
+                            card_id=card_id)
                     return {**common, 'status': 'ACTION_REQUIRED',
                             'code': 'SDC_AUTH_PENDING_WAIT_CODE',
                             'verification_stage': 'PENDING_VERIFICATION'}
