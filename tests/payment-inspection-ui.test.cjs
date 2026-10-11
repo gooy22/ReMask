@@ -64,14 +64,14 @@ assert.doesNotMatch(sandbox.fundingCell({verification_status:'LINKED',card_linke
     sdc_screen_verified:true,sdc_credential_match:true};
   const pendingPanel=element();sandbox.paymentConfirmationPanel(rows[0],challenge,pendingPanel);
   assert.equal(pendingPanel.children.length,1);
-  assert.equal(pendingPanel.children[0].children.length,1,'do not show code input before owner sees bank transaction');
+  assert.equal(pendingPanel.children[0].children.length,4,'show code field without extra confirmation button');
   const noProofPanel=element();
   sandbox.paymentConfirmationPanel(rows[0],{...challenge,sdc_credential_match:false},noProofPanel);
   assert.equal(noProofPanel.children.length,0);
-  requests=[];pendingPanel.children[0].children[0].handlers.click();
+  requests=[];
   const entry=pendingPanel.children[0].children[1],complete=pendingPanel.children[0].children[2];
   assert.ok(entry.placeholder.includes('описания операции'));
-  assert.equal(requests.length,0,'revealing code entry does not initiate an authorization');
+  assert.equal(requests.length,0,'displaying code entry does not initiate an authorization');
   entry.value='A9B2';await complete.handlers.click();
   assert.equal(requests.length,1);
   assert.equal(requests[0].body.action,'verify_code');
