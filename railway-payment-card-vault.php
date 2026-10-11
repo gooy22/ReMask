@@ -281,6 +281,54 @@ final class RemaskPaymentCardVault {
             return ['status'=>$status,'code'=>$code,'card_linked'=>true,'submitted'=>false,'funding_verified'=>false,'funding'=>$funding];
         });
     }
+    public function recordMetaBankVerified(string $id,string $profile,string $account,array $result): array {
+        // Only a positive, fully-scoped Meta response can advance a previously
+        // saved card to verified. No synthetic card success and no user-entered
+        // descriptor code is stored in the vault.
+        if(($result['profile_id']??null)!==$profile||($result['account_id']??null)!==$account||
+           ($result['status']??null)!=='VERIFIED'||($result['code']??null)!=='SDC_CODE_VERIFIED_BY_META'||
+           ($result['verification_stage']??null)!=='META_CONFIRMED'||
+           ($result['sdc_screen_verified']??false)!==true||
+           ($result['sdc_credential_match']??false)!==true||
+           ($result['card_linked']??false)!==true||
+           ($result['card_confirmation_status']??null)!=='CLEAR')
+            throw new InvalidArgumentException('CARD_META_VERIFICATION_NOT_CONFIRMED');
+        $funding=$result['funding']??null;
+        if(!is_array($funding)||($funding['profile_id']??null)!==$profile||
+           ($funding['account_id']??null)!==$account||
+           ($funding['checked_live']??false)!==true||
+           ($funding['account_scope_verified']??false)!==true||
+           ($funding['business_scope_verified']??false)!==true||
+           ($funding['payment_account_relation_verified']??false)!==true||
+           ($funding['methods_query_verified']??false)!==true||
+           !self::liveLinkSource($funding))
+            throw new InvalidArgumentException('CARD_META_VERIFICATION_NOT_CONFIRMED');
+        return $this->locked(static function(array &$data)use($id,$profile,$account,$result,$funding){
+            $card=$data['cards'][$id]??null;
+            $key=hash('sha256',$profile.'|'.$account);
+            $row=$data['bindings'][$key]??null;
+            if(!is_array($card)||!is_array($row)||($row['card_id']??null)!==$id)
+                throw new InvalidArgumentException('CARD_BINDING_NOT_FOUND');
+            $brand=static fn($v)=>self::cardBrand((string)$v);
+            $masked=array_filter($data['cards'],static fn($candidate)=>
+                ($candidate['last4']??null)===$card['last4']&&
+                $brand($candidate['brand']??'')===$brand($card['brand']??''));
+            $matching=array_values(array_filter($funding['payment_methods']??[],static fn($method)=>
+                is_array($method)&&($method['credential_id']??null)===($result['credential_id']??null)&&
+                ($method['last4']??null)===$card['last4']&&
+                $brand($method['type']??'')===$brand($card['brand']??'')));
+            if(count($masked)!==1||count($matching)!==1)
+                throw new InvalidArgumentException('CARD_VERIFICATION_CREDENTIAL_UNVERIFIED');
+            $data['bindings'][$key]=array_replace($row,[
+                'status'=>'LINKED','updated_at'=>gmdate('c'),
+                'last_result_code'=>'SDC_CODE_VERIFIED_BY_META',
+                'bank_verification_status'=>'META_CONFIRMED',
+                'card_confirmation_status'=>'CLEAR','checked_live'=>true
+            ]);
+            return $data['bindings'][$key];
+        });
+    }
+
     public function recordUnlinked(string $id,string $profile,string $account,?array $expected,array $funding): void {
         $this->locked(function(array &$data)use($id,$profile,$account,$expected,$funding){
             $key=hash('sha256',$profile.'|'.$account);$row=$data['bindings'][$key]??null;
