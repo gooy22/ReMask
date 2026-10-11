@@ -6,6 +6,7 @@ card Save and from any Add Funds flow. No browser, Graph API or Meta token.
 from __future__ import annotations
 
 import json
+import logging
 import re
 
 from .payment_card_intents import CardIntentLedger, BankVerificationLedger
@@ -78,6 +79,42 @@ def sdc_candidate_proof(payload, credential_id, brand, last4):
 SDC_SEND_DOC_ID = '29599506609664764'
 SDC_VERIFY_CODE_DOC_ID = '28322139410820855'
 BILLING_GRAPHQL = 'https://business.facebook.com/api/graphql/'
+
+
+def _code_response_diagnostic(response, *, candidate, credential, payment_account):
+    """Keep display errors, never bank codes, credentials or raw responses."""
+    from .payment_card_http import save_error_diagnostic
+    payload = response if isinstance(response, dict) else {}
+    data = payload.get('data')
+    body = data.get('billing_verify_sdc_code') if isinstance(data, dict) else None
+    kind = ('graphql_error' if payload.get('errors') or payload.get('error') else
+            'missing_result' if not isinstance(body, dict) else
+            'verified' if body.get('verified') is True else
+            'rejected' if body.get('verified') is False else 'incomplete_result')
+    errors = list(payload.get('errors') or []) if isinstance(payload.get('errors'), list) else []
+    client = body.get('client_result') if isinstance(body, dict) else None
+    if isinstance(client, dict):
+        display = client.get('display_error')
+        for source in (client, display if isinstance(display, dict) else {}):
+            errors.extend({'message': source[k]} for k in ('message', 'title', 'headline', 'body')
+                          if isinstance(source.get(k), str))
+    codes = []
+    for source in [payload] + [e for e in errors[:10] if isinstance(e, dict)]:
+        extension = source.get('extensions')
+        for row in (source, extension if isinstance(extension, dict) else {}):
+            for key in ('code', 'error', 'error_code'):
+                value = row.get(key)
+                if isinstance(value, str) and re.fullmatch(r'\d{1,9}', value):
+                    value = int(value)
+                if (type(value) is int and 0 <= value <= 999999999
+                        and str(value) != candidate and value not in codes):
+                    codes.append(value)
+    safe = save_error_diagnostic({'errors': errors},
+        {'code': candidate, 'code_lower': candidate.lower(),
+         'credential': credential, 'payment': payment_account}, candidate)
+    logging.getLogger('remask.payment_card').info(
+        'SDC code response kind=%s meta_error_codes=%s', kind, codes[:10])
+    return {'verification_response_kind': kind, 'meta_error_codes': codes[:10], **safe}
 
 
 async def _send_sdc_once(web, *, state, profile, account, payment_account,
@@ -165,16 +202,34 @@ async def _verify_sdc_code(web, *, code, account, payment_account,
     candidate = str(code or '').strip().upper()
     if re.fullmatch(r'[A-Z0-9]{4}', candidate) is None:
         return {**common, 'code': 'SDC_CODE_REQUIRED'}
-    response = await web.graphql(SDC_VERIFY_CODE_DOC_ID, {
+    submitted = False
+    async def before_submit():
+        nonlocal submitted
+        submitted = True
+    try:
+        response = await web.graphql(SDC_VERIFY_CODE_DOC_ID, {
         'input': {'credential_id': credential, 'intent': 'SFI',
                   'payment_account_id': payment_account, 'verification_code': candidate},
         'paymentAccountID': payment_account,
-    }, friendly_name='useBillingVerifySDCCodeMutation',
-       endpoint_url=BILLING_GRAPHQL, business_context_id=business)
-    if not isinstance(response, dict) or response.get('errors'):
+        }, friendly_name='useBillingVerifySDCCodeMutation',
+           endpoint_url=BILLING_GRAPHQL, business_context_id=business,
+           before_submit=before_submit)
+    except Exception as exc:
+        auth = private_auth_error(exc)
+        return {**common, 'status': 'ACTION_REQUIRED',
+                'code': auth.code if auth else 'SDC_CODE_RESULT_UNVERIFIED',
+                'submitted': submitted or getattr(exc, 'request_may_have_been_sent', False),
+                'verification_triggered': False,
+                'verification_response_kind': 'transport_error'}
+    diagnostic = _code_response_diagnostic(response, candidate=candidate,
+        credential=credential, payment_account=payment_account)
+    common = {**common, **diagnostic, 'submitted': submitted,
+              'verification_triggered': False}
+    if not isinstance(response, dict) or response.get('errors') or response.get('error'):
         return {**common, 'status': 'ACTION_REQUIRED',
                 'code': 'SDC_CODE_RESULT_UNVERIFIED'}
-    body = response.get('data', {}).get('billing_verify_sdc_code')
+    data = response.get('data')
+    body = data.get('billing_verify_sdc_code') if isinstance(data, dict) else None
     if not isinstance(body, dict):
         return {**common, 'status': 'ACTION_REQUIRED',
                 'code': 'SDC_CODE_RESULT_UNVERIFIED'}
@@ -197,6 +252,9 @@ async def _verify_sdc_code(web, *, code, account, payment_account,
                 'verification_stage': 'META_CONFIRMED',
                 'verification_recorded': recorded,
                 'submitted': True}
+    if body.get('verified') is not False:
+        return {**common, 'status': 'ACTION_REQUIRED',
+                'code': 'SDC_CODE_RESULT_UNVERIFIED'}
     remaining = body.get('num_tries_left')
     return {**common, 'status': 'ACTION_REQUIRED',
             'code': 'SDC_CODE_REJECTED',

@@ -162,6 +162,46 @@ class CardSDCHttpTests(IsolatedAsyncioTestCase):
                          ['READ_ACCOUNT','READ_METHODS','READ_SDC_CANDIDATES'])
         return result
 
+    async def test_failed_code_preserves_reason_without_secrets_or_new_auth(self):
+        async def graphql(doc, variables, **kw):
+            self.assertEqual(doc, SDC_VERIFY_CODE_DOC_ID)
+            await kw['before_submit']()
+            return {'errors':[{'message':'Code A9B2 rejected for secret_credential_987 555666777',
+                               'extensions':{'code':12345}}], 'data':None}
+        result=await _verify_sdc_code(SimpleNamespace(graphql=graphql),
+            code='A9B2', account='123456789',payment_account='555666777',
+            business='987654321', credential='secret_credential_987', common=self.common)
+        self.assertEqual(result['code'],'SDC_CODE_RESULT_UNVERIFIED')
+        self.assertEqual(result['verification_response_kind'],'graphql_error')
+        self.assertEqual(result['meta_error_codes'],[12345])
+        self.assertTrue(result['submitted'])
+        self.assertFalse(result['verification_triggered'])
+        for secret in ('A9B2','secret_credential_987','555666777'):
+            self.assertNotIn(secret,str(result))
+
+    async def test_incomplete_code_response_is_not_incorrect_code(self):
+        for response in ({'data':None},{'data':{'billing_verify_sdc_code':{}}}):
+            mock=AsyncMock(return_value=response)
+            result=await _verify_sdc_code(SimpleNamespace(graphql=mock),
+                code='A9B2',account='123456789',payment_account='555666777',
+                business='987654321',credential='credential',common=self.common)
+            self.assertEqual(result['code'],'SDC_CODE_RESULT_UNVERIFIED')
+            self.assertEqual(mock.await_count,1)
+
+    async def test_code_transport_timeout_keeps_submission_truth_and_never_retries(self):
+        calls=[]
+        async def graphql(doc,variables,**kw):
+            calls.append(doc)
+            await kw['before_submit']()
+            raise TimeoutError('untrusted secret body A9B2')
+        result=await _verify_sdc_code(SimpleNamespace(graphql=graphql),
+            code='A9B2',account='123456789',payment_account='555666777',
+            business='987654321',credential='credential',common=self.common)
+        self.assertTrue(result['submitted'])
+        self.assertFalse(result['verification_triggered'])
+        self.assertNotIn('A9B2',str(result))
+        self.assertEqual(calls,[SDC_VERIFY_CODE_DOC_ID])
+
     async def test_pending_without_local_attempt_is_ready_but_read_does_not_dispatch(self):
         HttpFixture.graphql = AsyncMock()
         result = await self.pending_result('verify')

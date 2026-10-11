@@ -69,7 +69,7 @@ assert.doesNotMatch(sandbox.fundingCell({verification_status:'LINKED',card_linke
   assert.equal(noBankEvidence.children.length,0,'Meta pending alone must not show a banking descriptor input');
   const pendingPanel=element();sandbox.paymentConfirmationPanel(rows[0],challenge,pendingPanel);
   assert.equal(pendingPanel.children.length,1);
-  assert.equal(pendingPanel.children[0].children.length,4,'show code field without extra confirmation button');
+  assert.equal(pendingPanel.children[0].children.length,5,'code field and read-only result check');
   const noProofPanel=element();
   sandbox.paymentConfirmationPanel(rows[0],{...challenge,sdc_credential_match:false},noProofPanel);
   assert.equal(noProofPanel.children.length,0);
@@ -83,8 +83,15 @@ assert.doesNotMatch(sandbox.fundingCell({verification_status:'LINKED',card_linke
   assert.equal(requests[0].body.card_id,challenge.card_id);
   assert.equal(requests[0].body.verification_code,'A9B2');
   assert.equal(entry.value,'','descriptor must not remain in input');
-  assert.ok(pendingPanel.children[0].children[3].textContent.includes('подтвердила'));
+  assert.ok(pendingPanel.children[0].children[4].textContent.includes('подтвердила'));
   assert.equal(complete.disabled,true);
+  requests=[];
+  await pendingPanel.children[0].children[3].handlers.click();
+  assert.deepEqual(requests.map(r=>r.body.action),['verify'],
+    'result check never starts another authorization or sends the descriptor');
+  assert.equal(requests[0].body.verification_code,undefined);
+  assert.match(sandbox.paymentCardBriefMessage({code:'SDC_CODE_RESULT_UNVERIFIED',
+    meta_error_messages:['Test Meta reason']}),/Test Meta reason/);
   requests=[];
   const precharge=element();sandbox.paymentConfirmationPanel(rows[0],
     {code:'SDC_AUTH_READY',card_id:challenge.card_id},precharge);
@@ -305,3 +312,4 @@ assert.doesNotMatch(sandbox.fundingCell({verification_status:'LINKED',card_linke
   assert.equal(elements.paymentCardCvv.value,'123','read-only reconciliation must not consume CVV');
   console.log('card interface: save without CVV, masked selection, serial exact targets, uncertain results and secret clearing passed');
 })().catch(e=>{console.error(e);process.exitCode=1});
+

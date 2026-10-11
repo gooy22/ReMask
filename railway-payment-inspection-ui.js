@@ -226,6 +226,13 @@ function paymentCardMessage(result){
 
 
 function paymentCardBriefMessage(result){
+  if(result?.code==='SDC_CODE_RESULT_UNVERIFIED'||result?.code==='SDC_CODE_REJECTED'){
+    const reason=Array.isArray(result.meta_error_messages)?result.meta_error_messages
+      .filter(s=>typeof s==='string'&&s.length<=320).slice(0,4).join(' · '):'';
+    const remaining=Number.isInteger(result.remaining_attempts)?' Осталось попыток: '+result.remaining_attempts+'.':'';
+    return (result.code==='SDC_CODE_REJECTED'?'Meta отклонила код.':'Meta не подтвердила результат отправленного кода.')+
+      (reason?' '+reason:'')+remaining+' Новый запрос удержания не отправлялся.';
+  }
   // User-visible status has no protocol, contract or inventory description.
   // The original structured metadata remains available to diagnostics.
   const brief={
@@ -432,13 +439,30 @@ function paymentDescriptorCompletionPanel(row,result,container){
      !/^card_[a-f0-9]{24}$/.test(String(result.card_id||'')))return;
   const box=document.createElement('div');box.className='ws-result';
   const hint=document.createElement('div');
-  hint.textContent='Если в выписке банка появилась временная операция Meta, введите 4 символа из её описания. Без операции код не требуется.';
+  hint.textContent='В выписке банка найдите операцию METAPAY и введите 4 символа после METAPAY. Здесь требуется код из описания операции.';
   const field=document.createElement('input');
   field.type='text';field.maxLength=4;field.autocomplete='off';
   field.placeholder='4 символа из описания операции';
   const send=document.createElement('button');send.type='button';
   send.textContent='Подтвердить код в Meta';
   const status=document.createElement('div');
+  const inspect=document.createElement('button');inspect.type='button';
+  inspect.textContent='Проверить текущий результат без нового удержания';
+  inspect.addEventListener('click',async()=>{
+    inspect.disabled=true;
+    try{
+      const response=await apiJson('ajax/paymentCards.php',post({
+        action:'verify',card_id:result.card_id,profile:row.profile,
+        account_id:row.id,...paymentAssetHint(row)}));
+      const current=response?.result;
+      status.textContent=current?.code==='SDC_AUTH_READY'
+        ?'Meta требует подтверждения карты. Эта проверка не запускала удержание.'
+        :paymentCardBriefMessage(current);
+      if(current?.funding)paymentApplyFunding(row,current.funding);
+      if(current?.status==='VERIFIED')send.disabled=true;
+    }catch(_){status.textContent='Текущий результат Meta недоступен. Новый запрос удержания не отправлялся.';}
+    finally{inspect.disabled=false;}
+  });
   send.addEventListener('click',async()=>{
       const code=String(field.value||'').trim().toUpperCase();
       field.value='';
@@ -465,7 +489,7 @@ function paymentDescriptorCompletionPanel(row,result,container){
       }
   });
   box.appendChild(hint);box.appendChild(field);
-  box.appendChild(send);box.appendChild(status);
+  box.appendChild(send);box.appendChild(inspect);box.appendChild(status);
   container.appendChild(box);
 }
 
@@ -779,4 +803,5 @@ if(typeof window!=='undefined'){
   if(document.readyState==='complete')queueMicrotask(restorePaymentCardBatch);
   else window.addEventListener('load',restorePaymentCardBatch,{once:true});
 }
+
 
