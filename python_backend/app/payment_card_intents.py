@@ -113,7 +113,7 @@ class CardIntentLedger:
                 con.close()
         return await asyncio.to_thread(read)
 
-    async def source_read_intent(self, profile, account):
+    async def source_read_intent(self, profile, account, card_id=None):
         """Known payment scope for explicit read-only source maintenance.
 
         A fresh exact-RK/BM methods response is still required before using
@@ -122,8 +122,12 @@ class CardIntentLedger:
         def read():
             con = self.connect()
             try:
-                row = con.execute("SELECT * FROM card_http_intents WHERE profile=? AND account=? AND phase IN ('LINKED','ACTION_REQUIRED') ORDER BY updated_at DESC LIMIT 1",
-                    (profile, account)).fetchone()
+                query="SELECT * FROM card_http_intents WHERE profile=? AND account=? AND phase IN ('LINKED','ACTION_REQUIRED')"
+                parameters=(profile,account)
+                if card_id is not None:
+                    query+=' AND card_id=?'
+                    parameters+=(card_id,)
+                row = con.execute(query+' ORDER BY updated_at DESC LIMIT 1',parameters).fetchone()
                 return dict(row) if row else None
             finally:
                 con.close()
@@ -318,3 +322,4 @@ class BankVerificationLedger(CardIntentLedger):
             raise
         finally:
             con.close()
+

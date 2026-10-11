@@ -4,7 +4,7 @@ import tempfile
 from pathlib import Path
 import unittest
 
-from app.payment_card_intents import BankVerificationLedger
+from app.payment_card_intents import BankVerificationLedger, CardIntentLedger
 
 
 class BankVerificationLedgerTests(unittest.IsolatedAsyncioTestCase):
@@ -73,3 +73,15 @@ class BankVerificationLedgerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await self.ledger.record_meta_confirmation(**self.kwargs))
         self.assertEqual((await self.ledger.reserve(**self.kwargs))['stage'],'META_CONFIRMED')
         self.assertNotIn(b'METAPAY',self.db.read_bytes())
+
+
+    async def test_retained_payment_scope_can_be_selected_for_the_exact_old_card(self):
+        ledger=CardIntentLedger(self.db)
+        older='card_'+'a'*24
+        newer='card_'+'b'*24
+        for card,attempt in ((older,'a'*24),(newer,'b'*24)):
+            await ledger.submit('16','120247991367350146',card,attempt)
+            await ledger.finish(attempt,{'status':'LINKED','account_id':'120247991367350146'})
+        row=await ledger.source_read_intent('16','120247991367350146',older)
+        self.assertEqual(row['card_id'],older)
+        self.assertIsNone(await ledger.source_read_intent('17','120247991367350146',older))

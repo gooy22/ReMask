@@ -108,7 +108,13 @@ try {
         // Never send PAN/CVV, repeat Save, or launch Chromium.
         $id=(string)($input['card_id']??'');
         if(!preg_match('/^card_[a-f0-9]{24}$/D',$id))throw new InvalidArgumentException('CARD_NOT_FOUND');
-        if(!is_array($vault->binding($id,$profile,$account)))throw new InvalidArgumentException('CARD_BINDING_NOT_FOUND');
+        $binding=$vault->accountBinding($profile,$account);
+        if(!is_array($binding))throw new InvalidArgumentException('CARD_BINDING_NOT_FOUND');
+        $recover=($binding['card_id']??null)!==$id;
+        if($recover&&($action!=='verify'||
+            !in_array($binding['status']??'', ['BLOCKED','FAILED'],true)||
+            ($binding['submitted']??null)!==false))
+            throw new InvalidArgumentException('CARD_BINDING_CARD_MISMATCH');
         $card=null;
         foreach($vault->all()['cards'] as $candidate){
             if(($candidate['id']??null)===$id){$card=$candidate;break;}
@@ -127,6 +133,14 @@ try {
         $result=card_worker($profile,$request);
         if(($result['profile_id']??'')!==$profile||($result['account_id']??'')!==$account)
             throw new RuntimeException('CARD_WORKER_RESULT_UNKNOWN');
+        if($recover){
+            if(($result['card_linked']??false)!==true||!is_array($result['funding']??null))
+                throw new InvalidArgumentException('CARD_BINDING_NOT_FOUND');
+            $restored=$vault->reconcile($id,$profile,$account,$binding,$result['funding']);
+            if(($restored['card_linked']??false)!==true)
+                throw new InvalidArgumentException('CARD_BINDING_NOT_FOUND');
+            $result['binding_recorded']=true;
+        }
         if($action==='verify_code'&&($result['code']??'')==='SDC_CODE_VERIFIED_BY_META'){
             // The server already received Meta's positive code verification.
             // Retain this outcome in the exact-card vault; never persist the
@@ -241,3 +255,4 @@ try {
         get_class($e),$code));
     card_out(['ok'=>false,'error'=>['message'=>$code]],503);
 }
+

@@ -242,7 +242,7 @@ async def verify_payment_card_http(resolver, profile, payload, *, state=None):
             retained_intent = None
             saved = {}
             if state is not None and getattr(state, 'path', None):
-                retained_intent = await CardIntentLedger(state.path).source_read_intent(profile, target)
+                retained_intent = await CardIntentLedger(state.path).source_read_intent(profile, target, card_id)
                 if retained_intent and retained_intent.get('card_id') == card_id:
                     try:
                         saved = json.loads(retained_intent['result'])

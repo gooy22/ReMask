@@ -211,6 +211,40 @@ OPERATION);
         expect(count($operations)===1,'Exact HTTP reconciliation repeated or fell back');
         $payload=json_decode($operations[0]['http']['content'],true);
         expect($payload['operation']==='reconcile'&&!isset($payload['card'])&&!isset($payload['cvv']),'Reconciliation sent financial credentials');
+        // A failed attempt for a different card must not strand an older
+        // exact Meta link. Recover through a read; never Save or authorize.
+        $other=$v->add(['number'=>'5555555555554444','month'=>12,'year'=>2099]);
+        $v->begin($other['id'],'Fixture','123456789');
+        $v->finish($other['id'],'Fixture','123456789','BLOCKED',['submitted'=>false]);
+        $beforeRecovery=file_get_contents($path);
+        $verify=['action'=>'verify','profile'=>'Fixture','account_id'=>'123456789','card_id'=>$c['id']];
+        $denied=$invoke(array_replace($verify,['action'=>'authorize']));
+        expect(($denied['error']['message']??'')==='CARD_BINDING_CARD_MISMATCH'&&file_get_contents($root.'/operations.jsonl')==='',
+            'Foreign binding allowed an authorization before live recovery');
+        foreach([['ACTION_REQUIRED',true],['SUBMITTED_UNVERIFIED',null],['LINKED',false]] as [$phase,$submitted]){
+            $v->finish($other['id'],'Fixture','123456789',$phase,['submitted'=>$submitted]);
+            $denied=$invoke($verify);
+            expect(($denied['error']['message']??'')==='CARD_BINDING_CARD_MISMATCH'&&file_get_contents($root.'/operations.jsonl')==='',
+                'Recovery overwrote another active/confirmed card attempt');
+        }
+        $v->finish($other['id'],'Fixture','123456789','BLOCKED',['submitted'=>false]);
+        $beforeRecovery=file_get_contents($path);
+        file_put_contents($root.'/result.json',json_encode(['profile_id'=>'Fixture','account_id'=>'123456789',
+            'status'=>'BLOCKED','code'=>'CARD_VERIFICATION_HTTP_UNAVAILABLE','submitted'=>false]));
+        $denied=$invoke($verify);
+        expect(($denied['ok']??false)===false&&file_get_contents($path)===$beforeRecovery,
+            'Failed live read fabricated a recovered binding');
+        file_put_contents($root.'/result.json',json_encode(['profile_id'=>'Fixture','account_id'=>'123456789',
+            'status'=>'ACTION_REQUIRED','code'=>'SDC_AUTH_READY','card_linked'=>true,'submitted'=>false,
+            'funding'=>$httpFunding]));
+        $recovered=$invoke($verify);
+        expect(($recovered['data']['result']['binding_recorded']??false)===true&&
+            $v->linkedBinding($c['id'],'Fixture','123456789')!==null,'Fresh exact-card link was not recovered');
+        $operations=array_map(fn($line)=>json_decode($line,true),file($root.'/operations.jsonl'));
+        expect(count($operations)===1&&json_decode($operations[0]['http']['content'],true)['operation']==='verify',
+            'Read-only recovery sent a Save or bank authorization');
+        $history=json_decode(file_get_contents($path),true)['binding_history'][hash('sha256','Fixture|123456789')];
+        expect(($history[$other['id']]['status']??'')==='BLOCKED','Recovery lost the failed other-card attempt');
         // Complete an already-observed bank challenge: Meta's verified reply
         // must update the original card/RK binding without sending a new hold.
         $bankResult=['profile_id'=>'Fixture','account_id'=>'123456789',

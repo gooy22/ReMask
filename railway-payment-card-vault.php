@@ -227,6 +227,12 @@ final class RemaskPaymentCardVault {
             return is_array($row)?$row:null;
         });
     }
+    public function accountBinding(string $profile,string $account): ?array {
+        return $this->locked(static function(array &$data)use($profile,$account){
+            $row=$data['bindings'][hash('sha256',$profile.'|'.$account)]??null;
+            return is_array($row)?$row:null;
+        });
+    }
     public function reconcile(string $id,string $profile,string $account,?array $expected,array $funding): array {
         return $this->locked(function(array &$data)use($id,$profile,$account,$expected,$funding){
             $card=$data['cards'][$id]??null;
@@ -267,6 +273,15 @@ final class RemaskPaymentCardVault {
                 }
                 if(self::reviewable($current)&&self::exactEmpty($profile,$account,$funding))$result['retry_review']=$this->retryReview($current);
                 return $result;
+            }
+            if(is_array($current)&&($current['card_id']??null)!==$id){
+                // Recover a previously attached card only after an independent
+                // live exact-card read. Never replace an uncertain other Save.
+                if(!in_array($current['status']??'', ['BLOCKED','FAILED'],true)||
+                   ($current['submitted']??null)!==false)
+                    throw new InvalidArgumentException('CARD_BINDING_CARD_MISMATCH');
+                $data['binding_history'][$key][$current['card_id']]=$current;
+                $current=null;
             }
             $method=$observedMatches[0];
             $requires=($method['needs_verification']??null)===true||!empty($method['verification_tasks']);
@@ -362,3 +377,4 @@ final class RemaskPaymentCardVault {
         });
     }
 }
+
