@@ -40,23 +40,30 @@ def inspect_saved_sources():
         "AdsPromotablePageListStoreSourceFragment.graphql",
         "AdsPromotablePageListLoaderGAPI", "AdsPromotablePageListDataManager",
         "AdsPromotablePageDataProviderPlugin"}
+    # Exact public module names only: no path, URL, expression or runtime eval.
+    requested = os.getenv("REMASK_LAUNCH_HTTP_AUDIT_MODULES", "").split(",")
+    if any(value.strip() for value in requested):
+        selected = {value.strip() for value in requested[:24]
+                    if re.fullmatch(r"[A-Za-z0-9_.:$-]{1,180}", value.strip())}
     budget = 60_000
     for row in rows:
         source = row.get("source", "")
         if row.get("name") not in selected or len(source) > budget:
             continue
-        if re.search(r"fb_dtsg|access_token|authorization|cookie", source, re.I):
+        if row.get("source_kind") != "public_cdn" and re.search(r"fb_dtsg|access_token|authorization|cookie", source, re.I):
             continue
         budget -= len(source)
         chunks = [source[i:i+1400] for i in range(0, len(source), 1400)]
         for index, chunk in enumerate(chunks):
             log.info("launch saved public module evidence=%s", json.dumps({
                 "name": row["name"], "sha256": row.get("sha256"),
+                "dependencies": row.get("dependencies", []),
                 "chunk": index, "chunks": len(chunks), "source": chunk}))
 
 
 async def collect_sources(web, *, account, business):
-    from ..private_contract_discovery import _module_nodes, _script_urls
+    from ..private_contract_discovery import _script_urls
+    from .ads_sources import deferred_script_urls, module_records, public_script_url
     entry = ("https://adsmanager.facebook.com/adsmanager/manage/campaigns"
              f"?act={account}&business_id={business}")
     status, document, final = await web.fetch_text(entry, max_bytes=5_000_000, document_navigation=True)
@@ -66,37 +73,53 @@ async def collect_sources(web, *, account, business):
     if not 200 <= status < 300 or urlsplit(final).hostname not in {"adsmanager.facebook.com", "business.facebook.com"}:
         return {"code": "ADS_SOURCE_DOCUMENT_UNAVAILABLE", "http_status": status}
     modules = {}
-    def observe(source):
-        for name, node in _module_nodes(source):
-            if not re.match(r"(?:Ads|useAds|BizKit.*Ads)", name):
-                continue
-            raw = node.text.decode("utf-8")
-            if len(raw) > 180_000 or re.search(r"fb_dtsg|access_token|authorization|cookie", raw, re.I):
+    source_budget = 15_000_000
+    def observe(source, kind):
+        nonlocal source_budget
+        for row in module_records(source):
+            raw, name = row["source"], row["name"]
+            # Inline document code can carry session values. CDN JavaScript is
+            # public static code; references to credential *variables* there
+            # are not credential values and must not hide request wrappers.
+            if kind != "public_cdn" and re.search(r"fb_dtsg|access_token|authorization|cookie", raw, re.I):
                 continue
             digest = hashlib.sha256(raw.encode()).hexdigest()
-            modules[name + ":" + digest] = {"name": name, "sha256": digest, "source": raw}
-    observe(document)
+            identity = name + ":" + digest
+            cost = len(json.dumps(row).encode())
+            if identity not in modules and cost <= source_budget:
+                source_budget -= cost
+                modules[identity] = {**row, "sha256": digest, "source_kind": kind}
+    observe(document, "document")
     semaphore = asyncio.Semaphore(3)
+    downloaded = 0
     async def read(url):
+        nonlocal downloaded
         async with semaphore:
+            if downloaded >= 50_000_000:
+                return
             try:
-                code, source, final_url = await web.fetch_text(url, max_bytes=3_000_000, referer=entry)
-                if 200 <= code < 300 and not _auth_gate(final_url, source):
-                    observe(source)
+                code, source, final_url = await web.fetch_text(url, max_bytes=5_000_000, referer=entry)
+                downloaded += len(source.encode())
+                if 200 <= code < 300 and public_script_url(final_url) and not _auth_gate(final_url, source):
+                    observe(source, "public_cdn")
             except AuthenticationError:
                 raise
             except Exception:
                 return
-    urls = _script_urls(document, final)[:24]
-    await asyncio.gather(*(read(url) for url in urls))
+    direct = [url for url in _script_urls(document, final, limit=40) if public_script_url(url)]
+    deferred = deferred_script_urls(document)
+    urls = list(dict.fromkeys(deferred + direct))[:80]
+    async with asyncio.timeout(75):
+        await asyncio.gather(*(read(url) for url in urls))
     root = Path(os.getenv("REMASK_DATA_DIR") or "/var/lib/remask") / "maintenance"
     root.mkdir(parents=True, exist_ok=True)
     target = root / "ads-public-modules-candidate.json"
     temporary = target.with_suffix(".tmp")
     temporary.write_text(json.dumps({"scope": "candidate_only_not_installed",
-        "modules": list(modules.values())}, ensure_ascii=False))
+        "modules": list(modules.values()), "deferred_scripts_observed": len(deferred)}, ensure_ascii=False))
     temporary.replace(target)
     return {"code": "ADS_SOURCE_CANDIDATE_SAVED", "scripts": len(urls), "modules": len(modules),
+            "deferred_scripts_observed": len(deferred), "downloaded_bytes": downloaded,
             "operation_modules": sorted({row["name"] for row in modules.values()
                 if row["name"].endswith((".graphql", "_facebookRelayOperation"))})[:100]}
 
