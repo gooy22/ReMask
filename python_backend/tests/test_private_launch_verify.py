@@ -1,3 +1,4 @@
+import asyncio
 import copy
 import json
 from pathlib import Path
@@ -6,7 +7,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from app.private_launch import PrivateLaunchService, PrivateLaunchContractStore, PrivateLaunchStep
+from app.private_launch import PrivateLaunchService, PrivateLaunchContractStore, PrivateLaunchStep, _resumable_read
+from app.action_result import ActionResult
 from app.private_launch_verify import proof, validate_contract
 from app.provisioning.models import ProvisioningError
 from app.provisioning.state import ProvisioningStateStore
@@ -84,6 +86,83 @@ class IndependentLaunchReadTests(unittest.IsolatedAsyncioTestCase):
             await self.run_launch()
         self.assertEqual(caught.exception.code, "PRIVATE_LAUNCH_VERIFICATION_CONTRACT_REQUIRED")
         self.web.graphql.assert_not_awaited()
+
+    async def test_temporary_read_failure_resumes_query_without_recreating_campaign(self):
+        self.web.graphql.side_effect = [responses()[0], TimeoutError()]
+        with self.assertRaises(ProvisioningError):
+            await self.run_launch()
+        saved = await self.service.state.step("verification-fixture", PrivateLaunchStep.CAMPAIGN)
+        self.assertEqual(saved["result"]["entity_id"], IDS[0])
+        self.web.graphql.reset_mock()
+        self.web.graphql.side_effect = responses()[1:]
+        result = await self.run_launch()
+        self.assertEqual(result["status"], "SUCCESS")
+        self.assertTrue(result["steps"][0]["read_resumed"])
+        self.assertEqual(self.web.graphql.await_count, 7)
+        self.assertEqual(self.web.graphql.await_args_list[0].args, ("900001", {"id": IDS[0]}))
+        self.assertEqual(len([call for call in self.web.graphql.await_args_list
+                              if call.args[0] == contracts()["CAMPAIGN"]["doc_id"]]), 0)
+
+    async def test_changed_configuration_cannot_resume_known_created_id(self):
+        self.web.graphql.side_effect = [responses()[0], TimeoutError()]
+        with self.assertRaises(ProvisioningError):
+            await self.run_launch()
+        self.payload["launch"]["campaign"]["name"] = "changed"
+        self.web.graphql.reset_mock()
+        with self.assertRaises(ProvisioningError) as caught:
+            await self.run_launch()
+        self.assertEqual(caught.exception.code, "PRIVATE_LAUNCH_KEY_PAYLOAD_MISMATCH")
+        self.web.graphql.assert_not_awaited()
+
+    async def test_downstream_read_resume_preserves_confirmed_parent_and_skips_both_creates(self):
+        self.web.graphql.side_effect = responses()[:3] + [TimeoutError()]
+        with self.assertRaises(ProvisioningError):
+            await self.run_launch()
+        self.web.graphql.reset_mock()
+        self.web.graphql.side_effect = responses()[3:]
+        result = await self.run_launch()
+        self.assertEqual(result["entities"]["campaign_id"], IDS[0])
+        self.assertTrue(result["steps"][1]["read_resumed"])
+        self.assertEqual(self.web.graphql.await_count, 5)
+        self.assertEqual(self.web.graphql.await_args_list[0].args, ("900002", {"id": IDS[1]}))
+
+    async def test_interrupted_pending_read_recovers_after_timeout_without_create(self):
+        with patch.object(self.service, "_verify_entity", AsyncMock(side_effect=asyncio.CancelledError())):
+            with self.assertRaises(asyncio.CancelledError):
+                await self.run_launch()
+        prior = await self.service.state.step("verification-fixture", PrivateLaunchStep.CAMPAIGN)
+        self.assertEqual(prior["error_code"], "PRIVATE_LAUNCH_CAMPAIGN_READ_PENDING")
+        self.web.graphql.reset_mock()
+        self.web.graphql.side_effect = responses()[1:]
+        with patch("app.private_launch.time.time", return_value=prior["updated_at"] + 91):
+            result = await self.run_launch()
+        self.assertEqual(result["status"], "SUCCESS")
+        self.assertTrue(result["steps"][0]["read_resumed"])
+        self.assertEqual(self.web.graphql.await_count, 7)
+
+    async def test_late_failed_read_cannot_overwrite_another_workers_success(self):
+        self.web.graphql.side_effect = [responses()[0], TimeoutError()]
+        with self.assertRaises(ProvisioningError):
+            await self.run_launch()
+        prior = await self.service.state.step("verification-fixture", PrivateLaunchStep.CAMPAIGN)
+        confirmed = ActionResult.success("CAMPAIGN", entity_id=IDS[0], evidence={
+            **prior["result"]["evidence"], "verification": {"verified": True}})
+        self.assertTrue(await self.service.state.finish_read(prior, confirmed))
+        failed = ActionResult.reconcile("CAMPAIGN", code="READ_UNAVAILABLE", message="fixture", submitted=True)
+        self.assertFalse(await self.service.state.finish_read(prior, failed))
+        saved = await self.service.state.step("verification-fixture", PrivateLaunchStep.CAMPAIGN)
+        self.assertEqual(saved["status"], "SUCCESS")
+        self.assertTrue(saved["result"]["verified"])
+
+    def test_pending_read_needs_returned_id_configuration_and_expired_read_timeout(self):
+        prior = {"status": "RECONCILE_REQUIRED", "entity_id": IDS[0], "submitted": 1,
+                 "error_code": "PRIVATE_LAUNCH_CAMPAIGN_READ_PENDING", "updated_at": 100}
+        with patch("app.private_launch.time.time", return_value=189):
+            self.assertFalse(_resumable_read(prior, PrivateLaunchStep.CAMPAIGN))
+        with patch("app.private_launch.time.time", return_value=190):
+            self.assertTrue(_resumable_read(prior, PrivateLaunchStep.CAMPAIGN))
+            self.assertFalse(_resumable_read({**prior, "entity_id": ""}, PrivateLaunchStep.CAMPAIGN))
+            self.assertFalse(_resumable_read({**prior, "status": "SUBMITTING"}, PrivateLaunchStep.CAMPAIGN))
 
     def test_active_foreign_partial_and_wrong_parent_responses_never_confirm(self):
         row = contracts()["AD"]["verification"]

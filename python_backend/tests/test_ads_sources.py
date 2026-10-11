@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from app.contract_maintenance.ads_sources import deferred_script_urls, module_records, public_script_url
+from app.contract_maintenance.ads_sources import compact_record, deferred_script_urls, module_records, module_source, public_script_url
 from app.contract_maintenance.launch_http_audit import collect_sources, inspect_saved_sources
 
 
@@ -30,13 +30,27 @@ class AdsSourceTests(unittest.TestCase):
                     "https://static.xx.fbcdn.net/a.js#x", "https://www.facebook.com/a.js"):
             self.assertFalse(public_script_url(url))
 
+    def test_sender_dependencies_precede_unrelated_publish_roots(self):
+        resources = {str(i): {"type": "js", "src": f"https://static.xx.fbcdn.net/{i}.js"} for i in range(4)}
+        components = {"AdsPublishEntry": {"r": ["0"], "rdfds": {"m": ["AdsDraftSender"]}},
+            "AdsPublishOther": {"r": ["3"]},
+            "AdsDraftSender": {"r": ["1"], "m": ["transport"]}, "transport": {"r": ["2"]}}
+        urls = deferred_script_urls(json.dumps({"rsrcMap": resources, "compMap": components}),
+                                    preferred=["AdsPublishEntry"])
+        self.assertEqual(urls, [resources[str(i)]["src"] for i in range(4)])
+
     def test_literal_dependencies_and_compileable_wrapper_are_preserved(self):
         source = '__d("AdsPublish",["cr:20373","AdsGraphAPI"],function(a,b,c,d,e,f){f.publish=c("AdsGraphAPI");},98);'
         row, = module_records(source)
         self.assertEqual(row["dependencies"], ["cr:20373", "AdsGraphAPI"])
         self.assertEqual(row["module_source"], source)
+        compact = compact_record(row)
+        self.assertNotIn("module_source", compact)
+        self.assertEqual(module_source(compact), source)
+        self.assertEqual(module_source(row), source)
         wrapped = source.replace("function(a,b,c,d,e,f){f.publish=c(\"AdsGraphAPI\");}", "(function(a,b,c,d,e,f){f.publish=c(\"AdsGraphAPI\");})")
         self.assertEqual(next(module_records(wrapped))["module_source"], wrapped)
+        self.assertEqual(module_source(compact_record(next(module_records(wrapped)))), wrapped)
         self.assertFalse(list(module_records(source.replace('["cr:20373","AdsGraphAPI"]', '[dynamic]'))))
 
     def test_saved_export_is_exact_bounded_and_never_includes_inline_auth(self):
@@ -53,6 +67,9 @@ class AdsSourceTests(unittest.TestCase):
             evidence = [call.args[1] for call in log.info.call_args_list if "evidence=" in call.args[0]]
             self.assertEqual(len(evidence), 1)
             self.assertEqual(json.loads(evidence[0])["name"], "AdsPublish")
+            report = [call.args[1] for call in log.info.call_args_list if "selection=" in call.args[0]]
+            self.assertEqual(len(report), 1)
+            self.assertTrue(next(row for row in json.loads(report[0]) if row["name"] == "AdsPublish")["present"])
 
 
 class AdsSourceTransportTests(unittest.IsolatedAsyncioTestCase):
@@ -76,6 +93,9 @@ class AdsSourceTransportTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(saved["scope"], "candidate_only_not_installed")
                 if not expected:
                     self.assertEqual(saved["modules"], [{"name": "AdsPrevious"}])
+                else:
+                    self.assertEqual(module_source(saved["modules"][0]), source)
+                    self.assertEqual(saved["scripts_observed"], ["https://static.xx.fbcdn.net/a.js"])
 
 
 if __name__ == "__main__":

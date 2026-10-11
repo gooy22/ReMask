@@ -3566,7 +3566,7 @@ async def private_launch_maintenance_candidate():
     target=Path(DATA_ROOT)/'maintenance'/'ads-public-modules-candidate.json'
     if not target.is_file():
         return {'ok':True,'scope':'candidate_only_not_installed','modules':[]}
-    if target.stat().st_size>8_000_000:
+    if target.stat().st_size>20_000_000:
         raise HTTPException(status_code=413,detail='MAINTENANCE_CANDIDATE_TOO_LARGE')
     return json.loads(target.read_text())
 

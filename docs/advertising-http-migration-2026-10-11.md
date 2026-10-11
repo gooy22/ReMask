@@ -98,3 +98,32 @@ Continuation validation: the final mandatory suite ran 943 tests successfully
 separate private requests, foreign RK/ID/state/parent rejection, missing
 downstream READ contracts and durable no-replay after an unconfirmed READ.
 This is code verification; no real production advertising CREATE is claimed.
+
+Further continuation: a temporary independent READ failure can now resume using
+the already returned exact entity ID and unchanged configuration. Only READ is
+repeated for that step; CREATE is never replayed. Unknown mutation results,
+wrong RK/ID/PAUSED/parent proofs and changed configurations remain blocked.
+A crashed READ_PENDING can be retried after 90 seconds, beyond the original
+40-second query timeout. Conditional SQLite updates prevent a late failing
+query from overwriting another worker's confirmed result. The retained ID is
+also present in the ActionResult returned to the application.
+
+Saved-source inspection confirmed that AdsDraftPublishDataManager and
+AdsGraphAPI are absent from the current captured snapshot. Their UI callers and
+the publishing-init reducer exist; these do not establish a request contract.
+Dependency traversal now follows each preferred publication root before
+unrelated UI roots. Candidate records retain the exact module wrapper as prefix,
+factory and suffix, without storing the factory twice. Captures preserve the
+observed public script catalog and report discarded-source counts. Inspection
+reports missing modules/dependencies and export-budget omissions explicitly.
+The authenticated candidate endpoint's file limit now matches the 20 MB reader.
+
+The saved-only inspection deployment f0f62b51 reached SUCCESS. It made no
+advertising audit request to Meta. An existing card verification task separately
+reported profile 16 SESSION_EXPIRED with post_not_sent=true. Actual advertising
+request contracts and a successful live PAUSED publication are still pending.
+
+Continuation checks: the mandatory local suite ran 948 tests successfully
+(18 skips). After adding downstream-parent and interrupted-query recovery
+fixtures, all 49 focused Launch/source tests passed. Temporary READ recovery
+does not replay the already submitted Campaign or Ad Set mutation.

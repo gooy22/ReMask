@@ -64,9 +64,10 @@ def deferred_script_urls(document, *, preferred=()):
         if name in conflicts["compMap"] or not isinstance(row, dict):
             continue
         tiers = [row] + [row[key] for key in ("rdfds", "rds") if isinstance(row.get(key), dict)]
+        dependencies = []
         for tier in tiers:
             if isinstance(tier.get("m"), list):
-                queue.extend(value for value in tier["m"] if isinstance(value, str) and value in components)
+                dependencies.extend(value for value in tier["m"] if isinstance(value, str) and value in components)
             for identity in tier.get("r", []) if isinstance(tier.get("r"), list) else []:
                 if not isinstance(identity, (str, int)) or isinstance(identity, bool):
                     continue
@@ -77,7 +78,27 @@ def deferred_script_urls(document, *, preferred=()):
                 url = resource.get("src")
                 if public_script_url(url) and url not in urls:
                     urls.append(url)
+        # Inspect a publication root's dependencies before unrelated roots.
+        # Breadth-first traversal put its actual sender behind hundreds of UI
+        # components and outside the transport's bounded script window.
+        queue.extendleft(reversed(list(dict.fromkeys(dependencies))))
     return urls
+
+
+def compact_record(row):
+    """Retain the exact compileable wrapper without storing its body twice."""
+    prefix, separator, suffix = row["module_source"].partition(row["source"])
+    if not separator:
+        raise ValueError("Module wrapper does not contain its observed factory")
+    return {key: value for key, value in row.items() if key != "module_source"} | {
+        "module_prefix": prefix, "module_suffix": suffix}
+
+
+def module_source(row):
+    """Reconstruct source evidence only; never evaluate it."""
+    if "module_source" in row:
+        return row["module_source"]
+    return row["module_prefix"] + row["source"] + row["module_suffix"]
 
 
 def module_records(source):

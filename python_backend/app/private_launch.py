@@ -721,6 +721,22 @@ class PrivateLaunchStateStore:
             submitted,
         )
 
+    async def finish_read(self, prior: dict[str, Any], result: ActionResult) -> bool:
+        """A late read must not overwrite another worker's confirmed result."""
+        return await asyncio.to_thread(self._finish_read_sync, prior, result.as_dict())
+
+    def _finish_read_sync(self, prior: dict[str, Any], result: dict[str, Any]) -> bool:
+        encode = lambda value: json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        with self._connect() as con:
+            cursor = con.execute("""UPDATE private_launch_steps
+                SET status=?,result_json=?,error_code=?,submitted=1,updated_at=?
+                WHERE launch_key=? AND step=? AND profile_id=? AND business_id=? AND ad_account_id=?
+                    AND status=? AND entity_id=? AND result_json=?""",
+                (result["status"], encode(result), result["code"], int(time.time()),
+                 prior["launch_key"], prior["step"], prior["profile_id"], prior["business_id"],
+                 prior["ad_account_id"], prior["status"], prior["entity_id"], encode(prior["result"])))
+            return cursor.rowcount == 1
+
     def _save_sync(
         self,
         launch_key: str,
@@ -784,6 +800,24 @@ def _lookup(value: Any, path: str) -> Any:
         else:
             return None
     return current
+
+
+def _resumable_read(prior: dict[str, Any], step: PrivateLaunchStep) -> bool:
+    """Only an exact returned ID with a temporary READ failure may resume."""
+    entity_id = str(prior.get("entity_id") or "")
+    if (prior.get("status") != "RECONCILE_REQUIRED"
+            or not re.fullmatch(r"\d{5,30}", entity_id)
+            or prior.get("submitted") != 1):
+        return False
+    code = prior.get("error_code")
+    if code == f"PRIVATE_LAUNCH_{step.value}_READ_PENDING":
+        # A crashed worker may leave READ_PENDING. Allow the first query's
+        # 40-second timeout to finish before a different worker can retry it.
+        return time.time() - int(prior.get("updated_at") or 0) >= 90
+    return (code == f"PRIVATE_LAUNCH_{step.value}_READ_UNCONFIRMED"
+            and prior.get("result", {}).get("evidence", {}).get("verification", {}).get("code")
+                in {"READ_UNAVAILABLE", "READ_INCOMPLETE", "SESSION_EXPIRED", "BUSINESS_LOGIN_GATE",
+                    "META_AUTH_TOKEN_UNAVAILABLE"})
 
 
 _PLACEHOLDER = re.compile(r"\{\{([A-Za-z0-9_.-]+)\}\}")
@@ -1497,7 +1531,7 @@ class PrivateLaunchService:
                     retryable=False,
                 )
             previous_status = str(prior.get("status") or "").upper()
-            if previous_status in {"SUBMITTING", "RECONCILE_REQUIRED", "BLOCKED"}:
+            if previous_status in {"SUBMITTING", "RECONCILE_REQUIRED", "BLOCKED"} and not _resumable_read(prior, step):
                 code = (
                     "PRIVATE_LAUNCH_BLOCKED_REPLAY"
                     if previous_status == "BLOCKED"
@@ -1509,6 +1543,11 @@ class PrivateLaunchService:
                     retryable=False,
                 )
         fingerprint = _launch_fingerprint(payload, page_id)
+        for prior in prior_by_step.values():
+            if prior and prior.get("status") == "RECONCILE_REQUIRED" and (
+                    prior.get("result", {}).get("evidence", {}).get("launch_fingerprint") != fingerprint):
+                raise ProvisioningError("PRIVATE_LAUNCH_KEY_PAYLOAD_MISMATCH",
+                    "Created object verification is bound to the saved Launch configuration", retryable=False)
         for prior in prior_by_step.values():
             if prior and str(prior.get("status") or "").upper() == "SUCCESS" and (
                     prior.get("result", {}).get("evidence", {}).get("launch_fingerprint") != fingerprint
@@ -1558,6 +1597,13 @@ class PrivateLaunchService:
                 })
                 continue
             contract = contracts[step]
+            if prior and _resumable_read(prior, step):
+                web = await meta_transport.facebook_web()
+                result = await self._confirm_created_entity(web, contract, values, prior)
+                values[f"{step.value.lower()}_id"] = result.entity_id
+                completed.append({"step": step.value, "status": "SUCCESS", "skipped": True,
+                    "read_resumed": True, "entity_id": result.entity_id})
+                continue
             candidate = _contract_candidate(
                 step,
                 contract,
@@ -1827,26 +1873,13 @@ class PrivateLaunchService:
                 code=f"PRIVATE_LAUNCH_{step.value}_READ_PENDING",
                 message="CREATE returned an ID; independent Meta READ is pending", submitted=True,
                 evidence={"launch_fingerprint": fingerprint, "response_path": response_path})
+            pending_read.entity_id = entity_id
             await self.state.save(launch_key=launch_key, profile_id=profile_id, business_id=business_id,
                 ad_account_id=ad_account_id, step=step, status=pending_read.status.value,
                 entity_id=entity_id, result=pending_read.as_dict(), error_code=pending_read.code, submitted=True)
-            try:
-                verification = await asyncio.wait_for(self._verify_entity(web, contract,
-                    {**values, "entity_id": entity_id}), timeout=40)
-            except AuthenticationError as exc:
-                verification = {"verified": False, "code": private_auth_error(exc).code}
-            except Exception:
-                # Save the returned ID, never arbitrary exception/auth text.
-                verification = {"verified": False, "code": "READ_UNAVAILABLE"}
-            if verification.get("verified") is not True:
-                result = ActionResult.reconcile(step.value,
-                    code=f"PRIVATE_LAUNCH_{step.value}_READ_UNCONFIRMED",
-                    message="CREATE returned an ID but independent Meta READ did not confirm the exact paused object",
-                    submitted=True, evidence={"launch_fingerprint": fingerprint, "verification": verification})
-                await self.state.save(launch_key=launch_key, profile_id=profile_id, business_id=business_id,
-                    ad_account_id=ad_account_id, step=step, status=result.status.value,
-                    entity_id=entity_id, result=result.as_dict(), error_code=result.code, submitted=True)
-                raise ProvisioningError(result.code, result.message, retryable=False)
+            prior_read = await self.state.step(launch_key, step)
+            result = await self._confirm_created_entity(web, contract, values, prior_read,
+                response_summary=_response_summary(response))
             if AUTO_RESULT_ID_PATH in contract.result_id_paths and response_path:
                 try:
                     self.contracts.promote_result_path(step, response_path)
@@ -1859,29 +1892,6 @@ class PrivateLaunchService:
                 success=True,
                 profile_id=profile_id,
                 response_path=response_path,
-            )
-            result = ActionResult.success(
-                step.value,
-                entity_id=entity_id,
-                code=f"PRIVATE_LAUNCH_{step.value}_CONFIRMED",
-                evidence={
-                    "launch_fingerprint": fingerprint,
-                    "verification": verification,
-                    **_response_summary(response),
-                    "response_path": response_path,
-                    "friendly_name": contract.friendly_name,
-                },
-            )
-            await self.state.save(
-                launch_key=launch_key,
-                profile_id=profile_id,
-                business_id=business_id,
-                ad_account_id=ad_account_id,
-                step=step,
-                status=result.status.value,
-                entity_id=entity_id,
-                result=result.as_dict(),
-                submitted=True,
             )
             values[f"{step.value.lower()}_id"] = entity_id
             completed.append({
@@ -1907,6 +1917,41 @@ class PrivateLaunchService:
                 "ad_id": values.get("ad_id", ""),
             },
         }
+
+    async def _confirm_created_entity(self, web, contract, values, prior, *, response_summary=None):
+        entity_id = str(prior["entity_id"])
+        evidence = {**prior["result"].get("evidence", {}), **(response_summary or {}),
+            "friendly_name": contract.friendly_name}
+        try:
+            verification = await asyncio.wait_for(self._verify_entity(web, contract,
+                {**values, "entity_id": entity_id}), timeout=40)
+        except AuthenticationError as exc:
+            verification = {"verified": False, "code": private_auth_error(exc).code}
+        except Exception:
+            verification = {"verified": False, "code": "READ_UNAVAILABLE"}
+        evidence["verification"] = verification
+        if verification.get("verified") is True:
+            result = ActionResult.success(contract.step.value, entity_id=entity_id,
+                code=f"PRIVATE_LAUNCH_{contract.step.value}_CONFIRMED", evidence=evidence)
+        else:
+            result = ActionResult.reconcile(contract.step.value,
+                code=f"PRIVATE_LAUNCH_{contract.step.value}_READ_UNCONFIRMED",
+                message="Independent Meta READ did not confirm the exact paused object; the created ID is retained",
+                submitted=True, evidence=evidence)
+            result.entity_id = entity_id
+        if not await self.state.finish_read(prior, result):
+            latest = await self.state.step(prior["launch_key"], contract.step)
+            saved = (latest or {}).get("result", {})
+            if (latest and latest.get("status") == "SUCCESS" and latest.get("entity_id") == entity_id
+                    and saved.get("evidence", {}).get("launch_fingerprint") == evidence.get("launch_fingerprint")
+                    and saved.get("evidence", {}).get("verification", {}).get("verified") is True):
+                return ActionResult.success(contract.step.value, entity_id=entity_id,
+                    code=saved.get("code", ""), evidence=saved.get("evidence", {}))
+            raise ProvisioningError("PRIVATE_LAUNCH_RECONCILE_REQUIRED",
+                "Created object state changed while its independent READ was in progress", retryable=False)
+        if result.verified is not True:
+            raise ProvisioningError(result.code, result.message, retryable=False)
+        return result
 
     @staticmethod
     async def _verify_entity(web, contract, values):

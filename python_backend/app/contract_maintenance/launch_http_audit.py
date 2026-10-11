@@ -48,14 +48,27 @@ def inspect_saved_sources():
     if any(value.strip() for value in requested):
         selected = {value.strip() for value in requested[:24]
                     if re.fullmatch(r"[A-Za-z0-9_.:$-]{1,180}", value.strip())}
-    budget = 60_000
-    for row in rows:
+    present = {row.get("name") for row in rows}
+    report = []
+    for name in sorted(selected):
+        matched = [row for row in rows if row.get("name") == name]
+        report.append({"name": name, "present": bool(matched), "variants": len(matched),
+            "bytes": sum(len(row.get("source", "").encode()) for row in matched),
+            "missing_dependencies": sorted({dependency for row in matched
+                for dependency in row.get("dependencies", []) if dependency not in present})[:40]})
+    log.info("launch saved public module selection=%s", json.dumps(report))
+    budget = 200_000
+    for row in sorted(rows, key=lambda row: (row.get("name", ""), row.get("sha256", ""))):
         source = row.get("source", "")
-        if row.get("name") not in selected or len(source) > budget:
+        if row.get("name") not in selected:
+            continue
+        if len(source.encode()) > budget:
+            log.info("launch saved public module omitted=%s", json.dumps({"name": row["name"],
+                "reason": "EXPORT_BUDGET", "bytes": len(source.encode())}))
             continue
         if row.get("source_kind") != "public_cdn" and re.search(r"fb_dtsg|access_token|authorization|cookie", source, re.I):
             continue
-        budget -= len(source)
+        budget -= len(source.encode())
         chunks = [source[i:i+1400] for i in range(0, len(source), 1400)]
         for index, chunk in enumerate(chunks):
             log.info("launch saved public module evidence=%s", json.dumps({
@@ -66,7 +79,7 @@ def inspect_saved_sources():
 
 async def collect_sources(web, *, account, business):
     from ..private_contract_discovery import _script_urls
-    from .ads_sources import deferred_script_urls, module_records, public_script_url
+    from .ads_sources import compact_record, deferred_script_urls, module_records, public_script_url
     entry = ("https://adsmanager.facebook.com/adsmanager/manage/campaigns"
              f"?act={account}&business_id={business}")
     status, document, final = await web.fetch_text(entry, max_bytes=5_000_000, document_navigation=True)
@@ -77,6 +90,7 @@ async def collect_sources(web, *, account, business):
         return {"code": "ADS_SOURCE_DOCUMENT_UNAVAILABLE", "http_status": status}
     modules = {}
     source_budget = 15_000_000
+    skipped = {"inline_auth": 0, "source_budget": 0}
     def observe(source, kind):
         nonlocal source_budget
         for row in module_records(source):
@@ -85,13 +99,17 @@ async def collect_sources(web, *, account, business):
             # public static code; references to credential *variables* there
             # are not credential values and must not hide request wrappers.
             if kind != "public_cdn" and re.search(r"fb_dtsg|access_token|authorization|cookie", raw, re.I):
+                skipped["inline_auth"] += 1
                 continue
             digest = hashlib.sha256(raw.encode()).hexdigest()
             identity = name + ":" + digest
+            row = compact_record(row)
             cost = len(json.dumps(row).encode())
             if identity not in modules and cost <= source_budget:
                 source_budget -= cost
                 modules[identity] = {**row, "sha256": digest, "source_kind": kind}
+            elif identity not in modules:
+                skipped["source_budget"] += 1
     observe(document, "document")
     semaphore = asyncio.Semaphore(3)
     downloaded = 0
@@ -113,6 +131,8 @@ async def collect_sources(web, *, account, business):
     preferred = [value.strip() for value in os.getenv("REMASK_LAUNCH_HTTP_AUDIT_MODULES", "").split(",")[:24]
                  if re.fullmatch(r"[A-Za-z0-9_.:$-]{1,180}", value.strip())]
     deferred = deferred_script_urls(document, preferred=preferred)
+    # Preserve the core entry scripts, then follow each selected publication
+    # component's dependency closure before unrelated frontend modules.
     urls = list(dict.fromkeys(direct + deferred))[:80]
     timed_out = False
     try:
@@ -127,11 +147,15 @@ async def collect_sources(web, *, account, business):
     if not modules:
         return {"code": "ADS_SOURCE_NO_MODULES", "scripts": len(urls), "modules": 0, "timed_out": timed_out}
     temporary.write_text(json.dumps({"scope": "candidate_only_not_installed",
-        "modules": list(modules.values()), "deferred_scripts_observed": len(deferred)}, ensure_ascii=False))
+        "modules": list(modules.values()), "deferred_scripts_observed": len(deferred),
+        "scripts_observed": list(dict.fromkeys(direct + deferred)),
+        "capture": {"scripts_requested": len(urls), "downloaded_bytes": downloaded,
+            "timed_out": timed_out, "skipped": skipped}}, ensure_ascii=False))
     temporary.replace(target)
     return {"code": "ADS_SOURCE_CANDIDATE_SAVED", "scripts": len(urls), "modules": len(modules),
             "deferred_scripts_observed": len(deferred), "downloaded_bytes": downloaded,
             "timed_out": timed_out,
+            "skipped": skipped,
             "operation_modules": sorted({row["name"] for row in modules.values()
                 if row["name"].endswith((".graphql", "_facebookRelayOperation"))})[:100]}
 
