@@ -629,7 +629,7 @@ async function showFunding(restored=null){
     <details class="mt-2"><summary>Диагностика</summary>
       <button id="paymentCardPrepare" type="button">Проверить форму Meta</button>
       <button id="paymentCardInspect" type="button">Проверить привязанные карты</button>
-      <button id="paymentCardVerify" type="button">Проверить статус подтверждения</button></details>
+      <button id="paymentCardVerify" type="button">Продолжить подтверждение (возможна временная операция по карте)</button></details>
     <div id="paymentCardAssignments" class="ws-muted mt-2"></div>
     <div id="paymentCardProgress" class="ws-muted mt-2" aria-live="polite"></div>
     <div id="fundingResults" aria-live="polite"></div>`,'',null);
