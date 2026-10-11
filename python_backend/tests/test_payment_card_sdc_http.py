@@ -142,6 +142,25 @@ class CardSDCHttpTests(IsolatedAsyncioTestCase):
                 '16',payload,state=self.state)
         self.assertEqual(result['code'],'SDC_AUTH_PENDING_WAIT_CODE')
         self.assertFalse(result['verification_triggered'])
+        self.assertEqual(result['bank_request_evidence'], 'META_PENDING_ONLY')
+        self.assertIsNone(result['previous_request_stage'])
         HttpFixture.graphql.assert_not_awaited()
         self.assertEqual([r.args[1] for r in read.await_args_list],
                          ['READ_ACCOUNT','READ_METHODS','READ_SDC_CANDIDATES'])
+
+    async def test_previous_bank_attempt_can_be_inspected_without_new_request(self):
+        ledger = BankVerificationLedger(self.state.path)
+        scope = {name: self.scope[name] for name in
+                 ('profile', 'account', 'payment_account', 'credential', 'card_id')}
+        self.assertIsNone(await ledger.read_existing(**scope))
+        attempt = await ledger.reserve(**scope, flow='SDC')
+        self.assertTrue(attempt['reserved'])
+        self.assertTrue(await ledger.mark(attempt['attempt_id'], 'REQUEST_SENT'))
+        self.assertTrue(await ledger.mark(attempt['attempt_id'], 'CHALLENGE_READY'))
+        self.assertEqual(await ledger.read_existing(**scope),
+                         {'stage':'CHALLENGE_READY', 'same_card':True})
+        self.assertEqual(await ledger.read_existing(
+            **{**scope, 'card_id':'card_'+'a'*24}),
+            {'stage':'CHALLENGE_READY', 'same_card':False})
+        self.assertIsNone(await ledger.read_existing(
+            **{**scope, 'account':'99999999'}))
