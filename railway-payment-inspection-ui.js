@@ -409,6 +409,8 @@ function paymentDescriptorCompletionPanel(row,result,container){
   const confirmedRequest=result.code==='SDC_AUTH_SENT_WAIT_CODE'
     && result.verification_triggered===true;
   const preexistingChallenge=result.code==='SDC_AUTH_PENDING_WAIT_CODE'
+    && result.bank_request_evidence==='REMASK_LOCAL_REQUEST'
+    && result.previous_request_stage==='CHALLENGE_READY'
     && result.sdc_screen_verified===true && result.sdc_credential_match===true;
   if(!(confirmedRequest||preexistingChallenge)||
      !/^card_[a-f0-9]{24}$/.test(String(result.card_id||'')))return;
