@@ -313,12 +313,25 @@ async def verify_payment_card_http(resolver, profile, payload, *, state=None):
                         and not action_credential):
                     return {**common, 'code': 'SDC_ACTION_CREDENTIAL_UNVERIFIED'}
                 if usability == 'PENDING_VERIFICATION':
-                    if operation == 'authorize':
-                        # Meta's own screen skips sending a second hold in
-                        # this state, proceeding to the descriptor code.
-                        return {**common, 'status': 'ACTION_REQUIRED',
-                                'code': 'SDC_AUTH_PENDING_WAIT_CODE',
-                                'verification_stage': 'PENDING_VERIFICATION'}
+                    # An observed Meta pending state does not establish whether
+                    # this installation sent the original bank request.
+                    # Read only: a second authorization would risk a new hold.
+                    previous = None
+                    if state is not None and getattr(state, 'path', None) and action_credential:
+                        try:
+                            previous = await BankVerificationLedger(state.path).read_existing(
+                                profile=profile, account=target,
+                                payment_account=evidence['payment_account_id'],
+                                credential=action_credential, card_id=card_id)
+                        except Exception:
+                            # A broken local ledger never justifies another debit.
+                            previous = None
+                    if previous is not None and not previous['same_card']:
+                        return {**common, 'code': 'SDC_DIFFERENT_CARD_ATTEMPT_BLOCKED'}
+                    previous_stage = previous['stage'] if previous else None
+                    bank_evidence = ('REMASK_LOCAL_REQUEST' if previous_stage in
+                                     ('REQUEST_SENT', 'RESULT_UNKNOWN', 'CHALLENGE_READY')
+                                     else 'META_PENDING_ONLY')
                     if operation == 'verify_code':
                         return await _verify_sdc_code(web,
                             code=payload.get('verification_code'),
@@ -328,7 +341,9 @@ async def verify_payment_card_http(resolver, profile, payload, *, state=None):
                             card_id=card_id)
                     return {**common, 'status': 'ACTION_REQUIRED',
                             'code': 'SDC_AUTH_PENDING_WAIT_CODE',
-                            'verification_stage': 'PENDING_VERIFICATION'}
+                            'verification_stage': 'PENDING_VERIFICATION',
+                            'bank_request_evidence': bank_evidence,
+                            'previous_request_stage': previous_stage}
                 if usability == 'UNVERIFIED_OR_PENDING_AUTH':
                     if operation == 'verify_code':
                         return {**common, 'code': 'SDC_AUTH_NOT_STARTED'}
