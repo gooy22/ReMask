@@ -109,6 +109,15 @@ assert.doesNotMatch(sandbox.fundingCell({verification_status:'LINKED',card_linke
   assert.equal(requests[0].body.setup_country,'UA');assert.equal(requests[0].body.setup_country_mode,'prefer_ua');
   assert.deepEqual(JSON.parse(requests[0].body.client_info),{color_depth:'24',java_enabled:false,screen_height:'900',screen_width:'1440'});
   assert.equal(requests[0].body.setup_currency,'USD');assert.equal(requests[0].body.setup_timezone,'Europe/Kyiv');
+  // Every exact linked RK remains eligible for its own bank verification.
+  // The first RK needing a bank challenge must not block the next RK.
+  requests=[];bindResult={status:'ACTION_REQUIRED',code:'CARD_BANK_CONFIRMATION_REQUIRED',
+    submitted:true,card_linked:true,funding:{account_scope_verified:true,
+    business_scope_verified:true,payment_account_relation_verified:true}};
+  await sandbox.bindPaymentCard(rows,card,'123',element());
+  assert.equal(requests.filter(r=>r.body.action==='bind').length,2,
+    'bank verification pending on one confirmed RK cannot stop the next');
+  assert.equal(requests.filter(r=>r.body.action==='verify').length,2);
   bindResult=null;
   sandbox.$('paymentSetupCountry').value='CURRENT';
   assert.equal(sandbox.paymentSetupPayload().setup_country_mode,'current');
