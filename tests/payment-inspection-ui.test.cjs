@@ -176,7 +176,7 @@ assert.doesNotMatch(sandbox.fundingCell({verification_status:'LINKED',card_linke
   const selectedRows=sandbox.selectedRows;sandbox.selectedRows=()=>[rows[0]];
   bindings=[{profile:'Fixture',account_id:'123456789',card_id:card.id,last4:'1111',status:'ACTION_REQUIRED',last_result_code:'CARD_BANK_CONFIRMATION_REQUIRED'}];
   await sandbox.showFunding();elements.paymentCardSelect.value=card.id;
-  assert.ok(elements.paymentCardAssignments.children.at(-1).textContent.includes('затем нажмите «Проверить результат»'));
+  assert.ok(elements.paymentCardAssignments.children.at(-1).textContent.includes('Требуется подтверждение в банке'));
   requests=[];await elements.paymentCardBind.handlers.click();
   assert.equal(requests.filter(r=>r.body.action==='reconcile').length,1);
   assert.equal(requests.filter(r=>r.body.action==='bind').length,0);
@@ -227,7 +227,7 @@ assert.doesNotMatch(sandbox.fundingCell({verification_status:'LINKED',card_linke
     funding:{verification_status:'LINKED',account_scope_verified:true,funding_verified:false}};
   const autoConfirmedBatch=element();await sandbox.bindPaymentCard(ten.slice(0,3),card,'123',autoConfirmedBatch);
   assert.deepEqual(requests.map(r=>r.body.action),['bind','reconcile','bind','reconcile','bind','reconcile']);
-  assert.equal(autoConfirmedBatch.children.filter(child=>String(child.textContent||'').includes('Meta показывает карту у выбранного РК')).length,3,
+  assert.equal(autoConfirmedBatch.children.filter(child=>String(child.textContent||'').includes('Карта найдена в РК')).length,3,
     'live Meta confirmation should allow the selected-account batch to continue');
   requests=[];reviewResult=null;
   const uncertainBatch=element();await sandbox.bindPaymentCard(ten.slice(0,3),card,'123',uncertainBatch);
