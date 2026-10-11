@@ -7,6 +7,7 @@ BillingRiskVerifyThreeDSPageViewManager (398e071f...).
 No amount is supplied by ReMask. Only Meta chooses the issuer challenge.
 Challenge form values are ephemeral and must never enter a vault or log.
 """
+import logging
 import re
 from urllib.parse import urlsplit
 
@@ -56,6 +57,33 @@ def _client_success(body):
     return (isinstance(client, dict) and client.get('__typename') in
             ('XFBIBillingClientSuccess', 'XFBBillingMutationSuccess')
             and not client.get('next_tasks'))
+
+
+def _response_diagnostic(response, field, *, challenge=None, initializing=False):
+    """Classify the missing step without retaining bank form values or tokens."""
+    payload = response if isinstance(response, dict) else {}
+    body = _body(response, field)
+    kind = ('GRAPHQL_ERROR' if payload.get('errors') or payload.get('error') else
+            'INCOMPLETE_RESPONSE' if payload.get('hasNext') is True else
+            'MISSING_RESULT' if body is None else
+            'CLIENT_RESULT_NOT_SUCCESS' if not _client_success(body) else
+            'CHALLENGE_UNAVAILABLE' if initializing and challenge is None else
+            'CARD_NOT_VERIFIED' if not initializing and body.get('verified') is not True else
+            'CHALLENGE_READY' if initializing else 'CARD_VERIFIED')
+    codes = []
+    errors = payload.get('errors')
+    for error in errors[:10] if isinstance(errors, list) else []:
+        if not isinstance(error, dict):
+            continue
+        extension = error.get('extensions')
+        for row in (error, extension if isinstance(extension, dict) else {}):
+            for key in ('code', 'error_code'):
+                value = row.get(key)
+                if isinstance(value, str) and re.fullmatch(r'\d{1,9}', value):
+                    value = int(value)
+                if type(value) is int and 0 <= value <= 999999999 and value not in codes:
+                    codes.append(value)
+    return {'bank_response_kind': kind, 'meta_error_codes': codes[:10]}
 
 
 def _challenge(request, token):
@@ -132,20 +160,28 @@ async def start_bank_once(web, *, state, profile, account, payment_account,
             auth = private_auth_error(exc)
             return {**common, 'code': auth.code if auth else 'BANK_AUTH_PRECHECK_UNAVAILABLE'}
         await ledger.mark(attempt, 'RESULT_UNKNOWN')
+        logging.getLogger('remask.payment_card').info(
+            'bank init response profile=%s account=%s kind=TRANSPORT_RESULT_UNKNOWN', profile, account)
         return {**common, 'status': 'ACTION_REQUIRED', 'code': 'BANK_AUTH_RESULT_UNKNOWN',
-                'submitted': True, 'verification_triggered': None, 'verification_stage': 'RESULT_UNKNOWN'}
+                'submitted': True, 'verification_triggered': None, 'verification_stage': 'RESULT_UNKNOWN',
+                'bank_response_kind': 'TRANSPORT_RESULT_UNKNOWN'}
     if attempt is None:
         return {**common, 'code': 'BANK_AUTH_SUBMIT_FENCE_MISSING'}
     body = _body(response, 'risk_init_credential_verification')
     bootstrap = getattr(web, '_bootstrap', None)
     challenge = _challenge(body.get('authentication_request') if body else None,
                            getattr(bootstrap, 'fb_dtsg', None))
+    diagnostic = _response_diagnostic(response, 'risk_init_credential_verification',
+                                      challenge=challenge, initializing=True)
+    logging.getLogger('remask.payment_card').info(
+        'bank init response profile=%s account=%s kind=%s meta_error_codes=%s',
+        profile, account, diagnostic['bank_response_kind'], diagnostic['meta_error_codes'])
     if not _client_success(body) or challenge is None:
         await ledger.mark(attempt, 'RESULT_UNKNOWN')
-        return {**common, 'status': 'ACTION_REQUIRED', 'code': 'BANK_AUTH_RESULT_UNKNOWN',
+        return {**common, **diagnostic, 'status': 'ACTION_REQUIRED', 'code': 'BANK_AUTH_RESULT_UNKNOWN',
                 'submitted': True, 'verification_triggered': None, 'verification_stage': 'RESULT_UNKNOWN'}
     await ledger.mark(attempt, 'CHALLENGE_READY')
-    return {**common, 'status': 'ACTION_REQUIRED', 'code': 'BANK_AUTH_CHALLENGE_READY',
+    return {**common, **diagnostic, 'status': 'ACTION_REQUIRED', 'code': 'BANK_AUTH_CHALLENGE_READY',
             'submitted': True, 'verification_triggered': True, 'verification_stage': 'CHALLENGE_READY',
             'bank_challenge': challenge}
 
@@ -169,8 +205,12 @@ async def verify_bank_result(web, *, state, profile, account, payment_account,
         return {**common, 'status': 'ACTION_REQUIRED',
                 'code': auth.code if auth else 'BANK_VERIFY_RESULT_UNKNOWN', 'submitted': sent}
     body = _body(response, 'validate_risk_credential_verification')
+    diagnostic = _response_diagnostic(response, 'validate_risk_credential_verification')
+    logging.getLogger('remask.payment_card').info(
+        'bank verify response profile=%s account=%s kind=%s meta_error_codes=%s',
+        profile, account, diagnostic['bank_response_kind'], diagnostic['meta_error_codes'])
     if not sent or not body or body.get('verified') is not True or not _client_success(body):
-        return {**common, 'status': 'ACTION_REQUIRED', 'code': 'BANK_VERIFICATION_NOT_CONFIRMED',
+        return {**common, **diagnostic, 'status': 'ACTION_REQUIRED', 'code': 'BANK_VERIFICATION_NOT_CONFIRMED',
                 'submitted': sent, 'verification_stage': 'AWAITING_BANK_RESULT'}
     recorded = await BankVerificationLedger(state.path).record_meta_confirmation(
         profile=profile, account=account, payment_account=payment_account,

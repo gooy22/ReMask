@@ -129,7 +129,7 @@ assert.doesNotMatch(sandbox.fundingCell({verification_status:'LINKED',card_linke
   assert.deepEqual(requests.map(r=>r.body.action),['verify','authorize_bank']);
   assert.ok(requests.every(r=>r.body.profile===rows[1].profile&&r.body.account_id===rows[1].id));
   const nativePanel=element();
-  const nativeResult={card_id:'card_'+'a'.repeat(24),bank_page_verified:true,
+  const nativeResult={code:'BANK_AUTH_CHALLENGE_READY',card_id:'card_'+'a'.repeat(24),bank_page_verified:true,
     bank_challenge:{url:'https://www.facebook.com/fixture/bank',params:[{key:'fb_dtsg',value:'ephemeral_fixture'}]}};
   sandbox.paymentBankConfirmationPanel(rows[0],nativeResult,nativePanel);
   assert.equal(nativeResult.bank_challenge,undefined,'bank form must not remain in a result object');
@@ -138,8 +138,41 @@ assert.doesNotMatch(sandbox.fundingCell({verification_status:'LINKED',card_linke
   assert.ok(![...resumeStorage.values(),...resumeLocalStorage.values()].join('').includes('ephemeral_fixture'));
   sandbox.apiJson=async(url,body)=>{requests.push({url,body});return {result:{code:'BANK_CARD_VERIFIED_BY_META'}}};
   requests=[];
-  await nativePanel.children[0].children.find(n=>n.textContent==='Я подтвердил в банке — проверить Meta').handlers.click();
+  await nativePanel.children[0].children.find(n=>n.textContent==='Проверить текущий результат').handlers.click();
   assert.deepEqual(requests.map(r=>r.body.action),['verify_bank'],'completion never initializes another bank request');
+  for(const code of ['BANK_AUTH_RESULT_UNKNOWN','BANK_AUTH_ALREADY_ATTEMPTED',
+                     'BANK_VERIFICATION_NOT_CONFIRMED','BANK_AUTH_READY']){
+    const unknownPanel=element();
+    sandbox.paymentConfirmationPanel(rows[0],{code,status:'ACTION_REQUIRED',
+      card_id:nativeResult.card_id,bank_page_verified:true},unknownPanel);
+    assert.equal(unknownPanel.children.length,1);
+    assert.doesNotMatch(JSON.stringify(unknownPanel.children),/Подтвердите.*банка|Я подтвердил|Проверьте.*банке/,
+      code+' must not imply that a bank request reached the issuer');
+    assert.equal(unknownPanel.children[0].children.filter(n=>n.method==='POST'||n.name?.startsWith('remask_bank_')).length,0);
+    requests=[];
+    await unknownPanel.children[0].children.find(n=>n.textContent==='Проверить текущий результат').handlers.click();
+    assert.deepEqual(requests.map(r=>r.body.action),['verify_bank']);
+  }
+  for(const bad of [{url:'https://issuer.example/',params:[]},
+      {url:'https://www.facebook.com/fixture',params:[{key:'a',value:'1'},{key:'a',value:'2'}]}]){
+    const invalidPanel=element();
+    sandbox.paymentBankConfirmationPanel(rows[0],{...nativeResult,bank_challenge:bad},invalidPanel);
+    assert.match(invalidPanel.children[0].children[0].textContent,/не удалось открыть/);
+    assert.equal(invalidPanel.children[0].children.filter(n=>n.method==='POST'||n.name?.startsWith('remask_bank_')).length,0);
+  }
+  const unloadedPanel=element();
+  sandbox.paymentBankConfirmationPanel(rows[0],{...nativeResult,
+    bank_challenge:{url:'https://www.facebook.com/fixture',params:[]}},unloadedPanel);
+  const unloadedFrame=unloadedPanel.children[0].children.find(n=>n.name?.startsWith('remask_bank_'));
+  unloadedFrame.handlers.error();
+  assert.match(unloadedPanel.children[0].children[0].textContent,/не загрузилось/);
+  assert.doesNotMatch(sandbox.paymentCardBriefMessage({code:'CARD_BANK_CONFIRMATION_REQUIRED'}),/Банк запросил|Требуется подтверждение в банке/);
+  for(const state of ['PENDING_VERIFICATION','UNVERIFIED_OR_PENDING_AUTH']){
+    const pendingOnly=element();
+    sandbox.paymentConfirmationPanel(rows[0],{sdc_usability:state},pendingOnly);
+    assert.match(pendingOnly.children[0].textContent,/Доставка запроса в банк не подтверждена/);
+    assert.doesNotMatch(pendingOnly.children[0].textContent,/временной операции|временную банковскую/);
+  }
   sandbox.apiJson=originalApi;
   requests=[];const verifyPanel=element();
   await sandbox.inspectCardVerificationHTTP(rows,card,verifyPanel);
@@ -267,7 +300,7 @@ assert.doesNotMatch(sandbox.fundingCell({verification_status:'LINKED',card_linke
   const selectedRows=sandbox.selectedRows;sandbox.selectedRows=()=>[rows[0]];
   bindings=[{profile:'Fixture',account_id:'123456789',card_id:card.id,last4:'1111',status:'ACTION_REQUIRED',last_result_code:'CARD_BANK_CONFIRMATION_REQUIRED'}];
   await sandbox.showFunding();elements.paymentCardSelect.value=card.id;
-  assert.ok(elements.paymentCardAssignments.children.at(-1).textContent.includes('Требуется подтверждение в банке'));
+  assert.ok(elements.paymentCardAssignments.children.at(-1).textContent.includes('Meta требует подтверждения карты'));
   requests=[];await elements.paymentCardBind.handlers.click();
   assert.equal(requests.filter(r=>r.body.action==='reconcile').length,1);
   assert.equal(requests.filter(r=>r.body.action==='bind').length,0);

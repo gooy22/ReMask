@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 
 from app.payment_card_bank import (
     INIT_DOC, VERIFY_DOC, bank_page_proof, start_bank_once, verify_bank_result, _challenge,
+    _response_diagnostic,
 )
 from app.payment_card_intents import BankVerificationLedger
 
@@ -79,8 +80,25 @@ class BankCardTests(IsolatedAsyncioTestCase):
         first = await start_bank_once(web, **self.scope, currency='EUR', common=self.common)
         self.assertEqual(first['code'],'BANK_AUTH_RESULT_UNKNOWN')
         self.assertTrue(first['submitted'])
+        self.assertEqual(first['bank_response_kind'], 'MISSING_RESULT')
+        self.assertIsNone(first['verification_triggered'])
         await start_bank_once(web, **self.scope, currency='EUR', common=self.common)
         self.assertEqual(mock.await_count,1)
+
+    def test_unknown_response_diagnostics_distinguish_missing_step_without_secrets(self):
+        field = 'risk_init_credential_verification'
+        cases = [
+            ({'errors':[{'message':'private_token','extensions':{'code':123}}]}, 'GRAPHQL_ERROR'),
+            ({'hasNext':True}, 'INCOMPLETE_RESPONSE'),
+            ({}, 'MISSING_RESULT'),
+            ({'data':{field:{'client_result':{'__typename':'private_token'}}}}, 'CLIENT_RESULT_NOT_SUCCESS'),
+            ({'data':{field:{'client_result':{'__typename':'XFBIBillingClientSuccess'},
+                'authentication_request':{'url':'https://issuer.example/private_token','params':[]}}}}, 'CHALLENGE_UNAVAILABLE')]
+        for response, kind in cases:
+            result = _response_diagnostic(response, field, initializing=True)
+            self.assertEqual(result['bank_response_kind'], kind)
+            self.assertNotIn('private_token', str(result))
+        self.assertEqual(_response_diagnostic(cases[0][0], field)['meta_error_codes'], [123])
 
     async def test_validate_never_initializes_and_only_exact_meta_success_confirms(self):
         web, mock = self.web({'data':{'validate_risk_credential_verification':{

@@ -115,7 +115,7 @@ function paymentCardMessage(result){
     PAYMENT_COUNTRY_LOCKED:'Meta заблокировала поле страны. Можно сохранить текущую страну Meta; карта не отправлена.',
     PAYMENT_FORM_NOT_EXPOSED:'Meta не открыла форму карты.',
     CARD_BILLING_FIELDS_REQUIRED:'Нужны дополнительные реквизиты владельца или платёжного адреса.',
-    CARD_BANK_CONFIRMATION_REQUIRED:'Банк запросил подтверждение. Завершите его в Facebook/банке, затем нажмите «Проверить результат». Не отправляйте карту повторно.',
+    CARD_BANK_CONFIRMATION_REQUIRED:'Meta требует подтверждения карты. Доставка запроса в банк не подтверждена; затем нажмите «Проверить результат». Не отправляйте карту повторно.',
     CARD_VERIFICATION_CARD_REQUIRED:'Выберите карту для подтверждения.',
     CARD_VERIFICATION_CREDENTIAL_UNVERIFIED:'Meta не подтвердила точную карту выбранного РК. Банковский запрос не отправлен.',
     CARD_VERIFICATION_OPTIONS_UNVERIFIED:'Не удалось определить банковское подтверждение для этого РК. Запрос не отправлен.',
@@ -136,13 +136,13 @@ function paymentCardMessage(result){
     SDC_CODE_REJECTED:'Meta не приняла код банковского подтверждения.',
     SDC_CODE_VERIFIED_BY_META:'Meta подтвердила код банковской операции для этой карты.',
     BANK_AUTH_READY:'Доступна проверка через банк или платёжного провайдера.',
-    BANK_AUTH_CHALLENGE_READY:'Meta открыла банковскую проверку. Подтвердите её в приложении банка.',
-    BANK_AUTH_ALREADY_ATTEMPTED:'Банковская проверка уже запускалась. Повторный запрос не отправлен; проверьте результат.',
-    BANK_AUTH_RESULT_UNKNOWN:'Ответ запуска проверки не подтверждён. Повторный запрос заблокирован.',
+    BANK_AUTH_CHALLENGE_READY:'Meta предоставила окно проверки карты. Открываем его; инструкции появятся в самом окне.',
+    BANK_AUTH_ALREADY_ATTEMPTED:'Запрос к Meta уже отправлялся. Доставка в банк не подтверждена. Повторный запрос остановлен; можно проверить текущий результат.',
+    BANK_AUTH_RESULT_UNKNOWN:'После запроса Meta не удалось открыть окно проверки. Доставка запроса в банк не подтверждена. Повторная отправка остановлена.',
     BANK_AUTH_PRECHECK_UNAVAILABLE:'Доступ к Meta не подтверждён до запуска банковской проверки.',
     BANK_PAGE_UNVERIFIED:'Не удалось подтвердить страницу банковской проверки для выбранной карты.',
     META_AUTH_TOKEN_UNAVAILABLE:'Worker не получил данные доступа Meta. Чекпоинт не подтверждён; банковский запрос не отправлен.',
-    BANK_VERIFICATION_NOT_CONFIRMED:'Meta ещё не подтвердила проверку этой карты.',
+    BANK_VERIFICATION_NOT_CONFIRMED:'Meta не подтвердила карту. Доставка запроса в банк не подтверждена.',
     BANK_VERIFY_RESULT_UNKNOWN:'Не удалось получить ответ Meta после банковского подтверждения.',
     BANK_CARD_VERIFIED_BY_META:'Meta подтвердила карту для этого РК.',
     BANK_CONFIRMED_LINK_RECHECK_REQUIRED:'Meta подтвердила банковскую проверку, но повторное чтение привязки ещё не завершено.',
@@ -251,7 +251,7 @@ function paymentCardBriefMessage(result){
     CARD_LINK_OBSERVED:'Карта найдена в РК.',
     CARD_SAVE_RESULT_UNKNOWN:'Результат добавления не получен. Повторная отправка остановлена.',
     CARD_SAVED_CREDENTIAL_UNLINKED:'Карта сохранена, но не прикреплена к РК.',
-    CARD_BANK_CONFIRMATION_REQUIRED:'Карта привязана. Требуется подтверждение в банке.',
+    CARD_BANK_CONFIRMATION_REQUIRED:'Карта привязана. Meta требует подтверждения карты; доставка запроса в банк не подтверждена.',
     SDC_AUTH_READY:'Meta разрешает запрос временного списания.',
     SDC_AUTH_PENDING_WAIT_CODE:'Meta уже ожидает подтверждения временной операции. Новый запрос в банк не отправлен.',
     SDC_AUTH_SENT_WAIT_CODE:'Meta приняла запрос временной операции. Проверьте её в банке.',
@@ -516,36 +516,51 @@ function paymentDescriptorCompletionPanel(row,result,container){
 function paymentBankConfirmationPanel(row,result,container){
   const box=document.createElement('div');box.className='ws-result';
   const hint=document.createElement('div');
-  hint.textContent='Подтвердите проверку в приложении банка, затем проверьте ответ Meta. Сумму показывает банк.';
+  hint.textContent=paymentCardBriefMessage(result);
   box.appendChild(hint);
   const challenge=result.bank_challenge;
   // Ephemeral form values never enter restored batches, localStorage or the
   // card vault. Only the Meta-returned HTTPS Facebook form receives CSRF.
   delete result.bank_challenge;
-  if(challenge&&typeof challenge.url==='string'&&Array.isArray(challenge.params)){
+  if(result.code==='BANK_AUTH_CHALLENGE_READY'&&result.bank_page_verified===true&&
+     challenge&&typeof challenge.url==='string'&&Array.isArray(challenge.params)){
     let url;try{url=new URL(challenge.url);}catch(e){}
-    if(url&&url.protocol==='https:'&&!url.username&&!url.password&&!url.port&&
+    const keys=new Set();
+    const valid=challenge.params.length<=81&&challenge.params.every(p=>{
+      if(!p||typeof p.key!=='string'||!/^[A-Za-z0-9_.-]{1,100}$/.test(p.key)||
+         typeof p.value!=='string'||p.value.length>100000||keys.has(p.key))return false;
+      keys.add(p.key);return true;
+    });
+    if(valid&&url&&url.protocol==='https:'&&!url.username&&!url.password&&!url.port&&!url.hash&&
        (url.hostname==='facebook.com'||url.hostname.endsWith('.facebook.com'))){
+      hint.textContent='Открываем окно проверки Meta. Следуйте инструкциям в нём. Получение уведомления банком пока не подтверждено.';
       const frame=document.createElement('iframe');
       frame.name='remask_bank_'+Math.random().toString(36).slice(2);
       frame.title='Подтверждение карты в банке';
       frame.setAttribute('sandbox','allow-forms allow-same-origin allow-scripts');
       frame.setAttribute('referrerpolicy','no-referrer');
       frame.style.cssText='width:100%;height:520px;border:0;background:white';
+      frame.addEventListener('error',()=>{
+        hint.textContent='Окно проверки не загрузилось. Доставка запроса в банк не подтверждена.';
+      });
       box.appendChild(frame);
       if(challenge.params.length){
         const form=document.createElement('form');form.method='POST';form.action=url.href;form.target=frame.name;
-        let valid=challenge.params.length<=81;
         for(const p of challenge.params){
-          if(!p||typeof p.key!=='string'||!/^[A-Za-z0-9_.-]{1,100}$/.test(p.key)||typeof p.value!=='string'){valid=false;break;}
           const field=document.createElement('input');field.type='hidden';field.name=p.key;field.value=p.value;form.appendChild(field);
         }
-        if(valid){box.appendChild(form);container.appendChild(box);form.submit();form.remove();}
+        box.appendChild(form);container.appendChild(box);
+        try{form.submit();}catch(e){hint.textContent='Окно проверки не открылось. Доставка запроса в банк не подтверждена.';}
+        finally{form.remove();}
       }else frame.src=url.href;
+    }else{
+      hint.textContent='Окно проверки Meta не удалось открыть. Доставка запроса в банк не подтверждена.';
     }
+  }else if(result.code==='BANK_AUTH_CHALLENGE_READY'){
+    hint.textContent='Окно проверки Meta недоступно. Доставка запроса в банк не подтверждена.';
   }
   const check=document.createElement('button');check.type='button';check.className='ws-button';
-  check.textContent='Я подтвердил в банке — проверить Meta';
+  check.textContent='Проверить текущий результат';
   const output=document.createElement('div');
   check.addEventListener('click',async()=>{
     check.disabled=true;
@@ -588,12 +603,10 @@ function paymentConfirmationPanel(row,result,container){
   // different flows. Do not pretend a push was sent or ask for an SDC code
   // before a confirmed bank-authorization outcome.
   let message='';
-  if(state==='PENDING_VERIFICATION'||result.code==='SDC_AUTH_PENDING_WAIT_CODE')
-    message='Meta уже ожидает завершения временной операции по карте. Повторное списание не отправлено.';
+  if(state==='PENDING_VERIFICATION'||state==='UNVERIFIED_OR_PENDING_AUTH')
+    message='Meta требует подтверждения карты. Доставка запроса в банк не подтверждена.';
   else if(result.code==='SDC_AUTH_SENT_WAIT_CODE'&&result.verification_triggered===true)
     message='Meta приняла запрос временной операции. Проверьте её в банке.';
-  else if(state==='UNVERIFIED_OR_PENDING_AUTH'||result.code==='SDC_AUTH_READY')
-    message='Meta требует временную банковскую операцию.';
   else if(result.code==='CARD_VERIFICATION_NO_REQUIRED_TASK')
     message='Дополнительное подтверждение карты Meta не запросила.';
   else if(status==='REQUIRED')
