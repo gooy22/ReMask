@@ -355,7 +355,7 @@ try {
     $key = (string)(getenv('REMASK_WORKER_API_KEY') ?: '');
     if ($key === '') throw new RuntimeException('PAGE_ACCESS_WORKER_UNAVAILABLE');
 
-    // Fetch historical Confirm before starting the expensive live browser probe.
+    // Fetch historical Confirm before the profile-bound HTTP access read.
     $savedCtx=stream_context_create(['http'=>['method'=>'GET',
         'header'=>"Accept: application/json\r\nX-Remask-Worker-Key: ".$key."\r\n",
         'timeout'=>5,'ignore_errors'=>true,'follow_location'=>0]]);
@@ -384,8 +384,8 @@ try {
     if (!isset($proof['account_id'])) $proof['account_id']=$account;
     $proof['page_confirmations']=array_merge($confirmations,(array)($proof['page_confirmations'] ?? []));
 
-    // Payment inspection is expensive and uses the same single Chromium slot.
-    // Run it only when this RK already has at least one live-proven Page.
+    // Payment uses static HTTP reads. Require exact Page readiness before this
+    // combined readiness flow reports payment alongside advertising access.
     $pageReady=false;
     if (($proof['profile_id'] ?? '')===$profile && ($proof['account_id'] ?? '')===$account
         && ($proof['checked_live'] ?? null)===true && ($proof['account_scope_verified'] ?? null)===true
@@ -516,7 +516,7 @@ if (strpos($js,'REMASK_PRIVATE_LAUNCH_CATALOG_V1')===false) {
 file_put_contents($jsPath,$js);
 $phpPath=$root.'/launch.php';
 $php=file_get_contents($phpPath);
-$php=preg_replace('#scripts/launch\\.js(?:\\?[^"\\\']*)?#','scripts/launch.js?v=20261002-private-catalog-v1',$php,1);
+$php=preg_replace('#scripts/launch\\.js(?:\\?[^"\\\']*)?#','scripts/launch.js?v=20261011-private-http-h2',$php,1);
 $php=str_replace('official API, read only','состояние оплаты, read only',$php);
 $php=str_replace('Одна настройка → много FB-профилей и RK. Каждая цель использует свой token, proxy и account-specific assets.',
     'Сохранённые РК и FP доступны без новой синхронизации. Доступ FP для рекламы и привязку карты ещё нужно проверить.',$php);

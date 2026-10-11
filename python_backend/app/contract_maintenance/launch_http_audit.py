@@ -31,12 +31,15 @@ def inspect_saved_sources():
     if not target.is_file() or target.stat().st_size > 20_000_000:
         return
     rows = json.loads(target.read_text()).get("modules", [])
-    relevant = sorted({row["name"] for row in rows if re.search(r"PromotablePage|(?:Create|Publish|Batch).*?(?:API|Api|Mutation)|(?:API|Api).*?(?:Create|Publish|Batch)", row.get("name", ""))})
-    log.info("launch saved public module names=%s", json.dumps(relevant[:160]))
+    relevant = sorted({row["name"] for row in rows if re.search(r"PromotablePage|Create|Publish|(?:Graph|Batch)(?:API|Api)", row.get("name", ""))})
+    for offset in range(0, min(len(relevant), 600), 75):
+        log.info("launch saved public module names=%s", json.dumps(relevant[offset:offset+75]))
     selected = {"AdsPromotablePageListStoreSourceServerQuery.graphql",
         "AdsPromotablePageListStoreSourceLoadedQuery.graphql",
         "AdsPromotablePageListStoreSource", "AdsPromotablePageListStoreSourceServer",
-        "AdsPromotablePageListStoreSourceFragment.graphql"}
+        "AdsPromotablePageListStoreSourceFragment.graphql",
+        "AdsPromotablePageListLoaderGAPI", "AdsPromotablePageListDataManager",
+        "AdsPromotablePageDataProviderPlugin"}
     budget = 60_000
     for row in rows:
         source = row.get("source", "")
