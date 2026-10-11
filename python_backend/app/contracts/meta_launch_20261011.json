@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "revision": "meta-launch-2026-10-11",
+  "steps": {},
+  "pending_evidence": ["CAMPAIGN", "ADSET", "CREATIVE", "AD", "MEDIA_UPLOAD", "ACTIVATION"]
+}

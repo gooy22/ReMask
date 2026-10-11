@@ -34,10 +34,10 @@ if (remaskFundingButton) remaskFundingButton.textContent='Показать со�
 const remaskOriginalLoadFunding=loadFunding;
 loadFunding=async function(force=false) {
     await remaskOriginalLoadFunding(force);
-    $('fundingStatus').textContent='Платёжная привязка считается готовой только после exact live-проверки выбранного РК.';
+    $('fundingStatus').textContent='Оплата считается готовой после проверки выбранного РК в Meta.';
 };
 
-const remaskPrivateLaunchNotice='Private Launch: перед CREATE ReMask проверяет exact BM/RK, доступ выбранной FP, ACTIVE RK, карту и полный серверный mutation contract.';
+const remaskPrivateLaunchNotice='Перед созданием рекламы ReMask проверит настройки, доступ страницы и оплату выбранных РК. Объявления создаются на паузе.';
 let remaskPrivateLaunchBusy=false;
 const remaskPrivateLaunchPendingKey='remask_private_launch_pending_v1';
 const remaskPrivatePaymentSelections={};
@@ -79,7 +79,7 @@ function remaskPrivateRenderPaymentSelector(row,methods){
         block.dataset.paymentKey=key;
         block.className='mb-2';
         const label=document.createElement('label');
-        label.textContent='RK '+row.ad_account_id+' · карта для Launch';
+        label.textContent='РК '+row.ad_account_id+' · карта для рекламы';
         const select=document.createElement('select');
         select.className='form-select';
         select.dataset.paymentSelect='1';
@@ -140,7 +140,7 @@ function remaskPrivateTargetRows(config) {
         ?config.accountOverrides:{};
     return ids.map(rawId=>{
         const accountId=remaskPrivateAccountId(rawId);
-        if(!accountId)throw new Error('Private Launch: invalid RK id.');
+        if(!accountId)throw new Error('Некорректный номер РК.');
         const target=typeof targetForAccount==='function'
             ?(targetForAccount(accountId)||targetForAccount('act_'+accountId)||null):null;
         const option=$('adAccount')?.options
@@ -155,9 +155,9 @@ function remaskPrivateTargetRows(config) {
             (typeof state!=='undefined'?state.profile:'')||'').trim();
         const businessId=String(target?.business_id||account?.business_id||account?.business?.id||'').trim();
         const pageId=String(binding?.page_id||'').trim();
-        if(!profile)throw new Error('Private Launch: Facebook profile is missing for RK '+accountId+'.');
-        if(!/^\d{5,30}$/.test(businessId))throw new Error('Private Launch: BM is missing for RK '+accountId+'.');
-        if(!/^\d{5,30}$/.test(pageId))throw new Error('Private Launch: select a Page for RK '+accountId+'.');
+        if(!profile)throw new Error('Для РК не выбран профиль Facebook: '+accountId+'.');
+        if(!/^\d{5,30}$/.test(businessId))throw new Error('Для РК не указан BM: '+accountId+'.');
+        if(!/^\d{5,30}$/.test(pageId))throw new Error('Выберите страницу для РК '+accountId+'.');
         const selectedPaymentMethod=remaskPrivateSelectedPayment(
             profile,accountId
         );
@@ -209,21 +209,73 @@ async function remaskPrivateContractStatus({render=true}={}) {
         return {
             step,
             configured:row.configured===true,
+            active:row.active===true,
+            verification_configured:row.verification_configured===true,
             code:String(row.code||''),
             message:String(row.message||''),
             friendly_name:String(row.friendly_name||'')
         };
     });
-    const missing=rows.filter(row=>!row.configured);
+    const missing=rows.filter(row=>!row.configured||!row.active||!row.verification_configured);
     if(render){
         remaskPrivateShow(
-            'Private Launch contracts · '+
-            rows.map(row=>row.step+' '+(row.configured?'READY':'MISSING')).join(' · ')+
-            (missing.length?' · запуск заблокирован до полного комплекта':''),
+            missing.length?'Создание рекламы пока недоступно: серверный модуль публикации не готов.':
+                'Модуль публикации готов. Проверяю настройки рекламы…',
             missing.length?'failed':'ready'
         );
     }
     return {rows,missing,ready:missing.length===0};
+}
+
+const remaskPrivateStagedFiles=new WeakMap();
+async function remaskPrivateStageFile(file) {
+    if(remaskPrivateStagedFiles.has(file))return remaskPrivateStagedFiles.get(file);
+    const pending=(async()=>{
+        const form=new FormData();
+        form.append('action','private_launch_media');
+        form.append('media',file,file.name);
+        const response=await fetch('ajax/pythonWorkerJobs.php',{
+            method:'POST',credentials:'same-origin',body:form
+        });
+        const data=await response.json();
+        if(!response.ok||data.ok!==true||!/^m-[a-f0-9]{24}$/.test(data.media?.id||'')
+            ||!/^[a-f0-9]{64}$/.test(data.media?.sha256||''))
+            throw new Error(data.error||'Не удалось сохранить медиа.');
+        return data.media;
+    })();
+    remaskPrivateStagedFiles.set(file,pending);
+    try{return await pending;}catch(error){remaskPrivateStagedFiles.delete(file);throw error;}
+}
+async function remaskPrivatePrepareConfig() {
+    // Snapshot before awaiting: Review and Job must describe the same form.
+    const config=JSON.parse(JSON.stringify(currentLaunchConfigForRequest()));
+    const creative=config.payload.creative||(config.payload.creative={});
+    const format=typeof creativeFormat==='function'?creativeFormat():'SINGLE';
+    const preset=typeof remaskSelectedCreativePreset!=='undefined'?remaskSelectedCreativePreset:null;
+    const selected=typeof state!=='undefined'?state.pendingWorkspaceMedia:null;
+    const files=format==='CAROUSEL'&&typeof carouselFiles==='function'?carouselFiles():
+        (format==='SINGLE'?Array.from($('media')?.files||[]).slice(0,1):[]);
+    creative.format=format;
+    if(format==='CAROUSEL'){
+        const cards=typeof carouselCardsPayload==='function'?carouselCardsPayload():[];
+        const saved=preset?.format==='CAROUSEL'?preset.carousel||[]:[];
+        if(cards.length<2||cards.length>10||cards.length!==(saved.length||files.length))
+            throw new Error('Карусель требует от 2 до 10 подготовленных карточек.');
+        creative.carousel_cards=JSON.parse(JSON.stringify(cards));
+        if(saved.length)creative.carousel_media_library_ids=saved.map(card=>String(card.media_library_id||''));
+    }else if(format==='SINGLE'){
+        if(!files.length&&preset?.format==='SINGLE'&&preset.media_library_id)
+            creative.media_library_id=String(preset.media_library_id);
+        if(!files.length&&selected){
+            const account=remaskPrivateAccountId(selected.account_id);
+            if(account&&config.accountIds.some(id=>remaskPrivateAccountId(id)!==account))
+                throw new Error('Выбранное медиа относится к другому РК. Выберите медиа для каждого РК.');
+            const key={image_hash:'existing_image_hash',video_id:'existing_video_id',creative_id:'existing_creative_id'}[selected.type];
+            if(key)creative[key]=String(selected[selected.type]||'');
+        }
+    }
+    if(files.length)creative.staged_media=await Promise.all(files.map(remaskPrivateStageFile));
+    return config;
 }
 
 function remaskPrivateShow(text,kind='') {
@@ -266,13 +318,13 @@ async function remaskPrivateReviewConfig(config,{render=true}={}) {
     const contractStatus=await remaskPrivateContractStatus({render});
     if(!contractStatus.ready){
         const missing=contractStatus.missing.map(row=>row.step).join(', ');
-        throw new Error('Private Launch contracts missing: '+missing+'.');
+        throw new Error('Модуль публикации не готов ('+missing+').');
     }
     const rows=remaskPrivateTargetRows(config);
     const results=[];
     for(let index=0;index<rows.length;index++){
         const row=rows[index];
-        if(render)remaskPrivateShow('Private Launch Review '+(index+1)+'/'+rows.length+' · RK '+row.ad_account_id+'…');
+        if(render)remaskPrivateShow('Проверка рекламы '+(index+1)+'/'+rows.length+' · РК '+row.ad_account_id+'…');
         const response=await remaskPrivateWorker({
             action:'private_launch_review',
             profile_id:row.profile,
@@ -295,12 +347,12 @@ async function remaskPrivateReviewConfig(config,{render=true}={}) {
                 preflight.payment_methods||[]
             );
             throw new Error(
-                'Private Launch: выберите карту для RK '+
-                row.ad_account_id+' и повторите Review.'
+                'Выберите карту для РК '+
+                row.ad_account_id+' и повторите проверку.'
             );
         }
         if(review.ready!==true)throw new Error(
-            'Private Launch Review did not confirm RK '+
+            'Проверка не подтвердила готовность РК '+
             row.ad_account_id+'.'
         );
         const selected=preflight.selected_payment_method;
@@ -319,8 +371,8 @@ async function remaskPrivateReviewConfig(config,{render=true}={}) {
         results.push({row,review});
     }
     if(render)remaskPrivateShow(
-        'Private Launch Review READY: '+results.length+'/'+rows.length+
-        ' RK · exact Page access + ACTIVE RK + linked card + 4 private mutation contracts.',
+        'Настройки проверены: '+results.length+'/'+rows.length+
+        ' РК. Реклама будет создана на паузе.',
         'ready'
     );
     return results;
@@ -329,10 +381,10 @@ async function remaskPrivateReviewOnly() {
     if(remaskPrivateLaunchBusy)return null;
     remaskPrivateLaunchBusy=true;validateReady();
     try{
-        const config=currentLaunchConfigForRequest();
+        const config=await remaskPrivatePrepareConfig();
         return await remaskPrivateReviewConfig(config,{render:true});
     }catch(error){
-        remaskPrivateShow('Private Launch blocked: '+String(error?.message||error),'failed');
+        remaskPrivateShow('Создание рекламы недоступно: '+String(error?.message||error),'failed');
         return null;
     }finally{
         remaskPrivateLaunchBusy=false;validateReady();
@@ -385,7 +437,7 @@ async function remaskPrivatePollJob(jobId) {
             const done=Number(job.items_done||job.items_completed||0);
             const total=Number(job.items_total||0);
             remaskPrivateShow(
-                'Private Launch Job '+jobId+' · '+String(job.status||'RUNNING')+
+                'Задача '+jobId+' · '+String(job.status||'RUNNING')+
                 (total?' · '+done+'/'+total:'')
             );
             if(['SUCCESS','FAILED','PARTIAL'].includes(String(job.status||'').toUpperCase())){
@@ -400,24 +452,23 @@ async function remaskPrivateCreateJob() {
     if(remaskPrivateLaunchBusy)return null;
     remaskPrivateLaunchBusy=true;validateReady();
     try{
-        const config=currentLaunchConfigForRequest();
+        const config=await remaskPrivatePrepareConfig();
         const reviewed=await remaskPrivateReviewConfig(config,{render:true});
         if(!reviewed?.length)return null;
         const planned=remaskPrivateJobRequest(config,reviewed);
         remaskPrivateShow((planned.reused?'Повторяю сохранённую отправку':'Создаю')+
-            ' Private Launch Job для '+reviewed.length+' RK…');
+            ' задачу для '+reviewed.length+' РК…');
         const accepted=await remaskPrivateWorker(planned.request);
         const jobId=String(accepted?.job?.job_id||'').trim();
-        if(!jobId)throw new Error('Worker did not return job_id.');
+        if(!jobId)throw new Error('Сервер не вернул номер задачи.');
         remaskPrivateShow(
-            'Private Launch Job принят: '+jobId+' · '+reviewed.length+
-            ' RK. Idempotency request сохраняется до terminal SUCCESS.'
+            'Задача принята: '+jobId+' · '+reviewed.length+' РК. Результаты доступны в Jobs.'
         );
         remaskPrivatePollJob(jobId);
         return accepted;
     }catch(error){
-        remaskPrivateShow('Private Launch blocked: '+String(error?.message||error)+
-            '. Если ответ Job потерян, следующий клик использует тот же idempotency key.','failed');
+        remaskPrivateShow('Создание рекламы недоступно: '+String(error?.message||error)+
+            '. При потере ответа повторная отправка использует сохранённую задачу.','failed');
         return null;
     }finally{
         remaskPrivateLaunchBusy=false;validateReady();
@@ -434,7 +485,7 @@ validateReady=function() {
         button.disabled=!structurallyReady||remaskPrivateLaunchBusy||
             (typeof state!=='undefined'&&state.processingJob===true);
         button.title=structurallyReady?remaskPrivateLaunchNotice:
-            'Private Launch: выберите RK и Page и заполните обязательные параметры объявления.';
+            'Выберите РК и страницу и заполните обязательные параметры объявления.';
     }
 };
 validateReady();

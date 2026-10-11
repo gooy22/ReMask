@@ -51,7 +51,8 @@ function rmx_pwj_input(): array {
         }
         return $input;
     }
-    $raw = (string)file_get_contents('php://input');
+    $raw = str_contains(strtolower((string)($_SERVER['CONTENT_TYPE'] ?? '')), 'application/json')
+        ? (string)file_get_contents('php://input') : '';
     if ($raw !== '') {
         $json = json_decode($raw, true);
         if (is_array($json)) $input = array_replace($input, $json);
@@ -270,6 +271,9 @@ try {
                 : [];
             $safe[$step] = [
                 'configured' => (($row['configured'] ?? false) === true),
+                'active' => (($row['active'] ?? false) === true),
+                'verification_configured' => (($row['verification_configured'] ?? false) === true),
+                'verification_code' => trim((string)($row['verification_code'] ?? '')),
                 'code' => trim((string)($row['code'] ?? '')),
                 'message' => trim((string)($row['message'] ?? '')),
                 'friendly_name' => trim((string)($row['friendly_name'] ?? '')),
@@ -283,6 +287,22 @@ try {
     if ($action === 'private_launch_sources') {
         $result = rmx_pwj_worker_request('GET', '/api/v1/private-launch/maintenance-candidate');
         rmx_pwj_out($result);
+    }
+
+    if ($action === 'private_launch_media') {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') rmx_pwj_out(['ok'=>false,'error'=>'POST_REQUIRED'], 405);
+        require_once __DIR__ . '/../classes/MediaLibraryStoreFactory.php';
+        $library = MediaLibraryStoreFactory::create(REMASK_MEDIA_LIBRARY_DIR, REMASK_MEDIA_LIBRARY_MAX_BYTES);
+        $upload = $_FILES['media'] ?? null;
+        if (!is_array($upload) || ($upload['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK
+            || !is_uploaded_file((string)($upload['tmp_name'] ?? ''))) {
+            rmx_pwj_out(['ok'=>false,'error'=>'PRIVATE_LAUNCH_MEDIA_UPLOAD_INVALID'], 400);
+        }
+        $record = $library->add($upload['tmp_name'], (string)($upload['name'] ?? 'media'));
+        // Reuse the durable content-addressed library. Never expose a path or
+        // treat a local library ID as a Meta image hash/video ID.
+        rmx_pwj_out(['ok'=>true,'media'=>array_intersect_key($record,
+            array_flip(['id','sha256','size_bytes','media_type','mime_type']))]);
     }
 
     if ($action === 'private_launch_review') {
@@ -323,15 +343,28 @@ try {
         };
         $walk($launch);
 
+        $reviewPayload = [
+            'business_id'=>$businessId,
+            'ad_account_id'=>$accountId,
+            'page_id'=>$pageId,
+            'launch'=>$launch,
+        ];
+        if (isset($input['selected_payment_method'])) {
+            $selector = $input['selected_payment_method'];
+            if (!is_array($selector) || array_diff(array_keys($selector), ['type','brand','last4'])
+                || !preg_match('/^\d{4}$/D', (string)($selector['last4'] ?? ''))) {
+                rmx_pwj_out(['ok'=>false,'error'=>'PRIVATE_LAUNCH_PAYMENT_SELECTION_INVALID'], 400);
+            }
+            $brand = trim((string)($selector['brand'] ?? $selector['type'] ?? ''));
+            if ($brand !== '' && !preg_match('/^[A-Za-z][A-Za-z .+-]{0,39}$/D', $brand)) {
+                rmx_pwj_out(['ok'=>false,'error'=>'PRIVATE_LAUNCH_PAYMENT_SELECTION_INVALID'], 400);
+            }
+            $reviewPayload['selected_payment_method'] = ['type'=>$brand,'last4'=>(string)$selector['last4']];
+        }
         $review = rmx_pwj_worker_request(
             'POST',
             '/api/v1/profiles/' . rawurlencode($profileId) . '/private-launch-review',
-            [
-                'business_id'=>$businessId,
-                'ad_account_id'=>$accountId,
-                'page_id'=>$pageId,
-                'launch'=>$launch,
-            ],
+            $reviewPayload,
             180
         );
         rmx_pwj_out(['ok'=>true,'review'=>$review]);

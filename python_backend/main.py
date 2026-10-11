@@ -3572,13 +3572,15 @@ async def private_launch_maintenance_candidate():
 
 @app.post('/api/v1/private-launch/contracts/{step_name}',dependencies=[Depends(require_key)])
 async def private_launch_contract_register(step_name: str, payload: dict = Body(...)):
-    from app.private_launch import PrivateLaunchStep
+    from app.private_launch import PrivateLaunchStep, PrivateLaunchContractStore
     try:
         step=PrivateLaunchStep(str(step_name or '').strip().upper())
     except ValueError as exc:
         raise HTTPException(status_code=404,detail='unsupported private Launch step') from exc
     try:
-        contract=pool.private_launch.contracts.register(step,payload)
+        # Maintenance candidates are not the deployed advertising manifest.
+        store = PrivateLaunchContractStore()
+        contract=store.register(step,payload)
     except ProvisioningError as exc:
         raise HTTPException(
             status_code=422,
@@ -3587,6 +3589,8 @@ async def private_launch_contract_register(step_name: str, payload: dict = Body(
     return {
         'ok':True,
         'step':step.value,
+        'scope':'maintenance_candidate_only',
+        'installed':False,
         'contract':{
             'configured':True,
             'friendly_name':contract.friendly_name,
