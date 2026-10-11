@@ -176,7 +176,7 @@ assert.doesNotMatch(sandbox.fundingCell({verification_status:'LINKED',card_linke
   const selectedRows=sandbox.selectedRows;sandbox.selectedRows=()=>[rows[0]];
   bindings=[{profile:'Fixture',account_id:'123456789',card_id:card.id,last4:'1111',status:'ACTION_REQUIRED',last_result_code:'CARD_BANK_CONFIRMATION_REQUIRED'}];
   await sandbox.showFunding();elements.paymentCardSelect.value=card.id;
-  assert.ok(elements.paymentCardAssignments.children.at(-1).textContent.includes('затем нажмите «Проверить результат»'));
+  assert.ok(elements.paymentCardAssignments.children.at(-1).textContent.includes('Требуется подтверждение в банке'));
   requests=[];await elements.paymentCardBind.handlers.click();
   assert.equal(requests.filter(r=>r.body.action==='reconcile').length,1);
   assert.equal(requests.filter(r=>r.body.action==='bind').length,0);
