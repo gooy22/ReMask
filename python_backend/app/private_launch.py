@@ -1950,7 +1950,9 @@ class PrivateLaunchService:
             raise ProvisioningError("PRIVATE_LAUNCH_RECONCILE_REQUIRED",
                 "Created object state changed while its independent READ was in progress", retryable=False)
         if result.verified is not True:
-            raise ProvisioningError(result.code, result.message, retryable=False)
+            retry_read = _resumable_read({**prior, "status": result.status.value,
+                "error_code": result.code, "result": result.as_dict()}, contract.step)
+            raise ProvisioningError(result.code, result.message, retryable=retry_read)
         return result
 
     @staticmethod

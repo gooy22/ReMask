@@ -9,6 +9,8 @@ from unittest.mock import AsyncMock, patch
 
 from app.private_launch import PrivateLaunchService, PrivateLaunchContractStore, PrivateLaunchStep, _resumable_read
 from app.action_result import ActionResult
+from app.models import CreateJobRequest
+from app.store import JobStore
 from app.private_launch_verify import proof, validate_contract
 from app.provisioning.models import ProvisioningError
 from app.provisioning.state import ProvisioningStateStore
@@ -69,6 +71,7 @@ class IndependentLaunchReadTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ProvisioningError) as caught:
             await self.run_launch()
         self.assertEqual(caught.exception.code, "PRIVATE_LAUNCH_CAMPAIGN_READ_UNCONFIRMED")
+        self.assertFalse(caught.exception.retryable)
         self.assertEqual(self.web.graphql.await_count, 2)
         saved = await self.service.state.step("verification-fixture", PrivateLaunchStep.CAMPAIGN)
         self.assertEqual(saved["status"], "RECONCILE_REQUIRED")
@@ -89,8 +92,9 @@ class IndependentLaunchReadTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_temporary_read_failure_resumes_query_without_recreating_campaign(self):
         self.web.graphql.side_effect = [responses()[0], TimeoutError()]
-        with self.assertRaises(ProvisioningError):
+        with self.assertRaises(ProvisioningError) as caught:
             await self.run_launch()
+        self.assertTrue(caught.exception.retryable)
         saved = await self.service.state.step("verification-fixture", PrivateLaunchStep.CAMPAIGN)
         self.assertEqual(saved["result"]["entity_id"], IDS[0])
         self.web.graphql.reset_mock()
@@ -102,6 +106,32 @@ class IndependentLaunchReadTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.web.graphql.await_args_list[0].args, ("900001", {"id": IDS[0]}))
         self.assertEqual(len([call for call in self.web.graphql.await_args_list
                               if call.args[0] == contracts()["CAMPAIGN"]["doc_id"]]), 0)
+
+    async def test_retry_failed_job_preserves_launch_key_and_requeues_only_read_recovery(self):
+        store = JobStore(self.service.state.path)
+        await store.init()
+        await ProvisioningStateStore(self.service.state.path).init()
+        job, _ = await store.create_job(CreateJobRequest(profiles=[{"profile_id": "fixture", "tasks": [{
+            "action": "private_launch", "payload": self.payload, "idempotency_key": "same-task"}]}]))
+        item, = await store.queued_item_ids(job)
+        task, = await store.tasks(item)
+        self.web.graphql.side_effect = [responses()[0], TimeoutError()]
+        with self.assertRaises(ProvisioningError) as caught:
+            await self.run_launch()
+        await store.set_task_failed(task["id"], caught.exception.code, str(caught.exception),
+                                    retryable=caught.exception.retryable)
+        await store.finalize_item(item)
+        self.assertTrue((await store.job_view(job))["items"][0]["retryable"])
+        self.assertEqual(await store.retry_failed(job), 1)
+        queued, = await store.tasks(item)
+        self.assertEqual(queued["idempotency_key"], "same-task")
+        self.assertEqual(queued["payload"]["launch_key"], self.payload["launch_key"])
+        self.payload = queued["payload"]
+        self.web.graphql.reset_mock()
+        self.web.graphql.side_effect = responses()[1:]
+        result = await self.run_launch()
+        self.assertTrue(result["steps"][0]["read_resumed"])
+        self.assertEqual(self.web.graphql.await_count, 7)
 
     async def test_changed_configuration_cannot_resume_known_created_id(self):
         self.web.graphql.side_effect = [responses()[0], TimeoutError()]

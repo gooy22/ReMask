@@ -134,3 +134,9 @@ publishing sender, providers and AdsGraphAPI from the snapshot. Candidate
 collection now also follows lowercase ads publication components, XAds
 controllers and explicitly selected generic transport helpers. Source loading
 still uses literal observed URLs and factories, and never executes JavaScript.
+
+Temporary READ failures also expose retryable=true at the Job boundary. The
+existing Retry Failed action preserves the task idempotency key and Launch key;
+the resumed step sends only its pinned READ. Foreign-object proof failures
+retain retryable=false. A JobStore integration fixture covers the entire
+failure, retry, unchanged-key and query-only recovery path.
