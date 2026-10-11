@@ -29,6 +29,7 @@ def contracts():
                 "input": {
                     "account_id": "{{ad_account_id}}",
                     "name": "{{payload.campaign.name}}",
+                    "status": "{{payload.campaign.status}}",
                 }
             },
             "result_id_paths": ["data.create.id"],
@@ -40,6 +41,7 @@ def contracts():
                 "input": {
                     "campaign_id": "{{campaign_id}}",
                     "name": "{{payload.adset.name}}",
+                    "status": "{{payload.adset.status}}",
                 }
             },
             "result_id_paths": ["data.create.id"],
@@ -64,6 +66,7 @@ def contracts():
                     "adset_id": "{{adset_id}}",
                     "creative_id": "{{creative_id}}",
                     "name": "{{payload.ad.name}}",
+                    "status": "{{payload.ad.status}}",
                 }
             },
             "result_id_paths": ["data.create.id"],
@@ -482,6 +485,8 @@ class PrivateLaunchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(adset_vars["input"]["campaign_id"], "500000000000001")
         self.assertEqual(ad_vars["input"]["adset_id"], "500000000000002")
         self.assertEqual(ad_vars["input"]["creative_id"], "500000000000003")
+        self.assertTrue(all(self.web.graphql.await_args_list[index].args[1]["input"]["status"] == "PAUSED"
+                            for index in (0, 1, 3)))
 
         self.web.graphql.reset_mock()
         with patch.object(self.service, "_live_preflight", AsyncMock(return_value=self.preflight)):
@@ -495,6 +500,40 @@ class PrivateLaunchTests(unittest.IsolatedAsyncioTestCase):
             )
         self.web.graphql.assert_not_awaited()
         self.assertTrue(all(step["skipped"] for step in rerun["steps"]))
+
+        # The same idempotency key must never splice a changed creative/Page
+        # into an already created campaign, even when the BM/RK is unchanged.
+        for changed in ({**self.payload, "page_id": "1289628847574499"},
+                        {**self.payload, "launch": {**self.payload["launch"], "creative": {"name": "Another creative"}}}):
+            with self.assertRaises(ProvisioningError) as caught:
+                await self.service.run(item_id="changed", profile_id="7", context=self.context,
+                                       session=self.session, payload=changed)
+            self.assertEqual(caught.exception.code, "PRIVATE_LAUNCH_KEY_PAYLOAD_MISMATCH")
+        self.web.graphql.assert_not_awaited()
+
+    async def test_active_or_missing_outgoing_status_stops_before_any_meta_request(self):
+        import copy
+        for step in ("CAMPAIGN", "ADSET", "AD"):
+            for status in (None, "ACTIVE"):
+                cfg = contracts()
+                if status is None:
+                    cfg[step]["variables"]["input"].pop("status")
+                else:
+                    cfg[step]["variables"]["input"]["status"] = status
+                service = PrivateLaunchService(self.state, contracts=PrivateLaunchContractStore(__import__("json").dumps(cfg)))
+                probe = AsyncMock(return_value=self.preflight)
+                with patch.object(service, "_live_preflight", probe), self.assertRaises(ProvisioningError) as caught:
+                    await service.run(item_id="unsafe", profile_id="7", context=self.context,
+                                      session=self.session, payload=self.payload)
+                self.assertEqual(caught.exception.code, "PRIVATE_LAUNCH_PAUSED_CONTRACT_REQUIRED")
+                probe.assert_not_awaited()
+        active = copy.deepcopy(self.payload)
+        active["launch"]["ad"]["status"] = "ACTIVE"
+        with self.assertRaises(ProvisioningError) as caught:
+            await self.service.run(item_id="unsafe", profile_id="7", context=self.context,
+                                   session=self.session, payload=active)
+        self.assertEqual(caught.exception.code, "PRIVATE_LAUNCH_PAUSED_REQUIRED")
+        self.web.graphql.assert_not_awaited()
 
     async def test_first_live_response_promotes_auto_result_path(self):
         cfg = contracts()

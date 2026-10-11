@@ -109,17 +109,24 @@ async def collect_sources(web, *, account, business):
     direct = [url for url in _script_urls(document, final, limit=40) if public_script_url(url)]
     deferred = deferred_script_urls(document)
     urls = list(dict.fromkeys(deferred + direct))[:80]
-    async with asyncio.timeout(75):
-        await asyncio.gather(*(read(url) for url in urls))
+    timed_out = False
+    try:
+        async with asyncio.timeout(75):
+            await asyncio.gather(*(read(url) for url in urls))
+    except TimeoutError:
+        timed_out = True
     root = Path(os.getenv("REMASK_DATA_DIR") or "/var/lib/remask") / "maintenance"
     root.mkdir(parents=True, exist_ok=True)
     target = root / "ads-public-modules-candidate.json"
     temporary = target.with_suffix(".tmp")
+    if not modules:
+        return {"code": "ADS_SOURCE_NO_MODULES", "scripts": len(urls), "modules": 0, "timed_out": timed_out}
     temporary.write_text(json.dumps({"scope": "candidate_only_not_installed",
         "modules": list(modules.values()), "deferred_scripts_observed": len(deferred)}, ensure_ascii=False))
     temporary.replace(target)
     return {"code": "ADS_SOURCE_CANDIDATE_SAVED", "scripts": len(urls), "modules": len(modules),
             "deferred_scripts_observed": len(deferred), "downloaded_bytes": downloaded,
+            "timed_out": timed_out,
             "operation_modules": sorted({row["name"] for row in modules.values()
                 if row["name"].endswith((".graphql", "_facebookRelayOperation"))})[:100]}
 

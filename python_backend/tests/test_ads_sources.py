@@ -35,6 +35,8 @@ class AdsSourceTests(unittest.TestCase):
         row, = module_records(source)
         self.assertEqual(row["dependencies"], ["cr:20373", "AdsGraphAPI"])
         self.assertEqual(row["module_source"], source)
+        wrapped = source.replace("function(a,b,c,d,e,f){f.publish=c(\"AdsGraphAPI\");}", "(function(a,b,c,d,e,f){f.publish=c(\"AdsGraphAPI\");})")
+        self.assertEqual(next(module_records(wrapped))["module_source"], wrapped)
         self.assertFalse(list(module_records(source.replace('["cr:20373","AdsGraphAPI"]', '[dynamic]'))))
 
     def test_saved_export_is_exact_bounded_and_never_includes_inline_auth(self):
@@ -59,6 +61,9 @@ class AdsSourceTransportTests(unittest.IsolatedAsyncioTestCase):
         document = '<script src="https://static.xx.fbcdn.net/a.js"></script><script src="https://evil.test/b.js"></script>'
         for final, expected in (("https://static.xx.fbcdn.net/a.js", 1), ("https://evil.test/a.js", 0)):
             with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, {"REMASK_DATA_DIR": temporary}):
+                root = Path(temporary)/"maintenance"; root.mkdir()
+                target = root/"ads-public-modules-candidate.json"
+                target.write_text(json.dumps({"scope": "candidate_only_not_installed", "modules": [{"name": "AdsPrevious"}]}))
                 web = SimpleNamespace(fetch_text=AsyncMock(side_effect=[
                     (200, document, "https://adsmanager.facebook.com/adsmanager/manage/campaigns"),
                     (200, source, final)]), graphql=AsyncMock())
@@ -67,8 +72,10 @@ class AdsSourceTransportTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result["scripts"], 1)
                 self.assertEqual(web.fetch_text.await_count, 2)
                 web.graphql.assert_not_awaited()
-                saved = json.loads((Path(temporary)/"maintenance"/"ads-public-modules-candidate.json").read_text())
+                saved = json.loads(target.read_text())
                 self.assertEqual(saved["scope"], "candidate_only_not_installed")
+                if not expected:
+                    self.assertEqual(saved["modules"], [{"name": "AdsPrevious"}])
 
 
 if __name__ == "__main__":

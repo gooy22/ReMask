@@ -919,16 +919,50 @@ def _effective_launch_payload(value: Any) -> dict[str, Any]:
             retryable=False,
         )
     if "base" not in value and "override" not in value:
-        return dict(value)
-    base = value.get("base") or {}
-    override = value.get("override") or {}
-    if not isinstance(base, dict) or not isinstance(override, dict):
-        raise ProvisioningError(
-            "PRIVATE_LAUNCH_INVALID_INPUT",
-            "launch.base and launch.override must be objects",
-            retryable=False,
-        )
-    return _deep_merge(base, override)
+        effective = dict(value)
+    else:
+        base = value.get("base") or {}
+        override = value.get("override") or {}
+        if not isinstance(base, dict) or not isinstance(override, dict):
+            raise ProvisioningError(
+                "PRIVATE_LAUNCH_INVALID_INPUT",
+                "launch.base and launch.override must be objects",
+                retryable=False,
+            )
+        effective = _deep_merge(base, override)
+    for section in ("campaign", "adset", "ad"):
+        row = effective.get(section)
+        if not isinstance(row, dict):
+            raise ProvisioningError("PRIVATE_LAUNCH_INVALID_INPUT", f"launch.{section} must be an object", retryable=False)
+        if row.get("status", "PAUSED") != "PAUSED":
+            raise ProvisioningError("PRIVATE_LAUNCH_PAUSED_REQUIRED", "Initial Launch only supports PAUSED advertising", retryable=False)
+        effective[section] = {**row, "status": "PAUSED"}
+    return effective
+
+
+def _require_paused_contract(contract: MutationContract) -> None:
+    """The outgoing template must carry the initial state, not only the UI."""
+    if contract.step == PrivateLaunchStep.CREATIVE:
+        return
+    expected = "{{payload." + contract.step.value.lower() + ".status}}"
+    statuses = []
+    pending = [contract.variables]
+    while pending:
+        value = pending.pop()
+        if isinstance(value, dict):
+            statuses.extend(child for key, child in value.items() if key == "status")
+            pending.extend(child for child in value.values() if isinstance(child, (dict, list)))
+        elif isinstance(value, list):
+            pending.extend(value)
+    if not statuses or any(value not in ("PAUSED", expected) for value in statuses):
+        raise ProvisioningError("PRIVATE_LAUNCH_PAUSED_CONTRACT_REQUIRED",
+            f"{contract.step.value} request template must explicitly transmit PAUSED status", retryable=False)
+
+
+def _launch_fingerprint(payload: dict[str, Any], page_id: str) -> str:
+    canonical = json.dumps({"launch": _effective_launch_payload(payload.get("launch")), "page_id": page_id,
+                            "payment": _payment_selector(payload)}, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 def _payment_selector(payload: dict[str, Any]) -> dict[str, str] | None:
@@ -1356,6 +1390,8 @@ class PrivateLaunchService:
         # request. A missing downstream contract must never leave an orphaned
         # Campaign or Ad Set behind.
         contracts = {step: self.contracts.get(step) for step in STEP_ORDER}
+        for contract in contracts.values():
+            _require_paused_contract(contract)
         preflight = await self._review_preflight(
             context=context,
             profile_id=profile_id,
@@ -1455,6 +1491,12 @@ class PrivateLaunchService:
                     f"{step.value} has a durable {previous_status} result; automatic resubmit is blocked",
                     retryable=False,
                 )
+        fingerprint = _launch_fingerprint(payload, page_id)
+        for prior in prior_by_step.values():
+            if prior and str(prior.get("status") or "").upper() == "SUCCESS" and prior.get("result", {}).get("evidence", {}).get("launch_fingerprint") != fingerprint:
+                raise ProvisioningError("PRIVATE_LAUNCH_KEY_PAYLOAD_MISMATCH",
+                    "Saved Launch is bound to another configuration or lacks an immutable configuration proof; resubmission is blocked",
+                    retryable=False)
 
         review = await self.review(
             profile_id=profile_id,
@@ -1568,6 +1610,7 @@ class PrivateLaunchService:
                 message=f"{step.value} mutation crossed the durable submit checkpoint",
                 submitted=None,
                 evidence={
+                    "launch_fingerprint": fingerprint,
                     "friendly_name": contract.friendly_name,
                     "variable_keys": sorted(str(key) for key in variables.keys())[:40],
                 },
@@ -1786,6 +1829,7 @@ class PrivateLaunchService:
                 entity_id=entity_id,
                 code=f"PRIVATE_LAUNCH_{step.value}_CONFIRMED",
                 evidence={
+                    "launch_fingerprint": fingerprint,
                     **_response_summary(response),
                     "response_path": response_path,
                     "friendly_name": contract.friendly_name,

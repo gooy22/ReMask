@@ -77,6 +77,8 @@ def module_records(source):
         if function is None or function.text != b"__d" or args is None or len(args.named_children) < 3:
             continue
         name, dependencies, body = args.named_children[:3]
+        while body.type == "parenthesized_expression" and len(body.named_children) == 1:
+            body = body.named_children[0]
         if dependencies.type != "array" or body.type != "function_expression" or body.has_error:
             continue
         try:
