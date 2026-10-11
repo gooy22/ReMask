@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 
 from app.payment_card_bank import (
     INIT_DOC, VERIFY_DOC, bank_page_proof, start_bank_once, verify_bank_result, _challenge,
-    _response_diagnostic,
+    _response_diagnostic, _client_success,
 )
 from app.payment_card_intents import BankVerificationLedger
 
@@ -100,6 +100,26 @@ class BankCardTests(IsolatedAsyncioTestCase):
             self.assertNotIn('private_token', str(result))
         self.assertEqual(_response_diagnostic(cases[0][0], field)['meta_error_codes'], [123])
 
+    async def test_relay_abstract_success_discriminator_accepts_concrete_subtype(self):
+        # The observed init/verify operation uses an abstract InlineFragment:
+        # type XFBIBillingClientSuccess, abstractKey __isXFBIBillingClientSuccess.
+        client = {'__typename':'ConcreteSuccessFixture',
+                  '__isXFBIBillingClientSuccess':'ConcreteSuccessFixture'}
+        self.assertTrue(_client_success({'client_result':client}))
+        self.assertFalse(_client_success({'client_result':{'__typename':'ConcreteSuccessFixture'}}))
+        self.assertFalse(_client_success({'client_result':{**client,
+            '__isXFBIBillingClientSuccess':'ForeignTypeFixture'}}))
+        self.assertFalse(_client_success({'client_result':{**client,'next_tasks':[{}]}}))
+        web, _ = self.web({'data':{'risk_init_credential_verification':{
+            'client_result':client,'authentication_request':{
+                'url':'https://www.facebook.com/fixture/bank','params':[]}}}})
+        result = await start_bank_once(web, **self.scope, currency='EUR', common=self.common)
+        self.assertEqual(result['code'], 'BANK_AUTH_CHALLENGE_READY')
+        web, _ = self.web({'data':{'validate_risk_credential_verification':{
+            'verified':True,'client_result':client}}})
+        result = await verify_bank_result(web, **self.scope, common=self.common)
+        self.assertEqual(result['code'], 'BANK_CARD_VERIFIED_BY_META')
+
     async def test_validate_never_initializes_and_only_exact_meta_success_confirms(self):
         web, mock = self.web({'data':{'validate_risk_credential_verification':{
             'verified':True,'client_result':{'__typename':'XFBIBillingClientSuccess'}}}})
@@ -119,3 +139,9 @@ class BankCardTests(IsolatedAsyncioTestCase):
         for url in ('https://issuer.example/challenge','https://evilfacebook.com/','javascript:alert(1)',
                     'https://www.facebook.com@evil.example/','https://www.facebook.com:8443/'):
             self.assertIsNone(_challenge({'url':url,'params':[]},'secret'))
+
+    def test_observed_page_supports_nullable_params_and_values(self):
+        url = 'https://www.facebook.com/fixture/bank'
+        self.assertEqual(_challenge({'url':url,'params':None}, 'secret'), {'url':url,'params':[]})
+        self.assertEqual(_challenge({'url':url,'params':[{'key':'optional','value':None}]}, 'secret'),
+            {'url':url,'params':[{'key':'optional','value':''},{'key':'fb_dtsg','value':'secret'}]})

@@ -52,11 +52,17 @@ def _body(response, field):
 
 def _client_success(body):
     client = body.get('client_result') if isinstance(body, dict) else None
-    # Same success branch as handleBelieveMutationResult. Error, deferred and
-    # next-task results never become a verified card.
-    return (isinstance(client, dict) and client.get('__typename') in
-            ('XFBIBillingClientSuccess', 'XFBBillingMutationSuccess')
-            and not client.get('next_tasks'))
+    if not isinstance(client, dict) or client.get('next_tasks'):
+        return False
+    # The captured operation selects XFBIBillingClientSuccess as an abstract
+    # fragment (__isXFBIBillingClientSuccess), not only a concrete typename.
+    # Relay's discriminator proves membership even when the concrete name is
+    # different. An error branch or just an authentication URL is not success.
+    typename = client.get('__typename')
+    marker = client.get('__isXFBIBillingClientSuccess')
+    return (typename in ('XFBIBillingClientSuccess', 'XFBBillingMutationSuccess')
+            or (isinstance(typename, str) and bool(typename)
+                and isinstance(marker, str) and marker == typename))
 
 
 def _response_diagnostic(response, field, *, challenge=None, initializing=False):
@@ -90,6 +96,10 @@ def _challenge(request, token):
     if not isinstance(request, dict):
         return None
     uri, params = request.get('url'), request.get('params')
+    # BillingThreeDSVerificationPage uses the URL directly for null/empty
+    # params and normalizes null values to an empty hidden field.
+    if params is None:
+        params = []
     if not isinstance(uri, str) or len(uri) > 12000 or not isinstance(params, list) or len(params) > 80:
         return None
     try:
@@ -105,6 +115,8 @@ def _challenge(request, token):
         return None
     clean, keys = [], set()
     for row in params:
+        if isinstance(row, dict) and row.get('value') is None:
+            row = {**row, 'value': ''}
         if (not isinstance(row, dict) or not isinstance(row.get('key'), str)
                 or not re.fullmatch(r'[A-Za-z0-9_.-]{1,100}', row['key'])
                 or not isinstance(row.get('value'), str) or len(row['value']) > 100000
