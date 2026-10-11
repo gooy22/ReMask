@@ -140,3 +140,31 @@ existing Retry Failed action preserves the task idempotency key and Launch key;
 the resumed step sends only its pinned READ. Foreign-object proof failures
 retain retryable=false. A JobStore integration fixture covers the entire
 failure, retry, unchanged-key and query-only recovery path.
+# Expired profile proxy: offline hardening
+
+After the operator reported an expired proxy, no live Meta checks or new
+publication attempts were made. PrivateHttpClient now rejects every request
+without a profile proxy before dispatch, including public source downloads.
+The existing proxy binding, disabled environment proxy settings and zero
+transport retries remain in force.
+
+Bootstrap now stops at the first connection failure with RemoteRequestError,
+transport_stage=bootstrap and request_may_have_been_sent=False. It reports the
+exception class without proxy credentials or exception text. It does not try
+alternate Meta origins or DTSG refresh after a failed route, and does not turn
+that failure into a cookie/session-expiry diagnosis. Successful HTTP login
+responses retain their existing authentication handling. A later attempt can
+bootstrap successfully after the route recovers, using the same cookies.
+
+Offline tests use local destination and proxy listeners plus local DNS mapping.
+For GET and POST, HTTP 407, HTTP 503, a closed tunnel, a stalled tunnel and a
+refused proxy connection produce no destination connection, no environment
+proxy fallback and no automatic replay. CONNECT requests do not carry Facebook
+cookies, and application logs do not expose proxy credentials. The advertising
+preflight test confirms a retryable HTTP failure before billing/Page queries or
+CREATE, with Chromium disabled. Real local TLS/ALPN HTTP/2 coverage still passes.
+
+These changes do not supply the missing real publication contracts or prove a
+live advertising launch. They are prepared separately from production to avoid
+restarting recovered jobs while the operator's proxy is unavailable.
+
