@@ -728,20 +728,22 @@ class PrivateLaunchStateStore:
         submitted_db = None if submitted is None else (1 if submitted else 0)
         encoded = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
         with self._connect() as con:
-            con.execute(
-                """
-                INSERT INTO private_launch_steps(
-                    launch_key,profile_id,business_id,ad_account_id,step,status,
-                    entity_id,result_json,error_code,submitted,created_at,updated_at
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
-                ON CONFLICT(launch_key,step) DO UPDATE SET
+            # INSERT is the durable ownership claim. Two worker processes can
+            # both pass the earlier read/preflight; only one may cross CREATE.
+            conflict = "DO NOTHING" if status == "SUBMITTING" else """DO UPDATE SET
                     status=excluded.status,
                     entity_id=excluded.entity_id,
                     result_json=excluded.result_json,
                     error_code=excluded.error_code,
                     submitted=excluded.submitted,
-                    updated_at=excluded.updated_at
-                """,
+                    updated_at=excluded.updated_at"""
+            cursor = con.execute(
+                """
+                INSERT INTO private_launch_steps(
+                    launch_key,profile_id,business_id,ad_account_id,step,status,
+                    entity_id,result_json,error_code,submitted,created_at,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(launch_key,step) """ + conflict,
                 (
                     launch_key,
                     profile_id,
@@ -757,6 +759,9 @@ class PrivateLaunchStateStore:
                     now,
                 ),
             )
+            if status == "SUBMITTING" and cursor.rowcount != 1:
+                raise ProvisioningError("PRIVATE_LAUNCH_RECONCILE_REQUIRED",
+                    f"{step} already has a durable submit claim; concurrent CREATE is blocked", retryable=False)
 
 
 def _lookup(value: Any, path: str) -> Any:

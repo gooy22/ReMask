@@ -19,7 +19,7 @@ def public_script_url(url):
         return False
 
 
-def deferred_script_urls(document):
+def deferred_script_urls(document, *, preferred=()):
     """Follow only unambiguous resource/component maps observed in the document."""
     maps = {"rsrcMap": {}, "compMap": {}}
     conflicts = {key: set() for key in maps}
@@ -39,8 +39,21 @@ def deferred_script_urls(document):
                 else:
                     target[name] = value
     components, resources = maps["compMap"], maps["rsrcMap"]
-    roots = sorted(name for name in components if re.match(r"(?:Ads|useAds)", name)
-                   and re.search(r"Publish|Create|Draft|Promotable|Editor|Graph|Campaign|Adgroup|AdSet", name))
+    preferred = set(preferred)
+    def priority(name):
+        if name in preferred:
+            return (0, name)
+        if "Publish" in name and "PostPublish" not in name:
+            return (1, name)
+        if "GraphAPI" in name:
+            return (2, name)
+        if "Promotable" in name:
+            return (3, name)
+        if "Create" in name and "SavedAudience" not in name:
+            return (4, name)
+        return (5, name)
+    roots = sorted((name for name in components if re.match(r"(?:Ads|useAds)", name)
+                    and (name in preferred or re.search(r"Publish|Create|Draft|Promotable|Editor|Graph|Campaign|Adgroup|AdSet", name))), key=priority)
     queue, seen, urls = deque(roots), set(), []
     while queue and len(seen) < 4000:
         name = queue.popleft()
@@ -88,7 +101,7 @@ def module_records(source):
             continue
         if not isinstance(name, str) or not all(isinstance(value, str) for value in dependencies):
             continue
-        if not re.match(r"(?:Ads|useAds|BizKit.*Ads|cr:)", name):
+        if not re.match(r"(?:Ads|ads|useAds|BizKit.*Ads|cr:|GraphAPI)", name):
             continue
         raw = body.text.decode()
         if len(raw) <= 180_000:

@@ -535,6 +535,27 @@ class PrivateLaunchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(caught.exception.code, "PRIVATE_LAUNCH_PAUSED_REQUIRED")
         self.web.graphql.assert_not_awaited()
 
+    async def test_concurrent_workers_claim_each_create_atomically(self):
+        import asyncio
+        arrived = 0
+        both_ready = asyncio.Event()
+        async def preflight(**kwargs):
+            nonlocal arrived
+            arrived += 1
+            if arrived == 2:
+                both_ready.set()
+            await both_ready.wait()
+            return self.preflight
+        other = PrivateLaunchService(self.state, contracts=PrivateLaunchContractStore(__import__("json").dumps(contracts())))
+        self.web.graphql.side_effect = [{"data": {"create": {"id": str(500000000000001 + index)}}} for index in range(4)]
+        with patch.object(self.service, "_live_preflight", preflight), patch.object(other, "_live_preflight", preflight):
+            results = await asyncio.gather(*(service.run(item_id="race", profile_id="7", context=self.context,
+                session=self.session, payload=self.payload) for service in (self.service, other)), return_exceptions=True)
+        self.assertEqual(sum(isinstance(row, dict) and row.get("status") == "SUCCESS" for row in results), 1)
+        failures = [row for row in results if isinstance(row, ProvisioningError)]
+        self.assertEqual([row.code for row in failures], ["PRIVATE_LAUNCH_RECONCILE_REQUIRED"])
+        self.assertEqual(self.web.graphql.await_count, 4)
+
     async def test_first_live_response_promotes_auto_result_path(self):
         cfg = contracts()
         cfg["CAMPAIGN"]["result_id_paths"] = [AUTO_RESULT_ID_PATH]

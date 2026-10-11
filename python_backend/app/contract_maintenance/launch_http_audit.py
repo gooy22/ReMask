@@ -31,7 +31,10 @@ def inspect_saved_sources():
     if not target.is_file() or target.stat().st_size > 20_000_000:
         return
     rows = json.loads(target.read_text()).get("modules", [])
-    relevant = sorted({row["name"] for row in rows if re.search(r"PromotablePage|Create|Publish|(?:Graph|Batch)(?:API|Api)", row.get("name", ""))})
+    filters = [value.strip() for value in os.getenv("REMASK_LAUNCH_HTTP_AUDIT_NAME_FILTERS", "").split(",")[:12]
+               if re.fullmatch(r"[A-Za-z0-9_.:$-]{1,80}", value.strip())]
+    relevant = sorted({row["name"] for row in rows if (any(value in row.get("name", "") for value in filters)
+        if filters else re.search(r"PromotablePage|Create|Publish|Footer|(?:Graph|Batch)(?:API|Api)", row.get("name", "")))})
     for offset in range(0, min(len(relevant), 600), 75):
         log.info("launch saved public module names=%s", json.dumps(relevant[offset:offset+75]))
     selected = {"AdsPromotablePageListStoreSourceServerQuery.graphql",
@@ -106,9 +109,11 @@ async def collect_sources(web, *, account, business):
                 raise
             except Exception:
                 return
-    direct = [url for url in _script_urls(document, final, limit=40) if public_script_url(url)]
-    deferred = deferred_script_urls(document)
-    urls = list(dict.fromkeys(deferred + direct))[:80]
+    direct = [url for url in _script_urls(document, final, limit=24) if public_script_url(url)]
+    preferred = [value.strip() for value in os.getenv("REMASK_LAUNCH_HTTP_AUDIT_MODULES", "").split(",")[:24]
+                 if re.fullmatch(r"[A-Za-z0-9_.:$-]{1,180}", value.strip())]
+    deferred = deferred_script_urls(document, preferred=preferred)
+    urls = list(dict.fromkeys(direct + deferred))[:80]
     timed_out = False
     try:
         async with asyncio.timeout(75):
