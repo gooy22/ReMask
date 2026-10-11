@@ -433,6 +433,11 @@ function paymentDescriptorCompletionPanel(row,result,container){
         const completed=response?.result;
         status.textContent=paymentCardBriefMessage(completed||
           {code:'SDC_CODE_RESULT_UNVERIFIED'});
+        if(completed?.code==='SDC_CODE_VERIFIED_BY_META'){
+          status.textContent=completed.binding_recorded===true
+            ?'Карта подтверждена в Meta. Результат сохранён в ReMask.'
+            :'Meta подтвердила карту. Сохранение результата в ReMask не подтверждено.';
+        }
         if(completed?.funding)paymentApplyFunding(row,completed.funding);
         if(completed?.code!=='SDC_CODE_VERIFIED_BY_META')send.disabled=false;
       }catch(_){
