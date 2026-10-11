@@ -25,6 +25,33 @@ from fb_worker import AuthenticationError
 log = logging.getLogger("remask.launch_http_audit")
 
 
+def inspect_saved_sources():
+    """Review bounded public source evidence without another Meta request."""
+    target = Path(os.getenv("REMASK_DATA_DIR") or "/var/lib/remask") / "maintenance" / "ads-public-modules-candidate.json"
+    if not target.is_file() or target.stat().st_size > 20_000_000:
+        return
+    rows = json.loads(target.read_text()).get("modules", [])
+    relevant = sorted({row["name"] for row in rows if re.search(r"PromotablePage|(?:Create|Publish|Batch).*?(?:API|Api|Mutation)|(?:API|Api).*?(?:Create|Publish|Batch)", row.get("name", ""))})
+    log.info("launch saved public module names=%s", json.dumps(relevant[:160]))
+    selected = {"AdsPromotablePageListStoreSourceServerQuery.graphql",
+        "AdsPromotablePageListStoreSourceLoadedQuery.graphql",
+        "AdsPromotablePageListStoreSource", "AdsPromotablePageListStoreSourceServer",
+        "AdsPromotablePageListStoreSourceFragment.graphql"}
+    budget = 60_000
+    for row in rows:
+        source = row.get("source", "")
+        if row.get("name") not in selected or len(source) > budget:
+            continue
+        if re.search(r"fb_dtsg|access_token|authorization|cookie", source, re.I):
+            continue
+        budget -= len(source)
+        chunks = [source[i:i+1400] for i in range(0, len(source), 1400)]
+        for index, chunk in enumerate(chunks):
+            log.info("launch saved public module evidence=%s", json.dumps({
+                "name": row["name"], "sha256": row.get("sha256"),
+                "chunk": index, "chunks": len(chunks), "source": chunk}))
+
+
 async def collect_sources(web, *, account, business):
     from ..private_contract_discovery import _module_nodes, _script_urls
     entry = ("https://adsmanager.facebook.com/adsmanager/manage/campaigns"
@@ -72,6 +99,11 @@ async def collect_sources(web, *, account, business):
 
 
 async def run(pool):
+    if os.getenv("REMASK_LAUNCH_HTTP_AUDIT_SAVED") == "1":
+        try:
+            inspect_saved_sources()
+        except Exception as exc:
+            log.info("launch saved public source read type=%s", type(exc).__name__)
     profile, account, business = (os.getenv(key, "").strip() for key in
         ("REMASK_LAUNCH_HTTP_AUDIT_PROFILE", "REMASK_LAUNCH_HTTP_AUDIT_ACCOUNT", "REMASK_LAUNCH_HTTP_AUDIT_BUSINESS"))
     if not profile or not all(re.fullmatch(r"\d{5,30}", value) for value in (account, business)):
