@@ -61,7 +61,12 @@ assert.doesNotMatch(sandbox.fundingCell({verification_status:'LINKED',card_linke
   assert.ok(elements.paymentCardSelect.children[0].textContent.includes('•••• 1111'));
   assert.ok(elements.paymentCardBind.handlers.click);assert.ok(elements.paymentCardSaveBind.handlers.click);
   const challenge={code:'SDC_AUTH_PENDING_WAIT_CODE',card_id:'card_'+'a'.repeat(24),
+    bank_request_evidence:'REMASK_LOCAL_REQUEST',previous_request_stage:'CHALLENGE_READY',
     sdc_screen_verified:true,sdc_credential_match:true};
+  const noBankEvidence=element();
+  sandbox.paymentConfirmationPanel(rows[0],{...challenge,
+    bank_request_evidence:'META_PENDING_ONLY',previous_request_stage:null},noBankEvidence);
+  assert.equal(noBankEvidence.children.length,0,'Meta pending alone must not show a banking descriptor input');
   const pendingPanel=element();sandbox.paymentConfirmationPanel(rows[0],challenge,pendingPanel);
   assert.equal(pendingPanel.children.length,1);
   assert.equal(pendingPanel.children[0].children.length,4,'show code field without extra confirmation button');
