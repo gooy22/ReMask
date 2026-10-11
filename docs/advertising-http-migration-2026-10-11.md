@@ -127,3 +127,10 @@ Continuation checks: the mandatory local suite ran 948 tests successfully
 (18 skips). After adding downstream-parent and interrupted-query recovery
 fixtures, all 49 focused Launch/source tests passed. Temporary READ recovery
 does not replay the already submitted Campaign or Ad Set mutation.
+
+Deployment 9f96e3f6 of commit 4ad9e2d reached SUCCESS and health returned ok.
+Its saved-only selection report positively confirmed the absence of the
+publishing sender, providers and AdsGraphAPI from the snapshot. Candidate
+collection now also follows lowercase ads publication components, XAds
+controllers and explicitly selected generic transport helpers. Source loading
+still uses literal observed URLs and factories, and never executes JavaScript.

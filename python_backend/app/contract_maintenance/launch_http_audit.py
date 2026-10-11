@@ -80,6 +80,8 @@ def inspect_saved_sources():
 async def collect_sources(web, *, account, business):
     from ..private_contract_discovery import _script_urls
     from .ads_sources import compact_record, deferred_script_urls, module_records, public_script_url
+    preferred = [value.strip() for value in os.getenv("REMASK_LAUNCH_HTTP_AUDIT_MODULES", "").split(",")[:24]
+                 if re.fullmatch(r"[A-Za-z0-9_.:$-]{1,180}", value.strip())]
     entry = ("https://adsmanager.facebook.com/adsmanager/manage/campaigns"
              f"?act={account}&business_id={business}")
     status, document, final = await web.fetch_text(entry, max_bytes=5_000_000, document_navigation=True)
@@ -93,7 +95,7 @@ async def collect_sources(web, *, account, business):
     skipped = {"inline_auth": 0, "source_budget": 0}
     def observe(source, kind):
         nonlocal source_budget
-        for row in module_records(source):
+        for row in module_records(source, selected=preferred):
             raw, name = row["source"], row["name"]
             # Inline document code can carry session values. CDN JavaScript is
             # public static code; references to credential *variables* there
@@ -128,8 +130,6 @@ async def collect_sources(web, *, account, business):
             except Exception:
                 return
     direct = [url for url in _script_urls(document, final, limit=24) if public_script_url(url)]
-    preferred = [value.strip() for value in os.getenv("REMASK_LAUNCH_HTTP_AUDIT_MODULES", "").split(",")[:24]
-                 if re.fullmatch(r"[A-Za-z0-9_.:$-]{1,180}", value.strip())]
     deferred = deferred_script_urls(document, preferred=preferred)
     # Preserve the core entry scripts, then follow each selected publication
     # component's dependency closure before unrelated frontend modules.

@@ -39,6 +39,20 @@ class AdsSourceTests(unittest.TestCase):
                                     preferred=["AdsPublishEntry"])
         self.assertEqual(urls, [resources[str(i)]["src"] for i in range(4)])
 
+    def test_lowercase_publication_and_selected_generic_transport_are_roots(self):
+        resources = {str(i): {"type": "js", "src": f"https://static.xx.fbcdn.net/{i}.js"} for i in range(2)}
+        components = {"adsDraftPublishingPublishAction": {"r": ["0"]}, "AsyncRequest": {"r": ["1"]}}
+        document = json.dumps({"rsrcMap": resources, "compMap": components})
+        self.assertEqual(deferred_script_urls(document), [resources["0"]["src"]])
+        self.assertEqual(deferred_script_urls(document, preferred=["AsyncRequest"]),
+                         [resources["1"]["src"], resources["0"]["src"]])
+
+    def test_exact_selected_literal_transport_helper_is_retained_without_execution(self):
+        source = '__d("AsyncRequest",[],(function(a,b,c,d,e,f){f.send=function(){throw "never run"};}),98);'
+        self.assertEqual(list(module_records(source)), [])
+        row, = module_records(source, selected=["AsyncRequest"])
+        self.assertEqual(module_source(compact_record(row)), source)
+
     def test_literal_dependencies_and_compileable_wrapper_are_preserved(self):
         source = '__d("AdsPublish",["cr:20373","AdsGraphAPI"],function(a,b,c,d,e,f){f.publish=c("AdsGraphAPI");},98);'
         row, = module_records(source)

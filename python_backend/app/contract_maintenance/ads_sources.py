@@ -52,7 +52,7 @@ def deferred_script_urls(document, *, preferred=()):
         if "Create" in name and "SavedAudience" not in name:
             return (4, name)
         return (5, name)
-    roots = sorted((name for name in components if re.match(r"(?:Ads|useAds)", name)
+    roots = sorted((name for name in components if (name in preferred or re.match(r"(?:Ads|ads|useAds|GraphAPI)", name))
                     and (name in preferred or re.search(r"Publish|Create|Draft|Promotable|Editor|Graph|Campaign|Adgroup|AdSet", name))), key=priority)
     queue, seen, urls = deque(roots), set(), []
     while queue and len(seen) < 4000:
@@ -101,7 +101,7 @@ def module_source(row):
     return row["module_prefix"] + row["source"] + row["module_suffix"]
 
 
-def module_records(source):
+def module_records(source, *, selected=()):
     """Keep literal dependency lists and the __d wrapper as compileable evidence."""
     root = Parser(_LANGUAGE).parse(source.encode()).root_node
     for node in _walk(root):
@@ -122,7 +122,7 @@ def module_records(source):
             continue
         if not isinstance(name, str) or not all(isinstance(value, str) for value in dependencies):
             continue
-        if not re.match(r"(?:Ads|ads|useAds|BizKit.*Ads|cr:|GraphAPI)", name):
+        if name not in selected and not re.match(r"(?:Ads|ads|useAds|BizKit.*Ads|cr:|GraphAPI|XAds)", name):
             continue
         raw = body.text.decode()
         if len(raw) <= 180_000:
