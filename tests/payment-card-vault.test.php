@@ -491,6 +491,33 @@ try{
     $verification['payment_methods'][0]['card_confirmation_status']='CLEAR';
     $checked=$vault->reconcile($card['id'],'Verification','123456789',$pending,$verification);
     expect($checked['status']==='LINKED','Completed verification not reflected');
+    // The Meta bank verification response is stronger than a cached
+    // 'pending' label, but it must still refer to the exact saved card/RK.
+    $verifiedMeta=['profile_id'=>'Verification','account_id'=>'123456789',
+        'status'=>'VERIFIED','code'=>'SDC_CODE_VERIFIED_BY_META',
+        'verification_stage'=>'META_CONFIRMED','sdc_screen_verified'=>true,
+        'sdc_credential_match'=>true,'card_linked'=>true,
+        'card_confirmation_status'=>'CLEAR','credential_id'=>'fixture-credential',
+        'funding'=>$verification];
+    foreach([
+        ['credential_id'=>'foreign_credential'],
+        ['code'=>'SDC_CODE_RESULT_UNVERIFIED'],
+        ['funding'=>array_replace($verification,['account_scope_verified'=>false])],
+        ['sdc_credential_match'=>false]
+    ] as $invalid){
+        rejected(fn()=>$vault->recordMetaBankVerified($card['id'],'Verification','123456789',
+            array_replace($verifiedMeta,$invalid)),'CARD_META_VERIFICATION_NOT_CONFIRMED');
+    }
+    rejected(fn()=>$vault->recordMetaBankVerified($card['id'],'Other profile','123456789',$verifiedMeta),
+        'CARD_META_VERIFICATION_NOT_CONFIRMED');
+    $confirmed=$vault->recordMetaBankVerified($card['id'],'Verification','123456789',$verifiedMeta);
+    expect($confirmed['status']==='LINKED'&&$confirmed['bank_verification_status']==='META_CONFIRMED'&&
+        $confirmed['last_result_code']==='SDC_CODE_VERIFIED_BY_META','Confirmed bank result was not saved to selected RK');
+    $reloaded=new RemaskPaymentCardVault($directory);
+    $persistent=$reloaded->binding($card['id'],'Verification','123456789');
+    expect($persistent['bank_verification_status']==='META_CONFIRMED','Bank confirmation was lost on restart');
+    expect(!str_contains(file_get_contents($directory.'/cards.json'),'verification_code'),
+        'Bank descriptor input was persisted');
     $data=json_decode(file_get_contents($directory.'/cards.json'),true);$bytes=base64_decode($data['cards'][$card['id']]['encrypted']);$bytes[30]=chr(ord($bytes[30])^1);
     $data['cards'][$card['id']]['encrypted']=base64_encode($bytes);file_put_contents($directory.'/cards.json',json_encode($data));
     try{$vault->secret($card['id']);throw new RuntimeException('Tamper accepted');}catch(RuntimeException $e){expect($e->getMessage()==='CARD_DECRYPTION_FAILED','Authenticated encryption');}
