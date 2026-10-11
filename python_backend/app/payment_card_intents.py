@@ -188,6 +188,27 @@ class BankVerificationLedger(CardIntentLedger):
         if flow not in ('SDC', 'THREEDS'):
             raise ValueError('VERIFY_INVALID_FLOW')
 
+    async def read_existing(self, *, profile, account, payment_account,
+                            credential, card_id, flow='SDC'):
+        """Inspect a previous bank request without authorizing or reserving one."""
+        self._validate(profile, account, payment_account, credential, card_id, flow)
+        return await asyncio.to_thread(self._read_existing, profile, account,
+            payment_account, credential, card_id, flow)
+
+    def _read_existing(self, profile, account, payment_account, credential, card_id, flow):
+        con = self.connect()
+        try:
+            row = con.execute('''SELECT stage,card_id
+                FROM card_bank_verification_intents
+                WHERE profile=? AND account=? AND payment_account=?
+                  AND credential_id=? AND flow=?''',
+                (profile, account, payment_account, credential, flow)).fetchone()
+            if row is None:
+                return None
+            return {'stage': row['stage'], 'same_card': row['card_id'] == card_id}
+        finally:
+            con.close()
+
     async def reserve(self, *, profile, account, payment_account, credential,
                       card_id, flow):
         self._validate(profile, account, payment_account, credential, card_id, flow)
