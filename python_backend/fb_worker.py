@@ -1102,6 +1102,7 @@ class FacebookWebSession:
         request_envelope: dict[str, Any] | None = None,
         before_submit: Any | None = None,
         business_context_id: str = "",
+        multipart_files: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
 
         effective_doc_id = str(doc_id or "").strip()
@@ -1278,6 +1279,23 @@ class FacebookWebSession:
         if friendly_name:
             headers["X-FB-Friendly-Name"] = friendly_name
 
+        post_options: dict[str, Any] = {}
+        if multipart_files is not None:
+            if (not isinstance(multipart_files, dict) or not multipart_files
+                    or any(not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,79}", key)
+                           or key in form for key in multipart_files)):
+                raise RemoteRequestError("Invalid private multipart file field.", request_may_have_been_sent=False)
+            # HTTPX supplies the multipart boundary and streams the open file.
+            # Authentication, profile proxy and no-redirect/no-replay semantics
+            # stay exactly the same as the existing GraphQL transport.
+            headers.pop("Content-Type", None)
+            post_options["files"] = multipart_files
+            try:
+                upload_budget = float(os.getenv("REMASK_PRIVATE_LAUNCH_MEDIA_TIMEOUT_SECONDS") or "120")
+            except (TypeError, ValueError):
+                upload_budget = 120.0
+            post_options["request_timeout_seconds"] = max(25.0, min(upload_budget, 300.0))
+
         request_may_have_been_sent = False
         transport_stage = "before_graphql_submit"
 
@@ -1302,6 +1320,7 @@ class FacebookWebSession:
                 headers=headers,
                 proxy=self.profile.proxy,
                 allow_redirects=False,
+                **post_options,
             ) as response:
 
                 raw_body = await response.text()

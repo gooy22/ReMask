@@ -65,7 +65,7 @@ async def inspect_pages(web, *, account: str, business_id: str) -> dict:
                            "http_status": status, "response_fields": sorted(fields)[:60]}}
 
 
-async def inspect_profile_pages_http(resolver, profile, target, *, state=None):
+async def inspect_profile_pages_http(resolver, profile, target, *, state=None, read_catalog=None):
     from .payment_inspection import account_id, resolve_payment_asset
     from .page_access_inspection import unverified_result
     from .session import ProfileSession
@@ -82,8 +82,15 @@ async def inspect_profile_pages_http(resolver, profile, target, *, state=None):
     try:
         async with ProfileSession(context) as session:
             web = await session.facebook_web()
-            result = await asyncio.wait_for(inspect_pages(
-                web, account=target, business_id=asset["business_id"]), timeout=40)
+            operation = (read_catalog.pages(web, {"profile_id": profile, "ad_account_id": target,
+                         "business_id": asset["business_id"], "query": "", "limit": 500,
+                         "actor_id":str(context.cookies.get("c_user") or "")})
+                         if read_catalog and "pages" in read_catalog.rows else
+                         inspect_pages(web, account=target, business_id=asset["business_id"]))
+            result = await asyncio.wait_for(operation, timeout=65)
+            if result.get("source") == "static_private_http_query":
+                result.update({"status": "VERIFIED" if result["data"] else "UNVERIFIED", "browser_started": False,
+                               "diagnostic": {"code": "PAGE_ACCESS_HTTP_VERIFIED" if result["data"] else "PAGE_ACCESS_HTTP_UNCONFIRMED"}})
         return {"profile_id": profile, **result}
     except AuthenticationError as exc:
         code = private_auth_error(exc).code

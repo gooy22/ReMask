@@ -55,11 +55,11 @@ class StaticLaunchTests(unittest.TestCase):
             StaticLaunchContractStore(self.manifest)
         self.assertEqual(caught.exception.code, 'PRIVATE_LAUNCH_STATIC_MANIFEST_INVALID')
 
-    def test_local_media_cannot_be_mistaken_for_published_meta_media(self):
+    def test_invalid_local_references_are_rejected_before_publication(self):
         for media in ({'staged_media': [{'id': 'm-local', 'sha256': 'a'*64}]},
                       {'media_library_id': 'm-local'}, {'carousel_media_library_ids': ['m-local']}):
             launch = {section: {'name': 'fixture'} for section in ('campaign', 'adset', 'creative', 'ad')}
             launch['creative'].update({'format': 'SINGLE', **media})
             with self.assertRaises(ProvisioningError) as caught:
                 _effective_launch_payload(launch)
-            self.assertEqual(caught.exception.code, 'PRIVATE_LAUNCH_MEDIA_CONTRACT_REQUIRED')
+            self.assertEqual(caught.exception.code, 'PRIVATE_LAUNCH_MEDIA_INVALID')

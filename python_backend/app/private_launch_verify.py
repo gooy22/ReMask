@@ -53,8 +53,11 @@ def proof(payload, row, values):
     account = _lookup(payload, row["account_path"])
     if not isinstance(account, str) or account.removeprefix("act_") != values["ad_account_id"]:
         return {"verified": False, "code": "READ_ACCOUNT_MISMATCH"}
-    if row.get("status_path") and _lookup(payload, row["status_path"]) != "PAUSED":
-        return {"verified": False, "code": "READ_PAUSED_UNCONFIRMED"}
+    expected_status = values.get("expected_status", "PAUSED")
+    if expected_status not in {"PAUSED", "ACTIVE"}:
+        return {"verified": False, "code": "READ_STATE_INVALID"}
+    if row.get("status_path") and _lookup(payload, row["status_path"]) != expected_status:
+        return {"verified": False, "code": "READ_" + expected_status + "_UNCONFIRMED"}
     if any(_lookup(payload, path) != values.get(key) for key, path in row["relations"].items()):
         return {"verified": False, "code": "READ_RELATION_MISMATCH"}
     return {"verified": True, "code": "READ_CONFIRMED", "source": "independent_private_http_query",

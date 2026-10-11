@@ -37,7 +37,7 @@ loadFunding=async function(force=false) {
     $('fundingStatus').textContent='Оплата считается готовой после проверки выбранного РК в Meta.';
 };
 
-const remaskPrivateLaunchNotice='Перед созданием рекламы ReMask проверит настройки, доступ страницы и оплату выбранных РК. Объявления создаются на паузе.';
+const remaskPrivateLaunchNotice='Подготовьте план рекламы. При запуске ReMask проверит доступ страницы и оплату выбранных РК.';
 let remaskPrivateLaunchBusy=false;
 const remaskPrivateLaunchPendingKey='remask_private_launch_pending_v1';
 const remaskPrivatePaymentSelections={};
@@ -134,6 +134,7 @@ function remaskPrivateAccountId(value) {
     return /^\d{5,30}$/.test(id)?id:'';
 }
 function remaskPrivateTargetRows(config) {
+    if(Array.isArray(config?._targets))return JSON.parse(JSON.stringify(config._targets));
     const ids=Array.isArray(config?.accountIds)?config.accountIds:
         (typeof selectedAccountIds==='function'?selectedAccountIds():[]);
     const overrides=config?.accountOverrides&&typeof config.accountOverrides==='object'
@@ -161,6 +162,16 @@ function remaskPrivateTargetRows(config) {
         const selectedPaymentMethod=remaskPrivateSelectedPayment(
             profile,accountId
         );
+        const override=JSON.parse(JSON.stringify(overrides[accountId]||overrides['act_'+accountId]||{}));
+        if(config.payload?.creative?.page_id||override.creative?.page_id)
+            override.creative={...(override.creative||{}),page_id:pageId};
+        if(config.payload?.adset?.promoted_object?.page_id||override.adset?.promoted_object?.page_id)
+            override.adset={...(override.adset||{}),promoted_object:{...(override.adset?.promoted_object||{}),page_id:pageId}};
+        if(config.payload?.creative?.format==='INSTAGRAM_POST'){
+            const mediaId=String(binding?.source_instagram_media_id||config.payload.creative.source_instagram_media_id||'').trim();
+            if(!/^\d{5,40}$/.test(mediaId))throw new Error('Выберите публикацию Instagram для РК '+accountId+'.');
+            override.creative={...(override.creative||{}),source_instagram_media_id:mediaId};
+        }
         return {
             profile,
             business_id:businessId,
@@ -171,7 +182,7 @@ function remaskPrivateTargetRows(config) {
                 :{}),
             launch:{
                 base:config.payload||{},
-                override:overrides[accountId]||overrides['act_'+accountId]||{}
+                override
             }
         };
     });
@@ -200,7 +211,7 @@ async function remaskPrivateWorker(payload) {
     }
     return data;
 }
-async function remaskPrivateContractStatus({render=true}={}) {
+async function remaskPrivateContractStatus({render=true,config=null}={}) {
     const response=await remaskPrivateWorker({action:'private_launch_contracts'});
     const contracts=response?.contracts||{};
     const order=['CAMPAIGN','ADSET','CREATIVE','AD'];
@@ -217,6 +228,20 @@ async function remaskPrivateContractStatus({render=true}={}) {
         };
     });
     const missing=rows.filter(row=>!row.configured||!row.active||!row.verification_configured);
+    if(config){
+        const format=config.payload?.creative?.format||'SINGLE';
+        if(Array.isArray(response.creative_formats)&&!response.creative_formats.includes(format))
+            missing.push({step:'CREATIVE_FORMAT',configured:false});
+        for(const target of remaskPrivateTargetRows(config)){
+            const delivery=target.launch.override?.delivery||target.launch.base?.delivery||{};
+            for(const section of ['campaign','adset','ad']){
+                const requested=delivery[section]||target.launch.override?.[section]?.status||target.launch.base?.[section]?.status||'PAUSED';
+                const key='ACTIVATE_'+section.toUpperCase();
+                if(requested==='ACTIVE'&&response.operations?.[key]?.active!==true&&!missing.some(row=>row.step===key))
+                    missing.push({step:key,configured:false});
+            }
+        }
+    }
     if(render){
         remaskPrivateShow(
             missing.length?'Создание рекламы пока недоступно: серверный модуль публикации не готов.':
@@ -256,6 +281,8 @@ async function remaskPrivatePrepareConfig() {
     const files=format==='CAROUSEL'&&typeof carouselFiles==='function'?carouselFiles():
         (format==='SINGLE'?Array.from($('media')?.files||[]).slice(0,1):[]);
     creative.format=format;
+    const delivery=$('launchDeliverySelect')?.value;
+    if(delivery==='ACTIVE'||delivery==='PAUSED')config.payload.delivery={campaign:delivery,adset:delivery,ad:delivery};
     if(format==='CAROUSEL'){
         const cards=typeof carouselCardsPayload==='function'?carouselCardsPayload():[];
         const saved=preset?.format==='CAROUSEL'?preset.carousel||[]:[];
@@ -273,8 +300,13 @@ async function remaskPrivatePrepareConfig() {
             const key={image_hash:'existing_image_hash',video_id:'existing_video_id',creative_id:'existing_creative_id'}[selected.type];
             if(key)creative[key]=String(selected[selected.type]||'');
         }
+    }else if(format==='INSTAGRAM_POST'){
+        const mediaId=String($('instagramMediaId')?.value||creative.source_instagram_media_id||'').trim();
+        if(mediaId)creative.source_instagram_media_id=mediaId;
     }
+    const targets=remaskPrivateTargetRows(config);
     if(files.length)creative.staged_media=await Promise.all(files.map(remaskPrivateStageFile));
+    config._targets=targets.map(row=>({...row,launch:{...row.launch,base:config.payload}}));
     return config;
 }
 
@@ -315,7 +347,7 @@ function remaskPrivatePendingClear() {
     try{localStorage.removeItem(remaskPrivateLaunchPendingKey);}catch(_){}
 }
 async function remaskPrivateReviewConfig(config,{render=true}={}) {
-    const contractStatus=await remaskPrivateContractStatus({render});
+    const contractStatus=await remaskPrivateContractStatus({render,config});
     if(!contractStatus.ready){
         const missing=contractStatus.missing.map(row=>row.step).join(', ');
         throw new Error('Модуль публикации не готов ('+missing+').');
@@ -372,7 +404,7 @@ async function remaskPrivateReviewConfig(config,{render=true}={}) {
     }
     if(render)remaskPrivateShow(
         'Настройки проверены: '+results.length+'/'+rows.length+
-        ' РК. Реклама будет создана на паузе.',
+        ' РК. После создания будет применён выбранный статус.',
         'ready'
     );
     return results;
@@ -382,7 +414,19 @@ async function remaskPrivateReviewOnly() {
     remaskPrivateLaunchBusy=true;validateReady();
     try{
         const config=await remaskPrivatePrepareConfig();
-        return await remaskPrivateReviewConfig(config,{render:true});
+        const rows=remaskPrivateTargetRows(config);
+        const plans=[];
+        for(const row of rows){
+            const response=await remaskPrivateWorker({action:'private_launch_plan',profile_id:row.profile,
+                business_id:row.business_id,ad_account_id:row.ad_account_id,page_id:row.page_id,launch:row.launch});
+            if(response.plan?.configuration_valid!==true||response.plan?.checked_live!==false)
+                throw new Error('Сервер не подтвердил подготовку плана.');
+            plans.push(response.plan);
+        }
+        const incomplete=plans.some(plan=>plan.missing_contracts?.length);
+        remaskPrivateShow('План подготовлен для '+plans.length+' РК. Проверка Meta не выполнялась.'+
+            (incomplete?' Для запуска ещё требуется настройка серверного модуля публикации.':''));
+        return plans;
     }catch(error){
         remaskPrivateShow('Создание рекламы недоступно: '+String(error?.message||error),'failed');
         return null;
@@ -434,6 +478,18 @@ async function remaskPrivatePollJob(jobId) {
         try{
             const data=await remaskPrivateWorker({action:'status',job_id:jobId});
             const job=data?.job||{};
+            if(typeof state!=='undefined'){
+                state.privateAdvertisingJob=job;
+                const tasks=(job.items||[]).flatMap(item=>item.tasks||[]);
+                if(tasks.some(task=>task.action==='private_launch'))state.privateAdvertisingSourceJob=job;
+                const source=state.privateAdvertisingSourceJob;
+                if(source){
+                    const sourceTasks=(source.items||[]).flatMap(item=>item.tasks||[]);
+                    if($('activateJobAds'))$('activateJobAds').disabled=!sourceTasks.some(task=>task.action==='private_launch'&&task.status==='SUCCESS');
+                    if($('pauseJobAds'))$('pauseJobAds').disabled=!sourceTasks.some(task=>task.action==='private_launch');
+                    if(typeof renderJobActionMenu==='function')renderJobActionMenu();
+                }
+            }
             const done=Number(job.items_done||job.items_completed||0);
             const total=Number(job.items_total||0);
             remaskPrivateShow(
@@ -442,12 +498,58 @@ async function remaskPrivatePollJob(jobId) {
             );
             if(['SUCCESS','FAILED','PARTIAL'].includes(String(job.status||'').toUpperCase())){
                 remaskPrivateFinalizeJob(job);
+                if(String(job.status).toUpperCase()==='SUCCESS'){
+                    try{localStorage.removeItem('remask_private_delivery_pending_v1');}catch(_){}
+                }
                 return job;
             }
         }catch(_){return null;}
     }
     return null;
 }
+
+async function remaskPrivateDelivery(status){
+    const source=typeof state!=='undefined'?state.privateAdvertisingSourceJob:null;
+    if(!source||!['ACTIVE','PAUSED'].includes(status)||remaskPrivateLaunchBusy)return null;
+    remaskPrivateLaunchBusy=true;validateReady();
+    try{
+        const targets=[];
+        for(const item of source.items||[]){
+            for(const task of item.tasks||[]){
+                if(task.action!=='private_launch'||(status==='ACTIVE'&&task.status!=='SUCCESS'))continue;
+                const payload=task.payload||{};
+                const sourceKey=String(payload.launch_key||task.idempotency_key||'');
+                if(!sourceKey)continue;
+                targets.push({profile:String(item.profile_id||''),source_launch_key:sourceKey,
+                    business_id:payload.business_id,ad_account_id:payload.ad_account_id,page_id:payload.page_id,
+                    ...(payload.selected_payment_method?{selected_payment_method:payload.selected_payment_method}:{})});
+            }
+        }
+        if(!targets.length)throw new Error('В этой задаче нет подходящих рекламных объектов.');
+        const fingerprint=JSON.stringify({job:source.job_id||source.id,status,targets});
+        let request=null;
+        try{const saved=JSON.parse(localStorage.getItem('remask_private_delivery_pending_v1')||'null');
+            if(saved?.fingerprint===fingerprint)request=saved.request;}catch(_){}
+        if(!request){
+            const nonce=remaskPrivateNonce();
+            request={action:'create',idempotency_key:'advertising-delivery-'+nonce,profiles:targets.map((row,index)=>{
+                const key='advertising-delivery-'+nonce+'-'+index;
+                const {profile,...payload}=row;
+                return {profile_id:profile,tasks:[{action:'private_delivery',idempotency_key:key,
+                    payload:{...payload,status,delivery_key:key}}]};
+            })};
+            try{localStorage.setItem('remask_private_delivery_pending_v1',JSON.stringify({fingerprint,request}));}catch(_){}
+        }
+        const accepted=await remaskPrivateWorker(request);
+        const jobId=String(accepted?.job?.job_id||'');
+        if(!jobId)throw new Error('Сервер не вернул номер задачи.');
+        remaskPrivateShow((status==='ACTIVE'?'Активация':'Пауза')+' · задача '+jobId+'. Результаты доступны в Jobs.');
+        remaskPrivatePollJob(jobId);
+        return accepted;
+    }catch(error){remaskPrivateShow(String(error?.message||error),'failed');return null;}
+    finally{remaskPrivateLaunchBusy=false;validateReady();}
+}
+if(typeof setJobDeliveryStatus==='function')setJobDeliveryStatus=remaskPrivateDelivery;
 async function remaskPrivateCreateJob() {
     if(remaskPrivateLaunchBusy)return null;
     remaskPrivateLaunchBusy=true;validateReady();
@@ -490,6 +592,39 @@ validateReady=function() {
 };
 validateReady();
 if ($('reviewStatus')) $('reviewStatus').textContent=remaskPrivateLaunchNotice;
+if ($('reviewLaunch')) $('reviewLaunch').textContent='Подготовить план';
+
+// Search remains attached to an explicitly selected RK/profile rather than
+// the old Graph token. The PHP bridge rejects an unbound account context.
+if(typeof apiJson==='function'){
+    const originalAdvertisingApiJson=apiJson;
+    apiJson=async function(url,options={}){
+        const body=options.body;
+        if(String(url).includes('metaTargetingSearch.php')&&typeof body?.get==='function'&&!body.get('account_id')){
+            const profile=String(body.get('profile')||'');
+            const ids=typeof selectedAccountIds==='function'?selectedAccountIds():[];
+            const matches=ids.filter(id=>String((typeof targetForAccount==='function'?targetForAccount(remaskPrivateAccountId(id))?.profile:'')||state.profile||'')===profile);
+            if(matches.length)body.set('account_id',remaskPrivateAccountId(matches[0]));
+        }
+        return originalAdvertisingApiJson(url,options);
+    };
+}
+
+// Delivery uses the same Launch form and existing Bootstrap controls.
+if(typeof document!=='undefined'&&document.createElement&&$('launchButton')?.parentNode&&!$('launchDeliverySelect')){
+    const block=document.createElement('div');block.className='mb-2';
+    const label=document.createElement('label');label.htmlFor='launchDeliverySelect';label.textContent='После создания';
+    const select=document.createElement('select');select.id='launchDeliverySelect';select.className='form-control';
+    for(const [value,text] of [['','Статус из настроек'],['PAUSED','Оставить на паузе'],['ACTIVE','Активировать рекламу']]){
+        const option=document.createElement('option');option.value=value;option.textContent=text;select.appendChild(option);
+    }
+    try{select.value=localStorage.getItem('remask_launch_delivery_v1')||'';}catch(_){}
+    select.addEventListener('change',()=>{
+        try{localStorage.setItem('remask_launch_delivery_v1',select.value);}catch(_){}
+        remaskPrivatePendingClear();validateReady();
+    });
+    block.appendChild(label);block.appendChild(select);$('launchButton').parentNode.insertBefore(block,$('launchButton'));
+}
 
 // Capture before legacy handlers. Old metaLaunchReview/metaJobCreate endpoints
 // remain blocked, so no click can fall through to the token-based Graph path.

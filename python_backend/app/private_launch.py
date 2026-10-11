@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import hashlib
+import copy
 import logging
 import os
 import re
@@ -139,7 +140,7 @@ def _record_contract_result(
 
 
 _CAPTURE_PLACEHOLDER_KEY = re.compile(
-    r"^(?:business_id|ad_account_id|page_id|campaign_id|adset_id|creative_id|"
+    r"^(?:actor_id|client_mutation_id|business_id|ad_account_id|page_id|campaign_id|adset_id|creative_id|"
     r"payload(?:\.[A-Za-z0-9_-]+)+)$"
 )
 
@@ -651,6 +652,10 @@ class PrivateLaunchStateStore:
 
     def _init_sync(self) -> None:
         with self._connect() as con:
+            con.execute("""CREATE TABLE IF NOT EXISTS private_launch_plans(
+                launch_key TEXT PRIMARY KEY, profile_id TEXT NOT NULL, business_id TEXT NOT NULL,
+                ad_account_id TEXT NOT NULL, fingerprint TEXT NOT NULL, contract_digest TEXT NOT NULL,
+                created_at INTEGER NOT NULL)""")
             con.execute(
                 """
                 CREATE TABLE IF NOT EXISTS private_launch_steps(
@@ -671,8 +676,29 @@ class PrivateLaunchStateStore:
                 """
             )
 
+    async def bind_plan(self, launch_key, values, fingerprint, contract_digest):
+        await asyncio.to_thread(self._bind_plan_sync, launch_key, values, fingerprint, contract_digest)
+
+    def _bind_plan_sync(self, launch_key, values, fingerprint, contract_digest):
+        expected = (values["profile_id"], values["business_id"], values["ad_account_id"], fingerprint, contract_digest)
+        with self._connect() as con:
+            con.execute("""INSERT INTO private_launch_plans VALUES(?,?,?,?,?,?,?)
+                ON CONFLICT(launch_key) DO NOTHING""", (launch_key, *expected, int(time.time())))
+            row = con.execute("SELECT * FROM private_launch_plans WHERE launch_key=?", (launch_key,)).fetchone()
+            actual = tuple(row[key] for key in ("profile_id", "business_id", "ad_account_id", "fingerprint", "contract_digest"))
+            if actual != expected:
+                raise ProvisioningError("PRIVATE_LAUNCH_PLAN_CHANGED",
+                    "This Launch key already has another target, configuration or contract revision", retryable=False)
+
     async def step(self, launch_key: str, step: PrivateLaunchStep) -> dict[str, Any] | None:
         return await asyncio.to_thread(self._step_sync, launch_key, step.value)
+
+    async def all_steps(self, launch_key):
+        def read():
+            with self._connect() as con:
+                names = [row[0] for row in con.execute("SELECT step FROM private_launch_steps WHERE launch_key=?", (launch_key,))]
+            return [self._step_sync(launch_key, name) for name in names]
+        return await asyncio.to_thread(read)
 
     def _step_sync(self, launch_key: str, step: str) -> dict[str, Any] | None:
         with self._connect() as con:
@@ -797,6 +823,8 @@ def _lookup(value: Any, path: str) -> Any:
             continue
         if isinstance(current, dict) and part in current:
             current = current[part]
+        elif isinstance(current, list) and part.isdigit() and int(part) < len(current):
+            current = current[int(part)]
         else:
             return None
     return current
@@ -968,7 +996,7 @@ def _effective_launch_payload(value: Any) -> dict[str, Any]:
             retryable=False,
         )
     if "base" not in value and "override" not in value:
-        effective = dict(value)
+        effective = copy.deepcopy(value)
     else:
         base = value.get("base") or {}
         override = value.get("override") or {}
@@ -978,14 +1006,29 @@ def _effective_launch_payload(value: Any) -> dict[str, Any]:
                 "launch.base and launch.override must be objects",
                 retryable=False,
             )
-        effective = _deep_merge(base, override)
+        effective = copy.deepcopy(_deep_merge(base, override))
+        # Explicit per-RK status overrides take precedence over a shared
+        # delivery choice, just like per-RK budgets and creative settings.
+        if isinstance(effective.get("delivery"), dict):
+            for section in ("campaign", "adset", "ad"):
+                if (isinstance(override.get(section), dict) and "status" in override[section]
+                        and section not in (override.get("delivery") or {})):
+                    effective["delivery"][section] = override[section]["status"]
+    delivery = effective.pop("delivery", {})
+    if not isinstance(delivery, dict) or set(delivery) - {"campaign", "adset", "ad"}:
+        raise ProvisioningError("PRIVATE_LAUNCH_INVALID_INPUT", "Invalid advertising delivery settings", retryable=False)
+    desired = {}
     for section in ("campaign", "adset", "ad"):
         row = effective.get(section)
         if not isinstance(row, dict):
             raise ProvisioningError("PRIVATE_LAUNCH_INVALID_INPUT", f"launch.{section} must be an object", retryable=False)
-        if row.get("status", "PAUSED") != "PAUSED":
-            raise ProvisioningError("PRIVATE_LAUNCH_PAUSED_REQUIRED", "Initial Launch only supports PAUSED advertising", retryable=False)
+        requested = delivery.get(section, row.get("status", "PAUSED"))
+        if requested not in {"PAUSED", "ACTIVE"}:
+            raise ProvisioningError("PRIVATE_LAUNCH_STATUS_INVALID", "Advertising supports PAUSED or ACTIVE delivery", retryable=False)
+        desired[section] = requested
         effective[section] = {**row, "status": "PAUSED"}
+    if any(status == "ACTIVE" for status in desired.values()):
+        effective["delivery"] = desired
     creative = effective.get("creative")
     if not isinstance(creative, dict):
         raise ProvisioningError("PRIVATE_LAUNCH_INVALID_INPUT", "launch.creative must be an object", retryable=False)
@@ -995,16 +1038,23 @@ def _effective_launch_payload(value: Any) -> dict[str, Any]:
         format_name = creative["format"]
         if format_name not in {"SINGLE", "CAROUSEL", "INSTAGRAM_POST"}:
             raise ProvisioningError("PRIVATE_LAUNCH_CREATIVE_FORMAT_INVALID", "Unsupported advertising format", retryable=False)
-        if creative.get("staged_media") or creative.get("media_library_id") or creative.get("carousel_media_library_ids"):
-            raise ProvisioningError("PRIVATE_LAUNCH_MEDIA_CONTRACT_REQUIRED",
-                "Media is saved locally; a verified private Meta upload contract is required before publication.", retryable=False)
+        from .private_launch_media import local_references, creative_with_media
+        local = local_references(creative)
         if format_name == "CAROUSEL":
-            raise ProvisioningError("PRIVATE_LAUNCH_CAROUSEL_CONTRACT_REQUIRED",
-                "A verified private carousel sender contract is required before publication.", retryable=False)
+            if local:
+                planned = [{"image_hash": "planned-local-media"} for _ in local]
+                creative_with_media(creative, planned)
+            else:
+                creative_with_media(creative, [])
+            return effective
         media_keys = ("source_instagram_media_id",) if format_name == "INSTAGRAM_POST" else (
             "existing_image_hash", "existing_video_id", "existing_creative_id")
-        if not any(creative.get(key) for key in media_keys):
+        if format_name == "INSTAGRAM_POST" and local:
+            raise ProvisioningError("PRIVATE_LAUNCH_CREATIVE_FORMAT_INVALID", "Instagram posts cannot use local files", retryable=False)
+        if not local and not any(creative.get(key) for key in media_keys):
             raise ProvisioningError("PRIVATE_LAUNCH_MEDIA_REQUIRED", "Select media for this ad account", retryable=False)
+        if format_name == "SINGLE" and local and len(local) != 1:
+            raise ProvisioningError("PRIVATE_LAUNCH_MEDIA_INVALID", "Single creative requires one media item", retryable=False)
     return effective
 
 
@@ -1013,6 +1063,9 @@ def _require_paused_contract(contract: MutationContract) -> None:
     if contract.step == PrivateLaunchStep.CREATIVE:
         return
     expected = "{{payload." + contract.step.value.lower() + ".status}}"
+    bindings = set(_PLACEHOLDER.findall(json.dumps(contract.variables)))
+    if "payload" in bindings or "payload." + contract.step.value.lower() in bindings:
+        return  # The complete section is normalized to PAUSED before rendering.
     statuses = []
     pending = [contract.variables]
     while pending:
@@ -1204,11 +1257,281 @@ class PrivateLaunchService:
             from .static_launch_contracts import StaticLaunchContractStore
             contracts = StaticLaunchContractStore()
         self.contracts = contracts
+        from .private_launch_extensions import LaunchExtensionCatalog, LaunchOperationRunner
+        self.extensions = getattr(contracts, "extensions", None) or LaunchExtensionCatalog()
+        from .private_advertising_reads import AdvertisingReadCatalog, AdvertisingResourceStore
+        self.reads = getattr(contracts, "reads", None) or AdvertisingReadCatalog()
+        self.resources = AdvertisingResourceStore(self.reads)
         self.state = PrivateLaunchStateStore(provisioning_state.path)
+        self.operations = LaunchOperationRunner(self.state)
         self._preflight_cache: dict[
             tuple[str, str, str, str, str, str, str],
             tuple[float, int, dict[str, Any]],
         ] = {}
+
+    def plan(self, *, profile_id, payload):
+        """Build an advertising plan without resolving a profile or contacting Meta."""
+        from .private_launch_media import local_references
+        if not isinstance(payload, dict) or not str(profile_id or "").strip():
+            raise ProvisioningError("PRIVATE_LAUNCH_INVALID_INPUT", "Advertising target is missing", retryable=False)
+        target = {"profile_id": str(profile_id),
+                  **{key: self._id(payload.get(key), key) for key in ("business_id", "ad_account_id", "page_id")}}
+        launch = _effective_launch_payload(payload.get("launch"))
+        creative = launch["creative"]
+        references = local_references(creative)
+        delivery = launch.get("delivery", {"campaign": "PAUSED", "adset": "PAUSED", "ad": "PAUSED"})
+        required = ["PUBLISH_FAMILY"] if "PUBLISH_FAMILY" in self.extensions.operations else [step.value for step in STEP_ORDER]
+        steps = []
+        if references:
+            steps.append({"stage": "MEDIA", "label": "Подготовка медиа", "items": len(references)})
+        steps.extend({"stage": step.value, "label": label} for step, label in zip(STEP_ORDER,
+                     ("Кампания", "Группа объявлений", "Креатив", "Объявление")))
+        for section in ("ad", "adset", "campaign"):
+            if delivery.get(section) == "ACTIVE":
+                name = "ACTIVATE_" + section.upper()
+                required.append(name)
+                steps.append({"stage": name, "label": "Активация рекламы"})
+        statuses = {**self.contracts.status(), **self.extensions.status()}
+        missing = [name for name in required if not statuses.get(name, {}).get("active")]
+        format_name = creative.get("format", "SINGLE")
+        if format_name not in self.extensions.formats:
+            missing.append("CREATIVE_FORMAT_" + format_name)
+        selections = self._asset_selections(launch, bool(references))
+        missing.extend("READ_"+name.upper() for name in selections if name not in self.reads.rows)
+        return {"configuration_valid": True, "ready": False, "checked_live": False,
+                "mutation_posts": 0, "target": target, "creative_format": format_name,
+                "delivery": delivery, "steps": steps, "local_media": references,
+                "missing_contracts": missing, "media_resolution_required": bool(references),
+                "asset_selections": selections,
+                "launch": launch, "launch_fingerprint": _launch_fingerprint(payload, target["page_id"])}
+
+    @staticmethod
+    def _asset_selections(launch, local_media=False):
+        selected = {}
+        def add(resource, identity):
+            if identity in (None, ""):
+                return
+            if not isinstance(identity, str) or not re.fullmatch(r"[A-Za-z0-9_-]{2,128}",identity):
+                raise ProvisioningError("PRIVATE_LAUNCH_ASSET_INVALID", "Select an exact advertising resource", retryable=False)
+            if identity not in selected.setdefault(resource,[]):
+                selected[resource].append(identity)
+        creative = launch["creative"]
+        if not local_media:
+            add("images", creative.get("existing_image_hash"))
+            add("videos", creative.get("existing_video_id"))
+            add("creatives", creative.get("existing_creative_id"))
+            for card in creative.get("carousel_cards",[]) if isinstance(creative.get("carousel_cards",[]),list) else []:
+                if isinstance(card,dict):
+                    add("images",card.get("image_hash")); add("videos",card.get("video_id"))
+        add("instagram_media",creative.get("source_instagram_media_id"))
+        add("instagram_accounts",creative.get("instagram_actor_id"))
+        promoted = launch["adset"].get("promoted_object") or {}
+        if isinstance(promoted,dict):
+            add("pixels",promoted.get("pixel_id"))
+            add("conversion_goals",promoted.get("custom_conversion_id"))
+        targeting = launch["adset"].get("targeting") or {}
+        if isinstance(targeting,dict):
+            for field in ("custom_audiences","excluded_custom_audiences"):
+                items = targeting.get(field) or []
+                if not isinstance(items,list):
+                    raise ProvisioningError("PRIVATE_LAUNCH_ASSET_INVALID", "Audience selection must be a list",retryable=False)
+                for item in items:
+                    add("custom_audiences",item.get("id") if isinstance(item,dict) else item)
+        return selected
+
+    async def _verify_assets(self, web, selections, values):
+        checks = {}
+        for resource, wanted in selections.items():
+            result = await asyncio.wait_for(self.reads.read(web,resource,{"query":"","limit":500,**values}),timeout=65)
+            identity_field = "hash" if resource == "images" else "id"
+            found = {str(row.get(identity_field) or "") for row in result["data"]}
+            if not set(wanted) <= found:
+                raise ProvisioningError("PRIVATE_LAUNCH_ASSET_ACCESS_UNCONFIRMED",
+                    "Selected advertising resources are not confirmed for this exact account",retryable=False)
+            checks[resource] = {"verified":True,"selected":wanted,"checked_live":True}
+        return checks
+
+    async def _media_inputs(self, launch):
+        from .private_launch_media import LaunchMediaResolver, local_references, creative_with_media
+        creative = launch["creative"]
+        format_name = creative.get("format", "SINGLE")
+        if format_name not in self.extensions.formats:
+            raise ProvisioningError("PRIVATE_LAUNCH_CREATIVE_FORMAT_CONTRACT_REQUIRED",
+                "The pinned creative sender does not declare this format", retryable=False)
+        references = local_references(creative)
+        media = await LaunchMediaResolver().resolve(references) if references else []
+        planned = []
+        for item in media:
+            self.extensions.get("IMAGE_UPLOAD" if item.media_type == "image" else "VIDEO_UPLOAD")
+            planned.append({"image_hash" if item.media_type == "image" else "video_id": "<pending-media>"})
+        preview = copy.deepcopy(launch)
+        preview["creative"] = creative_with_media(creative, planned)
+        return media, preview
+
+    def _validate_operations(self, values, media):
+        from .private_launch_extensions import OPERATIONS
+        from .private_launch_verify import validate_contract
+        family = self.extensions.operations.get("PUBLISH_FAMILY")
+        contracts = {} if family else {step: self.contracts.get(step) for step in STEP_ORDER}
+        for contract in contracts.values():
+            _require_paused_contract(contract)
+            validate_contract(contract.verification, contract.step.value)
+            _render(contract.variables, values)
+            _render(contract.verification["variables"], {**values, "entity_id": "<pending>"})
+            if not _candidate_is_active(contract.step, _contract_candidate(contract.step, contract)):
+                raise ProvisioningError(f"PRIVATE_LAUNCH_{contract.step.value}_CONTRACT_STALE",
+                    "The advertising contract is disabled and must be reviewed before publication", retryable=False)
+        if contracts:
+            _require_payload_coverage(contracts, values["payload"])
+        required = {}
+        if family:
+            required[family.name] = family
+            _render(family.row["variables"], values)
+            for read in family.row["verification"].values():
+                _render(read["variables"], {**values, "entity_id": "<pending>"})
+        for item in media:
+            name = "IMAGE_UPLOAD" if item.media_type == "image" else "VIDEO_UPLOAD"
+            contract = self.extensions.get(name)
+            required[name] = contract
+            _render(contract.row["variables"], {**values, "media": item.public()})
+            _render(contract.row["verification"]["variables"], {**values, "media": item.public(), "entity_id": "<pending>"})
+        for section, status in values.get("delivery", {}).items():
+            if status != "ACTIVE":
+                continue
+            name = "ACTIVATE_" + section.upper()
+            contract = self.extensions.get(name)
+            required[name] = contract
+            context = {**values, "entity_id": "<pending>", "target_status": status}
+            _render(contract.row["variables"], context)
+            _render(contract.row["verification"]["variables"], context)
+        # Pin the complete chain to one immutable Launch, including format,
+        # uploads, publication strategy and post-create delivery changes.
+        serialized = {step.value: {"doc_id": c.doc_id, "friendly_name": c.friendly_name,
+            "endpoint_url": c.endpoint_url, "variables": c.variables,
+            "result_id_paths": c.result_id_paths, "request_envelope": c.request_envelope,
+            "verification": c.verification} for step, c in contracts.items()}
+        serialized.update({name: contract.digest for name, contract in required.items() if name in OPERATIONS})
+        serialized["creative_format"] = values["payload"]["creative"].get("format", "SINGLE")
+        serialized["actor_id"] = values.get("actor_id", "")
+        for resource in self._asset_selections(values["payload"],bool(media)):
+            if resource in self.reads.rows:
+                serialized["read_"+resource] = self.reads.rows[resource]
+        if "pages" in self.reads.rows:
+            serialized["read_pages"] = self.reads.rows["pages"]
+        digest = hashlib.sha256(json.dumps(serialized, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        return contracts, family, digest
+
+    async def _upload_media(self, web, media, launch, values, launch_key, fingerprint):
+        from .private_launch_media import creative_with_media
+        references = []
+        for item in media:
+            name = "IMAGE_UPLOAD" if item.media_type == "image" else "VIDEO_UPLOAD"
+            output = await self.operations.run(web=web, contract=self.extensions.get(name),
+                values=values, launch_key=launch_key, launch_fingerprint=fingerprint, media=item)
+            references.append({"image_hash" if item.media_type == "image" else "video_id": output["entity_id"]})
+        result = copy.deepcopy(launch)
+        result["creative"] = creative_with_media(launch["creative"], references)
+        return result
+
+    async def _activate(self, web, values, launch_key, fingerprint):
+        completed = []
+        # Children first: a paused campaign remains the delivery barrier until
+        # its fully verified ad and ad set have the requested statuses.
+        for section in ("ad", "adset", "campaign"):
+            status = values.get("delivery", {}).get(section, "PAUSED")
+            if status != "ACTIVE":
+                continue
+            name = "ACTIVATE_" + section.upper()
+            await self.operations.run(web=web, contract=self.extensions.get(name),
+                values={**values, "entity_id": values[section + "_id"], "target_status": status},
+                launch_key=launch_key, launch_fingerprint=fingerprint)
+            completed.append({"step": name, "status": "SUCCESS", "entity_id": values[section + "_id"]})
+        return completed
+
+    async def run_delivery(self, *, item_id, profile_id, context, session, payload, task_idempotency_key=None):
+        """Change delivery of this worker's existing objects; never create new ones."""
+        del item_id
+        from .private_launch_extensions import OperationKey
+        from .private_launch_verify import proof, _complete
+        if not isinstance(payload, dict) or payload.get("status") not in {"ACTIVE", "PAUSED"}:
+            raise ProvisioningError("PRIVATE_LAUNCH_STATUS_INVALID", "Choose ACTIVE or PAUSED delivery", retryable=False)
+        source_key = str(payload.get("source_launch_key") or "").strip()
+        key = str(payload.get("delivery_key") or task_idempotency_key or "").strip()
+        if not source_key or not key or max(len(source_key),len(key)) > 200 or source_key == key:
+            raise ProvisioningError("PRIVATE_LAUNCH_INVALID_INPUT", "Delivery requires separate source and request keys", retryable=False)
+        values = {"profile_id": str(profile_id), **{name:self._id(payload.get(name),name)
+                  for name in ("business_id","ad_account_id","page_id")}, "target_status": payload["status"],
+                  "actor_id":str((getattr(context,"cookies",None) or {}).get("c_user") or ""),
+                  "client_mutation_id":"<pending>"}
+        target = tuple(values[name] for name in ("profile_id","business_id","ad_account_id"))
+        await self.state.init()
+        source = {row["step"]:row for row in await self.state.all_steps(source_key)}
+        family = source.get("PUBLISH_FAMILY")
+        if family:
+            source_rows = [family]
+            ids = family.get("result",{}).get("evidence",{}).get("outputs",{})
+            reads = self.extensions.get("PUBLISH_FAMILY").row["verification"]
+        else:
+            source_rows = [source[step.value] for step in STEP_ORDER if step.value in source]
+            ids = {step.value.lower()+"_id":source[step.value]["entity_id"] for step in STEP_ORDER
+                   if step.value in source and source[step.value].get("entity_id")}
+            reads = {step.value:self.contracts.get(step).verification for step in STEP_ORDER
+                     if ids.get(step.value.lower()+"_id")}
+        if (not source_rows or any(tuple(str(row[name]) for name in ("profile_id","business_id","ad_account_id")) != target
+                                  for row in source_rows)):
+            raise ProvisioningError("PRIVATE_LAUNCH_KEY_TARGET_MISMATCH", "Source advertising job belongs to another target", retryable=False)
+        for name, identity in ids.items():
+            if name not in {step.value.lower()+"_id" for step in STEP_ORDER} or not re.fullmatch(r"\d{5,40}",str(identity)):
+                raise ProvisioningError("PRIVATE_LAUNCH_RECONCILE_REQUIRED", "Source job has no exact advertising references", retryable=False)
+        if not ids or (payload["status"] == "ACTIVE" and len(ids) != 4):
+            raise ProvisioningError("PRIVATE_LAUNCH_RECONCILE_REQUIRED", "Activation requires the complete published advertising chain", retryable=False)
+        values.update(ids)
+        order = ("ad","adset","campaign") if payload["status"] == "ACTIVE" else ("campaign","adset","ad")
+        contracts = {section:self.extensions.get("ACTIVATE_"+section.upper()) for section in order if ids.get(section+"_id")}
+        for section, contract in contracts.items():
+            _render(contract.row["variables"], {**values,"entity_id":ids[section+"_id"]})
+            _render(contract.row["verification"]["variables"], {**values,"entity_id":ids[section+"_id"]})
+        fingerprint = hashlib.sha256(json.dumps({"source":source_key,"target":target,"page_id":values["page_id"],
+            "ids":ids,"status":payload["status"]},sort_keys=True).encode()).hexdigest()
+        digest = hashlib.sha256(json.dumps({"actor_id":values["actor_id"],
+            "contracts":{section:contract.digest for section,contract in contracts.items()}},sort_keys=True).encode()).hexdigest()
+        await self.state.bind_plan(key,values,fingerprint,digest)
+        transport = MetaTransportRouter(session,private_only=True)
+        web = await transport.facebook_web()
+        web.private_only = True
+        current = {}
+        # Fresh typed READs establish exact scope and parents even if a source
+        # task ended with an interrupted verification. IDs supplied by a client
+        # are never accepted as a delivery target.
+        for step in STEP_ORDER:
+            identity = ids.get(step.value.lower()+"_id")
+            if not identity:
+                continue
+            read = reads[step.value]
+            response = await web.graphql(read["doc_id"],_render(read["variables"],{**values,"entity_id":identity}),
+                friendly_name=read["friendly_name"],endpoint_url=PrivateLaunchContractStore._endpoint(read.get("endpoint_url")),
+                business_context_id=values["business_id"])
+            status = _lookup(response,read["status_path"]) if read.get("status_path") else "PAUSED"
+            if not _complete(response) or proof(response,read,{**values,"entity_id":identity,"expected_status":status}).get("verified") is not True:
+                raise ProvisioningError("PRIVATE_LAUNCH_DELIVERY_SCOPE_UNCONFIRMED",
+                    "Independent read did not confirm the source job's exact advertising objects",retryable=False)
+            current[step.value.lower()] = status
+        if payload["status"] == "ACTIVE":
+            preflight = await self._review_preflight(context=context,transport=transport,payment_selector=_payment_selector(payload),**{
+                name:values[name] for name in ("profile_id","business_id","ad_account_id","page_id")})
+            if preflight.get("payment_selection_required") is True:
+                raise ProvisioningError("PRIVATE_LAUNCH_PAYMENT_SELECTION_REQUIRED", "Choose the linked payment method before activation", retryable=False)
+        completed = []
+        for section, contract in contracts.items():
+            if current.get(section) == payload["status"]:
+                completed.append({"step":contract.name,"status":"SUCCESS","skipped":True,"entity_id":ids[section+"_id"]})
+                continue
+            await self.operations.run(web=web,contract=contract,values={**values,"entity_id":ids[section+"_id"]},
+                launch_key=key,launch_fingerprint=fingerprint)
+            completed.append({"step":contract.name,"status":"SUCCESS","entity_id":ids[section+"_id"]})
+        return {"status":"SUCCESS","source_launch_key":source_key,"delivery_key":key,"delivery_status":payload["status"],
+                "profile_id":str(profile_id),"business_id":values["business_id"],"ad_account_id":values["ad_account_id"],
+                "entities":ids,"steps":completed,"browser_started":False}
 
     @staticmethod
     def _id(value: Any, label: str) -> str:
@@ -1304,8 +1627,13 @@ class PrivateLaunchService:
             await web.bootstrap()
             # Both reads share the profile connection pool, cookies and proxy.
             # Queries may overlap; create operations remain ordered separately.
+            page_read = (self.reads.pages(web, {"profile_id": profile_id, "business_id": business_id,
+                         "ad_account_id": ad_account_id, "page_id": page_id, "query": "", "limit": 500,
+                         "actor_id":str((getattr(context,"cookies",None) or {}).get("c_user") or "")})
+                         if "pages" in self.reads.rows else
+                         inspect_pages(web, account=ad_account_id, business_id=business_id))
             pages, funding = await asyncio.wait_for(asyncio.gather(
-                inspect_pages(web, account=ad_account_id, business_id=business_id),
+                page_read,
                 inspect_methods(web, account=ad_account_id, business_id=business_id),
             ), timeout=65)
         except AuthenticationError as exc:
@@ -1484,28 +1812,30 @@ class PrivateLaunchService:
         page_id = self._id(payload.get("page_id"), "page_id")
         launch_payload = _effective_launch_payload(payload.get("launch"))
         payment_selector = _payment_selector(payload)
+        if launch_payload["creative"].get("page_id") not in (None,"",page_id):
+            raise ProvisioningError("PRIVATE_LAUNCH_PAGE_MISMATCH", "Creative Page differs from the selected account binding",retryable=False)
 
-        # Validate the complete mutation chain before the first irreversible
-        # request. A missing downstream contract must never leave an orphaned
-        # Campaign or Ad Set behind.
-        contracts = {step: self.contracts.get(step) for step in STEP_ORDER}
-        _require_payload_coverage(contracts, launch_payload)
+        # Resolve local media and validate every required operation before
+        # submitting an upload, family publication or individual CREATE.
+        media, preview = await self._media_inputs(launch_payload)
         validation_values = {
             "profile_id": profile_id, "business_id": business_id,
             "ad_account_id": ad_account_id, "page_id": page_id,
-            "payload": launch_payload,
-            "campaign_id": "<pending>", "adset_id": "<pending>", "creative_id": "<pending>",
+            "payload": preview,
+            "delivery": launch_payload.get("delivery", {}),
+            "campaign_id": "<pending>", "adset_id": "<pending>", "creative_id": "<pending>", "ad_id": "<pending>",
+            "actor_id": str((getattr(context,"cookies",None) or {}).get("c_user") or ""),
+            "client_mutation_id": "<pending>",
         }
-        for contract in contracts.values():
-            _require_paused_contract(contract)
-            from .private_launch_verify import validate_contract
-            validate_contract(contract.verification, contract.step.value)
-            # Rendering checks every downstream required input now, before any
-            # Campaign CREATE. Dependency IDs are validated after actual reads.
-            _render(contract.variables, validation_values)
-            if not _candidate_is_active(contract.step, _contract_candidate(contract.step, contract)):
-                raise ProvisioningError(f"PRIVATE_LAUNCH_{contract.step.value}_CONTRACT_STALE",
-                    "The advertising contract is disabled and must be reviewed before publication.", retryable=False)
+        validation_values["payload"].pop("delivery", None)
+        contracts, family, digest = self._validate_operations(validation_values, media)
+        selections = self._asset_selections(launch_payload,bool(media))
+        for resource in selections:
+            row = self.reads.rows.get(resource)
+            if row is None:
+                raise ProvisioningError("PRIVATE_LAUNCH_RESOURCE_CONTRACT_REQUIRED",
+                    "A pinned resource query is required before publishing these selected assets",retryable=False)
+            _render(row["variables"],{"query":"","limit":500,**validation_values})
         preflight = await self._review_preflight(
             context=context,
             profile_id=profile_id,
@@ -1515,6 +1845,8 @@ class PrivateLaunchService:
             transport=transport,
             payment_selector=payment_selector,
         )
+        if selections:
+            preflight["asset_checks"] = await self._verify_assets(await transport.facebook_web(),selections,validation_values)
         return {
             "ready": preflight.get("payment_selection_required") is not True,
             "profile_id": profile_id,
@@ -1531,6 +1863,9 @@ class PrivateLaunchService:
                 for step, contract in contracts.items()
             },
             "_contracts": contracts,
+            "_family": family,
+            "_media": media,
+            "_contract_digest": digest,
         }
 
     async def run(
@@ -1571,6 +1906,23 @@ class PrivateLaunchService:
             )
 
         await self.state.init()
+        fingerprint = _launch_fingerprint(payload, page_id)
+        # Unknown media/family submissions outrank fresh live preflight just
+        # like the existing four CREATE stages. They can never be replayed.
+        for saved in await self.state.all_steps(launch_key):
+            if saved["step"] in {step.value for step in STEP_ORDER}:
+                continue
+            evidence = saved.get("result", {}).get("evidence", {})
+            if (str(saved["profile_id"]), str(saved["business_id"]), str(saved["ad_account_id"])) != (
+                    str(profile_id), business_id, ad_account_id):
+                raise ProvisioningError("PRIVATE_LAUNCH_KEY_TARGET_MISMATCH",
+                    "Saved advertising operation belongs to another target", retryable=False)
+            if evidence.get("launch_fingerprint") != fingerprint:
+                raise ProvisioningError("PRIVATE_LAUNCH_KEY_PAYLOAD_MISMATCH",
+                    "Advertising operation belongs to another Launch configuration", retryable=False)
+            if saved["status"] in {"SUBMITTING", "RECONCILE_REQUIRED", "BLOCKED"} and not evidence.get("outputs"):
+                raise ProvisioningError("PRIVATE_LAUNCH_RECONCILE_REQUIRED",
+                    "A saved media or publication request has an unknown result; resubmission is blocked", retryable=False)
         meta_transport = MetaTransportRouter(session, private_only=True)
         prior_by_step: dict[PrivateLaunchStep, dict[str, Any] | None] = {}
         current_target = (profile_id, business_id, ad_account_id)
@@ -1636,6 +1988,9 @@ class PrivateLaunchService:
         page_id = str(review["page_id"])
         launch_payload = review["launch"]
         contracts = review.pop("_contracts")
+        family = review.pop("_family")
+        media = review.pop("_media")
+        contract_digest = review.pop("_contract_digest")
         preflight = review["preflight"]
 
         values: dict[str, Any] = {
@@ -1644,10 +1999,29 @@ class PrivateLaunchService:
             "ad_account_id": ad_account_id,
             "page_id": page_id,
             "payload": launch_payload,
+            "delivery": launch_payload.get("delivery", {}),
+            "actor_id": str((getattr(context,"cookies",None) or {}).get("c_user") or ""),
         }
         completed: list[dict[str, Any]] = []
 
-        for step in STEP_ORDER:
+        from .private_launch_extensions import OperationKey
+        prior_family = await self.state.step(launch_key, OperationKey("PUBLISH_FAMILY"))
+        if (family and any(prior_by_step.values())) or (not family and prior_family):
+            raise ProvisioningError("PRIVATE_LAUNCH_PLAN_CHANGED",
+                "An existing Launch cannot switch between family and individual publication", retryable=False)
+        await self.state.bind_plan(launch_key, values, fingerprint, contract_digest)
+        web = await meta_transport.facebook_web()
+        launch_payload = await self._upload_media(web, media, launch_payload, values, launch_key, fingerprint)
+        values["payload"] = {key: value for key, value in launch_payload.items() if key != "delivery"}
+        if family:
+            outputs = await self.operations.run(web=web, contract=family, values=values,
+                                               launch_key=launch_key, launch_fingerprint=fingerprint)
+            values.update(outputs)
+            completed.extend({"step": step.value, "status": "SUCCESS", "entity_id": outputs[step.value.lower() + "_id"],
+                              "publication": "family"} for step in STEP_ORDER)
+
+        for step in ([] if family else STEP_ORDER):
+            values["client_mutation_id"] = hashlib.sha256((launch_key + ":" + step.value).encode()).hexdigest()[:32]
             prior = prior_by_step.get(step)
             if prior and str(prior.get("status") or "").upper() == "SUCCESS":
                 entity_id = str(prior.get("entity_id") or "").strip()
@@ -1964,6 +2338,7 @@ class PrivateLaunchService:
                 "entity_id": entity_id,
             })
 
+        completed.extend(await self._activate(web, values, launch_key, fingerprint))
         return {
             "profile_id": profile_id,
             "business_id": business_id,
@@ -1971,6 +2346,7 @@ class PrivateLaunchService:
             "page_id": page_id,
             "launch_key": launch_key,
             "status": "SUCCESS",
+            "delivery": launch_payload.get("delivery", {"campaign": "PAUSED", "adset": "PAUSED", "ad": "PAUSED"}),
             "preflight": preflight,
             "steps": completed,
             "entities": {

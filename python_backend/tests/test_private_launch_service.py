@@ -546,7 +546,7 @@ class PrivateLaunchTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ProvisioningError) as caught:
             await self.service.run(item_id="unsafe", profile_id="7", context=self.context,
                                    session=self.session, payload=active)
-        self.assertEqual(caught.exception.code, "PRIVATE_LAUNCH_PAUSED_REQUIRED")
+        self.assertEqual(caught.exception.code, "PRIVATE_LAUNCH_ACTIVATE_AD_CONTRACT_REQUIRED")
         self.web.graphql.assert_not_awaited()
 
     async def test_concurrent_workers_claim_each_create_atomically(self):
