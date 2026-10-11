@@ -346,13 +346,18 @@ async function bindPaymentCard(rows,card,cvv,container,reviews={}){
           return checked;
         }catch(_){stopAfterUncertain=true;return response;}
       }
-      if(result.status==='ACTION_REQUIRED'||
-        (result.submitted!==false&&result.status!=='LINKED'))stopAfterUncertain=true;
-      if(result.card_linked===true
+      const exactLinked=result.card_linked===true
           && ['LINKED','ACTION_REQUIRED'].includes(result.status)
           && result.funding?.account_scope_verified===true
           && result.funding?.business_scope_verified===true
-          && result.funding?.payment_account_relation_verified===true){
+          && result.funding?.payment_account_relation_verified===true;
+      // Bank verification pending on a PROVEN linked card is not an
+      // ambiguous Save. Continue the batch to the other independently
+      // scoped accounts; stop only after an uncertain card submission.
+      if(!exactLinked&&(result.status==='ACTION_REQUIRED'||
+          (result.submitted!==false&&result.status!=='LINKED')))
+        stopAfterUncertain=true;
+      if(exactLinked){
         // User explicitly selected this card for this RK. On a confirmed
         // link, check the Meta SDC task and initiate its once-only temporary
         // authorization only when Meta says UNVERIFIED_OR_PENDING_AUTH.
