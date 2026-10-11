@@ -211,6 +211,32 @@ OPERATION);
         expect(count($operations)===1,'Exact HTTP reconciliation repeated or fell back');
         $payload=json_decode($operations[0]['http']['content'],true);
         expect($payload['operation']==='reconcile'&&!isset($payload['card'])&&!isset($payload['cvv']),'Reconciliation sent financial credentials');
+        // Complete an already-observed bank challenge: Meta's verified reply
+        // must update the original card/RK binding without sending a new hold.
+        $bankResult=['profile_id'=>'Fixture','account_id'=>'123456789',
+            'status'=>'VERIFIED','code'=>'SDC_CODE_VERIFIED_BY_META',
+            'verification_stage'=>'META_CONFIRMED','sdc_screen_verified'=>true,
+            'sdc_credential_match'=>true,'card_linked'=>true,
+            'card_confirmation_status'=>'CLEAR','credential_id'=>'fixture-exact-card',
+            'funding'=>$httpFunding];
+        file_put_contents($root.'/result.json',json_encode($bankResult));
+        $response=$invoke(['action'=>'verify_code','profile'=>'Fixture','account_id'=>'123456789',
+            'card_id'=>$c['id'],'verification_code'=>'A9B2']);
+        expect(($response['data']['result']['binding_recorded']??null)===true,
+            'Meta bank success was not durably linked to selected card');
+        $confirmed=$v->binding($c['id'],'Fixture','123456789');
+        expect($confirmed['status']==='LINKED'&&
+            ($confirmed['bank_verification_status']??'')==='META_CONFIRMED',
+            'Meta bank success was not stored in exact vault binding');
+        $sentRequests=array_map(fn($line)=>json_decode($line,true),file($root.'/operations.jsonl'));
+        expect(count($sentRequests)===1,'Bank code completion sent additional requests');
+        $workerPayload=json_decode($sentRequests[0]['http']['content'],true);
+        expect(($workerPayload['operation']??'')==='verify_code'&&
+            ($workerPayload['verification_code']??'')==='A9B2'&&
+            !isset($workerPayload['card'],$workerPayload['cvv']),
+            'Bank code completion sent an unexpected payment action');
+        expect(!str_contains(file_get_contents($root.'/state/payment-cards/cards.json'),'A9B2'),
+            'Bank descriptor was persisted in card vault');
     } finally {
         $files=new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root,FilesystemIterator::SKIP_DOTS),RecursiveIteratorIterator::CHILD_FIRST);
         foreach($files as $file){if($file->isDir())rmdir($file->getPathname());else unlink($file->getPathname());}rmdir($root);
