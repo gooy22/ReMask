@@ -606,6 +606,11 @@ async function pythonWorkerHealthCheck() {
         ' · volume ' + (volumeMounted ? 'YES' : 'NO') +
         ' · очередь ' + queued +
         ' · concurrency ' + concurrency;
+      if (readiness && readiness.network_test && readiness.network_test.mode === 'DIRECT_TEST') {
+        const test = readiness.network_test;
+        el.textContent += ' · БЕЗ ПРОКСИ: FB ' + String(test.profile_id) +
+          ' до ' + new Date(Number(test.expires_at) * 1000).toLocaleTimeString();
+      }
     } else {
       el.dataset.state = 'offline';
       el.textContent =

@@ -71,7 +71,9 @@ async def private_business_preflight(session, context, profile_id):
         for row in (getattr(context, "pages", []) or [])
         if isinstance(row, dict) and str(row.get("id", "")).isdigit()]
     return {"ok": True, "profile_id": str(profile_id), "purpose": "business",
-        "profile_context": "ok", "proxy": "ok", "proxy_exit_ip": str(proxy_result.get("exit_ip", "")),
+        "profile_context": "ok", "proxy": "direct_test" if proxy_result.get('mode') == 'DIRECT_TEST' else "ok",
+        "network_mode": proxy_result.get('mode', 'PROXY'), "direct_test_until": proxy_result.get('expires_at', 0),
+        "proxy_exit_ip": str(proxy_result.get("exit_ip", "")),
         "proxy_latency_ms": int(proxy_result.get("latency_ms", 0)), "total_ms": int((time.monotonic()-started)*1000),
         "facebook_session": "private_http", "facebook_session_ready": inspection["session_ready"],
         "auth_blocked": auth_blocked, "auth_error_code": auth_code if auth_blocked else "",

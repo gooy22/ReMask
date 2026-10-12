@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -14,6 +15,7 @@ from fb_worker import (
     WebProfile,
 )
 from .facebook_graph_api import FacebookGraphApi
+from .direct_test import direct_test_deadline, direct_test_result
 
 
 class ProfileContextError(RuntimeError):
@@ -49,6 +51,7 @@ class ProfileContext:
     ad_accounts: list[dict[str, Any]] | None = None
     inventory_updated_at: int = 0
     inventory_source: str = ""
+    direct_test_until: int = 0
 
 
 class ProfileResolver:
@@ -312,8 +315,9 @@ class ProfileResolver:
                 category="invalid_profile_context",
             )
 
-        proxy = str(payload.get("proxy") or "").strip() or None
-        if not proxy:
+        direct_until = direct_test_deadline(profile_id)
+        proxy = None if direct_until else str(payload.get("proxy") or "").strip() or None
+        if not proxy and not direct_until:
             raise ProfileContextError(
                 "profile proxy is not configured",
                 retryable=False,
@@ -324,6 +328,7 @@ class ProfileResolver:
             profile_id=profile_id,
             cookies=cookie_map,
             proxy=proxy,
+            direct_test_until=direct_until,
             user_agent=user_agent,
             access_token="",
             display_name=(
@@ -393,6 +398,7 @@ class MetaSession:
         self._graph_lock = asyncio.Lock()
         self._business_browser: Any | None = None
         self._business_browser_lock = asyncio.Lock()
+        self._direct_browser_timer: asyncio.Task | None = None
 
     async def _get_session(self) -> aiohttp.ClientSession:
         session = self._session
@@ -424,6 +430,8 @@ class MetaSession:
         url: str,
         **kwargs: Any,
     ) -> aiohttp.ClientResponse:
+        if getattr(self.context, 'direct_test_until', 0) and not direct_test_deadline(self.context.profile_id):
+            raise ProfileContextError('DIRECT_TEST_EXPIRED', retryable=False)
         session = await self._get_session()
         return await session.request(method, url, **kwargs)
 
@@ -454,6 +462,9 @@ class MetaSession:
         return BusinessLogicController(await self.facebook_web())
 
     async def facebook_business_browser(self):
+        direct_until = getattr(self.context, 'direct_test_until', 0)
+        if direct_until and direct_test_deadline(self.context.profile_id) != direct_until:
+            raise ProfileContextError('DIRECT_TEST_EXPIRED', retryable=False)
         current = self._business_browser
         if current is not None:
             return current
@@ -483,6 +494,11 @@ class MetaSession:
                 )
                 await current.open()
                 self._business_browser = current
+                if direct_until:
+                    async def expire_direct_browser():
+                        await asyncio.sleep(max(0, direct_until - time.time()))
+                        await self.close_business_browser()
+                    self._direct_browser_timer = asyncio.create_task(expire_direct_browser())
             return current
 
     async def graph_api(self) -> FacebookGraphApi:
@@ -494,6 +510,11 @@ class MetaSession:
     async def close_business_browser(self) -> None:
         """Release Chromium between provisioning phases, retaining HTTP state."""
         async with self._business_browser_lock:
+            timer = self._direct_browser_timer
+            self._direct_browser_timer = None
+            if timer is not None and timer is not asyncio.current_task():
+                timer.cancel()
+                await asyncio.gather(timer, return_exceptions=True)
             if self._business_browser is not None:
                 await self._business_browser.close()
                 self._business_browser = None
@@ -525,6 +546,11 @@ class MetaSession:
     async def proxy_check(self) -> dict[str, Any]:
         from .provisioning.proxy import ProxyChecker
 
+        if getattr(self.context, 'direct_test_until', 0):
+            result = direct_test_result(self.context.profile_id)
+            if result is None:
+                raise ProxyCheckError('DIRECT_TEST_EXPIRED')
+            return result
         return await ProxyChecker(
             self.context.proxy,
             self.context.user_agent,
