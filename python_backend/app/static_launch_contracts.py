@@ -44,6 +44,12 @@ class StaticLaunchContractStore(PrivateLaunchContractStore):
                 rows[name] = row
             super().__init__(json.dumps(rows))
             self.revision = data["revision"]
+            from .private_launch_extensions import LaunchExtensionCatalog
+            self.extensions = LaunchExtensionCatalog(data)
+            from .private_advertising_reads import AdvertisingReadCatalog
+            self.reads = AdvertisingReadCatalog(data)
+            if "PUBLISH_FAMILY" in self.extensions.operations and rows:
+                raise ValueError("Choose family publication or individual CREATE contracts")
             for name in rows:
                 self.get(PrivateLaunchStep(name))
         except (OSError, ValueError, KeyError, TypeError) as exc:
@@ -56,5 +62,11 @@ class StaticLaunchContractStore(PrivateLaunchContractStore):
             retryable=False)
 
     def status(self):
+        if "PUBLISH_FAMILY" in self.extensions.operations:
+            contract = self.extensions.get("PUBLISH_FAMILY")
+            return {step.value: {"configured": True, "active": True, "verification_configured": True,
+                                "revision": self.revision, "source": "static_deployed_family_manifest",
+                                "friendly_name": contract.row["friendly_name"], "code": ""}
+                    for step in PrivateLaunchStep}
         return {step: {**row, "revision": self.revision, "source": "static_deployed_manifest"}
                 for step, row in super().status().items()}

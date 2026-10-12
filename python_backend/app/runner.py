@@ -455,18 +455,33 @@ class WorkerPool:
                         await self.store.set_task_running(task['id'])
                         try:
                             action=str(task['action'])
-                            if action=='private_launch':
+                            if action in {'private_launch','private_delivery'}:
                                 payload=task['payload']
+                                upload_count=0
+                                if action=='private_launch' and isinstance(payload,dict):
+                                    launch=payload.get('launch') or {}
+                                    if isinstance(launch,dict):
+                                        base=launch.get('base',launch) or {}
+                                        override=launch.get('override') or {}
+                                        base=base if isinstance(base,dict) else {}
+                                        override=override if isinstance(override,dict) else {}
+                                        base_creative=base.get('creative') or {}
+                                        override_creative=override.get('creative') or {}
+                                        creative={**(base_creative if isinstance(base_creative,dict) else {}),
+                                                  **(override_creative if isinstance(override_creative,dict) else {})}
+                                        uploads=creative.get('staged_media') or creative.get('carousel_media_library_ids') or []
+                                        upload_count=len(uploads) if isinstance(uploads,list) else 0
+                                        if creative.get('media_library_id'):upload_count=max(1,upload_count)
                                 try:
                                     launch_timeout=float(
                                         os.getenv('REMASK_PRIVATE_LAUNCH_HARD_TIMEOUT_SECONDS')
-                                        or '300'
+                                        or str(300+min(upload_count,10)*120)
                                     )
                                 except (TypeError,ValueError):
                                     launch_timeout=300.0
-                                launch_timeout=max(120.0,min(launch_timeout,900.0))
+                                launch_timeout=max(120.0,min(launch_timeout,1800.0))
                                 result=await _await_with_hard_watchdog(
-                                    self.private_launch.run(
+                                    (self.private_launch.run if action=='private_launch' else self.private_launch.run_delivery)(
                                         item_id=item_id,
                                         profile_id=profile_id,
                                         context=context,

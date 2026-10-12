@@ -87,6 +87,28 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status, 307)
         self.assertEqual(len(calls), 1)
 
+    async def test_graphql_multipart_stream_keeps_auth_and_claim_before_one_post(self):
+        import io
+        web = FacebookWebSession(WebProfile('fixture', {'c_user':'123'}, 'http://127.0.0.1:1', 'fixture-UA'))
+        self.addAsyncCleanup(web.close)
+        web.bootstrap = AsyncMock(return_value=FacebookBootstrap('fresh-dtsg','123'))
+        client = await web._ensure_session()
+        events=[]
+        async def claim():
+            events.append('claim')
+        async def handler(request):
+            events.append('post')
+            self.assertIn('multipart/form-data; boundary=',request.headers['content-type'])
+            body=await request.aread()
+            for value in (b'fresh-dtsg',b'fixture image bytes',b'name="file"; filename="fixture.png"',b'123456789'):
+                self.assertIn(value,body)
+            return httpx.Response(200,json={'data':{'upload':{'hash':'fixture_hash'}}})
+        await self.mock(client,handler)
+        result=await web.graphql('123456789',{'account':'123'},endpoint_url='https://www.facebook.com/api/graphql/',
+            before_submit=claim,multipart_files={'file':('fixture.png',io.BytesIO(b'fixture image bytes'),'image/png')})
+        self.assertEqual(result['data']['upload']['hash'],'fixture_hash')
+        self.assertEqual(events,['claim','post'])
+
     async def test_fresh_set_cookie_is_used_on_next_profile_request(self):
         client = self.make()
         seen = []

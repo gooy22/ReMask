@@ -1,6 +1,9 @@
 {
   "version": 1,
-  "revision": "meta-launch-2026-10-11",
+  "revision": "meta-launch-2026-10-12-offline",
   "steps": {},
-  "pending_evidence": ["CAMPAIGN", "ADSET", "CREATIVE", "AD", "MEDIA_UPLOAD", "ACTIVATION"]
+  "operations": {},
+  "reads": {},
+  "creative_formats": ["SINGLE"],
+  "pending_evidence": ["CAMPAIGN", "ADSET", "CREATIVE", "AD", "MEDIA_UPLOAD", "ACTIVATION", "FAMILY_PUBLICATION", "ACCOUNT_PAGES", "ASSET_QUERIES"]
 }

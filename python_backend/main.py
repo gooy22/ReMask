@@ -1454,7 +1454,8 @@ async def profile_page_access(profile_id: str, account_id: str):
         raise HTTPException(status_code=400,detail='INVALID_PROFILE')
     try:
         account_id=normalize_account(account_id)
-        result=await inspect_profile_pages(pool.resolver,profile,account_id,state=pool.provisioning_state)
+        result=await inspect_profile_pages(pool.resolver,profile,account_id,state=pool.provisioning_state,
+                                         read_catalog=pool.private_launch.reads)
     except ValueError as exc:
         raise HTTPException(status_code=400,detail='INVALID_PAGE_ACCESS_TARGET') from exc
     except ProfileContextError as exc:
@@ -3558,7 +3559,55 @@ async def private_launch_contract_status():
     return {
         'ok':True,
         'contracts':pool.private_launch.contracts.status(),
+        'operations':pool.private_launch.extensions.status(),
+        'creative_formats':pool.private_launch.extensions.formats,
+        'resources':pool.private_launch.reads.status(),
     }
+
+@app.post('/api/v1/private-launch/plan',dependencies=[Depends(require_key)])
+async def private_launch_plan(payload: dict = Body(...)):
+    try:
+        return pool.private_launch.plan(profile_id=str(payload.get('profile_id') or '').strip(), payload=payload)
+    except ProvisioningError as exc:
+        raise HTTPException(status_code=422, detail={'code':exc.code,'message':str(exc),'retryable':False}) from exc
+
+@app.get('/api/v1/profiles/{profile_id}/advertising-resources',dependencies=[Depends(require_key)])
+async def private_advertising_resources(profile_id: str, resource: str, account_id: str,
+                                        force: bool = False, query: str = '', limit: int = 100):
+    from app.private_advertising_reads import RESOURCE_FIELDS
+    from app.private_auth import private_auth_error
+    from fb_worker import AuthenticationError
+    profile = str(profile_id or '').strip()
+    if not profile or len(profile) > 160 or resource not in RESOURCE_FIELDS or len(query) > 200:
+        raise HTTPException(status_code=400,detail='INVALID_ADVERTISING_RESOURCE_REQUEST')
+    try:
+        account = pool.private_launch._id(account_id, 'account_id')
+        context = await pool.resolver.resolve(profile)
+        rows = [row for row in (context.ad_accounts or []) if isinstance(row,dict)
+                and str(row.get('ad_account_id') or row.get('account_id') or row.get('id') or '').removeprefix('act_') == account]
+        businesses = {str(row.get('business_id') or '') for row in rows if str(row.get('business_id') or '').isdigit()}
+        if len(businesses) != 1:
+            raise ProvisioningError('PRIVATE_LAUNCH_RK_NOT_IN_CONFIRMED_INVENTORY',
+                                   'Exact advertising account context is unavailable',retryable=False)
+        values = {'profile_id':profile,'business_id':next(iter(businesses)),'ad_account_id':account,
+                  'query':query,'limit':max(1,min(limit,500)),
+                  'actor_id':str(context.cookies.get('c_user') or '')}
+        actor = str(context.cookies.get('c_user') or '')
+        if force:
+            async with ProfileSession(context) as session:
+                web = await session.facebook_web()
+                web.private_only = True
+                result = await pool.private_launch.resources.get(name=resource,values=values,actor_id=actor,force=True,web=web)
+        else:
+            result = await pool.private_launch.resources.get(name=resource,values=values,actor_id=actor)
+        return {'ok':True,'profile':profile,'resource':resource,**result}
+    except AuthenticationError as exc:
+        error = private_auth_error(exc)
+        raise HTTPException(status_code=409,detail={'code':error.code,'message':str(error)}) from exc
+    except (ProvisioningError,ProfileContextError) as exc:
+        raise HTTPException(status_code=409,detail={'code':getattr(exc,'code','PROFILE_CONTEXT_ERROR'),'message':str(exc)}) from exc
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(status_code=504,detail='ADVERTISING_RESOURCE_READ_TIMEOUT') from exc
 
 @app.get('/api/v1/private-launch/maintenance-candidate',dependencies=[Depends(require_key)])
 async def private_launch_maintenance_candidate():
@@ -3611,7 +3660,7 @@ async def private_launch_review(profile_id: str, payload: dict = Body(...)):
             context=context,
             payload=payload,
         )
-        result.pop('_contracts',None)
+        result = {key:value for key,value in result.items() if not key.startswith('_')}
         return {'ok':True,**result}
     except ProvisioningError as exc:
         raise HTTPException(

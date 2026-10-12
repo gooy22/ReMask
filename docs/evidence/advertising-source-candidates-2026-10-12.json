@@ -1,0 +1,183 @@
+{
+  "schema_version": 1,
+  "scope": "archived_source_research_only",
+  "archive_repository": "vinikjkkj/wa-diff",
+  "archive_commit": "0d88c7fddbde4cd33090a0b65df3d3017486684f",
+  "archive_commit_date": "2026-10-11T21:13:36Z",
+  "retrieved_at": "2026-10-12",
+  "provenance": "Public source mirror, not an authenticated AdsManager request capture. Commit date does not establish module capture date.",
+  "live_meta_requests": 0,
+  "production_contracts_enabled": 0,
+  "sources": [
+    {
+      "module": "AdAsyncRequestStatus",
+      "url": "https://github.com/vinikjkkj/wa-diff/blob/0d88c7fddbde4cd33090a0b65df3d3017486684f/files/AdAsyncRequestStatus.js",
+      "file_sha256": "c19d97506d41b7de20c638b7f6db25b9f520a5aae11c7ddc70f3b1cf1d8af100"
+    },
+    {
+      "module": "AdDraftPublishStatuses",
+      "url": "https://github.com/vinikjkkj/wa-diff/blob/0d88c7fddbde4cd33090a0b65df3d3017486684f/files/AdDraftPublishStatuses.js",
+      "file_sha256": "08e85e3c57c438a9e8d8be5a7a16346cded0827a39a561955654a546719f42e2"
+    },
+    {
+      "module": "AdsAccountStoreNewSourceServerQuery.graphql",
+      "url": "https://github.com/vinikjkkj/wa-diff/blob/0d88c7fddbde4cd33090a0b65df3d3017486684f/files/AdsAccountStoreNewSourceServerQuery_graphql.js",
+      "file_sha256": "40768d945a9ddaf005120be01ae553d372669b18127e807b2d4a6f04e3727078",
+      "doc_id": "28123458433974544",
+      "operation_kind": "query",
+      "active": false,
+      "request_schema_confirmed": false,
+      "response_scope_confirmed": false
+    },
+    {
+      "module": "AdsDraftFragmentDataManager",
+      "url": "https://github.com/vinikjkkj/wa-diff/blob/0d88c7fddbde4cd33090a0b65df3d3017486684f/files/AdsDraftFragmentDataManager.js",
+      "file_sha256": "f7dc5a82c70d682df350adf440900577e5018e62a85522ad9ef77355370317de"
+    },
+    {
+      "module": "AdsDraftFragmentDataManagerFields",
+      "url": "https://github.com/vinikjkkj/wa-diff/blob/0d88c7fddbde4cd33090a0b65df3d3017486684f/files/AdsDraftFragmentDataManagerFields.js",
+      "file_sha256": "a1aba63cd39a75bb08ea9f014a05cab8b688cb22e99b12355e629109f99c3c2c"
+    },
+    {
+      "module": "AdsDraftPublishDataManager",
+      "url": "https://github.com/vinikjkkj/wa-diff/blob/0d88c7fddbde4cd33090a0b65df3d3017486684f/files/AdsDraftPublishDataManager.js",
+      "file_sha256": "690f5868c72ab8e70b9d213f64a31c2c82f01db59a1510cdea52106be8b2ab07"
+    },
+    {
+      "module": "AdsDraftPublishRealtimeClient",
+      "url": "https://github.com/vinikjkkj/wa-diff/blob/0d88c7fddbde4cd33090a0b65df3d3017486684f/files/AdsDraftPublishRealtimeClient.js",
+      "file_sha256": "eee1cb1e42358da15f00b2c9f3043bfd500f0412d5860155a6c893cdddee4338"
+    },
+    {
+      "module": "AdsGraphAPI",
+      "url": "https://github.com/vinikjkkj/wa-diff/blob/0d88c7fddbde4cd33090a0b65df3d3017486684f/files/AdsGraphAPI.js",
+      "file_sha256": "6805850c0ce43fec0bf10008e2ccaa5fed10267d19b82a10743a4153fa15e114"
+    },
+    {
+      "module": "AdsManagerLiveDataCampaignQuery.graphql",
+      "url": "https://github.com/vinikjkkj/wa-diff/blob/0d88c7fddbde4cd33090a0b65df3d3017486684f/files/AdsManagerLiveDataCampaignQuery_graphql.js",
+      "file_sha256": "bb903fc54ed2e8c5904d5028aa0f7034ef4132639088cd5573be0183512ef58c",
+      "doc_id": "38493987773525432",
+      "operation_kind": "query",
+      "active": false,
+      "request_schema_confirmed": false,
+      "response_scope_confirmed": false
+    },
+    {
+      "module": "AdsMgmtAdgroupDynamicStoreSourceTier1ServerQuery.graphql",
+      "url": "https://github.com/vinikjkkj/wa-diff/blob/0d88c7fddbde4cd33090a0b65df3d3017486684f/files/AdsMgmtAdgroupDynamicStoreSourceTier1ServerQuery_graphql.js",
+      "file_sha256": "dd42f9640d45679462d445c88a7c8e13d453861d1dc63ddec903e5a1bacbf104",
+      "doc_id": "27551912517774136",
+      "operation_kind": "query",
+      "active": false,
+      "request_schema_confirmed": false,
+      "response_scope_confirmed": false
+    },
+    {
+      "module": "AdsMgmtCampaignDynamicStoreSourceTier1ServerQuery.graphql",
+      "url": "https://github.com/vinikjkkj/wa-diff/blob/0d88c7fddbde4cd33090a0b65df3d3017486684f/files/AdsMgmtCampaignDynamicStoreSourceTier1ServerQuery_graphql.js",
+      "file_sha256": "64ba78509fc4112d4f1d31383b2677220d32c0f1b812d5bc8f1a24f29b60d732",
+      "doc_id": "27270692965915199",
+      "operation_kind": "query",
+      "active": false,
+      "request_schema_confirmed": false,
+      "response_scope_confirmed": false
+    },
+    {
+      "module": "AdsMgmtCampaignGroupDynamicStoreSourceTier1V2ServerQuery.graphql",
+      "url": "https://github.com/vinikjkkj/wa-diff/blob/0d88c7fddbde4cd33090a0b65df3d3017486684f/files/AdsMgmtCampaignGroupDynamicStoreSourceTier1V2ServerQuery_graphql.js",
+      "file_sha256": "587497b470ad1487fa3145739bd621e47f1ddbd062b94b6465e73007f0bd4e71",
+      "doc_id": "36284216301221726",
+      "operation_kind": "query",
+      "active": false,
+      "request_schema_confirmed": false,
+      "response_scope_confirmed": false
+    },
+    {
+      "module": "AdsPageInstagramAccountStoreSourceServerQuery.graphql",
+      "url": "https://github.com/vinikjkkj/wa-diff/blob/0d88c7fddbde4cd33090a0b65df3d3017486684f/files/AdsPageInstagramAccountStoreSourceServerQuery_graphql.js",
+      "file_sha256": "c3569962796429d80915b2e1a0ab269676c45d3fe83ab028d0f06f96dc9df7d4",
+      "doc_id": "26393503750284892",
+      "operation_kind": "query",
+      "active": false,
+      "request_schema_confirmed": false,
+      "response_scope_confirmed": false
+    },
+    {
+      "module": "AdsPageStoreSourceServerQuery.graphql",
+      "url": "https://github.com/vinikjkkj/wa-diff/blob/0d88c7fddbde4cd33090a0b65df3d3017486684f/files/AdsPageStoreSourceServerQuery_graphql.js",
+      "file_sha256": "a7ddb92d912394f2537939697c13d06d98595c8db38172de5c570e40dc17797c",
+      "doc_id": "38347202714893693",
+      "operation_kind": "query",
+      "active": false,
+      "request_schema_confirmed": false,
+      "response_scope_confirmed": false
+    },
+    {
+      "module": "ApiClient",
+      "url": "https://github.com/vinikjkkj/wa-diff/blob/0d88c7fddbde4cd33090a0b65df3d3017486684f/files/ApiClient.js",
+      "file_sha256": "b1fe8b91656caa346026b08949c4ceadaa7bd73aa6b0046f91bef9de5c7992e0"
+    },
+    {
+      "module": "GraphAPI",
+      "url": "https://github.com/vinikjkkj/wa-diff/blob/0d88c7fddbde4cd33090a0b65df3d3017486684f/files/GraphAPI.js",
+      "file_sha256": "9e4eb46cf1b44d23cc4fbf7d86c53a05eca42ceeb15f0aa3381f9fad1b55fb1e"
+    },
+    {
+      "module": "GraphAPICore",
+      "url": "https://github.com/vinikjkkj/wa-diff/blob/0d88c7fddbde4cd33090a0b65df3d3017486684f/files/GraphAPICore.js",
+      "file_sha256": "da0712cdebfe5c5737fed2ce93ee9e3c46f105f766cbff51fb6fe2651e6679f5"
+    },
+    {
+      "module": "GraphAPIRequestSpec",
+      "url": "https://github.com/vinikjkkj/wa-diff/blob/0d88c7fddbde4cd33090a0b65df3d3017486684f/files/GraphAPIRequestSpec.js",
+      "file_sha256": "cd891d40dacbb1d03dce9a3f75b2f1cc1e9b8f8a724a9a0104ac7c729849cfdc"
+    },
+    {
+      "module": "LWICometCreateBoostedComponentMutation_facebookRelayOperation",
+      "url": "https://github.com/vinikjkkj/wa-diff/blob/0d88c7fddbde4cd33090a0b65df3d3017486684f/files/LWICometCreateBoostedComponentMutation_facebookRelayOperation.js",
+      "file_sha256": "e6edbf9b38b52b240eff3365cc51b3ee85036eb6922ba5105a9e083a99cc2740"
+    },
+    {
+      "module": "LWICometCreateBoostedComponentMutation.graphql",
+      "url": "https://github.com/vinikjkkj/wa-diff/blob/0d88c7fddbde4cd33090a0b65df3d3017486684f/files/LWICometCreateBoostedComponentMutation_graphql.js",
+      "file_sha256": "6645e94745fea33a777a162926cc068cc88d6d87844a32d5509677a5d6bdf63a",
+      "doc_id": "9955578997835249",
+      "operation_kind": "mutation",
+      "active": false,
+      "request_schema_confirmed": false,
+      "response_scope_confirmed": false
+    },
+    {
+      "module": "WAWebBizAdCreationLWIMediaUpload",
+      "url": "https://github.com/vinikjkkj/wa-diff/blob/0d88c7fddbde4cd33090a0b65df3d3017486684f/files/WAWebBizAdCreationLWIMediaUpload.js",
+      "file_sha256": "459daef6457693ada4d9650d037e2a34a0799b5b99f7ef64fb2bb80cab48666c"
+    },
+    {
+      "module": "WAWebBizAdCreationLWIMediaUploadMutation_facebookRelayOperation",
+      "url": "https://github.com/vinikjkkj/wa-diff/blob/0d88c7fddbde4cd33090a0b65df3d3017486684f/files/WAWebBizAdCreationLWIMediaUploadMutation_facebookRelayOperation.js",
+      "file_sha256": "cb0a8b0ec5aa74507d2a39096a95d4dad6144c10ad04548f06acffde9071ffc3"
+    },
+    {
+      "module": "WAWebBizAdCreationLWIMediaUploadMutation.graphql",
+      "url": "https://github.com/vinikjkkj/wa-diff/blob/0d88c7fddbde4cd33090a0b65df3d3017486684f/files/WAWebBizAdCreationLWIMediaUploadMutation_graphql.js",
+      "file_sha256": "2b92f705fb25dacef9ea5be2ba9d52d1483673b710f784997625a741f66943c4",
+      "doc_id": "26635433729479722",
+      "operation_kind": "mutation",
+      "active": false,
+      "request_schema_confirmed": false,
+      "response_scope_confirmed": false
+    },
+    {
+      "module": "useLWIBoostedComponentSubmit",
+      "url": "https://github.com/vinikjkkj/wa-diff/blob/0d88c7fddbde4cd33090a0b65df3d3017486684f/files/useLWIBoostedComponentSubmit.js",
+      "file_sha256": "d9b011774baf7c5accc73acc966d13dd224cefddebc8f331df16bb6621e63fe6"
+    },
+    {
+      "module": "useWAWebBizAdSubmit",
+      "url": "https://github.com/vinikjkkj/wa-diff/blob/0d88c7fddbde4cd33090a0b65df3d3017486684f/files/useWAWebBizAdSubmit.js",
+      "file_sha256": "bf03a443ace74604491e96af95cf1a0833d3caf4ad54379c8e20d81ee6009bfa"
+    }
+  ]
+}

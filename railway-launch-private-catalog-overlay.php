@@ -309,6 +309,45 @@ try {
 } catch (Throwable $e) { MetaEndpoint::fail($e); }
 PREFLIGHT
 );
+file_put_contents($root.'/classes/RemaskAdvertisingAssetBridge.php', <<<'ASSET_BRIDGE'
+<?php
+declare(strict_types=1);
+final class RemaskAdvertisingAssetBridge
+{
+    public static function read(array $input, array $catalog, string $resource, bool $force = false): array {
+        $allowed=['pixels','custom_audiences','images','videos','creatives','instagram_accounts','instagram_media',
+            'conversion_goals','campaigns','adsets','ads','insights','locations','interests','behaviors','locales'];
+        if (!in_array($resource,$allowed,true)) throw new InvalidArgumentException('UNKNOWN_ADVERTISING_RESOURCE');
+        $profile=trim((string)($input['profile'] ?? ''));
+        $account=preg_replace('/^act_/','',trim((string)($input['account_id'] ?? '')));
+        $accounts=(array)($catalog['ad_accounts']['data'] ?? []);
+        if ($account==='' && count($accounts)===1) $account=(string)($accounts[0]['account_id'] ?? '');
+        if (!preg_match('/^\d{5,30}$/D',$account)
+            || !in_array($account,array_column($accounts,'account_id'),true)) {
+            throw new InvalidArgumentException('SELECT_ADVERTISING_ACCOUNT');
+        }
+        $base=rtrim((string)(getenv('REMASK_PYTHON_WORKER_URL') ?: 'http://127.0.0.1:8081'),'/');
+        $key=(string)(getenv('REMASK_WORKER_API_KEY') ?: '');
+        if ($key==='') throw new RuntimeException('ADVERTISING_WORKER_UNAVAILABLE');
+        $query=trim((string)($input['q'] ?? ''));
+        if (strlen($query)>200) throw new InvalidArgumentException('ADVERTISING_QUERY_TOO_LONG');
+        if (session_status()===PHP_SESSION_ACTIVE) session_write_close();
+        $params=http_build_query(['resource'=>$resource,'account_id'=>$account,'force'=>$force?'true':'false',
+            'query'=>$query,'limit'=>max(1,min(500,(int)($input['limit'] ?? 100)))],'','&',PHP_QUERY_RFC3986);
+        $context=stream_context_create(['http'=>['method'=>'GET','timeout'=>$force?85:20,'ignore_errors'=>true,
+            'follow_location'=>0,'header'=>"Accept: application/json\r\nX-Remask-Worker-Key: ".$key."\r\n"]]);
+        $raw=@file_get_contents($base.'/api/v1/profiles/'.rawurlencode($profile).'/advertising-resources?'.$params,false,$context);
+        $data=is_string($raw)?json_decode($raw,true):null;
+        if (!is_array($data) || ($data['ok'] ?? null)!==true
+            || ($data['profile'] ?? '')!==$profile || ($data['account_id'] ?? '')!==$account) {
+            $detail=is_array($data['detail'] ?? null)?(string)($data['detail']['code'] ?? ''):'';
+            throw new RuntimeException($detail ?: 'ADVERTISING_RESOURCE_UNAVAILABLE');
+        }
+        return $data;
+    }
+}
+ASSET_BRIDGE
+);
 file_put_contents($root.'/ajax/metaAssets.php', <<<'ASSETS'
 <?php
 declare(strict_types=1);
@@ -316,6 +355,7 @@ require_once __DIR__ . '/../settings.php';
 require_once __DIR__ . '/../checkpassword.php';
 require_once __DIR__ . '/../classes/MetaEndpoint.php';
 require_once __DIR__ . '/../classes/RemaskPrivateLaunchCatalog.php';
+require_once __DIR__ . '/../classes/RemaskAdvertisingAssetBridge.php';
 
 try {
     $input = MetaEndpoint::input();
@@ -326,7 +366,11 @@ try {
     $catalog = RemaskPrivateLaunchCatalog::load($profile);
     $resource = strtolower(trim((string)($input['resource'] ?? '')));
     $accountId = trim((string)($input['account_id'] ?? ''));
-    MetaEndpoint::ok(RemaskPrivateLaunchCatalog::asset($catalog, $resource, $accountId));
+    if (in_array($resource,['ad_accounts','pages','funding'],true)) {
+        MetaEndpoint::ok(RemaskPrivateLaunchCatalog::asset($catalog, $resource, $accountId));
+    } else {
+        MetaEndpoint::ok(RemaskAdvertisingAssetBridge::read($input,$catalog,$resource,($input['force'] ?? '')==='1'));
+    }
 } catch (DomainException $e) {
     http_response_code(501);
     header('Content-Type: application/json; charset=utf-8');
@@ -334,6 +378,27 @@ try {
         'message'=>'Этот ресурс ещё не подключён к текущему режиму Launch.']], JSON_UNESCAPED_UNICODE);
 } catch (Throwable $e) { MetaEndpoint::fail($e); }
 ASSETS
+);
+file_put_contents($root.'/ajax/metaTargetingSearch.php', <<<'TARGETING'
+<?php
+declare(strict_types=1);
+/* REMASK_PRIVATE_ADVERTISING_TARGETING_V1 */
+require_once __DIR__.'/../settings.php';
+require_once __DIR__.'/../checkpassword.php';
+require_once __DIR__.'/../classes/MetaEndpoint.php';
+require_once __DIR__.'/../classes/RemaskPrivateLaunchCatalog.php';
+require_once __DIR__.'/../classes/RemaskAdvertisingAssetBridge.php';
+try {
+    $input=MetaEndpoint::input();
+    $profile=trim((string)($input['profile'] ?? ''));
+    MetaEndpoint::accountForName($profile);
+    $type=strtolower(trim((string)($input['type'] ?? '')));
+    $type=['location'=>'locations','interest'=>'interests','behavior'=>'behaviors',
+           'language'=>'locales','languages'=>'locales','locale'=>'locales'][$type] ?? $type;
+    if (!in_array($type,['locations','interests','behaviors','locales'],true)) throw new InvalidArgumentException('UNKNOWN_TARGETING_TYPE');
+    MetaEndpoint::ok(RemaskAdvertisingAssetBridge::read($input,RemaskPrivateLaunchCatalog::load($profile),$type,true));
+} catch (Throwable $e) { MetaEndpoint::fail($e); }
+TARGETING
 );
 file_put_contents($root.'/ajax/metaAssetReadiness.php', <<<'READINESS'
 <?php
@@ -516,7 +581,7 @@ if (strpos($js,'REMASK_PRIVATE_LAUNCH_CATALOG_V1')===false) {
 file_put_contents($jsPath,$js);
 $phpPath=$root.'/launch.php';
 $php=file_get_contents($phpPath);
-$php=preg_replace('#scripts/launch\\.js(?:\\?[^"\\\']*)?#','scripts/launch.js?v=20261012-advertising-worker-v3',$php,1);
+$php=preg_replace('#scripts/launch\\.js(?:\\?[^"\\\']*)?#','scripts/launch.js?v=20261012-advertising-pipeline-v4',$php,1);
 $php=str_replace('official API, read only','состояние оплаты, read only',$php);
 $php=str_replace('Одна настройка → много FB-профилей и RK. Каждая цель использует свой token, proxy и account-specific assets.',
     'Сохранённые РК и FP доступны без новой синхронизации. Доступ FP для рекламы и привязку карты ещё нужно проверить.',$php);
@@ -527,4 +592,11 @@ $php=str_replace('Checks token access, RK status, Page/Instagram, Pixel, Custom 
 $php=str_replace('Shows the current funding source/status Meta exposes for each selected RK. ReMask does not change payment methods here.',
     'Платёжная привязка требует отдельной проверки Meta. Сохранённые ID не подтверждают готовность карты.',$php);
 file_put_contents($phpPath,$php);
+$workspacePath=$root.'/workspace.php';
+if (is_file($workspacePath)) {
+    $workspace=file_get_contents($workspacePath);
+    $workspace=preg_replace('#scripts/workspace\\.js(?:\\?[^"\\\']*)?#',
+        'scripts/workspace.js?v=20261012-python-worker-ui-v220-advertising-v4',$workspace,1);
+    file_put_contents($workspacePath,$workspace);
+}
 fwrite(STDERR,"[launch-private-catalog] local RK/Page reads installed; live advertising/payment permissions remain unverified\n");

@@ -18,7 +18,7 @@ COPY python_backend /opt/remask-python
 RUN /opt/remask-venv/bin/python -m compileall -q /opt/remask-python \
     && cd /opt/remask-python \
     && /opt/remask-venv/bin/python -c "import fb_worker; from app.session import ProfileSession; from app.facebook_business_browser import FacebookBusinessBrowser; from app.provisioning.registry import get_handler; from app.provisioning.private_create_handlers import business_handler, ad_account_handler; assert get_handler('BUSINESS') is business_handler; assert get_handler('AD_ACCOUNT') is ad_account_handler; assert fb_worker.WebSessionManager is fb_worker.FacebookWebSession; assert callable(ProfileSession.facebook_business_browser)" \
-    && /opt/remask-venv/bin/python -m unittest -q tests.test_fb_worker_bootstrap tests.test_business_docid_discovery tests.test_v14_docid_policy tests.test_fb_worker_request_envelope tests.test_business_create_exact_envelope tests.test_meta_transport_router tests.test_private_http tests.test_private_launch_service tests.test_private_launch_http tests.test_private_launch_verify tests.test_static_launch_contracts tests.test_ads_sources tests.test_business_browser_flow tests.test_business_create_observer tests.test_ad_account_create tests.test_ad_account_private_contract tests.test_fan_page_private_preflight tests.test_fan_page_private_contract tests.test_private_inventory tests.test_private_inventory_queries tests.test_private_create_handlers tests.test_private_business_preflight tests.test_private_page_ownership tests.test_docker_python_guards tests.test_fan_page_create tests.test_fan_page_reconciliation tests.test_workspace_bindings tests.test_job_store_recovery tests.test_ads_manager_scope_sync tests.test_live_sync_contract tests.test_common_advertising_page tests.test_payment_card_binding tests.test_payment_country_setup tests.test_payment_card_service tests.test_payment_card_http tests.test_payment_card_business_wallet tests.test_payment_card_sdc_http tests.test_payment_card_bank tests.test_bank_verification_ledger tests.test_payment_card_verification \
+    && /opt/remask-venv/bin/python -m unittest -q tests.test_fb_worker_bootstrap tests.test_business_docid_discovery tests.test_v14_docid_policy tests.test_fb_worker_request_envelope tests.test_business_create_exact_envelope tests.test_meta_transport_router tests.test_private_http tests.test_private_launch_service tests.test_private_launch_http tests.test_private_launch_verify tests.test_static_launch_contracts tests.test_private_launch_extensions tests.test_private_launch_publication tests.test_private_advertising_lifecycle tests.test_ads_sources tests.test_business_browser_flow tests.test_business_create_observer tests.test_ad_account_create tests.test_ad_account_private_contract tests.test_fan_page_private_preflight tests.test_fan_page_private_contract tests.test_private_inventory tests.test_private_inventory_queries tests.test_private_create_handlers tests.test_private_business_preflight tests.test_private_page_ownership tests.test_docker_python_guards tests.test_fan_page_create tests.test_fan_page_reconciliation tests.test_workspace_bindings tests.test_job_store_recovery tests.test_ads_manager_scope_sync tests.test_live_sync_contract tests.test_common_advertising_page tests.test_payment_card_binding tests.test_payment_country_setup tests.test_payment_card_service tests.test_payment_card_http tests.test_payment_card_business_wallet tests.test_payment_card_sdc_http tests.test_payment_card_bank tests.test_bank_verification_ledger tests.test_payment_card_verification \
     && grep -q 'class FacebookBusinessBrowser' /opt/remask-python/app/facebook_business_browser.py \
     && grep -q 'DIRECT_CREATE_URL = "https://business.facebook.com/create"' /opt/remask-python/app/facebook_business_browser.py \
     && grep -q 'business_guarded=' /opt/remask-python/app/runner.py \
@@ -278,33 +278,29 @@ RUN set -eux; \
     php -l /var/www/html/ajax/metaCreativePreview.php; \
     php -l /var/www/html/ajax/metaPlacementCapabilities.php; \
     php -l /var/www/html/ajax/metaTargetingSearch.php; \
-    grep -q 'REMASK_ACCOUNTLESS_TARGETING_V1' /var/www/html/ajax/metaTargetingSearch.php; \
-    grep -q 'REMASK_ACCOUNTLESS_TRANSPORT_POOL_V4' /var/www/html/ajax/metaTargetingSearch.php; \
-    grep -q 'REMASK_TARGETING_RUNTIME_FAILOVER_V1' /var/www/html/ajax/metaTargetingSearch.php; \
-    grep -q 'creative-targeting-transport.json' /var/www/html/ajax/metaTargetingSearch.php; \
-    grep -q 'successful_targeting_call' /var/www/html/ajax/metaTargetingSearch.php; \
-    ! grep -q 'cachedPreflight($candidateName, true)' /var/www/html/ajax/metaTargetingSearch.php; \
-    grep -q 'REMASK_ACCOUNTLESS_BEHAVIOR_ACCOUNT_V3' /var/www/html/ajax/metaTargetingSearch.php; \
+    grep -q 'REMASK_PRIVATE_ADVERTISING_TARGETING_V1' /var/www/html/ajax/metaTargetingSearch.php; \
+    grep -q 'RemaskAdvertisingAssetBridge::read' /var/www/html/ajax/metaTargetingSearch.php; \
+    ! grep -q 'MetaEndpoint::service' /var/www/html/ajax/metaTargetingSearch.php; \
+    php -l /var/www/html/classes/RemaskAdvertisingAssetBridge.php; \
     grep -q 'REMASK_EFFECTIVE_META_BUILDER_V2' /var/www/html/scripts/launch.js; \
     grep -q 'REMASK_PLACEMENT_PREFLIGHT_V1' /var/www/html/scripts/launch.js; \
     grep -q 'REMASK_FULL_META_LAUNCH_V1' /var/www/html/scripts/launch.js; \
     grep -q 'launchMetaSdkFields' /var/www/html/launch.php; \
     grep -q 'remaskCurrentMetaBuilderForJob' /var/www/html/scripts/launch.js; \
-    grep -q '20261012-advertising-worker-v3' /var/www/html/launch.php; \
+    grep -q '20261012-advertising-pipeline-v4' /var/www/html/launch.php; \
     grep -q 'REMASK_META_VISUAL_EDITORS_V1' /var/www/html/scripts/launch.js; \
     grep -q 'REMASK_LANGUAGE_SEARCH_V1' /var/www/html/classes/MetaAdsService.php; \
     grep -q "'type' => 'adlocale'" /var/www/html/classes/MetaAdsService.php; \
     grep -q "'limit' => 1000" /var/www/html/classes/MetaAdsService.php; \
-    grep -q 'No Meta locale transport candidate is available' /var/www/html/ajax/metaTargetingSearch.php; \
-    grep -q "'language', 'languages', 'locale', 'locales'" /var/www/html/ajax/metaTargetingSearch.php; \
+    grep -q "'languages'=>'locales'" /var/www/html/ajax/metaTargetingSearch.php; \
     grep -q 'REMASK_AUDIENCE_LANGUAGES_V1' /var/www/html/scripts/launch.js; \
     grep -q 'languageQuery' /var/www/html/scripts/launch.js; \
     grep -q 'mbLanguageSearch' /var/www/html/creatives.php; \
     grep -q 'languages:{input' /var/www/html/scripts/creatives.js; \
-    grep -q '20261012-advertising-worker-v3' /var/www/html/launch.php; \
+    grep -q '20261012-advertising-pipeline-v4' /var/www/html/launch.php; \
     grep -q 'languages-v117' /var/www/html/creatives.php; \
     grep -q 'rmMetaVisualModal' /var/www/html/launch.php; \
-    grep -q '20261012-advertising-worker-v3' /var/www/html/launch.php; \
+    grep -q '20261012-advertising-pipeline-v4' /var/www/html/launch.php; \
     grep -Fq "kind === 'geo' || kind === 'excludedGeo'" /var/www/html/scripts/creatives.js; \
     grep -q "state.behaviors = Array.isArray(targeting.behaviors)" /var/www/html/scripts/launch.js; \
     grep -q 'mbGeoSearch' /var/www/html/creatives.php; \
@@ -432,7 +428,7 @@ RUN set -eux; \
     grep -q "installLiveTargetingInput('geoQuery', 'locations')" /var/www/html/scripts/launch.js; \
     grep -q "installLiveTargetingInput('interestQuery', 'interests')" /var/www/html/scripts/launch.js; \
     grep -q 'REMASK_BEHAVIOR_SEARCH_V1' /var/www/html/classes/MetaAdsService.php; \
-    grep -q "'behavior', 'behaviors'" /var/www/html/ajax/metaTargetingSearch.php; \
+    grep -q "'behavior'=>'behaviors'" /var/www/html/ajax/metaTargetingSearch.php; \
     grep -q 'REMASK_BEHAVIOR_UI_V1' /var/www/html/scripts/launch.js; \
     grep -q "installLiveTargetingInput('behaviorQuery', 'behaviors')" /var/www/html/scripts/launch.js; \
     grep -q 'detailedTargeting.behaviors' /var/www/html/scripts/launch.js; \
@@ -492,7 +488,7 @@ RUN set -eux; \
     php -r 'require "/var/www/html/classes/MetaOfficialFields.php"; $base=["campaign"=>[],"adset"=>["targeting"=>[]],"creative"=>[],"ad"=>[]]; foreach([["image_hash"=>"abcDEF_123"],["video_id"=>"123456"],["creative_id"=>"987654"]] as $m){$p=MetaOfficialFields::applyBuilderToPayload($base,["existing_media"=>$m]);$c=$p["creative"]; if(isset($m["image_hash"])&&($c["existing_image_hash"]??"")!==$m["image_hash"])exit(71); if(isset($m["video_id"])&&($c["existing_video_id"]??"")!==$m["video_id"])exit(72); if(isset($m["creative_id"])&&($c["existing_creative_id"]??"")!==$m["creative_id"])exit(73);}'; \
     grep -q 'ad_creatives' /var/www/html/ajax/metaCreativeCapabilities.php; \
     grep -q "'video_id'" /var/www/html/classes/MetaOfficialFields.php; \
-    grep -q '20261012-advertising-worker-v3' /var/www/html/launch.php; \
+    grep -q '20261012-advertising-pipeline-v4' /var/www/html/launch.php; \
     php -l /var/www/html/classes/MetaSdkSchema.php; \
     php -l /var/www/html/ajax/metaSdkSchema.php; \
     grep -q 'metaSdkFields' /var/www/html/creatives.php; \

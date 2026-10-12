@@ -14,7 +14,19 @@ PUBLICATION_TARGETS = (
     "AdsDraftPublishDataManager", "AdsDraftPublishingManagerProvider",
     "AdsGraphAPI", "AsyncRequest", "adsDraftPublishingPublishAction",
     "adsDraftPublishingCreateFragmentAndPublishAction",
+    "AdsDraftFragmentDataManager", "GraphAPI", "GraphAPICore", "GraphAPIRequestSpec", "ApiClient",
+    "AdsBulkUploadImages", "AdsPEUploadUtils", "AdsWizardMediaPickerMultiUploadUtils",
+    "AdsDraftFragmentDataManagerFields", "AdsDraftFragmentDataManagerUtils",
 )
+
+DEFAULT_SENDER_MODULES = PUBLICATION_TARGETS
+_TRANSPORT_MODULES = {"ApiClient", "ApiBatcher", "ApiClientUtils", "CORSRequest", "UrlMap",
+                      "RequestProcessorBase", "RequestProcessorDefault", "RequestConstants"}
+
+
+def advertising_module_name(name):
+    return isinstance(name, str) and (name in _TRANSPORT_MODULES or bool(re.match(
+        r"(?:Ads|ads|useAds|BizKit.*Ads|cr:|GraphAPI|XAds|LWI|useLWI|WAWebBizAd|useWAWebBizAd|Ad(?:Account|Campaign|Creative|group|Draft|AsyncRequest|DeliveryStatus))", name)))
 
 
 def public_script_url(url):
@@ -130,7 +142,7 @@ def module_records(source, *, selected=()):
             continue
         if not isinstance(name, str) or not all(isinstance(value, str) for value in dependencies):
             continue
-        if name not in selected and not re.match(r"(?:Ads|ads|useAds|BizKit.*Ads|cr:|GraphAPI|XAds)", name):
+        if name not in selected and not advertising_module_name(name):
             continue
         raw = body.text.decode()
         if len(raw) <= 180_000:

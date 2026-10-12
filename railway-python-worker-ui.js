@@ -1053,6 +1053,26 @@ function pythonWorkerRenderJob(job) {
           }
         }
 
+        const advertisingSteps=Array.isArray(item.advertising_steps)?item.advertising_steps:[];
+        if(advertisingSteps.length){
+          const labels={IMAGE_UPLOAD:'Загрузка изображения',VIDEO_UPLOAD:'Загрузка видео',
+            PUBLISH_FAMILY:'Публикация рекламы',CAMPAIGN:'Кампания',ADSET:'Группа объявлений',
+            CREATIVE:'Креатив',AD:'Объявление',ACTIVATE_CAMPAIGN:'Статус кампании',
+            ACTIVATE_ADSET:'Статус группы',ACTIVATE_AD:'Статус объявления'};
+          const details=document.createElement('details');
+          const summary=document.createElement('summary');summary.textContent='Шаги рекламы';
+          const pre=document.createElement('pre');
+          pre.textContent=advertisingSteps.map(function(step){
+            const operation=String(step.step||'').split(':')[0];
+            const publication=step.publication||{};
+            const description=publication.code==='PUBLISH_PENDING'?'Meta обрабатывает публикацию'
+              :publication.code==='PUBLISH_FAILED'?'Meta отклонила публикацию'
+              :step.verified===true?'Подтверждено'
+              :step.submitted===true?'Отправлено, результат уточняется':String(step.status||'');
+            return [(labels[operation]||operation),'РК '+step.ad_account_id,description].join(' · ');
+          }).join('\n');
+          details.appendChild(summary);details.appendChild(pre);errorTd.appendChild(details);
+        }
         const accessStep = (item.provisioning_steps || []).find(function(s) { return s.step === 'PAGE_ACCESS'; });
         if (itemStatus === 'FAILED') {
           const trace=document.createElement('details');

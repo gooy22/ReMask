@@ -281,12 +281,63 @@ try {
                 'result_paths' => (int)($row['result_paths'] ?? 0),
             ];
         }
-        rmx_pwj_out(['ok'=>true,'contracts'=>$safe]);
+        $operations = [];
+        foreach (['IMAGE_UPLOAD','VIDEO_UPLOAD','PUBLISH_FAMILY','ACTIVATE_CAMPAIGN','ACTIVATE_ADSET','ACTIVATE_AD'] as $name) {
+            $row = is_array($result['operations'][$name] ?? null) ? $result['operations'][$name] : [];
+            $operations[$name] = ['configured'=>(($row['configured'] ?? false) === true),
+                'active'=>(($row['active'] ?? false) === true),
+                'verification_configured'=>(($row['verification_configured'] ?? false) === true)];
+        }
+        $formats = array_values(array_intersect(['SINGLE','CAROUSEL','INSTAGRAM_POST'],
+            is_array($result['creative_formats'] ?? null) ? $result['creative_formats'] : []));
+        rmx_pwj_out(['ok'=>true,'contracts'=>$safe,'operations'=>$operations,'creative_formats'=>$formats]);
     }
 
     if ($action === 'private_launch_sources') {
         $result = rmx_pwj_worker_request('GET', '/api/v1/private-launch/maintenance-candidate');
         rmx_pwj_out($result);
+    }
+
+    if ($action === 'private_launch_media_resolve') {
+        // Filesystem paths are an internal worker capability, never a UI API.
+        if (!$internalAuthorized) rmx_pwj_out(['ok'=>false,'error'=>'INTERNAL_MEDIA_ACCESS_REQUIRED'], 403);
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') rmx_pwj_out(['ok'=>false,'error'=>'POST_REQUIRED'], 405);
+        $ids = $input['ids'] ?? null;
+        if (!is_array($ids) || count($ids) < 1 || count($ids) > 10) {
+            rmx_pwj_out(['ok'=>false,'error'=>'INVALID_MEDIA_SELECTION'], 400);
+        }
+        require_once __DIR__ . '/../classes/MediaLibraryStoreFactory.php';
+        $library = MediaLibraryStoreFactory::create(REMASK_MEDIA_LIBRARY_DIR, REMASK_MEDIA_LIBRARY_MAX_BYTES);
+        $root = realpath(REMASK_MEDIA_LIBRARY_DIR);
+        $records = [];
+        foreach (array_unique($ids) as $id) {
+            if (!is_string($id) || !preg_match('/^m-[a-f0-9]{24}$/D', $id)) {
+                rmx_pwj_out(['ok'=>false,'error'=>'INVALID_MEDIA_REFERENCE'], 400);
+            }
+            $row = $library->getInternal($id);
+            $path = is_array($row) ? realpath((string)($row['path'] ?? '')) : false;
+            if ($root === false || $path === false || !is_readable($path)
+                || !in_array(dirname($path), [$root.'/files',$root.'/pg-cache'], true)) {
+                rmx_pwj_out(['ok'=>false,'error'=>'MEDIA_LIBRARY_ITEM_UNAVAILABLE'], 404);
+            }
+            $safe = array_intersect_key($row, array_flip(['id','sha256','size_bytes','media_type','mime_type']));
+            $records[] = array_replace($safe, ['path'=>$path]);
+        }
+        rmx_pwj_out(['ok'=>true,'media'=>$records]);
+    }
+
+    if ($action === 'private_launch_plan') {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') rmx_pwj_out(['ok'=>false,'error'=>'POST_REQUIRED'], 405);
+        $profileId = trim((string)($input['profile_id'] ?? ''));
+        if ($profileId === '' || strlen($profileId) > 160 || !is_array($input['launch'] ?? null)) {
+            rmx_pwj_out(['ok'=>false,'error'=>'INVALID_ADVERTISING_PLAN'], 400);
+        }
+        $plan = rmx_pwj_worker_request('POST', '/api/v1/private-launch/plan', [
+            'profile_id'=>$profileId,'business_id'=>$input['business_id'] ?? '',
+            'ad_account_id'=>$input['ad_account_id'] ?? '', 'page_id'=>$input['page_id'] ?? '',
+            'launch'=>$input['launch'],
+        ]);
+        rmx_pwj_out(['ok'=>true,'plan'=>$plan]);
     }
 
     if ($action === 'private_launch_media') {
