@@ -574,7 +574,14 @@ async function checkAssetsSelection(){
 READINESS_UI
 , $start, $end-$start);
 $workspace=str_replace('const n=state.selected[state.activeTab].size;', 'const n=selectedRows(state.activeTab).length;', $workspace);
-if (strpos($workspace,'REMASK_PRIVATE_WORKSPACE_ASSETS_V1')===false) $workspace.= <<<'ASSET_UI'
+if (strpos($workspace,'REMASK_PRIVATE_WORKSPACE_ASSETS_V1')===false) {
+    // Workspace is an ES module: duplicate function declarations are a syntax
+    // error even though new Function() accepts them in a classic script.
+    $assetStart=strpos($workspace,'async function fetchAsset(');
+    $assetEnd=$assetStart!==false ? strpos($workspace,"\nfunction fillSelect(",$assetStart) : false;
+    if ($assetStart===false || $assetEnd===false || substr_count($workspace,'async function fetchAsset(')!==1)
+        throw new RuntimeException('Workspace Assets READ boundary missing or duplicated');
+    $assetUi=<<<'ASSET_UI'
 
 /* REMASK_PRIVATE_WORKSPACE_ASSETS_V1 */
 async function fetchAsset(resource,force=false){
@@ -605,6 +612,8 @@ async function fetchAsset(resource,force=false){
 }
 
 ASSET_UI;
+    $workspace=substr_replace($workspace,$assetUi,$assetStart,$assetEnd-$assetStart);
+}
 file_put_contents($workspacePath,$workspace);
 // Review/submit still have only a legacy Graph implementation. Do not silently
 // use that implementation when the user selected private-worker operation.
