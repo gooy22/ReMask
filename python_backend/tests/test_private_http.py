@@ -196,7 +196,10 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
                     server.close()
                     await server.wait_closed()
                 client = self.make("http://fixture-user:fixture-password@127.0.0.1:" + str(port))
-                client.timeout_seconds = 0.1
+                # Exercise the proxy's declared failure, not a race with DNS
+                # or CONNECT scheduling on a loaded CI runner. Keep the
+                # deadline finite for the intentionally silent proxy too.
+                client.timeout_seconds = 1.0
                 before = len(tunnels)
                 try:
                     with patch("socket.getaddrinfo", side_effect=local_dns), patch.dict("os.environ", {
