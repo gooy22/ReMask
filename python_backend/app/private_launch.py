@@ -1262,6 +1262,10 @@ class PrivateLaunchService:
         self.resources = AdvertisingResourceStore(self.reads)
         self.state = PrivateLaunchStateStore(provisioning_state.path)
         self.operations = LaunchOperationRunner(self.state)
+        self.ads_manager = None
+        if getattr(contracts, "protocol", None) == "private_ads_manager_versioned":
+            from .private_ads_launch import AdsManagerLaunch
+            self.ads_manager = AdsManagerLaunch(self)
         self._preflight_cache: dict[
             tuple[str, str, str, str, str, str, str],
             tuple[float, int, dict[str, Any]],
@@ -1269,6 +1273,8 @@ class PrivateLaunchService:
 
     def plan(self, *, profile_id, payload):
         """Build an advertising plan without resolving a profile or contacting Meta."""
+        if self.ads_manager is not None:
+            return self.ads_manager.plan(profile_id=profile_id, payload=payload)
         from .private_launch_media import local_references
         if not isinstance(payload, dict) or not str(profile_id or "").strip():
             raise ProvisioningError("PRIVATE_LAUNCH_INVALID_INPUT", "Advertising target is missing", retryable=False)
@@ -1801,6 +1807,9 @@ class PrivateLaunchService:
         payload: dict[str, Any],
         transport: MetaTransportRouter | None = None,
     ) -> dict[str, Any]:
+        if self.ads_manager is not None:
+            return await self.ads_manager.review(profile_id=profile_id, context=context,
+                                                  payload=payload, transport=transport)
         if transport is None:
             from .session import ProfileSession
             async with ProfileSession(context) as session:
@@ -1886,6 +1895,10 @@ class PrivateLaunchService:
         payload: dict[str, Any],
         task_idempotency_key: str | None = None,
     ) -> dict[str, Any]:
+        if self.ads_manager is not None:
+            return await self.ads_manager.run(item_id=item_id, profile_id=profile_id,
+                context=context, session=session, payload=payload,
+                task_idempotency_key=task_idempotency_key)
         del item_id
         if not isinstance(payload, dict):
             raise ProvisioningError(

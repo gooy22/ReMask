@@ -44,6 +44,11 @@ class StaticLaunchContractStore(PrivateLaunchContractStore):
                 rows[name] = row
             super().__init__(json.dumps(rows))
             self.revision = data["revision"]
+            self.protocol = data.get("protocol")
+            if self.protocol not in (None, "private_ads_manager_versioned"):
+                raise ValueError("Unsupported advertising protocol")
+            if self.protocol and (rows or data.get("operations") or data.get("reads")):
+                raise ValueError("Private draft publication cannot mix with Relay launch contracts")
             from .private_launch_extensions import LaunchExtensionCatalog
             self.extensions = LaunchExtensionCatalog(data)
             from .private_advertising_reads import AdvertisingReadCatalog

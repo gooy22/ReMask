@@ -3556,6 +3556,8 @@ async def profile_provisioning_state(profile_id: str):
 
 @app.get('/api/v1/private-launch/contracts',dependencies=[Depends(require_key)])
 async def private_launch_contract_status():
+    if getattr(pool.private_launch, 'ads_manager', None) is not None:
+        return {'ok': True, **pool.private_launch.ads_manager.status()}
     return {
         'ok':True,
         'contracts':pool.private_launch.contracts.status(),

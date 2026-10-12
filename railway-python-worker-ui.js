@@ -1058,12 +1058,16 @@ function pythonWorkerRenderJob(job) {
           const labels={IMAGE_UPLOAD:'Загрузка изображения',VIDEO_UPLOAD:'Загрузка видео',
             PUBLISH_FAMILY:'Публикация рекламы',CAMPAIGN:'Кампания',ADSET:'Группа объявлений',
             CREATIVE:'Креатив',AD:'Объявление',ACTIVATE_CAMPAIGN:'Статус кампании',
-            ACTIVATE_ADSET:'Статус группы',ACTIVATE_AD:'Статус объявления'};
+            ACTIVATE_ADSET:'Статус группы',ACTIVATE_AD:'Статус объявления',
+            DRAFT:'Черновик рекламы',FRAGMENT_CAMPAIGN:'Черновик кампании',
+            FRAGMENT_AD_SET:'Черновик группы',FRAGMENT_AD:'Черновик объявления',
+            PUBLISH:'Публикация рекламы',IMAGE:'Загрузка изображения'};
           const details=document.createElement('details');
           const summary=document.createElement('summary');summary.textContent='Шаги рекламы';
           const pre=document.createElement('pre');
           pre.textContent=advertisingSteps.map(function(step){
-            const operation=String(step.step||'').split(':')[0];
+            const parts=String(step.step||'').split(':');
+            const operation=parts[0]==='ADS_MANAGER'?parts[1]:parts[0];
             const publication=step.publication||{};
             const description=publication.code==='PUBLISH_PENDING'?'Meta обрабатывает публикацию'
               :publication.code==='PUBLISH_FAILED'?'Meta отклонила публикацию'
