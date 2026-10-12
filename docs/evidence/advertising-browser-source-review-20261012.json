@@ -1,0 +1,2139 @@
+{
+  "schema_version": 1,
+  "scope": "source_research_only_not_a_launch_manifest",
+  "observed_on": "2026-10-12",
+  "repository_base": "f8053f6a78a073050bc6eb227dbbebda07d9fe15",
+  "capture": {
+    "scripts_planned": 600,
+    "scripts_requested": 600,
+    "charged_bytes": 158598498,
+    "timed_out": false,
+    "elapsed_seconds": 121.78,
+    "observed_loaded_scripts": 504,
+    "observed_components": 1030,
+    "observed_resource_urls": 2767,
+    "modules": 40521,
+    "script_results": {
+      "CAPTURED": 596,
+      "BODY_BUDGET_EXCEEDED": 4
+    },
+    "collector_advertising_posts": 0,
+    "browser_network_bodies_captured": false,
+    "browser_network_mutations_count": null,
+    "dom_export_sha256": "5643d822310aa25e57443a3c2bc391296dc26e41d542f4e7bca383a7b32fe529",
+    "compiled_factory_ast_confirmed": true
+  },
+  "publication_transport": {
+    "kind": "versioned_adsmanager_graph_client",
+    "source_evidence_only": true,
+    "relay_doc_id_used_in_observed_sender": false,
+    "authentication_code_references": [
+      "ApiClient.getAccessToken",
+      "access_token",
+      "withCredentials"
+    ],
+    "runtime_graph_origin": null,
+    "runtime_api_version": null,
+    "runtime_auth_values_collected": false,
+    "compatible_with_current_doc_id_manifest": false,
+    "dom_declared_default_graph_origin": "https://adsmanager-graph.facebook.com",
+    "dom_declared_ads_api_version": "v22.0",
+    "actual_network_routing_confirmed": false,
+    "sdk_runtime_graph_domain_override_reviewed": false,
+    "nonsecret_configuration_source": "literal GraphAPIConfig.adsApiVersion and UrlMapConfig.graph fields in DOM script data"
+  },
+  "source_observed_routes": [
+    {
+      "name": "get_or_create_draft",
+      "method": "POST",
+      "path": "/v{api_version}/act_{ad_account_id}/addrafts",
+      "fields": [
+        "name",
+        "use_active_draft_if_exists",
+        "use_employee_draft",
+        "application_id",
+        "ownership_type"
+      ],
+      "result_fields": [
+        "id"
+      ],
+      "module": "AdsDraftDataManager"
+    },
+    {
+      "name": "create_fragment",
+      "method": "POST",
+      "path": "/v{api_version}/{draft_id}/addraft_fragments",
+      "fields": "fragment fields from getAPIParams; values old_value/new_value JSON-encoded",
+      "module": "AdsDraftFragmentDataManager"
+    },
+    {
+      "name": "create_multi_fragments",
+      "method": "POST",
+      "path": "/v{api_version}/{draft_id}/addraft_multi_fragments",
+      "fields": [
+        "action",
+        "ad_draft_id",
+        "validate",
+        "source",
+        "campaign_group_values",
+        "campaign_values",
+        "adgroup_values"
+      ],
+      "module": "AdsDraftFragmentDataManager"
+    },
+    {
+      "name": "create_fragment_and_publish",
+      "method": "POST",
+      "path": "/v{api_version}/{draft_id}/addraft_fragments_with_publish",
+      "fields": "fragment fields with temporary id omitted; ad_object_id omitted if non-positive; values JSON-encoded",
+      "result_fields": [
+        "async_request_set_id",
+        "publish_status"
+      ],
+      "module": "AdsDraftFragmentDataManager"
+    },
+    {
+      "name": "publish_fragments",
+      "method": "POST",
+      "path": "/v{api_version}/{draft_id}/publish",
+      "fields": [
+        "fragments",
+        "caller_options"
+      ],
+      "result_fields": [
+        "success",
+        "async_request_set_id",
+        "publish_status"
+      ],
+      "module": "AdsDraftPublishDataManager"
+    },
+    {
+      "name": "poll_publish_status",
+      "method": "GET",
+      "path": "/v{api_version}/addraft_{draft_id}/addraft_publish_statuses",
+      "fields": [
+        "async_request_set_ids",
+        "fields",
+        "date_format"
+      ],
+      "date_format": "U",
+      "result_path": "data",
+      "status_fields": [
+        "async_request_set_id",
+        "canceled_count",
+        "error_count",
+        "in_progress_count",
+        "initial_count",
+        "publish_error",
+        "status",
+        "success_count",
+        "total_count",
+        "fragment_statuses"
+      ],
+      "module": "AdsDraftPublishDataManager"
+    },
+    {
+      "name": "upload_image",
+      "method": "POST",
+      "path": "/v{api_version}/act_{ad_account_id}/adimages",
+      "body_kind": "multipart/form-data",
+      "file_field": "original file name",
+      "result_fields": [
+        "images.*.hash",
+        "images.*.url"
+      ],
+      "module": "AdsBulkUploadImages"
+    },
+    {
+      "name": "upload_video",
+      "method": "POST",
+      "path": "/v{api_version}/act_{ad_account_id}/advideos",
+      "phases": {
+        "start": {
+          "fields": [
+            "file_size",
+            "waterfall_id",
+            "upload_phase",
+            "creator_product"
+          ],
+          "additional_parallel_fields": [
+            "source",
+            "upload_source",
+            "partition_start_offset",
+            "partition_end_offset"
+          ],
+          "result_fields": [
+            "upload_session_id",
+            "video_id",
+            "start_offset",
+            "end_offset"
+          ]
+        },
+        "transfer": {
+          "fields": [
+            "start_offset",
+            "waterfall_id",
+            "upload_session_id",
+            "upload_phase"
+          ],
+          "additional_parallel_fields": [
+            "end_offset",
+            "upload_source",
+            "partition_start_offset",
+            "partition_end_offset",
+            "upload_speed"
+          ]
+        },
+        "finish": {
+          "fields": [
+            "creator_product",
+            "waterfall_id",
+            "upload_session_id",
+            "upload_phase",
+            "upload_source",
+            "title",
+            "thumbnail_type"
+          ]
+        }
+      },
+      "encoding_completion_required": true,
+      "complete_parent_request_fields_reviewed": false,
+      "request_response_confirmed": false,
+      "modules": [
+        "AdsVideoUploadUtil",
+        "AdsVideoUploadAsyncRequest",
+        "AdsVideoUploadStartRequestManager",
+        "AdsVideoUploadReceiveRequestManager",
+        "AdsVideoUploadPostRequestManager",
+        "AdsVideoUploadSession"
+      ]
+    }
+  ],
+  "publication_statuses": [
+    "PRE_PUBLISH",
+    "IN_PROGRESS",
+    "FAILED",
+    "SUCCEEDED"
+  ],
+  "fragment_statuses": [
+    "INITIAL",
+    "IN_PROGRESS",
+    "SUCCESS",
+    "ERROR",
+    "CANCELED",
+    "PENDING_DEPENDENCY",
+    "CANCELED_DEPENDENCY",
+    "ERROR_DEPENDENCY",
+    "ERROR_CONFLICTS",
+    "USER_CANCELED",
+    "USER_CANCELED_DEPENDENCY",
+    "PROCESS_BY_EVENT_PROCESSOR",
+    "PROCESS_BY_AD_ASYNC_ENGINE"
+  ],
+  "independent_object_verification_confirmed": false,
+  "operations": [
+    {
+      "friendly_name": "AdsAdgroupAuctionPageFieldPromotablePageListQuery",
+      "doc_id": "27170713452516675",
+      "operation_kind": "query",
+      "factory_sha256": "26306cc742efbd7ede5d5dfa6ecb96907690c92747257c567c8092380176f687",
+      "variable_definitions": [
+        {
+          "defaultValue": null,
+          "kind": "LocalArgument",
+          "name": "id"
+        },
+        {
+          "defaultValue": null,
+          "kind": "LocalArgument",
+          "name": "is_promotable"
+        },
+        {
+          "defaultValue": null,
+          "kind": "LocalArgument",
+          "name": "filter"
+        },
+        {
+          "defaultValue": null,
+          "kind": "LocalArgument",
+          "name": "limit"
+        }
+      ],
+      "server_fields": [
+        {
+          "path": "data.user",
+          "field": "user",
+          "kind": "LinkedField",
+          "plural": false
+        },
+        {
+          "path": "data.user.facebook_pages",
+          "field": "facebook_pages",
+          "kind": "LinkedField",
+          "plural": false
+        },
+        {
+          "path": "data.user.facebook_pages.nodes",
+          "field": "nodes",
+          "kind": "LinkedField",
+          "plural": true
+        },
+        {
+          "path": "data.user.facebook_pages.nodes[*].name",
+          "field": "ads_name",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.user.facebook_pages.nodes[*].global_brand_page_name",
+          "field": "global_brand_page_name",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.user.facebook_pages.nodes[*].has_create_ads_access",
+          "field": "has_create_ads_access",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.user.facebook_pages.nodes[*].has_transitioned_to_new_page_experience",
+          "field": "has_transitioned_to_new_page_experience",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.user.facebook_pages.nodes[*].has_whatsapp_business_number",
+          "field": "is_business_number",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.user.facebook_pages.nodes[*].has_whatsapp_number",
+          "field": "has_whatsapp_number",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.user.facebook_pages.nodes[*].id",
+          "field": "id",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.user.facebook_pages.nodes[*].name_with_location_descriptor",
+          "field": "name_with_location_descriptor",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.user.facebook_pages.nodes[*].page_businesses",
+          "field": "page_businesses",
+          "kind": "LinkedField",
+          "plural": false
+        },
+        {
+          "path": "data.user.facebook_pages.nodes[*].page_businesses.nodes",
+          "field": "nodes",
+          "kind": "LinkedField",
+          "plural": true
+        },
+        {
+          "path": "data.user.facebook_pages.nodes[*].page_businesses.nodes[*].id",
+          "field": "id",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.user.facebook_pages.nodes[*].page_businesses.nodes[*].name",
+          "field": "name",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.user.facebook_pages.nodes[*].page_token",
+          "field": "page_token",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.user.facebook_pages.nodes[*].permitted_tasks",
+          "field": "permitted_tasks",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.user.facebook_pages.nodes[*].profile_picture",
+          "field": "profile_picture",
+          "kind": "LinkedField",
+          "plural": false
+        },
+        {
+          "path": "data.user.facebook_pages.nodes[*].profile_picture.height",
+          "field": "height",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.user.facebook_pages.nodes[*].profile_picture.is_silhouette",
+          "field": "is_silhouette",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.user.facebook_pages.nodes[*].profile_picture.url",
+          "field": "uri",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.user.facebook_pages.nodes[*].profile_picture.width",
+          "field": "width",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.user.facebook_pages.nodes[*].whatsapp_numbers_info",
+          "field": "whatsapp_numbers_info",
+          "kind": "LinkedField",
+          "plural": true
+        },
+        {
+          "path": "data.user.facebook_pages.nodes[*].whatsapp_numbers_info[*].whatsapp_number",
+          "field": "whatsapp_number",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.user.id",
+          "field": "id",
+          "kind": "ScalarField",
+          "plural": false
+        }
+      ],
+      "provider_imports": [],
+      "missing_imports": [],
+      "request_schema_confirmed": false,
+      "account_scope_confirmed": false,
+      "eligible_for_launch": false,
+      "artifact_source": {
+        "module_sha256": "282628e9ee53bf0cb460364ec6cb450fed554d7aa1c16ec09bec7980680c72a3",
+        "script_sha256": "73bb83faa52f5d60bc93b3ec034afc44706c2ce9cf5052c1a9177233984a4eea",
+        "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4iZOl4/y8/l/en_US-j/L9RbQIOdiEK.js"
+      }
+    },
+    {
+      "friendly_name": "AdsDraftRealtimeSubscription",
+      "doc_id": "9629535650464174",
+      "operation_kind": "subscription",
+      "factory_sha256": "f41ee5eab4165a20761e5b835da2e8e83166363e1fb58b0c122b37ae7e24cc1c",
+      "variable_definitions": [
+        {
+          "defaultValue": null,
+          "kind": "LocalArgument",
+          "name": "input"
+        }
+      ],
+      "server_fields": [
+        {
+          "path": "data.ad_draft_publish_subscribe",
+          "field": "ad_draft_publish_subscribe",
+          "kind": "LinkedField",
+          "plural": false
+        },
+        {
+          "path": "data.ad_draft_publish_subscribe.ad_draft_id",
+          "field": "ad_draft_id",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.ad_draft_publish_subscribe.event_type",
+          "field": "event_type",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.ad_draft_publish_subscribe.message",
+          "field": "message",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.ad_draft_publish_subscribe.viewer",
+          "field": "viewer",
+          "kind": "LinkedField",
+          "plural": false
+        },
+        {
+          "path": "data.ad_draft_publish_subscribe.viewer.actor",
+          "field": "actor",
+          "kind": "LinkedField",
+          "plural": false
+        },
+        {
+          "path": "data.ad_draft_publish_subscribe.viewer.actor.__typename",
+          "field": "__typename",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.ad_draft_publish_subscribe.viewer.actor.id",
+          "field": "id",
+          "kind": "ScalarField",
+          "plural": false
+        }
+      ],
+      "provider_imports": [],
+      "missing_imports": [],
+      "request_schema_confirmed": false,
+      "account_scope_confirmed": false,
+      "eligible_for_launch": false,
+      "artifact_source": {
+        "module_sha256": "c77e60492b5612265316fb0b931aae5cae28d88a13df98248c5875fa742a07f5",
+        "script_sha256": "ca595ab6b82bb87adaa0ad1d2a5e57346e9745f568b734ae9b2999aaa20d2def",
+        "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4idcd4/y0/l/en_US-j/f2UtWoV9xoS.js"
+      }
+    },
+    {
+      "friendly_name": "AdsManagerLiveDataCampaignGroupThrowOnFieldErrorQuery",
+      "doc_id": "28373242225674751",
+      "operation_kind": "query",
+      "factory_sha256": "62bfbc31ec7eaed88c26646a76e9c74b899dad0781f3cae08004a870e0b57933",
+      "variable_definitions": [
+        {
+          "defaultValue": null,
+          "kind": "LocalArgument",
+          "name": "ids"
+        },
+        {
+          "defaultValue": null,
+          "kind": "LocalArgument",
+          "name": "__relay_internal__pv__GraphQLIncludeAdgroupActiveStudiesrelayprovider"
+        },
+        {
+          "defaultValue": null,
+          "kind": "LocalArgument",
+          "name": "__relay_internal__pv__GraphQLIncludeIsCreativeTestingrelayprovider"
+        }
+      ],
+      "server_fields": [
+        {
+          "path": "data.nodes",
+          "field": "nodes",
+          "kind": "LinkedField",
+          "plural": true
+        },
+        {
+          "path": "data.nodes[*].__typename",
+          "field": "__typename",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.nodes[*].id",
+          "field": "id",
+          "kind": "ScalarField",
+          "plural": false
+        }
+      ],
+      "provider_imports": [
+        "GraphQLIncludeAdgroupActiveStudies.relayprovider",
+        "GraphQLIncludeIsCreativeTesting.relayprovider"
+      ],
+      "missing_imports": [
+        "AdCampaignGroup-ad_object_field_error_spec-resolver",
+        "GraphQLIncludeAdgroupActiveStudies.relayprovider",
+        "GraphQLIncludeIsCreativeTesting.relayprovider",
+        "relay-runtime"
+      ],
+      "request_schema_confirmed": false,
+      "account_scope_confirmed": false,
+      "eligible_for_launch": false,
+      "artifact_source": {
+        "module_sha256": "86c711b356290ebd2f2157ba7b459b9d1b7a3e35c59dc9842e6d8b7ba03230db",
+        "script_sha256": "3c7de32f7de0b89953b2ecd5b31ff65bf34367e671f7f9e67134f6eb2d163000",
+        "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4ijsg4/yq/l/en_US-j/Y731TQMByU4.js"
+      }
+    },
+    {
+      "friendly_name": "AdsManagerLiveDataCampaignGroupThrowOnFieldErrorQueryNoSpecsServerQuery",
+      "doc_id": "28858545547163307",
+      "operation_kind": "query",
+      "factory_sha256": "ebb307fa714c5b76c42ad7f437ec22d7ad7b911a64026030ab736a51fefdd514",
+      "variable_definitions": [
+        {
+          "defaultValue": null,
+          "kind": "LocalArgument",
+          "name": "__relay_internal__pv__GraphQLIncludeAdgroupActiveStudiesrelayprovider"
+        },
+        {
+          "defaultValue": null,
+          "kind": "LocalArgument",
+          "name": "__relay_internal__pv__GraphQLIncludeIsCreativeTestingrelayprovider"
+        }
+      ],
+      "server_fields": [
+        {
+          "path": "data.xfb_ads_ui_root",
+          "field": "xfb_ads_ui_root",
+          "kind": "LinkedField",
+          "plural": false
+        },
+        {
+          "path": "data.xfb_ads_ui_root.campaign_groups_live_data_query_context",
+          "field": "campaign_groups_live_data_query_context",
+          "kind": "LinkedField",
+          "plural": false
+        },
+        {
+          "path": "data.xfb_ads_ui_root.campaign_groups_live_data_query_context.campaign_group_ids",
+          "field": "campaign_group_ids",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.xfb_ads_ui_root.campaign_groups_live_data_query_context.campaign_groups",
+          "field": "campaign_groups",
+          "kind": "LinkedField",
+          "plural": false
+        },
+        {
+          "path": "data.xfb_ads_ui_root.campaign_groups_live_data_query_context.campaign_groups.nodes",
+          "field": "nodes",
+          "kind": "LinkedField",
+          "plural": true
+        },
+        {
+          "path": "data.xfb_ads_ui_root.campaign_groups_live_data_query_context.campaign_groups.nodes[*].id",
+          "field": "id",
+          "kind": "ScalarField",
+          "plural": false
+        }
+      ],
+      "provider_imports": [
+        "GraphQLIncludeAdgroupActiveStudies.relayprovider",
+        "GraphQLIncludeIsCreativeTesting.relayprovider"
+      ],
+      "missing_imports": [
+        "AdCampaignGroup-ad_object_field_error_spec-resolver",
+        "GraphQLIncludeAdgroupActiveStudies.relayprovider",
+        "GraphQLIncludeIsCreativeTesting.relayprovider",
+        "relay-runtime"
+      ],
+      "request_schema_confirmed": false,
+      "account_scope_confirmed": false,
+      "eligible_for_launch": false,
+      "artifact_source": {
+        "module_sha256": "c06bf4521015b4b49e4d1e52e12254f0fe6d1ae8bf24d2848aced0a8966a657d",
+        "script_sha256": "3c7de32f7de0b89953b2ecd5b31ff65bf34367e671f7f9e67134f6eb2d163000",
+        "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4ijsg4/yq/l/en_US-j/Y731TQMByU4.js"
+      }
+    },
+    {
+      "friendly_name": "AdsManagerLiveDataCampaignQuery",
+      "doc_id": "27983899064622696",
+      "operation_kind": "query",
+      "factory_sha256": "af73dd34fda3d7811c812b2040cc88d1416680d86d8c10c0c714c63b737ade5d",
+      "variable_definitions": [
+        {
+          "defaultValue": null,
+          "kind": "LocalArgument",
+          "name": "ids"
+        },
+        {
+          "defaultValue": false,
+          "kind": "LocalArgument",
+          "name": "skip_data_transform"
+        },
+        {
+          "defaultValue": null,
+          "kind": "LocalArgument",
+          "name": "__relay_internal__pv__GraphQLIncludeAdgroupActiveStudiesrelayprovider"
+        }
+      ],
+      "server_fields": [
+        {
+          "path": "data.nodes",
+          "field": "nodes",
+          "kind": "LinkedField",
+          "plural": true
+        },
+        {
+          "path": "data.nodes[*].__typename",
+          "field": "__typename",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.nodes[*].id",
+          "field": "id",
+          "kind": "ScalarField",
+          "plural": false
+        }
+      ],
+      "provider_imports": [
+        "GraphQLIncludeAdgroupActiveStudies.relayprovider"
+      ],
+      "missing_imports": [
+        "AdCampaign-ad_object_spec-resolver",
+        "GraphQLIncludeAdgroupActiveStudies.relayprovider",
+        "relay-runtime"
+      ],
+      "request_schema_confirmed": false,
+      "account_scope_confirmed": false,
+      "eligible_for_launch": false,
+      "artifact_source": {
+        "module_sha256": "1d9ff0f0d18ea819a697ac3feec8e22e6e564feec3985b7abff41648a8471a46",
+        "script_sha256": "3c7de32f7de0b89953b2ecd5b31ff65bf34367e671f7f9e67134f6eb2d163000",
+        "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4ijsg4/yq/l/en_US-j/Y731TQMByU4.js"
+      }
+    },
+    {
+      "friendly_name": "AdsManagerLiveDataCampaignQueryPreloadingConfigNoSpecsQuery",
+      "doc_id": "28864090736520598",
+      "operation_kind": "query",
+      "factory_sha256": "48641b0eb66fe075a6215a37911b50914dbff22d93dac3c5f0bc4c1d19794612",
+      "variable_definitions": [
+        {
+          "defaultValue": null,
+          "kind": "LocalArgument",
+          "name": "__relay_internal__pv__GraphQLIncludeAdgroupActiveStudiesrelayprovider"
+        }
+      ],
+      "server_fields": [
+        {
+          "path": "data.xfb_ads_ui_root",
+          "field": "xfb_ads_ui_root",
+          "kind": "LinkedField",
+          "plural": false
+        },
+        {
+          "path": "data.xfb_ads_ui_root.campaigns_live_table_context",
+          "field": "campaigns_live_table_context",
+          "kind": "LinkedField",
+          "plural": false
+        },
+        {
+          "path": "data.xfb_ads_ui_root.campaigns_live_table_context.campaign_ids",
+          "field": "campaign_ids",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.xfb_ads_ui_root.campaigns_live_table_context.campaigns",
+          "field": "campaigns",
+          "kind": "LinkedField",
+          "plural": false
+        },
+        {
+          "path": "data.xfb_ads_ui_root.campaigns_live_table_context.campaigns.nodes",
+          "field": "nodes",
+          "kind": "LinkedField",
+          "plural": true
+        },
+        {
+          "path": "data.xfb_ads_ui_root.campaigns_live_table_context.campaigns.nodes[*].id",
+          "field": "id",
+          "kind": "ScalarField",
+          "plural": false
+        }
+      ],
+      "provider_imports": [
+        "GraphQLIncludeAdgroupActiveStudies.relayprovider"
+      ],
+      "missing_imports": [
+        "AdCampaign-ad_object_spec-resolver",
+        "GraphQLIncludeAdgroupActiveStudies.relayprovider",
+        "relay-runtime"
+      ],
+      "request_schema_confirmed": false,
+      "account_scope_confirmed": false,
+      "eligible_for_launch": false,
+      "artifact_source": {
+        "module_sha256": "1d037e427295aad289034be6ab7e020c9fa4361380f69f21399fcfe84e7adf57",
+        "script_sha256": "3c7de32f7de0b89953b2ecd5b31ff65bf34367e671f7f9e67134f6eb2d163000",
+        "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4ijsg4/yq/l/en_US-j/Y731TQMByU4.js"
+      }
+    },
+    {
+      "friendly_name": "AdsMgmtAdgroupDynamicStoreSourceTier1ServerQuery",
+      "doc_id": "28241458518843188",
+      "operation_kind": "query",
+      "factory_sha256": "7fcb3c89cc394935a8de77f08334a58acb55a715eb11455bb7e9b8d2b71ca84e",
+      "variable_definitions": [
+        {
+          "defaultValue": null,
+          "kind": "LocalArgument",
+          "name": "ids"
+        }
+      ],
+      "server_fields": [
+        {
+          "path": "data.nodes",
+          "field": "nodes",
+          "kind": "LinkedField",
+          "plural": true
+        },
+        {
+          "path": "data.nodes[*].__typename",
+          "field": "__typename",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.nodes[*].node_id",
+          "field": "id",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.nodes[*].id",
+          "field": "id",
+          "kind": "ScalarField",
+          "plural": false
+        }
+      ],
+      "provider_imports": [],
+      "missing_imports": [
+        "Adgroup-dynamic_ad_object_spec_tier1-resolver",
+        "relay-runtime"
+      ],
+      "request_schema_confirmed": false,
+      "account_scope_confirmed": false,
+      "eligible_for_launch": false,
+      "artifact_source": {
+        "module_sha256": "3deee1937d0d52db34b802a10f2903becdef78b4194ac1a6695600b3582cc1a8",
+        "script_sha256": "ab8dc8531bfd5d74b0fa2483c6f79ef94c00d863e18a707fa2c05bd73fc319d0",
+        "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4iukv4/yM/l/en_US-j/uCFwpQnePq5.js"
+      }
+    },
+    {
+      "friendly_name": "AdsMgmtCampaignGroupDynamicStoreSourceTier1V2ServerQuery",
+      "doc_id": "38315745208069503",
+      "operation_kind": "query",
+      "factory_sha256": "e9a9d6e22a0fa56348c34f88f20ea7dee7fadb2d8992cf5f74f5de0ad4a4df8e",
+      "variable_definitions": [
+        {
+          "defaultValue": null,
+          "kind": "LocalArgument",
+          "name": "ids"
+        }
+      ],
+      "server_fields": [
+        {
+          "path": "data.nodes",
+          "field": "nodes",
+          "kind": "LinkedField",
+          "plural": true
+        },
+        {
+          "path": "data.nodes[*].__typename",
+          "field": "__typename",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.nodes[*].node_id",
+          "field": "id",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.nodes[*].id",
+          "field": "id",
+          "kind": "ScalarField",
+          "plural": false
+        }
+      ],
+      "provider_imports": [],
+      "missing_imports": [
+        "AdCampaignGroup-dynamic_ad_object_spec_tier1_v2-resolver",
+        "relay-runtime"
+      ],
+      "request_schema_confirmed": false,
+      "account_scope_confirmed": false,
+      "eligible_for_launch": false,
+      "artifact_source": {
+        "module_sha256": "a90cc87a043bca0d2c96124276f4119ff74a27269697a86e83fabee067acc0fe",
+        "script_sha256": "ab8dc8531bfd5d74b0fa2483c6f79ef94c00d863e18a707fa2c05bd73fc319d0",
+        "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4iukv4/yM/l/en_US-j/uCFwpQnePq5.js"
+      }
+    },
+    {
+      "friendly_name": "AdsNoDeliveryStatusPostPublishResolutionMutationExecutorMutation",
+      "doc_id": "27608454202114707",
+      "operation_kind": "mutation",
+      "factory_sha256": "064bcc5a6716a9bbc23c3d5b360d89adb03fa985227f1ee4405928c7ba989c46",
+      "variable_definitions": [
+        {
+          "defaultValue": null,
+          "kind": "LocalArgument",
+          "name": "input"
+        }
+      ],
+      "server_fields": [
+        {
+          "path": "data.ads_no_delivery_post_publish_resolution",
+          "field": "ads_no_delivery_post_publish_resolution",
+          "kind": "LinkedField",
+          "plural": false
+        },
+        {
+          "path": "data.ads_no_delivery_post_publish_resolution.success",
+          "field": "success",
+          "kind": "ScalarField",
+          "plural": false
+        }
+      ],
+      "provider_imports": [],
+      "missing_imports": [],
+      "request_schema_confirmed": false,
+      "account_scope_confirmed": false,
+      "eligible_for_launch": false,
+      "artifact_source": {
+        "module_sha256": "da924a13533ea6ba2eebecd5090bc3957e7a7a6780f2ebdb1cb701fd691dabf7",
+        "script_sha256": "8933c080d9c5dd714937ae9dc99e99bc5db4de8f7fbd4b895b9239a4e198a792",
+        "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4i-v34/y0/l/en_US-j/qvak7WR4YmU.js"
+      }
+    },
+    {
+      "friendly_name": "AdsPromotablePageListStoreSourceServerQuery",
+      "doc_id": "26138679029145319",
+      "operation_kind": "query",
+      "factory_sha256": "79c658d11ac8137e56574376e2a3d4b7ca4f008f6edd3b74a60a4f95da926d26",
+      "variable_definitions": [
+        {
+          "defaultValue": null,
+          "kind": "LocalArgument",
+          "name": "userId"
+        },
+        {
+          "defaultValue": null,
+          "kind": "LocalArgument",
+          "name": "filter"
+        },
+        {
+          "defaultValue": null,
+          "kind": "LocalArgument",
+          "name": "limit"
+        },
+        {
+          "defaultValue": null,
+          "kind": "LocalArgument",
+          "name": "after"
+        }
+      ],
+      "server_fields": [
+        {
+          "path": "data.user",
+          "field": "user",
+          "kind": "LinkedField",
+          "plural": false
+        },
+        {
+          "path": "data.user.id",
+          "field": "id",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.user.facebook_pages",
+          "field": "facebook_pages",
+          "kind": "LinkedField",
+          "plural": false
+        },
+        {
+          "path": "data.user.facebook_pages.page_info",
+          "field": "page_info",
+          "kind": "LinkedField",
+          "plural": false
+        },
+        {
+          "path": "data.user.facebook_pages.page_info.has_next_page",
+          "field": "has_next_page",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.user.facebook_pages.page_info.end_cursor",
+          "field": "end_cursor",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.user.facebook_pages.nodes",
+          "field": "nodes",
+          "kind": "LinkedField",
+          "plural": true
+        },
+        {
+          "path": "data.user.facebook_pages.nodes[*].id",
+          "field": "id",
+          "kind": "ScalarField",
+          "plural": false
+        }
+      ],
+      "provider_imports": [],
+      "missing_imports": [
+        "Page-promotable_page_list_spec-resolver"
+      ],
+      "request_schema_confirmed": false,
+      "account_scope_confirmed": false,
+      "eligible_for_launch": false,
+      "artifact_source": {
+        "module_sha256": "b7c31bd961a1bb773cb50db729e77ec546719fa2a034f31450bf6a681aa0072a",
+        "script_sha256": "38a638bd4e4fada68050a93875ef9ece30fe1c6bb5daeb0757dc1c680fccfecd",
+        "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4iwv04/yX/l/en_US-j/5LykW2SJN24.js"
+      }
+    },
+    {
+      "friendly_name": "useAdsPromotablePagesForAccountV2Query",
+      "doc_id": "26808648062123894",
+      "operation_kind": "query",
+      "factory_sha256": "24baac97e3d463945524cb113c8d626a83eaa72a63ace10b02e7a10b0f012912",
+      "variable_definitions": [
+        {
+          "defaultValue": null,
+          "kind": "LocalArgument",
+          "name": "adAccountID"
+        },
+        {
+          "defaultValue": 10,
+          "kind": "LocalArgument",
+          "name": "count"
+        },
+        {
+          "defaultValue": null,
+          "kind": "LocalArgument",
+          "name": "currentUserID"
+        },
+        {
+          "defaultValue": null,
+          "kind": "LocalArgument",
+          "name": "cursor"
+        }
+      ],
+      "server_fields": [
+        {
+          "path": "data.currentUser",
+          "field": "node",
+          "kind": "LinkedField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.__typename",
+          "field": "__typename",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.facebook_pages",
+          "field": "facebook_pages",
+          "kind": "LinkedField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.facebook_pages.edges",
+          "field": "edges",
+          "kind": "LinkedField",
+          "plural": true
+        },
+        {
+          "path": "data.currentUser.facebook_pages.edges[*].node",
+          "field": "node",
+          "kind": "LinkedField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.facebook_pages.edges[*].node.id",
+          "field": "id",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.facebook_pages.edges[*].node.ads_manager_access_token",
+          "field": "ads_manager_access_token",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.facebook_pages.edges[*].node.is_instagram_account_backed_page",
+          "field": "is_instagram_account_backed_page",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.facebook_pages.edges[*].node.is_whatsapp_ads_identity",
+          "field": "is_whatsapp_ads_identity",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.facebook_pages.edges[*].node.ads_assoc_v2_linked_bizlink_instagram_account",
+          "field": "ads_assoc_v2_linked_bizlink_instagram_account",
+          "kind": "LinkedField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.facebook_pages.edges[*].node.ads_assoc_v2_linked_bizlink_instagram_account.__typename",
+          "field": "__typename",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.facebook_pages.edges[*].node.ads_assoc_v2_linked_bizlink_instagram_account.instagram_user_id",
+          "field": "instagram_user_id",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.facebook_pages.edges[*].node.ads_assoc_v2_linked_bizlink_instagram_account.profile_picture_url",
+          "field": "profile_picture_url",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.facebook_pages.edges[*].node.ads_assoc_v2_linked_bizlink_instagram_account.id",
+          "field": "id",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.facebook_pages.edges[*].node.business",
+          "field": "business",
+          "kind": "LinkedField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.facebook_pages.edges[*].node.business.id",
+          "field": "id",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.facebook_pages.edges[*].node.business.name",
+          "field": "name",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.facebook_pages.edges[*].node.ctx_account_based_default_source",
+          "field": "ctx_account_based_default_source",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.facebook_pages.edges[*].node.is_eligible_defaulting_to_wtwa_with_threshold_a",
+          "field": "is_eligible_defaulting_to_wtwa_with_threshold_a",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.facebook_pages.edges[*].node.is_eligible_defaulting_to_wtwa_with_threshold_b",
+          "field": "is_eligible_defaulting_to_wtwa_with_threshold_b",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.facebook_pages.edges[*].node.is_eligible_for_ml_wtm_defaulting",
+          "field": "is_eligible_for_ml_wtm_defaulting",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.facebook_pages.edges[*].node.last_website_link",
+          "field": "last_website_link",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.facebook_pages.edges[*].node.messenger_sends_l28",
+          "field": "messenger_sends_l28",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.facebook_pages.edges[*].node.more_than_100_connected_ig_sends_l28",
+          "field": "more_than_100_connected_ig_sends_l28",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.facebook_pages.edges[*].node.website_add_on_preserve_preference",
+          "field": "website_add_on_preserve_preference",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.facebook_pages.edges[*].node.whatsapp_numbers_info",
+          "field": "whatsapp_numbers_info",
+          "kind": "LinkedField",
+          "plural": true
+        },
+        {
+          "path": "data.currentUser.facebook_pages.edges[*].node.whatsapp_numbers_info[*].whatsapp_number",
+          "field": "whatsapp_number",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.facebook_pages.edges[*].node.ads_name",
+          "field": "ads_name",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.facebook_pages.edges[*].node.page_token",
+          "field": "page_token",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.facebook_pages.edges[*].node.has_whatsapp_number",
+          "field": "has_whatsapp_number",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.facebook_pages.edges[*].node.global_brand_page_name",
+          "field": "global_brand_page_name",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.facebook_pages.edges[*].node.name_with_location_descriptor",
+          "field": "name_with_location_descriptor",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.facebook_pages.edges[*].node.page_businesses",
+          "field": "page_businesses",
+          "kind": "LinkedField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.facebook_pages.edges[*].node.page_businesses.nodes",
+          "field": "nodes",
+          "kind": "LinkedField",
+          "plural": true
+        },
+        {
+          "path": "data.currentUser.facebook_pages.edges[*].node.page_businesses.nodes[*].name",
+          "field": "name",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.facebook_pages.edges[*].node.page_businesses.nodes[*].id",
+          "field": "id",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.facebook_pages.edges[*].node.is_business_number",
+          "field": "is_business_number",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.facebook_pages.edges[*].node.profile_picture",
+          "field": "profile_picture",
+          "kind": "LinkedField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.facebook_pages.edges[*].node.profile_picture.height",
+          "field": "height",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.facebook_pages.edges[*].node.profile_picture.is_silhouette",
+          "field": "is_silhouette",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.facebook_pages.edges[*].node.profile_picture.uri",
+          "field": "uri",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.facebook_pages.edges[*].node.profile_picture.width",
+          "field": "width",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.facebook_pages.edges[*].node.permitted_tasks",
+          "field": "permitted_tasks",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.facebook_pages.edges[*].node.profile_picture_uri",
+          "field": "profile_picture_uri",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.facebook_pages.edges[*].node.has_transitioned_to_new_page_experience",
+          "field": "has_transitioned_to_new_page_experience",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.facebook_pages.edges[*].node.__typename",
+          "field": "__typename",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.facebook_pages.edges[*].cursor",
+          "field": "cursor",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.facebook_pages.page_info",
+          "field": "page_info",
+          "kind": "LinkedField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.facebook_pages.page_info.end_cursor",
+          "field": "end_cursor",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.facebook_pages.page_info.has_next_page",
+          "field": "has_next_page",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.currentUser.id",
+          "field": "id",
+          "kind": "ScalarField",
+          "plural": false
+        }
+      ],
+      "provider_imports": [],
+      "missing_imports": [],
+      "request_schema_confirmed": false,
+      "account_scope_confirmed": false,
+      "eligible_for_launch": false,
+      "artifact_source": {
+        "module_sha256": "d03625ea01827588eabdc2b0806d6b2617cea20f4bb6747d94a148f6525b9e9b",
+        "script_sha256": "f0f947deb2dc35f3dd8e48c9c651fe80d3fae778ca0120f17d9da6c4fdfef726",
+        "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4iBbd4/yK/l/en_US-j/kDg8z-0uyHe.js"
+      }
+    },
+    {
+      "friendly_name": "useAdsUGPRecommendationCreateDraftFragmentsMutation",
+      "doc_id": "33543577035289212",
+      "operation_kind": "mutation",
+      "factory_sha256": "974c1513e6beeef83c006c51da2779cc40834ce5dfe891a1e5dcf798f1109808",
+      "variable_definitions": [
+        {
+          "defaultValue": null,
+          "kind": "LocalArgument",
+          "name": "input"
+        }
+      ],
+      "server_fields": [
+        {
+          "path": "data.xfb_ad_recommendation_create_draft",
+          "field": "xfb_ad_recommendation_create_draft",
+          "kind": "LinkedField",
+          "plural": false
+        },
+        {
+          "path": "data.xfb_ad_recommendation_create_draft.fragments",
+          "field": "fragments",
+          "kind": "LinkedField",
+          "plural": false
+        },
+        {
+          "path": "data.xfb_ad_recommendation_create_draft.fragments.nodes",
+          "field": "nodes",
+          "kind": "LinkedField",
+          "plural": true
+        },
+        {
+          "path": "data.xfb_ad_recommendation_create_draft.fragments.nodes[*].id",
+          "field": "id",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.xfb_ad_recommendation_create_draft.fragments.nodes[*].ad_draft_v2",
+          "field": "ad_draft_v2",
+          "kind": "LinkedField",
+          "plural": false
+        },
+        {
+          "path": "data.xfb_ad_recommendation_create_draft.fragments.nodes[*].ad_draft_v2.__typename",
+          "field": "__typename",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.xfb_ad_recommendation_create_draft.fragments.nodes[*].ad_draft_v2.id",
+          "field": "id",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.xfb_ad_recommendation_create_draft.fragments.nodes[*].ad_object_id",
+          "field": "ad_object_id",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.xfb_ad_recommendation_create_draft.fragments.nodes[*].ad_object_type",
+          "field": "ad_object_type",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.xfb_ad_recommendation_create_draft.fragments.nodes[*].values",
+          "field": "values",
+          "kind": "LinkedField",
+          "plural": true
+        },
+        {
+          "path": "data.xfb_ad_recommendation_create_draft.fragments.nodes[*].values[*].field",
+          "field": "field",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.xfb_ad_recommendation_create_draft.fragments.nodes[*].values[*].new_value",
+          "field": "new_value",
+          "kind": "ScalarField",
+          "plural": false
+        },
+        {
+          "path": "data.xfb_ad_recommendation_create_draft.fragments.nodes[*].validation_status",
+          "field": "validation_status",
+          "kind": "ScalarField",
+          "plural": false
+        }
+      ],
+      "provider_imports": [],
+      "missing_imports": [],
+      "request_schema_confirmed": false,
+      "account_scope_confirmed": false,
+      "eligible_for_launch": false,
+      "artifact_source": {
+        "module_sha256": "b6513de98ccca7d40458c7bf1794a03583160a7136fa60e255ad6f0543e68bf6",
+        "script_sha256": "352c5a639f7b9558b338e8eacb7d55154e6868541ba590d63abc49e354244f5f",
+        "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4ioK34/yD/l/en_US-j/of8awa-Bakx.js"
+      }
+    }
+  ],
+  "blocked_candidates": {
+    "AdsManagerLiveDataCampaignQuery": "server selections contain IDs/types; advertising specification is client resolved",
+    "useAdsPromotablePagesForAccountV2Query": "exact-account eligible Page intersection is a client resolver; server list is actor-wide",
+    "AdsAdgroupAuctionPageFieldPromotablePageListQuery": "actor-wide has_create_ads_access is not exact-RK eligibility",
+    "useAdsUGPRecommendationCreateDraftFragmentsMutation": "recommendation-specific draft fragments, not arbitrary full advertising publication",
+    "AdsNoDeliveryStatusPostPublishResolutionMutationExecutorMutation": "post-publication resolution, not CREATE or activation contract",
+    "AdsDraftRealtimeSubscription": "subscription/event message, not an HTTP polling verification contract"
+  },
+  "source_modules": {
+    "AdsDraftPublishDataManager": {
+      "module_sha256": "c04737c1b5b6c4b320ea4ee22d4146f006837b424d24d197b5c8e0a554a37a6d",
+      "script_sha256": "ca595ab6b82bb87adaa0ad1d2a5e57346e9745f568b734ae9b2999aaa20d2def",
+      "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4idcd4/y0/l/en_US-j/f2UtWoV9xoS.js",
+      "dependencies": [
+        "errorCode",
+        "fbt",
+        "AdAsyncRequestStatus",
+        "AdDraftFragmentSource",
+        "AdDraftPublishStatuses",
+        "AdFLEXConfig",
+        "AdsAccountStore",
+        "AdsApplicationIDs",
+        "AdsApplicationUtils",
+        "AdsBusinessIntegrityReviewStatusAfterAPFChallengeDataProvider",
+        "AdsCampaignBudgetSeasonalGuidanceExperimentUtils",
+        "AdsDataAtom",
+        "AdsDraftAppendPublishErrorDataAction",
+        "AdsDraftDraftCloseDataAction",
+        "AdsDraftDraftClosedDataAction",
+        "AdsDraftDraftPublishCompletedDataAction",
+        "AdsDraftDraftPublishFailedErrorDataAction",
+        "AdsDraftDraftPublishInProgressDataAction",
+        "AdsDraftDraftPublishWillCompleteDataAction",
+        "AdsDraftFragmentDataManager",
+        "AdsDraftFragmentStore",
+        "AdsDraftPublishQPLUserFlowLogging",
+        "AdsDraftPublishRealtimeClient",
+        "AdsDraftPublishTypes",
+        "AdsExperiments2026QEUtils",
+        "AdsFragmentsPostPublishMonitoringAction",
+        "AdsFragmentsPostPublishMonitoringUtils",
+        "AdsGraphAPI",
+        "AdsGuidanceAccountSpendLimitPostPublishAction",
+        "AdsGuidanceBudgetSeasonalRecommendationPostPublishAction",
+        "AdsGuidanceCTXCBOZeroOutcomeBudgetPostPublishAction",
+        "AdsGuidanceCTXZeroOutcomeBudgetPostPublishAction",
+        "AdsGuidanceNarrowWebsiteCustomAudiencePostPublishAction",
+        "AdsGuidanceOutcomeForecasterPFRBudgetPostPublishAction",
+        "AdsGuidanceUnderpoweredExperimentPostPublishAction",
+        "AdsGuidanceZeroOutcomeBudgetPostPublishAction",
+        "AdsMarkRecommendationAppliedAction",
+        "AdsPEPublishStartedAction",
+        "AdsPERemoveFakePublishIDAction",
+        "AdsPPPReliabilityExperimentUtils",
+        "AdsPerfInteractionsController",
+        "AdsPostPublishGuidanceActivateAction",
+        "AdsPostPublishGuidanceCoordinatorUtils",
+        "AdsPreflightHVSGuidanceRecommendationPostPublishAction",
+        "AdsRecommendationsClearPendingPublishAction",
+        "AdsRecommendationsUtils",
+        "ClickToWhatsAppFeatureGating",
+        "GraphAPIRetry",
+        "JSResource",
+        "QPLSharing",
+        "adsDraftGetFragmentStatusesFromPublishResponse",
+        "adsDraftGetPublishSuccessInfo",
+        "adsDraftIsSystemError",
+        "adsFormatErrorMessage",
+        "adsLogSourceAdObjectIDsForDuplication",
+        "adsPELockedAndPublishingSelectors",
+        "asyncToGeneratorRuntime",
+        "err",
+        "getByPath",
+        "getErrorSafe",
+        "gkx",
+        "ifRequired",
+        "isTruthy",
+        "justknobx",
+        "promiseDone",
+        "requireDeferred"
+      ]
+    },
+    "AdsDraftPublishingManagerProvider": {
+      "module_sha256": "3b3aeefec1df6af419ac83a4805bc64f1442389c0d376a9bb40b9ec3789a8567",
+      "script_sha256": "ca595ab6b82bb87adaa0ad1d2a5e57346e9745f568b734ae9b2999aaa20d2def",
+      "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4idcd4/y0/l/en_US-j/f2UtWoV9xoS.js",
+      "dependencies": [
+        "AdsDraftPublishingManagerProviderPlugin",
+        "Laminar"
+      ]
+    },
+    "AdsGraphAPI": {
+      "module_sha256": "f0cf5a17cbc97de6bbc4b44395e7650c364fe8df62b1012049935b5379c9d7e6",
+      "script_sha256": "f45273ee31b82049ca473e4c7b1025166c696b69591175d4e9c8bdbc35cdd522",
+      "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4itLS4/yO/l/en_US-j/YjHG_hCa_oy.js",
+      "dependencies": [
+        "FBLogger",
+        "GraphAPI",
+        "GraphAPIConfig"
+      ]
+    },
+    "AsyncRequest": {
+      "module_sha256": "4396d46a8783f17d89b0d1c9a02df0e19ac7ff264f049f6d7ae4ca797d09bf82",
+      "script_sha256": "fdb4f875ff73a4c4897d26c4d3034bb9c1dc5ace0ccb85f655977d4a84c7e2a3",
+      "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4i6sa4/yc/l/en_US-j/3Kf07VKR0AH.js",
+      "dependencies": [
+        "errorCode",
+        "fbt",
+        "invariant",
+        "AdsManagerConstURIUtils",
+        "Arbiter",
+        "AsyncDOM",
+        "AsyncRequestConfig",
+        "AsyncResponse",
+        "Bootloader",
+        "CSS",
+        "DTSG",
+        "DTSG_ASYNC",
+        "Deferred",
+        "Env",
+        "ErrorGuard",
+        "Event",
+        "FBLogger",
+        "FetchStreamTransport",
+        "HTTPErrors",
+        "HasteResponse",
+        "PHPQuerySerializer",
+        "Parent",
+        "Promise",
+        "ResourceTimingsStore",
+        "ResourceTypes",
+        "Run",
+        "ScriptPath",
+        "ServerJS",
+        "SessionName",
+        "TimeSlice",
+        "URI",
+        "UserAgent_DEPRECATED",
+        "ZeroRewrites",
+        "bind",
+        "canSendCredentialsForAsyncRequest",
+        "clearTimeout",
+        "emptyFunction",
+        "err",
+        "executeAfter",
+        "fb-error",
+        "ge",
+        "getAsyncHeaders",
+        "getAsyncParams",
+        "getErrorSafe",
+        "gkx",
+        "goURI",
+        "isEmpty",
+        "isFacebookURI",
+        "performanceAbsoluteNow",
+        "promiseDone",
+        "replaceTransportMarkers",
+        "setTimeout",
+        "setTimeoutAcrossTransitions",
+        "uriIsRelativePath"
+      ]
+    },
+    "adsDraftPublishingPublishAction": {
+      "module_sha256": "d3fc834b6781873c2c68d7e3f1523c1132151a0f6a9a2144b7338fc762d0e39e",
+      "script_sha256": "38a638bd4e4fada68050a93875ef9ece30fe1c6bb5daeb0757dc1c680fccfecd",
+      "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4iwv04/yX/l/en_US-j/5LykW2SJN24.js",
+      "dependencies": [
+        "AdDraftFragmentSource",
+        "AdsAccountStore",
+        "AdsApplicationIDs",
+        "AdsDraftDraftPublishDataAction",
+        "AdsDraftPublishDataManager",
+        "AdsDuplicationZeroEditTracker",
+        "AdsDuplicationZeroEditTrackingKillSwitch",
+        "AdsEditorTransitionConfig",
+        "AdsICCPublishLoggingStoreUtils",
+        "AdsManagerQPLUserFlowLogger",
+        "AdsNewIDs",
+        "AdsPerfInteractionsController",
+        "CPASMerchantPredefinedAdgroupUTM",
+        "FBLogger",
+        "QPLUserFlow",
+        "adsPELockedAndPublishingSelectors",
+        "gkx",
+        "qpl"
+      ]
+    },
+    "adsDraftPublishingCreateFragmentAndPublishAction": {
+      "module_sha256": "7cf94c93349d9b622099f08811f6154a0769674014e3f7ef76e5ff70b02fc4b6",
+      "script_sha256": "38a638bd4e4fada68050a93875ef9ece30fe1c6bb5daeb0757dc1c680fccfecd",
+      "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4iwv04/yX/l/en_US-j/5LykW2SJN24.js",
+      "dependencies": [
+        "AdDraftFragmentSource",
+        "AdsApplicationIDs",
+        "AdsDraftDraftPublishDataAction",
+        "AdsDraftPublishDataManager",
+        "AdsNewIDs",
+        "adsPELockedAndPublishingSelectors",
+        "immutable"
+      ]
+    },
+    "AdsDraftFragmentDataManager": {
+      "module_sha256": "016f45add0c818d7df000c0c4c431fd2d7facde170f7de832e4ba271f5f9d123",
+      "script_sha256": "ca595ab6b82bb87adaa0ad1d2a5e57346e9745f568b734ae9b2999aaa20d2def",
+      "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4idcd4/y0/l/en_US-j/f2UtWoV9xoS.js",
+      "dependencies": [
+        "errorCode",
+        "fbt",
+        "invariant",
+        "AdsAddToastCardAction",
+        "AdsApplicationIDs",
+        "AdsBaseDataManager",
+        "AdsDraftDraftFragmentBatchCreateErrorDataAction",
+        "AdsDraftDraftFragmentBatchCreatedDataAction",
+        "AdsDraftDraftFragmentBatchDeleteErrorDataAction",
+        "AdsDraftDraftFragmentBatchDeletedDataAction",
+        "AdsDraftDraftFragmentBatchLoadErrorDataAction",
+        "AdsDraftDraftFragmentBatchLoadedDataAction",
+        "AdsDraftDraftFragmentBatchUpdateErrorDataAction",
+        "AdsDraftDraftFragmentBatchUpdatedDataAction",
+        "AdsDraftDraftFragmentTooManyFragmentsInDraftDataAction",
+        "AdsDraftFragmentDataManagerFields",
+        "AdsDraftFragmentDataManagerUtils",
+        "AdsDraftFragmentDeletedRegistry",
+        "AdsDraftPublishRealtimeClient",
+        "AdsGraphAPI",
+        "AdsMgmtQPLLogger",
+        "AdsNewIDs",
+        "AdsPEHoverCardUtils",
+        "AdsScopeUtils",
+        "AdsUECampaignIncrementalAttributionUtils",
+        "FBLogger",
+        "JSResource",
+        "Promise",
+        "QPLDraftFragmentMutationLogger",
+        "QPLUserFlow",
+        "QuickPerformanceLogger",
+        "asyncToGeneratorRuntime",
+        "err",
+        "getErrorSafe",
+        "gkx",
+        "isFalsey",
+        "maybePreloadAdsPreflightRecommendations",
+        "promiseDone",
+        "qpl"
+      ]
+    },
+    "GraphAPI": {
+      "module_sha256": "da96858827635d7978aa1b5e6099846415732ae25d0cd56b2c2a3b883773da48",
+      "script_sha256": "f45273ee31b82049ca473e4c7b1025166c696b69591175d4e9c8bdbc35cdd522",
+      "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4itLS4/yO/l/en_US-j/YjHG_hCa_oy.js",
+      "dependencies": [
+        "errorCode",
+        "ErrorNormalizeUtils",
+        "FBLogger",
+        "GraphAPIAdAccountPrefix",
+        "GraphAPICore",
+        "GraphAPIRequestSpec",
+        "GraphAPIRequestSpecPotentialEdge",
+        "err",
+        "fb-error",
+        "isValidID",
+        "isValidVanityURI",
+        "runGraphAPIBatch_EXPERIMENTAL",
+        "sdk.URI",
+        "sdk.safelyParseResponse"
+      ]
+    },
+    "GraphAPICore": {
+      "module_sha256": "72c62e47687496b1cbc42dcc3f1c62986c30684dbabb38b22b265a8d24f0cdfc",
+      "script_sha256": "f45273ee31b82049ca473e4c7b1025166c696b69591175d4e9c8bdbc35cdd522",
+      "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4itLS4/yO/l/en_US-j/YjHG_hCa_oy.js",
+      "dependencies": [
+        "errorCode",
+        "invariant",
+        "AdsManagerConstURIUtils",
+        "ApiClient",
+        "ErrorSerializer",
+        "FBLogger",
+        "FBTraceIDsForFailedGraphAPIRequests",
+        "GraphAPIPerfLogging",
+        "GraphAPIPreloadingOnlyMode",
+        "JSResourceForInteraction",
+        "Promise",
+        "RequestConstants",
+        "RequestProcessorDefault",
+        "SecuredActionDataFromErrorResponse",
+        "SecuredActionUtils",
+        "UrlMap",
+        "emptyFunction",
+        "err",
+        "getErrorFromAPIResponse",
+        "guid",
+        "justknobx",
+        "mixInEventEmitter",
+        "performanceNow",
+        "preloadedGraphAPI",
+        "promiseDone",
+        "sdk.URI",
+        "setTimeout",
+        "sprintf"
+      ]
+    },
+    "GraphAPIRequestSpec": {
+      "module_sha256": "015106612cbb7917d523dfdaed7dea04da784eb8f104c770e53138be5c18cfa5",
+      "script_sha256": "f45273ee31b82049ca473e4c7b1025166c696b69591175d4e9c8bdbc35cdd522",
+      "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4itLS4/yO/l/en_US-j/YjHG_hCa_oy.js",
+      "dependencies": [
+        "invariant",
+        "CurrentLocale",
+        "GraphAPICore",
+        "GraphAPIPreloadedData"
+      ]
+    },
+    "ApiClient": {
+      "module_sha256": "71fda38b0e4025f1fdc3f0e9cdc8b6b41e4a9dee767611f17343f178254465f3",
+      "script_sha256": "f45273ee31b82049ca473e4c7b1025166c696b69591175d4e9c8bdbc35cdd522",
+      "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4itLS4/yO/l/en_US-j/YjHG_hCa_oy.js",
+      "dependencies": [
+        "ApiBatcher",
+        "ApiClientUtils",
+        "Assert",
+        "CORSRequest",
+        "Log",
+        "ObservableMixin",
+        "QueryString",
+        "UrlMap",
+        "flattenObject"
+      ]
+    },
+    "AdsBulkUploadImages": {
+      "module_sha256": "360fa6903f7d4f39c733c8aa0934b107a148156e53f26311950b978bc4f31113",
+      "script_sha256": "20e24198196d37f887bdf813f64d88da4c02243ff131764074e2dd3528bcd9df",
+      "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4i0d04/yU/l/en_US-j/EgJMIKoJMzJ.js",
+      "dependencies": [
+        "AdsGraphAPI",
+        "Promise",
+        "mixInEventEmitter",
+        "promiseDone"
+      ]
+    },
+    "AdsPEUploadUtils": {
+      "module_sha256": "46918e25307d7b614cc36e84587cfeca73a2f9aaea566a2e831fb86b69dd0064",
+      "script_sha256": "7a06217f05ff63510dd5aee8cad75cbed2ec5ba584c80fc1240d5243333d4881",
+      "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4i2V74/y4/l/en_US-j/LDUsMHrnl_w.js",
+      "dependencies": [
+        "invariant",
+        "AdAsyncRequestStatus",
+        "AdsAPIDraftPublishStatusErrorPaths",
+        "AdsAPIDraftPublishStatusPaths",
+        "adsDraftGetAdsErrorFromDraftError",
+        "adsDraftGetFragmentPublishErrorMessage",
+        "adsDraftSortLevel",
+        "expectationViolation",
+        "getByPath",
+        "intlList"
+      ]
+    },
+    "AdsWizardMediaPickerMultiUploadUtils": {
+      "module_sha256": "b30f694384901110ce1b7798540610be8936dcf018b4a26c7bf3dc1fd292fc24",
+      "script_sha256": "3c7de32f7de0b89953b2ecd5b31ff65bf34367e671f7f9e67134f6eb2d163000",
+      "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4ijsg4/yq/l/en_US-j/Y731TQMByU4.js",
+      "dependencies": [
+        "AdImageSpecCropKeys",
+        "AdsImageIDClasses",
+        "AdsImageIDUtils",
+        "AdsPageTypes",
+        "gkx",
+        "immutable",
+        "justknobx",
+        "qex"
+      ]
+    },
+    "AdsDraftFragmentDataManagerFields": {
+      "module_sha256": "4f5b3e2cfdea4637c94f0604022371e84ca77ffabd48453c7fbcf58993b7b77e",
+      "script_sha256": "ca595ab6b82bb87adaa0ad1d2a5e57346e9745f568b734ae9b2999aaa20d2def",
+      "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4idcd4/y0/l/en_US-j/f2UtWoV9xoS.js",
+      "dependencies": []
+    },
+    "AdsDraftFragmentDataManagerUtils": {
+      "module_sha256": "153d93323c43e06bf87ffd9c6635ed9e2a1e219326ac1ec10943889c34387a75",
+      "script_sha256": "ca595ab6b82bb87adaa0ad1d2a5e57346e9745f568b734ae9b2999aaa20d2def",
+      "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4idcd4/y0/l/en_US-j/f2UtWoV9xoS.js",
+      "dependencies": [
+        "FBLogger",
+        "adsDraftEncodeFragmentValues",
+        "immutable"
+      ]
+    },
+    "AdsDraftDataManager": {
+      "module_sha256": "225cb70025c2d8a14b28d5fd09bb92505d1eec4be3ebea95cd47d6c09d633987",
+      "script_sha256": "ca595ab6b82bb87adaa0ad1d2a5e57346e9745f568b734ae9b2999aaa20d2def",
+      "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4idcd4/y0/l/en_US-j/f2UtWoV9xoS.js",
+      "dependencies": [
+        "invariant",
+        "AdDraftOwnership",
+        "AdDraftPublishStatuses",
+        "AdDraftStates",
+        "AdsAPIDraftPaths",
+        "AdsApplicationIDs",
+        "AdsApplicationUtils",
+        "AdsBaseDataManager",
+        "AdsCurrentUser",
+        "AdsDefaultDraftNameConfig",
+        "AdsDraftDataManagerFields",
+        "AdsDraftDataManagerPreloader",
+        "AdsDraftDraftBatchLoadErrorDataAction",
+        "AdsDraftDraftBatchLoadedDataAction",
+        "AdsDraftDraftCurrentDraftLoadErrorDataAction",
+        "AdsDraftDraftCurrentDraftLoadedDataAction",
+        "AdsDraftDraftDiscardErrorDataAction",
+        "AdsDraftDraftDiscardedDataAction",
+        "AdsDraftDraftSetCurrentDraftErrorDataAction",
+        "AdsDraftDraftSetCurrentDraftSuccessDataAction",
+        "AdsDraftLoginAsDraftsLoadedDataAction",
+        "AdsDraftPublishDataManager",
+        "AdsDraftPublishQPLUserFlowLogging",
+        "AdsDraftPublishQPLUserFlowLoggingConsts",
+        "AdsDraftPublishRealtimeClient",
+        "AdsDraftTypes",
+        "AdsGraphAPI",
+        "AdsLoginAs",
+        "AdsManagerQPLUserFlowLogger",
+        "AdsMgmtPreloadingUtils",
+        "AdsPEEmployeeSelectDraftUtils",
+        "AdsPerfInteractionsController",
+        "FBLogger",
+        "Promise",
+        "QPLEvent",
+        "adsDraftCreateToastCardForPublishComplete",
+        "adsDraftGetFragmentStatusesFromPublishResponse",
+        "asyncToGeneratorRuntime",
+        "err",
+        "formatDate",
+        "getByPath",
+        "immutable",
+        "promiseDone"
+      ]
+    },
+    "GraphAPIRequestSpecPotentialEdge": {
+      "module_sha256": "f1d9d787a03455f5da7f50cb153568df60d73ec073c388ba1479df761c11f0e3",
+      "script_sha256": "f45273ee31b82049ca473e4c7b1025166c696b69591175d4e9c8bdbc35cdd522",
+      "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4itLS4/yO/l/en_US-j/YjHG_hCa_oy.js",
+      "dependencies": [
+        "GraphAPIRequestSpec"
+      ]
+    },
+    "ApiClientUtils": {
+      "module_sha256": "3432588d7314905e892394787ffe0d94a28bc2bc5d4a947b28f4cc133ac36487",
+      "script_sha256": "f45273ee31b82049ca473e4c7b1025166c696b69591175d4e9c8bdbc35cdd522",
+      "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4itLS4/yO/l/en_US-j/YjHG_hCa_oy.js",
+      "dependencies": [
+        "ArgumentError",
+        "Assert",
+        "Log",
+        "flattenObject",
+        "getErrorSafe",
+        "sdk.URI",
+        "sprintf"
+      ]
+    },
+    "ApiBatcher": {
+      "module_sha256": "812c11368e90b29e79ddf16974425bfef87ed11405c4dd1f509929470aca97d6",
+      "script_sha256": "f45273ee31b82049ca473e4c7b1025166c696b69591175d4e9c8bdbc35cdd522",
+      "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4itLS4/yO/l/en_US-j/YjHG_hCa_oy.js",
+      "dependencies": [
+        "invariant",
+        "ApiClientUtils",
+        "QueryString",
+        "sdk.safelyParseResponse",
+        "whitelistObjectKeys"
+      ]
+    },
+    "CORSRequest": {
+      "module_sha256": "0e2cbb693616391ec72c4718fc1fb45b1972df85b0a2d9927dc5bb8085a54ca8",
+      "script_sha256": "f45273ee31b82049ca473e4c7b1025166c696b69591175d4e9c8bdbc35cdd522",
+      "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4itLS4/yO/l/en_US-j/YjHG_hCa_oy.js",
+      "dependencies": [
+        "Log",
+        "QueryString",
+        "RequestConstants",
+        "sdk.safelyParseResponse",
+        "wrapFunction"
+      ]
+    },
+    "UrlMap": {
+      "module_sha256": "481f566180c161657514de94987cbaf484f47dcadc8d1d9df788405b55882cb0",
+      "script_sha256": "f45273ee31b82049ca473e4c7b1025166c696b69591175d4e9c8bdbc35cdd522",
+      "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4itLS4/yO/l/en_US-j/YjHG_hCa_oy.js",
+      "dependencies": [
+        "invariant",
+        "UrlMapConfig",
+        "sdk.Runtime"
+      ]
+    },
+    "AdsDraftDataManagerFields": {
+      "module_sha256": "2a1e004ac33cc0abe1084a7c2b8cdcb758487bdd5556777ad58289e43eb71c64",
+      "script_sha256": "ca595ab6b82bb87adaa0ad1d2a5e57346e9745f568b734ae9b2999aaa20d2def",
+      "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4idcd4/y0/l/en_US-j/f2UtWoV9xoS.js",
+      "dependencies": []
+    },
+    "AdsAPIAdDraftPublishStatusFields": {
+      "module_sha256": "df8d7a30d9271a4e6a2d8168e09714504e0657fb7c05063b9a18a426fe394c43",
+      "script_sha256": "3c7de32f7de0b89953b2ecd5b31ff65bf34367e671f7f9e67134f6eb2d163000",
+      "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4ijsg4/yq/l/en_US-j/Y731TQMByU4.js",
+      "dependencies": []
+    },
+    "adsDraftEncodeFragmentValues": {
+      "module_sha256": "708d3791c43ccb7ac96270242c7660353248f0316ba00972a1d62191614e9e8e",
+      "script_sha256": "ca595ab6b82bb87adaa0ad1d2a5e57346e9745f568b734ae9b2999aaa20d2def",
+      "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4idcd4/y0/l/en_US-j/f2UtWoV9xoS.js",
+      "dependencies": []
+    },
+    "AdsDraftRealtimeSubscription": {
+      "module_sha256": "bf625ee4f7d72925cddbdebbe9354ad44772921f80a4e8664048847677693ffa",
+      "script_sha256": "ca595ab6b82bb87adaa0ad1d2a5e57346e9745f568b734ae9b2999aaa20d2def",
+      "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4idcd4/y0/l/en_US-j/f2UtWoV9xoS.js",
+      "dependencies": [
+        "AdsDraftRealtimeSubscription.graphql",
+        "RelayFBEnvironment",
+        "RelayFBSubscription",
+        "RelayRuntime"
+      ]
+    },
+    "AdsDraftRealtimeSubscription.graphql": {
+      "module_sha256": "c77e60492b5612265316fb0b931aae5cae28d88a13df98248c5875fa742a07f5",
+      "script_sha256": "ca595ab6b82bb87adaa0ad1d2a5e57346e9745f568b734ae9b2999aaa20d2def",
+      "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4idcd4/y0/l/en_US-j/f2UtWoV9xoS.js",
+      "dependencies": []
+    },
+    "AdsVideoUploadUtil": {
+      "module_sha256": "983653ff5f8954a382c75e3b24df438ed826a127cabb57b3ffd32fb2047d16aa",
+      "script_sha256": "eafc1e09a42412df4d0a62433c53aba2f98102420df1eac953289a457f36ebf1",
+      "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4inDV4/yD/l/en_US-j/CgHJ0ko0XyD.js",
+      "dependencies": [
+        "AdsGraphAPI",
+        "AdsVideoUploadConsts",
+        "AdsVideoUploadStatus",
+        "AdsVideoUploadStoreState",
+        "URI",
+        "UrlMapConfig",
+        "adsMemoizeWithArgs",
+        "immutable",
+        "memoizeWithArgsCapped"
+      ]
+    },
+    "AdsVideoUploadAsyncRequest": {
+      "module_sha256": "e86d66d7521cceec587b00e54722a59d0efc2fe93b07cec0dc28331d62ce5a84",
+      "script_sha256": "f0f947deb2dc35f3dd8e48c9c651fe80d3fae778ca0120f17d9da6c4fdfef726",
+      "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4iBbd4/yK/l/en_US-j/kDg8z-0uyHe.js",
+      "dependencies": [
+        "fbt",
+        "ApiClient",
+        "AsyncResponse",
+        "emptyFunction",
+        "forEachObject"
+      ]
+    },
+    "AdsVideoUploadStartRequestManager": {
+      "module_sha256": "c56b1139c2104980891494dff639541c58fb280f77590f0c910761e7293eef07",
+      "script_sha256": "f0f947deb2dc35f3dd8e48c9c651fe80d3fae778ca0120f17d9da6c4fdfef726",
+      "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4iBbd4/yK/l/en_US-j/kDg8z-0uyHe.js",
+      "dependencies": [
+        "AdsVideoUploadRequest",
+        "VideoCreatorProductType",
+        "VideoUploadStartRequestManager"
+      ]
+    },
+    "AdsVideoUploadReceiveRequestManager": {
+      "module_sha256": "7ffa739aa64ffeda93f279aa0eab5f738a93330219eb2e1f3b77654f04501b79",
+      "script_sha256": "f0f947deb2dc35f3dd8e48c9c651fe80d3fae778ca0120f17d9da6c4fdfef726",
+      "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4iBbd4/yK/l/en_US-j/kDg8z-0uyHe.js",
+      "dependencies": [
+        "AdsVideoUploadRequest",
+        "VideoUploadReceiveRequestManager"
+      ]
+    },
+    "AdsVideoUploadPostRequestManager": {
+      "module_sha256": "921ca71af69330ce303b7849340ee12aa638f3aa5c5d27d75f02b42c34352e66",
+      "script_sha256": "f0f947deb2dc35f3dd8e48c9c651fe80d3fae778ca0120f17d9da6c4fdfef726",
+      "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4iBbd4/yK/l/en_US-j/kDg8z-0uyHe.js",
+      "dependencies": [
+        "AdsVideoUploadRequest",
+        "AdsVideoUploadUtil",
+        "VideoCreatorProductType",
+        "VideoUploadPostRequestManager"
+      ]
+    },
+    "AdsVideoUploadSession": {
+      "module_sha256": "ccc5e85af262982f967e5c6a6202946f648c8f96bf07239308af884ffb6e4fd4",
+      "script_sha256": "f0f947deb2dc35f3dd8e48c9c651fe80d3fae778ca0120f17d9da6c4fdfef726",
+      "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4iBbd4/yK/l/en_US-j/kDg8z-0uyHe.js",
+      "dependencies": [
+        "AdsVideoEncodingAsyncNotifier",
+        "AdsVideoEncodingFormat",
+        "AdsVideoUploadEvents",
+        "AdsVideoUploadPostRequestManager",
+        "AdsVideoUploadReceiveRequestManager",
+        "AdsVideoUploadRequestContext",
+        "AdsVideoUploadStartRequestManager",
+        "S553632MMAMultiLogin",
+        "VideoUploadLogger",
+        "VideoUploadSession",
+        "setTimeout"
+      ]
+    },
+    "AdsStatusChangeBulkEditDialogActions": {
+      "module_sha256": "3ac40d33c34c1d054f92a6aa0a7bbf760b3c454f1858968552fe1ebfea2a2322",
+      "script_sha256": "09ddd335ce7d820d667e04267e889625a12f69fa350f3d8b8625d01baa8e4586",
+      "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4iXyb4/yi/l/en_US-j/8AQ3X9nmGsJ.js",
+      "dependencies": [
+        "AdsAdgroupSetRunStatusDataAction",
+        "AdsCampaignGroupSetStatusDataAction",
+        "AdsHideAdsStatusChangeDialogAction",
+        "AdsPEAdgroupLiveStatusChangeAction",
+        "AdsPECampaignGroupLiveStatusChangeAction",
+        "AdsUEditorCampaignSetStatusAction",
+        "AdsUEditorHostIDs",
+        "AdsUEditorPECampaignLiveStatusChangeAction"
+      ]
+    },
+    "AdsDraftPublishReducerPlugins": {
+      "module_sha256": "c32f744506931146735143163af039f44eaad1fedcf885d4306993611275c155",
+      "script_sha256": "ca595ab6b82bb87adaa0ad1d2a5e57346e9745f568b734ae9b2999aaa20d2def",
+      "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4idcd4/y0/l/en_US-j/f2UtWoV9xoS.js",
+      "dependencies": [
+        "AdAsyncRequestStatus",
+        "AdDraftPublishStatuses",
+        "AdsCreativeFlexPushModelPublishUtils",
+        "AdsDraftFragmentStore",
+        "AdsDraftFragmentUtils",
+        "AdsDraftPublishDataProvider",
+        "AdsDraftPublishUIProviderActionType",
+        "AdsPEFragmentSelectors",
+        "AdsPEInstantDeleteActionFlux",
+        "Laminar",
+        "adsDraftGetFragmentStatusesFromPublishResponse",
+        "immutable"
+      ]
+    },
+    "AdsAdgroupDraftFragmentLiveStatusChangeReducerPlugin": {
+      "module_sha256": "8e2e2ee3d564bd0320ffc8e4f67b3fbc973776c1d76aa50e759431b78b079fee",
+      "script_sha256": "64818db3eef6be4b947ea5164bbb4582f2f3e17794b873fd8a9e21e47687c013",
+      "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4idWq4/yu/l/en_US-j/LmRN96zPk8t.js",
+      "dependencies": [
+        "AdsAdgroupRecordAccessors",
+        "AdsMutators",
+        "adsAdgroupDraftFragmentCreateReducer"
+      ]
+    },
+    "AdsCampaignGroupDraftFragmentsSetStatusReducerPlugin": {
+      "module_sha256": "dcf464685fcdb89d5c13b7b1a609b39a4e8ee3905dfd96de086306145747bbbd",
+      "script_sha256": "258c2f44a3cfd6265d23200b0cd3422648260b93047571d483cc7de867c3239b",
+      "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4iEuf4/yn/l/en_US-j/DSp2Dsh0LTH.js",
+      "dependencies": [
+        "AdsCampaignGroupRecordAccessors",
+        "AdsMutators",
+        "adsCampaignGroupDraftFragmentCreateReducer"
+      ]
+    },
+    "AdsUEditorPECampaignLiveStatusChangeReducerPlugin": {
+      "module_sha256": "3a1a08081769b2d3cc5e849045463febf50cfc97d2eb8091301c098f3956ad64",
+      "script_sha256": "38a638bd4e4fada68050a93875ef9ece30fe1c6bb5daeb0757dc1c680fccfecd",
+      "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4iwv04/yX/l/en_US-j/5LykW2SJN24.js",
+      "dependencies": [
+        "AdsCampaignRecordAccessors",
+        "AdsMutators",
+        "AdsUEditorCampaignReducerUtils",
+        "AdsUEditorPECampaignLiveStatusChangeActionFlux"
+      ]
+    }
+  },
+  "next_missing_evidence": [
+    "actual network request/response bodies",
+    "a full arbitrary publication Relay sender if such a route exists",
+    "independent object/RK/status/parent verification",
+    "video upload complete parent fields, resumability, encoding and request/response proof",
+    "status-change publication request/response and independent object state proof",
+    "actual network routing/version including SDK domain override"
+  ],
+  "production_contracts_enabled": 0,
+  "status_change_source_review": {
+    "ui_entry": "AdsStatusChangeBulkEditDialogActions.onPublish",
+    "levels": [
+      "campaign",
+      "ad_set",
+      "ad"
+    ],
+    "flow": "modify draft status field -> enqueue instant draft publication",
+    "independent_activate_doc_ids_confirmed": false,
+    "live_status_change_confirmed": false,
+    "source_modules": [
+      "AdsStatusChangeBulkEditDialogActions",
+      "AdsDraftPublishReducerPlugins",
+      "AdsAdgroupDraftFragmentLiveStatusChangeReducerPlugin",
+      "AdsCampaignGroupDraftFragmentsSetStatusReducerPlugin",
+      "AdsUEditorPECampaignLiveStatusChangeReducerPlugin"
+    ]
+  }
+}
