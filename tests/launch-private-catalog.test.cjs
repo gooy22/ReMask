@@ -3,6 +3,41 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
 const source = fs.readFileSync(path.join(__dirname, '..', 'railway-launch-private-catalog.js'), 'utf8');
+
+(async()=>{
+  const overlay=fs.readFileSync(path.join(__dirname,'..','railway-launch-private-catalog-overlay.php'),'utf8');
+  const assets=overlay.match(/<<<'ASSET_UI'\n([\s\S]*?)\nASSET_UI/)[1];
+  const requests=[];
+  let foreign=false,hold=null;
+  const ctx={state:{asset:{profile:'19',accountId:'act_111111111',generation:1,cache:new Map(),inflight:new Map()}},
+    post:input=>input,apiJson:async(url,input)=>{
+      requests.push({url,input});
+      if(hold){const current=hold;hold=null;await current;}
+      return {ok:true,profile:input.profile,account_id:foreign?'999999999':input.account_id.replace(/^act_/,''),
+        resource:input.resource,data:[{id:'555555555'}],checked_live:input.force==='1'};
+    }};
+  vm.createContext(ctx);vm.runInContext(assets,ctx);
+  await ctx.fetchAsset('pages');
+  assert.equal(requests[0].input.account_id,'act_111111111','Pages must carry the selected RK');
+  assert.equal(requests[0].url,'ajax/metaAssetManager.php');
+  await ctx.fetchAsset('pages');assert.equal(requests.length,1);
+  ctx.state.asset.accountId='act_222222222';ctx.state.asset.generation++;
+  await ctx.fetchAsset('pages');assert.equal(requests.length,2,'same-profile Pages cannot reuse another RK cache');
+  foreign=true;
+  await assert.rejects(()=>ctx.fetchAsset('pages',true),/другого профиля/);
+  assert.equal(ctx.state.asset.cache.has('19|pages|222222222'),false);
+  foreign=false;
+  let release;hold=new Promise(resolve=>release=resolve);
+  const cachedRead=ctx.fetchAsset('images');
+  const refreshed=ctx.fetchAsset('images',true);
+  release();await cachedRead;
+  assert.equal((await refreshed).checked_live,true,'Refresh must perform a fresh READ after an older cached READ');
+  const imageRequests=requests.filter(r=>r.input.resource==='images');
+  assert.deepEqual(imageRequests.map(r=>r.input.force),['0','1']);
+  ctx.state.asset.accountId='';
+  await assert.rejects(()=>ctx.fetchAsset('pages'),/Выберите один РК/);
+  console.log('Private Workspace Assets keep exact RK scope, reject foreign responses and refresh independently.');
+})().catch(e=>{console.error(e);process.exitCode=1;});
 const controls = Object.fromEntries(['preflight','syncMeta','loadFunding','fundingStatus','reviewLaunch','launchButton','serverDryRun','dryRunPlan','reviewStatus'].map(id=>[id,{}]));
 const context = {$:id=>controls[id],fundingState(){},fundingReviewLabel(){},loadFunding:async()=>{},validateReady(){}};
 vm.createContext(context); vm.runInContext(source,context);

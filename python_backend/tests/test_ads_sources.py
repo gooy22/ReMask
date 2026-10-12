@@ -11,7 +11,49 @@ import httpx
 from fb_worker import AuthenticationError, RemoteRequestError
 
 from app.contract_maintenance.ads_sources import compact_record, deferred_script_urls, module_records, module_source, public_script_url
-from app.contract_maintenance.launch_http_audit import collect_sources, inspect_saved_sources
+from app.contract_maintenance.launch_http_audit import collect_sources, inspect_saved_sources, error_diagnostic, run
+
+
+class LaunchAuditFailureTests(unittest.IsolatedAsyncioTestCase):
+    def test_transport_metadata_is_actionable_without_credentials_or_false_auth_gate(self):
+        for kind,code in [('ProxyError','PROFILE_PROXY_UNAVAILABLE'),('ConnectError','PRIVATE_HTTP_CONNECTION_UNAVAILABLE'),
+                          ('ConnectTimeout','PRIVATE_HTTP_CONNECTION_UNAVAILABLE'),('ReadTimeout','PRIVATE_HTTP_TIMEOUT')]:
+            error=RemoteRequestError('secret-proxy-user secret-session',meta_payload={'transport_failure':{'kind':kind,
+                'proxy_configured':True}},request_may_have_been_sent=False,transport_stage='bootstrap')
+            result=error_diagnostic(error)
+            self.assertEqual(result['code'],code)
+            self.assertTrue(result['post_not_sent'])
+            self.assertEqual(result['transport_stage'],'bootstrap')
+            self.assertNotIn('secret',json.dumps(result))
+        self.assertEqual(error_diagnostic(httpx.ProxyError('secret'))['code'],'PROFILE_PROXY_UNAVAILABLE')
+
+    def test_checkpoint_requires_structured_auth_evidence(self):
+        error=AuthenticationError('login/checkpoint')
+        error.meta_payload={'business_precheck':[{'auth_reason':'checkpoint_redirect'}]}
+        self.assertEqual(error_diagnostic(error)['code'],'CHECKPOINT_REQUIRED')
+        self.assertEqual(error_diagnostic(RuntimeError('login/checkpoint'))['code'],'ADS_HTTP_AUDIT_INCONCLUSIVE')
+
+    async def test_failed_profile_connection_stops_before_sources_pages_or_payment_queries(self):
+        web=SimpleNamespace(bootstrap=AsyncMock(side_effect=RemoteRequestError('secret',
+            meta_payload={'transport_failure':{'kind':'ProxyError'}},request_may_have_been_sent=False,transport_stage='bootstrap')),
+            graphql=AsyncMock(),fetch_text=AsyncMock())
+        session=SimpleNamespace(facebook_web=AsyncMock(return_value=web))
+        class FixtureSession:
+            async def __aenter__(self):return session
+            async def __aexit__(self,*args):pass
+        pool=SimpleNamespace(profile_locks={'19':asyncio.Lock()},resolver=SimpleNamespace(resolve=AsyncMock(return_value=object())),
+            private_launch=SimpleNamespace(contracts=SimpleNamespace(status=lambda:{})))
+        with patch.dict(os.environ,{'REMASK_LAUNCH_HTTP_AUDIT_PROFILE':'19','REMASK_LAUNCH_HTTP_AUDIT_ACCOUNT':'123456789',
+                    'REMASK_LAUNCH_HTTP_AUDIT_BUSINESS':'987654321','REMASK_LAUNCH_HTTP_AUDIT_SOURCES':'1',
+                    'REMASK_LAUNCH_HTTP_AUDIT_SAVED':'0'}),patch('app.contract_maintenance.launch_http_audit.ProfileSession',return_value=FixtureSession()),\
+             patch('app.contract_maintenance.launch_http_audit.collect_sources',AsyncMock()) as sources,\
+             patch('app.contract_maintenance.launch_http_audit.inspect_pages',AsyncMock()) as pages,\
+             patch('app.contract_maintenance.launch_http_audit.inspect_methods',AsyncMock()) as methods,\
+             patch('app.contract_maintenance.launch_http_audit.log') as logger:
+            await run(pool)
+        sources.assert_not_awaited();pages.assert_not_awaited();methods.assert_not_awaited()
+        web.graphql.assert_not_awaited();web.fetch_text.assert_not_awaited()
+        self.assertEqual(json.loads(logger.info.call_args.args[-1])['code'],'PROFILE_PROXY_UNAVAILABLE')
 
 
 class AdsSourceTests(unittest.TestCase):

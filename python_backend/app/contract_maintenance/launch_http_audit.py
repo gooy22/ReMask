@@ -31,6 +31,29 @@ SCRIPT_BYTE_LIMIT = 5_000_000
 CAPTURE_BYTE_LIMIT = 50_000_000
 
 
+def error_diagnostic(exc):
+    """Report typed failure evidence, never exception text or connection URLs."""
+    auth = private_auth_error(exc) if isinstance(exc, AuthenticationError) else None
+    payload = getattr(exc, "meta_payload", None)
+    transport = payload.get("transport_failure", {}) if isinstance(payload, dict) else {}
+    kind = transport.get("kind", "") if isinstance(transport, dict) else ""
+    kind = kind if isinstance(kind, str) else ""
+    codes = {"ProxyError": "PROFILE_PROXY_UNAVAILABLE",
+        "ConnectError": "PRIVATE_HTTP_CONNECTION_UNAVAILABLE", "ConnectTimeout": "PRIVATE_HTTP_CONNECTION_UNAVAILABLE",
+        "ReadTimeout": "PRIVATE_HTTP_TIMEOUT", "WriteTimeout": "PRIVATE_HTTP_TIMEOUT",
+        "PoolTimeout": "PRIVATE_HTTP_TIMEOUT", "TimeoutError": "PRIVATE_HTTP_TIMEOUT",
+        "RemoteProtocolError": "PRIVATE_HTTP_PROTOCOL_UNAVAILABLE", "LocalProtocolError": "PRIVATE_HTTP_PROTOCOL_UNAVAILABLE",
+        "HTTPStatusError": "PRIVATE_HTTP_STATUS_REJECTED"}
+    if not kind and type(exc).__name__ in codes:
+        kind = type(exc).__name__
+    code = auth.code if auth else getattr(exc, "code", "") or codes.get(kind, "ADS_HTTP_AUDIT_INCONCLUSIVE")
+    stage = getattr(exc, "transport_stage", "")
+    return {"code": code if isinstance(code, str) and re.fullmatch(r"[A-Z0-9_]{1,100}", code) else "ADS_HTTP_AUDIT_INCONCLUSIVE",
+        "transport_kind": kind if kind in codes else "",
+        "transport_stage": stage if isinstance(stage, str) and stage in {"bootstrap", "before_graphql_submit", "graphql_submit", "business_auth_precheck"} else "",
+        "post_not_sent": getattr(exc, "request_may_have_been_sent", None) is False}
+
+
 def inspect_saved_sources():
     """Review bounded public source evidence without another Meta request."""
     from .ads_sources import PUBLICATION_TARGETS
@@ -256,7 +279,6 @@ async def run(pool):
                     "promotable_pages": len(pages.get("data", [])), "page_code": pages.get("diagnostic", {}).get("code"),
                     "payment_code": funding.get("code"), "linked_methods": len(funding.get("payment_methods", []))}))
         except Exception as exc:
-            error = private_auth_error(exc) if isinstance(exc, AuthenticationError) else exc
             # Never log arbitrary exception text, which may contain Meta auth data.
-            log.info("launch HTTP audit profile=%s account=%s browser_started=False mutation_posts=0 code=%s type=%s",
-                profile, account, getattr(error, "code", "ADS_HTTP_AUDIT_INCONCLUSIVE"), type(exc).__name__)
+            log.info("launch HTTP audit profile=%s account=%s browser_started=False mutation_posts=0 diagnostic=%s",
+                profile, account, json.dumps(error_diagnostic(exc)))
