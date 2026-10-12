@@ -21,11 +21,11 @@ class ImageClient(DraftClient):
             await before_submit()
             self.uploads += 1
             self.uploaded = next(iter(files.values()))[1].read()
-            return {'images': {'image.png': {'hash': 'fixture-image-hash'}}}
+            return {'images': {next(iter(files)): {'hash': 'fixture-image-hash'}}}
         return await super().post(path, params, before_submit=before_submit, files=files)
     async def get(self, path, params):
         if path == '/act_111111':
-            return {'id':'act_111111','account_status':1,'business':{'id':'222222'},'promotable_page_ids':['555555']}
+            return {'id':'act_111111','account_status':1,'business':{'id':'222222'},'ad_account_promotable_objects':{'promotable_page_ids':['555555']}}
         if path.endswith('/adimages'):
             return {'data':[{'hash':'fixture-image-hash','account_id':'111111'}]}
         if path in {'/777771','/777772','/777773'}:
@@ -97,12 +97,10 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result['checked_live'])
         self.assertEqual(result['mutation_posts'],0)
         self.session.facebook_web.assert_not_awaited()
-    async def test_active_video_and_unsupported_creative_reject_before_any_post(self):
-        for change in ('active','video','advanced'):
+    async def test_competing_video_and_unsupported_creative_reject_before_any_post(self):
+        for change in ('competing_video','advanced'):
             payload = copy.deepcopy(self.payload)
-            if change == 'active':
-                payload['launch']['delivery']={'campaign':'ACTIVE'}
-            elif change == 'video':
+            if change == 'competing_video':
                 payload['launch']['creative']['existing_video_id']='777775'
             else:
                 payload['launch']['creative']['unsupported_option']=True

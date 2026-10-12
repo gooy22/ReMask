@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "revision": "meta-settings-2026-10-08",
+  "revision": "settings-2026-10-12-source-defaults",
   "operations": {
     "CONFIG": {
       "doc_id": "38731886369758684",
@@ -164,12 +164,42 @@
         "fetchNumberForBusinessScopes": 200,
         "shouldEnableYAUsabilityImprovement": false,
         "shouldFetchEnterprise": false,
-        "__relay_internal__pv__IsBusinessPortfolioOverviewLinkEnabledrelayprovider": false
+        "__relay_internal__pv__IsBusinessPortfolioOverviewLinkEnabledrelayprovider": false,
+        "bagId": null,
+        "paginationCursorForBusinessScopes": null,
+        "fetchNumberForBusinessChildrenScopes": 0,
+        "paginationCursorForBusinessChildrenScopes": null,
+        "scopeIDs": null,
+        "fetchNumberForBagScopes": 0,
+        "paginationCursorForBagScopes": null,
+        "bagScopeIDs": null,
+        "paginationCursorForBagChildrenScopes": null,
+        "fetchNumberForBagChildrenScopes": 0
       },
       "response_parser": "viewer.meta_business_scoping.business_scopes",
       "source_sha256": "116075fec2ca77c287ddc3219e114166fba10eb303f9f550ea308492faa105f3",
       "observed_at": "2026-10-08",
-      "evidence": "observed_preload_sender_response_unverified"
+      "evidence": "observed_preload_sender_response_unverified",
+      "source_refresh": {
+        "observed_at": "2026-10-12",
+        "artifact_factory_sha256": "2348a59e65ff8f5be0a2f49ae7bc3e7716343209b1baed91242a6fe2bc6672a7",
+        "script_sha256": [
+          "e2379d5c020dbf68ed75836a8546f3e8fcf5d6c29988eaa0976bae3d667e5a1c"
+        ],
+        "installed_literal_defaults": {
+          "bagId": null,
+          "paginationCursorForBusinessScopes": null,
+          "fetchNumberForBusinessChildrenScopes": 0,
+          "paginationCursorForBusinessChildrenScopes": null,
+          "scopeIDs": null,
+          "fetchNumberForBagScopes": 0,
+          "paginationCursorForBagScopes": null,
+          "bagScopeIDs": null,
+          "paginationCursorForBagChildrenScopes": null,
+          "fetchNumberForBagChildrenScopes": 0
+        },
+        "live_response_verified": false
+      }
     }
   }
 }

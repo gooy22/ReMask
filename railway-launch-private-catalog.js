@@ -350,7 +350,7 @@ function remaskPrivatePendingRead(fingerprint) {
 function remaskPrivatePendingWrite(fingerprint,request) {
     try{localStorage.setItem(remaskPrivateLaunchPendingKey,JSON.stringify({
         version:1,updated:Date.now(),fingerprint,request
-    }));}catch(_){}
+    }));}catch(_){throw new Error('Не удалось сохранить ключ отправки. Освободите место в браузере и повторите.');}
 }
 function remaskPrivatePendingClear() {
     try{localStorage.removeItem(remaskPrivateLaunchPendingKey);}catch(_){}
@@ -478,23 +478,37 @@ function remaskPrivateJobRequest(config,reviewed) {
 }
 function remaskPrivateFinalizeJob(job) {
     const status=String(job?.status||'').toUpperCase();
-    if(status==='SUCCESS')remaskPrivatePendingClear();
+    if(status==='SUCCESS'){
+        try{
+            const saved=JSON.parse(localStorage.getItem(remaskPrivateLaunchPendingKey)||'null');
+            if(saved?.request?.idempotency_key===job.idempotency_key)remaskPrivatePendingClear();
+        }catch(_){}
+    }
     return status;
 }
+let remaskPrivatePollGeneration=0;
 async function remaskPrivatePollJob(jobId) {
+    const generation=++remaskPrivatePollGeneration;
+    let failures=0;
     for(let attempt=0;attempt<180;attempt++){
         await new Promise(resolve=>setTimeout(resolve,2000));
+        if(generation!==remaskPrivatePollGeneration)return null;
         try{
             const data=await remaskPrivateWorker({action:'status',job_id:jobId});
+            if(generation!==remaskPrivatePollGeneration)return null;
+            failures=0;
             const job=data?.job||{};
             if(typeof state!=='undefined'){
                 state.privateAdvertisingJob=job;
                 const tasks=(job.items||[]).flatMap(item=>item.tasks||[]);
-                if(tasks.some(task=>task.action==='private_launch'))state.privateAdvertisingSourceJob=job;
+                if(tasks.some(task=>task.action==='private_launch')){
+                    state.privateAdvertisingSourceJob=job;
+                    try{localStorage.setItem('remask_private_source_job_v1',JSON.stringify({job_id:jobId}));}catch(_){}
+                }
                 const source=state.privateAdvertisingSourceJob;
                 if(source){
                     const sourceTasks=(source.items||[]).flatMap(item=>item.tasks||[]);
-                    if($('activateJobAds'))$('activateJobAds').disabled=!sourceTasks.some(task=>task.action==='private_launch'&&task.status==='SUCCESS');
+                    if($('activateJobAds'))$('activateJobAds').disabled=!(source.items||[]).some(item=>(item.tasks||[]).some(task=>remaskPrivateCanDeliver(item,task,'ACTIVE')));
                     if($('pauseJobAds'))$('pauseJobAds').disabled=!sourceTasks.some(task=>task.action==='private_launch');
                     if(typeof renderJobActionMenu==='function')renderJobActionMenu();
                 }
@@ -511,13 +525,31 @@ async function remaskPrivatePollJob(jobId) {
             if(['SUCCESS','FAILED','PARTIAL'].includes(String(job.status||'').toUpperCase())){
                 remaskPrivateFinalizeJob(job);
                 if(String(job.status).toUpperCase()==='SUCCESS'){
-                    try{localStorage.removeItem('remask_private_delivery_pending_v1');}catch(_){}
+                    try{
+                        const saved=JSON.parse(localStorage.getItem('remask_private_delivery_pending_v1')||'null');
+                        if(saved?.request?.idempotency_key===job.idempotency_key)localStorage.removeItem('remask_private_delivery_pending_v1');
+                    }catch(_){}
                 }
                 return job;
             }
-        }catch(_){return null;}
+        }catch(_){
+            failures++;
+            remaskPrivateShow('Связь с задачей '+jobId+' прервана. Восстанавливаю чтение статуса…');
+            if(failures>=5){
+                remaskPrivateShow('Не удалось получить статус задачи '+jobId+'. Она остаётся в Jobs; повторная отправка рекламы не выполнялась.','failed');
+                return null;
+            }
+        }
     }
     return null;
+}
+
+function remaskPrivateCanDeliver(item,task,status){
+    if(task?.action!=='private_launch')return false;
+    if(status==='PAUSED'||task.status==='SUCCESS')return true;
+    return (item.advertising_steps||[]).some(step=>step.task_id===task.id&&step.verified===true&&
+        step.status==='SUCCESS'&&['ADS_MANAGER:PUBLISH','PUBLISH_FAMILY'].includes(step.step)&&
+        ['campaign_id','adset_id','creative_id','ad_id'].every(key=>/^\d{5,40}$/.test(String(step.outputs?.[key]||''))));
 }
 
 async function remaskPrivateDelivery(status){
@@ -528,7 +560,7 @@ async function remaskPrivateDelivery(status){
         const targets=[];
         for(const item of source.items||[]){
             for(const task of item.tasks||[]){
-                if(task.action!=='private_launch'||(status==='ACTIVE'&&task.status!=='SUCCESS'))continue;
+                if(!remaskPrivateCanDeliver(item,task,status))continue;
                 const payload=task.payload||{};
                 const sourceKey=String(payload.launch_key||task.idempotency_key||'');
                 if(!sourceKey)continue;
@@ -550,7 +582,8 @@ async function remaskPrivateDelivery(status){
                 return {profile_id:profile,tasks:[{action:'private_delivery',idempotency_key:key,
                     payload:{...payload,status,delivery_key:key}}]};
             })};
-            try{localStorage.setItem('remask_private_delivery_pending_v1',JSON.stringify({fingerprint,request}));}catch(_){}
+            try{localStorage.setItem('remask_private_delivery_pending_v1',JSON.stringify({fingerprint,request}));}
+            catch(_){throw new Error('Не удалось сохранить ключ изменения статуса. Освободите место в браузере и повторите.');}
         }
         const accepted=await remaskPrivateWorker(request);
         const jobId=String(accepted?.job?.job_id||'');
@@ -562,6 +595,16 @@ async function remaskPrivateDelivery(status){
     finally{remaskPrivateLaunchBusy=false;validateReady();}
 }
 if(typeof setJobDeliveryStatus==='function')setJobDeliveryStatus=remaskPrivateDelivery;
+
+async function remaskPrivateRestoreSourceJob(){
+    let saved=null;
+    try{saved=JSON.parse(localStorage.getItem('remask_private_source_job_v1')||'null');}catch(_){}
+    if(saved&&typeof saved.job_id==='string'&&/^[A-Za-z0-9_-]{1,100}$/.test(saved.job_id)){
+        await remaskPrivatePollJob(saved.job_id);
+    }
+}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>remaskPrivateRestoreSourceJob(),{once:true});
+else remaskPrivateRestoreSourceJob();
 async function remaskPrivateCreateJob() {
     if(remaskPrivateLaunchBusy)return null;
     remaskPrivateLaunchBusy=true;validateReady();
@@ -578,6 +621,7 @@ async function remaskPrivateCreateJob() {
         remaskPrivateShow(
             'Задача принята: '+jobId+' · '+reviewed.length+' РК. Результаты доступны в Jobs.'
         );
+        try{localStorage.setItem('remask_private_source_job_v1',JSON.stringify({job_id:jobId}));}catch(_){}
         remaskPrivatePollJob(jobId);
         return accepted;
     }catch(error){

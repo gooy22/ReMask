@@ -27,7 +27,8 @@ async def verify_published_objects(client, objects, levels):
     specifications["ad_set"]["campaign_id"] = entities["campaign_id"]
     specifications["ad"].update({"campaign_id": entities["campaign_id"], "adset_id": entities["adset_id"]})
     creative = specifications["ad"].pop("creative", None)
-    if not isinstance(creative, dict) or not isinstance(creative.get("object_story_spec"), dict):
+    if (not isinstance(creative, dict) or not (isinstance(creative.get("object_story_spec"), dict)
+            or (isinstance(creative.get("object_id"), str) and isinstance(creative.get("source_instagram_media_id"), str)))):
         raise fail("CREATIVE_SPEC_UNVERIFIED", "Published creative requires its expected Page and media specification")
     for level, entity_name in (("campaign", "campaign_id"), ("ad_set", "adset_id"), ("ad", "ad_id")):
         expected = specifications[level]

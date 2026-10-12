@@ -46,7 +46,7 @@ def fragment_params(draft_id, *, level, values, parent_id=None, object_id=None,
                     action="add", source="click_quick_create"):
     """Match getAPIParams and adsDraftEncodeFragmentValues without mutating input."""
     draft_id = identity(draft_id)
-    if level not in LEVELS or action not in {"add", "update"}:
+    if level not in LEVELS or action not in {"add", "modify"}:
         raise fail("INVALID_FRAGMENT", "Unsupported advertising fragment")
     if not isinstance(values, dict) or not values or len(values) > 100:
         raise fail("INVALID_FRAGMENT", "Advertising fragment fields are missing")
@@ -68,7 +68,7 @@ def fragment_params(draft_id, *, level, values, parent_id=None, object_id=None,
         output["parent_ad_object_id"] = identity(parent_id)
     if object_id is not None:
         output["ad_object_id"] = identity(object_id)
-    if action == "update" and object_id is None:
+    if action == "modify" and object_id is None:
         raise fail("INVALID_FRAGMENT", "An update requires its saved advertising object")
     return output
 
@@ -79,13 +79,14 @@ def publish_params(fragment_ids, caller_options=None):
     ids = [identity(value) for value in fragment_ids]
     if len(set(ids)) != len(ids):
         raise fail("INVALID_FRAGMENT", "Publication requires distinct saved fragment IDs")
-    output = {"fragments": ids}
+    output = {"fragments": ids, "ignore_errors": False, "include_fragment_statuses": True}
     if caller_options is not None:
-        if not isinstance(caller_options, dict):
+        if (not isinstance(caller_options, dict) or set(caller_options) - {"ignore_errors", "include_fragment_statuses"}
+                or any(type(value) is not bool for value in caller_options.values())):
             raise fail("INVALID_INPUT", "Publication caller options must be an object")
         from .private_launch import PrivateLaunchContractStore
         PrivateLaunchContractStore._reject_auth_material(caller_options)
-        output["caller_options"] = copy.deepcopy(caller_options)
+        output.update(copy.deepcopy(caller_options))
     return output
 
 

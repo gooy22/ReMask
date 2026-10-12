@@ -94,6 +94,32 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
             await AdsManagerPrivateHttp.open(self.web, account_id="111111", business_id="222222", actor_id="123456")
 
 
+    async def test_changed_non_actor_cookie_requires_fresh_document_before_claim(self):
+        self.web.profile.cookies['xs'] = 'new-synthetic-cookie'
+        with self.assertRaises(ProvisioningError):
+            await self.client.post('/act_111111/addrafts', {}, before_submit=self.claim)
+        self.assertEqual(self.claims, 0)
+        self.assertEqual(self.web.session.calls, [])
+
+    async def test_profile_change_during_claim_cannot_dispatch(self):
+        async def change_profile():
+            self.claims += 1
+            self.web.profile.cookies['xs'] = 'new-synthetic-cookie'
+        with self.assertRaises(ProvisioningError):
+            await self.client.post('/act_111111/addrafts', {}, before_submit=change_profile)
+        self.assertEqual(self.claims, 1)
+        self.assertEqual(self.web.session.calls, [])
+
+    async def test_video_start_uses_formdata_and_transfer_uses_waterfall_header(self):
+        waterfall = 'a' * 32
+        await self.client.post('/act_111111/advideos', {'upload_phase': 'start', 'waterfall_id': waterfall},
+                               before_submit=self.claim, multipart=True)
+        self.assertEqual(self.web.session.calls[-1][2]['files']['upload_phase'], (None, 'start'))
+        await self.client.post('/act_111111/advideos', {'upload_phase': 'transfer', 'waterfall_id': waterfall},
+                               before_submit=self.claim, files={'video_file_chunk': ('chunk', b'synthetic', 'video/mp4')})
+        self.assertEqual(self.web.session.calls[-1][2]['headers']['X_FB_VIDEO_WATERFALL_ID'], waterfall)
+
+
 class PublishedReads(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.objects = {"campaign": "777771", "ad_set": "777772", "ad": "777773"}

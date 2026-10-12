@@ -1,0 +1,1747 @@
+{
+  "version": 1,
+  "revision": "ads-manager-private-http-2026-10-12",
+  "origin": "https://adsmanager-graph.facebook.com",
+  "api_version": "v22.0",
+  "source_reviewed": true,
+  "live_publication_verified": false,
+  "source_record": "docs/evidence/advertising-browser-source-review-20261012.json",
+  "routes": {
+    "ACTOR_READ": {
+      "method": "GET",
+      "path": "/me",
+      "params": [
+        "fields"
+      ],
+      "source_module": "GraphAPI",
+      "request_name": "me",
+      "sources": [
+        {
+          "module_sha256": "da96858827635d7978aa1b5e6099846415732ae25d0cd56b2c2a3b883773da48",
+          "script_sha256": "f45273ee31b82049ca473e4c7b1025166c696b69591175d4e9c8bdbc35cdd522",
+          "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4itLS4/yO/l/en_US-j/YjHG_hCa_oy.js"
+        }
+      ]
+    },
+    "ACCOUNT_READ": {
+      "method": "GET",
+      "path": "/{account_node}",
+      "params": [
+        "fields"
+      ],
+      "source_module": "GraphAPI",
+      "request_name": "adaccount",
+      "sources": [
+        {
+          "module_sha256": "da96858827635d7978aa1b5e6099846415732ae25d0cd56b2c2a3b883773da48",
+          "script_sha256": "f45273ee31b82049ca473e4c7b1025166c696b69591175d4e9c8bdbc35cdd522",
+          "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4itLS4/yO/l/en_US-j/YjHG_hCa_oy.js"
+        }
+      ]
+    },
+    "OBJECT_READ": {
+      "method": "GET",
+      "path": "/{entity_id}",
+      "params": [
+        "fields"
+      ],
+      "source_module": "GraphAPI",
+      "request_name": "object:advertising",
+      "sources": [
+        {
+          "module_sha256": "da96858827635d7978aa1b5e6099846415732ae25d0cd56b2c2a3b883773da48",
+          "script_sha256": "f45273ee31b82049ca473e4c7b1025166c696b69591175d4e9c8bdbc35cdd522",
+          "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4itLS4/yO/l/en_US-j/YjHG_hCa_oy.js"
+        },
+        {
+          "module": "AdsAPIAdCampaignGroupFields",
+          "module_sha256": "b89d07d4c009517454cad9c9da5a43a49b7a31406f5fdf1b92ebad8edbe9836d",
+          "script_sha256": "3c7de32f7de0b89953b2ecd5b31ff65bf34367e671f7f9e67134f6eb2d163000",
+          "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4ijsg4/yq/l/en_US-j/Y731TQMByU4.js"
+        },
+        {
+          "module": "AdsAPIAdCampaignFields",
+          "module_sha256": "3e01ae72e0d47aadc38486462cad3daec1d3d75561f4239d3d0f444fb68d3efd",
+          "script_sha256": "3c7de32f7de0b89953b2ecd5b31ff65bf34367e671f7f9e67134f6eb2d163000",
+          "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4ijsg4/yq/l/en_US-j/Y731TQMByU4.js"
+        },
+        {
+          "module": "AdsAPIAdgroupFields",
+          "module_sha256": "1e307fcf06d4b7361821301dc7931c234723360c7bd1e4b0f31787053bb5d5e6",
+          "script_sha256": "f45273ee31b82049ca473e4c7b1025166c696b69591175d4e9c8bdbc35cdd522",
+          "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4itLS4/yO/l/en_US-j/YjHG_hCa_oy.js"
+        },
+        {
+          "module": "ApiAdCreativeFields",
+          "module_sha256": "3ba7d7280b758ed778675c3ff03978d6f0b1ace93a641c892aec9433ed60fab7",
+          "script_sha256": "f45273ee31b82049ca473e4c7b1025166c696b69591175d4e9c8bdbc35cdd522",
+          "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4itLS4/yO/l/en_US-j/YjHG_hCa_oy.js"
+        },
+        {
+          "module": "AdsVideoFetcher",
+          "module_sha256": "7dae50105fcb6df74be6138202c2ea0acee57d3d6fa67c0e0fba1c837f04fdca",
+          "script_sha256": "eafc1e09a42412df4d0a62433c53aba2f98102420df1eac953289a457f36ebf1",
+          "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4inDV4/yD/l/en_US-j/CgHJ0ko0XyD.js"
+        }
+      ]
+    },
+    "DRAFT_READ": {
+      "method": "GET",
+      "path": "/{draft_node}",
+      "params": [
+        "fields"
+      ],
+      "source_module": "AdsDraftDataManager",
+      "request_name": "objectByName:addraft",
+      "sources": [
+        {
+          "module_sha256": "225cb70025c2d8a14b28d5fd09bb92505d1eec4be3ebea95cd47d6c09d633987",
+          "script_sha256": "ca595ab6b82bb87adaa0ad1d2a5e57346e9745f568b734ae9b2999aaa20d2def",
+          "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4idcd4/y0/l/en_US-j/f2UtWoV9xoS.js"
+        }
+      ]
+    },
+    "DRAFT_CREATE": {
+      "method": "POST",
+      "path": "/{account_node}/addrafts",
+      "params": [
+        "name",
+        "use_active_draft_if_exists",
+        "use_employee_draft",
+        "application_id",
+        "ownership_type"
+      ],
+      "source_module": "AdsDraftDataManager",
+      "request_name": "adaccount/addrafts",
+      "sources": [
+        {
+          "module_sha256": "225cb70025c2d8a14b28d5fd09bb92505d1eec4be3ebea95cd47d6c09d633987",
+          "script_sha256": "ca595ab6b82bb87adaa0ad1d2a5e57346e9745f568b734ae9b2999aaa20d2def",
+          "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4idcd4/y0/l/en_US-j/f2UtWoV9xoS.js"
+        }
+      ]
+    },
+    "FRAGMENTS_CREATE": {
+      "method": "POST",
+      "path": "/{draft_id}/quick_create_fragments",
+      "params": [
+        "id",
+        "values_per_level"
+      ],
+      "source_module": "AdsDraftFragmentDataManager",
+      "request_name": "object:addraft/quick_create_fragments",
+      "sources": [
+        {
+          "module_sha256": "016f45add0c818d7df000c0c4c431fd2d7facde170f7de832e4ba271f5f9d123",
+          "script_sha256": "ca595ab6b82bb87adaa0ad1d2a5e57346e9745f568b734ae9b2999aaa20d2def",
+          "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4idcd4/y0/l/en_US-j/f2UtWoV9xoS.js"
+        }
+      ]
+    },
+    "FRAGMENT_CREATE": {
+      "method": "POST",
+      "path": "/{draft_id}/addraft_fragments",
+      "params": [
+        "action",
+        "ad_draft_id",
+        "ad_object_id",
+        "ad_object_type",
+        "parent_ad_object_id",
+        "source",
+        "validate",
+        "values",
+        "is_delete",
+        "is_archive"
+      ],
+      "source_module": "AdsDraftFragmentDataManager",
+      "request_name": "object:addraft/addraft_fragments",
+      "sources": [
+        {
+          "module_sha256": "016f45add0c818d7df000c0c4c431fd2d7facde170f7de832e4ba271f5f9d123",
+          "script_sha256": "ca595ab6b82bb87adaa0ad1d2a5e57346e9745f568b734ae9b2999aaa20d2def",
+          "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4idcd4/y0/l/en_US-j/f2UtWoV9xoS.js"
+        }
+      ]
+    },
+    "PUBLISH": {
+      "method": "POST",
+      "path": "/{draft_id}/publish",
+      "params": [
+        "fragments",
+        "ignore_errors",
+        "include_fragment_statuses"
+      ],
+      "source_module": "AdsDraftPublishDataManager",
+      "request_name": "object:draft_id/publish",
+      "sources": [
+        {
+          "module_sha256": "c04737c1b5b6c4b320ea4ee22d4146f006837b424d24d197b5c8e0a554a37a6d",
+          "script_sha256": "ca595ab6b82bb87adaa0ad1d2a5e57346e9745f568b734ae9b2999aaa20d2def",
+          "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4idcd4/y0/l/en_US-j/f2UtWoV9xoS.js"
+        }
+      ]
+    },
+    "PUBLISH_READ": {
+      "method": "GET",
+      "path": "/{draft_node}/addraft_publish_statuses",
+      "params": [
+        "async_request_set_ids",
+        "fields",
+        "date_format"
+      ],
+      "source_module": "AdsDraftPublishDataManager",
+      "request_name": "objectByName:addraft/addraft_publish_statuses",
+      "sources": [
+        {
+          "module_sha256": "c04737c1b5b6c4b320ea4ee22d4146f006837b424d24d197b5c8e0a554a37a6d",
+          "script_sha256": "ca595ab6b82bb87adaa0ad1d2a5e57346e9745f568b734ae9b2999aaa20d2def",
+          "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4idcd4/y0/l/en_US-j/f2UtWoV9xoS.js"
+        }
+      ]
+    },
+    "IMAGE_UPLOAD": {
+      "method": "POST",
+      "path": "/{account_node}/adimages",
+      "params": [],
+      "source_module": "AdsBulkUploadImages",
+      "request_name": "adaccount/adimages",
+      "sources": [
+        {
+          "module_sha256": "360fa6903f7d4f39c733c8aa0934b107a148156e53f26311950b978bc4f31113",
+          "script_sha256": "20e24198196d37f887bdf813f64d88da4c02243ff131764074e2dd3528bcd9df",
+          "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4i0d04/yU/l/en_US-j/EgJMIKoJMzJ.js"
+        }
+      ],
+      "multipart": true
+    },
+    "IMAGE_READ": {
+      "method": "GET",
+      "path": "/{account_node}/adimages",
+      "params": [
+        "fields",
+        "hashes",
+        "limit",
+        "after"
+      ],
+      "source_module": "AdsBulkUploadImages",
+      "request_name": "adaccount/adimages",
+      "sources": [
+        {
+          "module": "adsFetchAccountImage",
+          "module_sha256": "3b3b4636fbd5816cc682b574bfa45a1287ded74340b6c5bff2d7ceea458b26ef",
+          "script_sha256": "f45273ee31b82049ca473e4c7b1025166c696b69591175d4e9c8bdbc35cdd522",
+          "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4itLS4/yO/l/en_US-j/YjHG_hCa_oy.js"
+        },
+        {
+          "module": "AdsImageListDataManager",
+          "module_sha256": "362d7e182dddadb6f76f860d044b129236031e649b3f7f4bc4034ad5165e9e42",
+          "script_sha256": "f0f947deb2dc35f3dd8e48c9c651fe80d3fae778ca0120f17d9da6c4fdfef726",
+          "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4iBbd4/yK/l/en_US-j/kDg8z-0uyHe.js"
+        },
+        {
+          "module": "AdsImageDataManagerFields",
+          "module_sha256": "bde91c25913125f905d835eed625d0236d10e868bdd2bab93770dfaabdcded63",
+          "script_sha256": "f45273ee31b82049ca473e4c7b1025166c696b69591175d4e9c8bdbc35cdd522",
+          "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4itLS4/yO/l/en_US-j/YjHG_hCa_oy.js"
+        }
+      ]
+    },
+    "VIDEO_UPLOAD": {
+      "method": "POST",
+      "path": "/{account_node}/advideos",
+      "params": [
+        "upload_phase",
+        "file_size",
+        "waterfall_id",
+        "creator_product",
+        "upload_session_id",
+        "start_offset",
+        "end_offset",
+        "source",
+        "upload_source",
+        "video_id",
+        "target_id",
+        "supports_chunking",
+        "title",
+        "thumbnail_type",
+        "has_file_been_replaced"
+      ],
+      "source_module": "AdsVideoUploadUtil",
+      "request_name": "adaccount/advideos",
+      "sources": [
+        {
+          "module_sha256": "983653ff5f8954a382c75e3b24df438ed826a127cabb57b3ffd32fb2047d16aa",
+          "script_sha256": "eafc1e09a42412df4d0a62433c53aba2f98102420df1eac953289a457f36ebf1",
+          "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4inDV4/yD/l/en_US-j/CgHJ0ko0XyD.js"
+        },
+        {
+          "module": "VideoUploadRequest",
+          "module_sha256": "674967fd1dbdb717785cc3922766909d063029a0c1f6ae6a0fa743c2ed220032",
+          "script_sha256": "f0f947deb2dc35f3dd8e48c9c651fe80d3fae778ca0120f17d9da6c4fdfef726",
+          "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4iBbd4/yK/l/en_US-j/kDg8z-0uyHe.js"
+        },
+        {
+          "module": "VideoUploadPostRequestManager",
+          "module_sha256": "8f5112b4dd6a1ae33ccbe1b29ffd82a914aefb9769bebf1f5b50af2909d12d67",
+          "script_sha256": "f0f947deb2dc35f3dd8e48c9c651fe80d3fae778ca0120f17d9da6c4fdfef726",
+          "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4iBbd4/yK/l/en_US-j/kDg8z-0uyHe.js"
+        },
+        {
+          "module": "AdsVideoUploaderWrapper",
+          "module_sha256": "38d0591abf9cfecc8ccb3769b492d15412bb336f130314571fb1f7716bdc9bf8",
+          "script_sha256": "a5589121f83cece44f34b5785e198dcf97453258d69210418e9fc0020885ddc4",
+          "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4/yR/r/ENp_swmasKz.js"
+        }
+      ],
+      "multipart": true
+    },
+    "VIDEO_READ": {
+      "method": "GET",
+      "path": "/{account_node}/advideos",
+      "params": [
+        "fields",
+        "limit",
+        "after",
+        "filtering"
+      ],
+      "source_module": "AdsVideoUploadUtil",
+      "request_name": "adaccount/advideos",
+      "sources": [
+        {
+          "module": "AdsVideoFetcher",
+          "module_sha256": "7dae50105fcb6df74be6138202c2ea0acee57d3d6fa67c0e0fba1c837f04fdca",
+          "script_sha256": "eafc1e09a42412df4d0a62433c53aba2f98102420df1eac953289a457f36ebf1",
+          "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4inDV4/yD/l/en_US-j/CgHJ0ko0XyD.js"
+        }
+      ]
+    },
+    "CAMPAIGNS_READ": {
+      "method": "GET",
+      "path": "/{account_node}/campaigns",
+      "params": [
+        "fields",
+        "limit",
+        "after",
+        "filtering",
+        "date_format",
+        "summary"
+      ],
+      "source_module": "AdsCampaignGroupLiveListDataManager",
+      "request_name": "adaccount/campaigns",
+      "sources": [
+        {
+          "module_sha256": "067157db9414cc73bc3a78312014d240909a5d60a3464635c7e5abf99003bfd2",
+          "script_sha256": "57a63cfad5090765a7a36925664e92f004088a1ab4d3debae963ac524980a4e8",
+          "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4iIxK4/ye/l/en_US-j/I3V2EXy8hBT.js"
+        }
+      ]
+    },
+    "ADSETS_READ": {
+      "method": "GET",
+      "path": "/{account_node}/adsets",
+      "params": [
+        "fields",
+        "limit",
+        "after",
+        "filtering",
+        "date_format",
+        "summary"
+      ],
+      "source_module": "AdsCampaignLiveListDataManager",
+      "request_name": "adaccount/adsets",
+      "sources": [
+        {
+          "module_sha256": "3b986160c213f09643690ea5c8163de84635240985db0cf5e080cde5d5c38259",
+          "script_sha256": "b2ca67cf0642d7a6a0b91071c67f3dddda44bd0f3cba3e216f76a905605872a7",
+          "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4iica4/yo/l/en_US-j/rzhZTNrLA3F.js"
+        }
+      ]
+    },
+    "ADS_READ": {
+      "method": "GET",
+      "path": "/{account_node}/ads",
+      "params": [
+        "fields",
+        "limit",
+        "after",
+        "filtering",
+        "date_format",
+        "summary"
+      ],
+      "source_module": "AdsAdgroupLiveListDataManager",
+      "request_name": "adaccount/ads",
+      "sources": [
+        {
+          "module_sha256": "7e11ce026409cead70a2b8ca96a86e01f86a7fe4fb9d11980528b14d89c18804",
+          "script_sha256": "b2ca67cf0642d7a6a0b91071c67f3dddda44bd0f3cba3e216f76a905605872a7",
+          "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4iica4/yo/l/en_US-j/rzhZTNrLA3F.js"
+        }
+      ]
+    },
+    "ACTOR_PAGES_READ": {
+      "method": "GET",
+      "path": "/me/facebook_pages",
+      "params": [
+        "fields",
+        "limit",
+        "after",
+        "is_promotable"
+      ],
+      "source_module": "AdsPromotablePageListLoaderGAPI",
+      "request_name": "me/facebook_pages",
+      "sources": [
+        {
+          "module_sha256": "fd174f8fd87726930b7709b7e5b3e8a948c42d5ad2b9148f71d8d895687a16e0",
+          "script_sha256": "38a638bd4e4fada68050a93875ef9ece30fe1c6bb5daeb0757dc1c680fccfecd",
+          "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4iwv04/yX/l/en_US-j/5LykW2SJN24.js"
+        }
+      ]
+    },
+    "FRAGMENT_READ": {
+      "method": "GET",
+      "path": "/{fragment_node}",
+      "params": [
+        "fields"
+      ],
+      "source_module": "AdsDraftFragmentDataManager",
+      "request_name": "objectByName:addraftfragment",
+      "sources": [
+        {
+          "module_sha256": "016f45add0c818d7df000c0c4c431fd2d7facde170f7de832e4ba271f5f9d123",
+          "script_sha256": "ca595ab6b82bb87adaa0ad1d2a5e57346e9745f568b734ae9b2999aaa20d2def",
+          "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4idcd4/y0/l/en_US-j/f2UtWoV9xoS.js"
+        }
+      ]
+    },
+    "PIXELS_READ": {
+      "method": "GET",
+      "path": "/{account_node}/adspixels",
+      "params": [
+        "fields",
+        "limit",
+        "after",
+        "business_id",
+        "acting_account_id"
+      ],
+      "request_name": "AdsPixelDataManagerLoader",
+      "source_module": "AdsPixelDataManagerLoader",
+      "sources": [
+        {
+          "module": "AdsPixelDataManagerLoader",
+          "module_sha256": "ddb57522f6daa7b9261706e8d3cd90ab01f7155dcdd9fe6703eec2b5b2c7da58",
+          "script_sha256": "7a06217f05ff63510dd5aee8cad75cbed2ec5ba584c80fc1240d5243333d4881",
+          "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4i2V74/y4/l/en_US-j/LDUsMHrnl_w.js"
+        },
+        {
+          "module": "AdsPixelFields",
+          "module_sha256": "a1449191ee7ea236ae81bb4dec158483c0a56ad4f38e75062222ce03b139e900",
+          "script_sha256": "7a06217f05ff63510dd5aee8cad75cbed2ec5ba584c80fc1240d5243333d4881",
+          "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4i2V74/y4/l/en_US-j/LDUsMHrnl_w.js"
+        }
+      ]
+    },
+    "AUDIENCES_READ": {
+      "method": "GET",
+      "path": "/{account_node}/customaudiences",
+      "params": [
+        "fields",
+        "limit",
+        "after",
+        "business_id",
+        "acting_account_id"
+      ],
+      "request_name": "AdsCustomAudienceProviderPlugin",
+      "source_module": "AdsCustomAudienceProviderPlugin",
+      "sources": [
+        {
+          "module": "AdsCustomAudienceProviderPlugin",
+          "module_sha256": "e6c7cb76451bd2d94ac303824dfc9ec7db7e2e6280cc83df4fc2f747fa4eda64",
+          "script_sha256": "9d1d6460fe8fa8c59a08d94684ba93a9dbde100920a9d21dadb1bce13b61f68d",
+          "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4iYk24/yK/l/en_US-j/gOIwLxm93rK.js"
+        }
+      ]
+    },
+    "CONVERSIONS_READ": {
+      "method": "GET",
+      "path": "/{account_node}/customconversions",
+      "params": [
+        "fields",
+        "limit",
+        "after",
+        "business_id",
+        "acting_account_id"
+      ],
+      "request_name": "AdsGoalGraphAPI",
+      "source_module": "AdsGoalGraphAPI",
+      "sources": [
+        {
+          "module": "AdsGoalGraphAPI",
+          "module_sha256": "ec9edffcd2354bfe14a6d81d6de0fd3a88d8b0fc48c4af8f4061ca9829701006",
+          "script_sha256": "da1f850b385b63423639f0cf6d04f1ec1fa9eca4d372ab84921c2d173d98f423",
+          "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4iTmC4/y8/l/en_US-j/jhciJ4XUQsj.js"
+        },
+        {
+          "module": "AdsGoalFields",
+          "module_sha256": "5efee4a32b38bd87242cf2b69fbd7ec253500648479765c52a384c6c7891b56c",
+          "script_sha256": "da1f850b385b63423639f0cf6d04f1ec1fa9eca4d372ab84921c2d173d98f423",
+          "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4iTmC4/y8/l/en_US-j/jhciJ4XUQsj.js"
+        }
+      ]
+    },
+    "INSTAGRAM_ACCOUNTS_READ": {
+      "method": "GET",
+      "path": "/{account_node}/instagram_accounts",
+      "params": [
+        "fields",
+        "limit",
+        "after",
+        "business_id",
+        "acting_account_id"
+      ],
+      "request_name": "AdsBusinessInstagramAccountDataManager",
+      "source_module": "AdsBusinessInstagramAccountDataManager",
+      "sources": [
+        {
+          "module": "AdsBusinessInstagramAccountDataManager",
+          "module_sha256": "f9f800e68e5490fc2f332ffe33d44df38f728dd115b54641e8b42f447374d164",
+          "script_sha256": "8123a8ebaf0083fafcf86accbc17ca5ebb62b53fce078850e8af94f6fb3e476f",
+          "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4ip3t4/yo/l/en_US-j/YNPVBalYd02.js"
+        },
+        {
+          "module": "AdsUEditorAdgroupSetInstagramPostV2ReducerPluginUtils",
+          "module_sha256": "12f169d094fdec36380d834effdbc16481ef97dcda2f07af93d7608b9d1f0565",
+          "script_sha256": "59794e46a3d8997451bc02430eff4d84f253029ca964c97fe2c4a7c31dabee06",
+          "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4iKoj4/y5/l/en_US-j/GVCAIgZZ3iU.js"
+        }
+      ]
+    },
+    "INSTAGRAM_MEDIA_READ": {
+      "method": "GET",
+      "path": "/{instagram_id}/advertisable_media",
+      "params": [
+        "fields",
+        "limit",
+        "after",
+        "ad_account_id"
+      ],
+      "request_name": "AdsInstagramAccountMediaListDataManager",
+      "source_module": "AdsInstagramAccountMediaListDataManager",
+      "sources": [
+        {
+          "module": "AdsInstagramAccountMediaListDataManager",
+          "module_sha256": "ea4dd15155f3e578500f700e7cbb95bdf0eec466170aff94ec0db10a666f210c",
+          "script_sha256": "d5200e9121a7dc441b740f1f0304fd9cbc8a14020486043eac16971550be1710",
+          "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4ii9g4/yh/l/en_US-j/6Fd4cGqM2Bb.js"
+        },
+        {
+          "module": "ShadowIGMediaFields",
+          "module_sha256": "f614bb6caa13f6b691af19186e343369faceb11d2124e30ec7fb73300ad8e311",
+          "script_sha256": "57a63cfad5090765a7a36925664e92f004088a1ab4d3debae963ac524980a4e8",
+          "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4iIxK4/ye/l/en_US-j/I3V2EXy8hBT.js"
+        }
+      ]
+    },
+    "TARGETING_SEARCH": {
+      "method": "GET",
+      "path": "/{account_node}/targetingsearch",
+      "params": [
+        "accountId",
+        "q",
+        "whitelisted_types",
+        "fields",
+        "limit",
+        "after"
+      ],
+      "request_name": "AdsUnifiedFlexibleTargetingDataSource",
+      "source_module": "AdsUnifiedFlexibleTargetingDataSource",
+      "sources": [
+        {
+          "module": "AdsUnifiedFlexibleTargetingDataSource",
+          "module_sha256": "0651281632e365818cac820146aae75c63d97e64ea94c1f00a67b9d5cdff7579",
+          "script_sha256": "83951800add0f5c9b67864eeaf3f7c87d3a2bf423396e0325e1f8940186707c0",
+          "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4iSUo4/yH/l/en_US-j/3tDRsLoArIO.js"
+        },
+        {
+          "module": "AdAccountTargetingUnifiedNodeDefaultFieldsStatic",
+          "module_sha256": "eac965239f006d05e160d6b36f22df4f8de31982e45b9eee07e2af436e386851",
+          "script_sha256": "83951800add0f5c9b67864eeaf3f7c87d3a2bf423396e0325e1f8940186707c0",
+          "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4iSUo4/yH/l/en_US-j/3tDRsLoArIO.js"
+        },
+        {
+          "module": "AdsFlexibleTargetingConstants",
+          "module_sha256": "215f90eeca0f1734a78d2435da99df4bbb30b6c9b54d6a2eac54fe7ff964233b",
+          "script_sha256": "0e74cb8e83a621f733d5189dafb5c1c98ab638e997dd6158b5bb2441f0474733",
+          "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4iB7f4/y4/l/en_US-j/R0rKxJEINu1.js"
+        }
+      ]
+    },
+    "INSIGHTS_READ": {
+      "method": "GET",
+      "path": "/{account_node}/insights",
+      "params": [
+        "fields",
+        "limit",
+        "after",
+        "level",
+        "date_preset"
+      ],
+      "request_name": "AdsSplitTestReportingDataProviderPlugin",
+      "source_module": "AdsSplitTestReportingDataProviderPlugin",
+      "sources": [
+        {
+          "module": "AdsSplitTestReportingDataProviderPlugin",
+          "module_sha256": "d6775c0afcc28e0dc2413fc1179981a94fed3a51845e7899e23ffedf38dacd8f",
+          "script_sha256": "36cf33384460379dbfb1fd5b01781420d9ed0f24631c7a3ad3f5b372b5e7836b",
+          "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4ij404/yi/l/en_US-j/BCGuh7gmB9E.js"
+        },
+        {
+          "module": "AdsInsightsField",
+          "module_sha256": "e07ba93b308d8dbbf9738254ad361bac3ddca8ec895652c96534edc61b563fcc",
+          "script_sha256": "0e74cb8e83a621f733d5189dafb5c1c98ab638e997dd6158b5bb2441f0474733",
+          "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4iB7f4/y4/l/en_US-j/R0rKxJEINu1.js"
+        },
+        {
+          "module": "AdsAccountDataDispatcher",
+          "module_sha256": "f729f2b4acee566c20b89dc517229d7207e6bc42efefa7bc3856562682c4d627",
+          "script_sha256": "0e74cb8e83a621f733d5189dafb5c1c98ab638e997dd6158b5bb2441f0474733",
+          "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4iB7f4/y4/l/en_US-j/R0rKxJEINu1.js"
+        }
+      ]
+    },
+    "LOCATIONS_READ": {
+      "method": "GET",
+      "path": "/search",
+      "params": [
+        "type",
+        "qs",
+        "limit",
+        "after",
+        "ad_account_id",
+        "place_fallback",
+        "bulk_upload"
+      ],
+      "request_name": "AdsLocationSearchSource",
+      "source_module": "AdsLocationSearchSource",
+      "sources": [
+        {
+          "module": "AdsLocationSearchSource",
+          "module_sha256": "46210b887495a175a23fab4480856e3e645a29030eaeb46141cd85afa8c2ba8a",
+          "script_sha256": "727d71de8954442e40a1aaa20c5b9ffa5ceabc876a1c9841c55739aab0af7ebd",
+          "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4iPp54/yn/l/en_US-j/eR1aekuqnV3.js"
+        },
+        {
+          "module": "GraphAPI",
+          "module_sha256": "da96858827635d7978aa1b5e6099846415732ae25d0cd56b2c2a3b883773da48",
+          "script_sha256": "f45273ee31b82049ca473e4c7b1025166c696b69591175d4e9c8bdbc35cdd522",
+          "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4itLS4/yO/l/en_US-j/YjHG_hCa_oy.js"
+        }
+      ]
+    },
+    "LOCALES_READ": {
+      "method": "GET",
+      "path": "/search",
+      "params": [
+        "type",
+        "limit",
+        "after"
+      ],
+      "request_name": "AdsCommonTargetingRDManager",
+      "source_module": "AdsCommonTargetingRDManager",
+      "sources": [
+        {
+          "module": "AdsCommonTargetingRDManager",
+          "module_sha256": "70ef1bc811bb9a5a75fa7ae31544a127283f66c9ddaff59c6fb88352f8f36100",
+          "script_sha256": "ca595ab6b82bb87adaa0ad1d2a5e57346e9745f568b734ae9b2999aaa20d2def",
+          "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4idcd4/y0/l/en_US-j/f2UtWoV9xoS.js"
+        },
+        {
+          "module": "GraphAPI",
+          "module_sha256": "da96858827635d7978aa1b5e6099846415732ae25d0cd56b2c2a3b883773da48",
+          "script_sha256": "f45273ee31b82049ca473e4c7b1025166c696b69591175d4e9c8bdbc35cdd522",
+          "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4itLS4/yO/l/en_US-j/YjHG_hCa_oy.js"
+        },
+        {
+          "module": "AdsTargetingLanguageTokenizerFunctionalComponent.react",
+          "module_sha256": "65eed65d1beadaa9b49495bc845bcbee7f2615c8b62125b979f386047cf29546",
+          "script_sha256": "1cfa46b5c49f0199da9e8ba8bf584ae87f276482628a81a1b9258564f0d65a0c",
+          "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4i-734/yB/l/en_US-j/dhDbGfrLTU4.js"
+        }
+      ]
+    }
+  },
+  "resource_fields": {
+    "images": [
+      "hash",
+      "name",
+      "url",
+      "width",
+      "height"
+    ],
+    "videos": [
+      "id",
+      "title",
+      "description",
+      "thumbnails"
+    ],
+    "campaigns": [
+      "id",
+      "name",
+      "account_id",
+      "status",
+      "configured_status",
+      "objective",
+      "daily_budget",
+      "lifetime_budget"
+    ],
+    "adsets": [
+      "id",
+      "name",
+      "account_id",
+      "status",
+      "configured_status",
+      "campaign_id",
+      "daily_budget",
+      "lifetime_budget",
+      "targeting"
+    ],
+    "ads": [
+      "id",
+      "name",
+      "account_id",
+      "status",
+      "configured_status",
+      "campaign_id",
+      "adset_id",
+      "creative{id}"
+    ],
+    "pixels": [
+      "id",
+      "name"
+    ],
+    "custom_audiences": [
+      "id",
+      "name",
+      "subtype"
+    ],
+    "conversion_goals": [
+      "id",
+      "name",
+      "custom_event_type",
+      "pixel"
+    ],
+    "instagram_accounts": [
+      "id",
+      "username",
+      "has_create_ads_access",
+      "id_v2"
+    ],
+    "creatives": [
+      "id",
+      "account_id",
+      "creative{id,account_id,name,image_hash,video_id,object_story_id,effective_object_story_id,thumbnail_url}"
+    ],
+    "instagram_media": [
+      "id",
+      "caption",
+      "media_type",
+      "media_url",
+      "thumbnail_url",
+      "permalink"
+    ],
+    "interests": [
+      "id",
+      "name",
+      "path",
+      "audience_size_lower_bound",
+      "audience_size_upper_bound"
+    ],
+    "behaviors": [
+      "id",
+      "name",
+      "path",
+      "description"
+    ],
+    "insights": [
+      "campaign_id",
+      "adset_id",
+      "ad_id",
+      "date_start",
+      "date_stop",
+      "impressions",
+      "clicks",
+      "spend"
+    ],
+    "locations": [
+      "key",
+      "name",
+      "type",
+      "country_code",
+      "region",
+      "region_id"
+    ],
+    "locales": [
+      "key",
+      "name"
+    ]
+  },
+  "constants": {
+    "application_id": "119211728144504",
+    "ownership_type": "USER",
+    "creator_product": "LEGACY",
+    "video_source": "ads_interfaces"
+  },
+  "constant_sources": [
+    {
+      "module": "AdsApplicationIDs",
+      "module_sha256": "9b154add2b9e5812a35ffb1a0ee8ae6153b2e44fd86c75857e80b99235be41b4",
+      "script_sha256": "0e74cb8e83a621f733d5189dafb5c1c98ab638e997dd6158b5bb2441f0474733",
+      "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4iB7f4/y4/l/en_US-j/R0rKxJEINu1.js"
+    },
+    {
+      "module": "AdDraftOwnership",
+      "module_sha256": "1d11ab362d78b6ddc932ddfbb0bf1710e77f6479c08d1110fa05258dc356b24c",
+      "script_sha256": "ca595ab6b82bb87adaa0ad1d2a5e57346e9745f568b734ae9b2999aaa20d2def",
+      "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4idcd4/y0/l/en_US-j/f2UtWoV9xoS.js"
+    },
+    {
+      "module": "AdsVideoUploadStartRequestManager",
+      "module_sha256": "c56b1139c2104980891494dff639541c58fb280f77590f0c910761e7293eef07",
+      "script_sha256": "f0f947deb2dc35f3dd8e48c9c651fe80d3fae778ca0120f17d9da6c4fdfef726",
+      "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4iBbd4/yK/l/en_US-j/kDg8z-0uyHe.js"
+    },
+    {
+      "module": "AdsVideoUploaderWrapper",
+      "module_sha256": "38d0591abf9cfecc8ccb3769b492d15412bb336f130314571fb1f7716bdc9bf8",
+      "script_sha256": "a5589121f83cece44f34b5785e198dcf97453258d69210418e9fc0020885ddc4",
+      "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4/yR/r/ENp_swmasKz.js"
+    }
+  ],
+  "object_fields": {
+    "campaign": [
+      "ab_test_config",
+      "account_id",
+      "acting_business_id",
+      "action_categories",
+      "action_types",
+      "ad_creation_package_config",
+      "ad_strategy_group_id",
+      "ad_strategy_id",
+      "adlabel_ids",
+      "adlabels",
+      "adlabels_operation",
+      "ads_guidance_qe_exposure",
+      "adset_bid_amounts",
+      "adset_budgets",
+      "adset_count",
+      "advantage_state_info",
+      "advertiser_intent",
+      "agency_fee_config",
+      "allow_legacy_objectives",
+      "anomaly_detection",
+      "auto_scale_config",
+      "automation_unified_campaign_type",
+      "benchmark_report_count",
+      "bid_constraints",
+      "bid_strategy",
+      "boosted_component_client_app_id",
+      "boosted_component_product",
+      "boosted_object_id",
+      "boosted_page_id",
+      "brand_configuration",
+      "brand_lift_studies",
+      "budget",
+      "budget_limit",
+      "budget_rebalance_flag",
+      "budget_remaining",
+      "budget_reset_period",
+      "budget_scaling_cost_target",
+      "budget_scaling_extra_budget",
+      "budget_schedule_specs",
+      "budget_strategy",
+      "buy_with_integration_partner",
+      "buy_with_prime_type",
+      "buying_type",
+      "campaign_group_active_time",
+      "campaign_group_creation_source",
+      "campaign_group_status",
+      "campaign_group_type",
+      "campaign_optimization_type",
+      "campaign_structure_tree",
+      "can_create_brand_lift_study",
+      "can_use_spend_cap",
+      "cancel_split_test",
+      "card_status",
+      "checkout_non_delivering",
+      "collaborative_ads_partner_info",
+      "configured_status",
+      "created_time",
+      "creative_diversity_data",
+      "creative_diversity_label",
+      "cta_message_id",
+      "custom_labels",
+      "custom_labels_operation",
+      "daily_budget",
+      "default_lifetime_flex_budget",
+      "delivery_info",
+      "delivery_status",
+      "delivery_status_status",
+      "delivery_status_sub_status",
+      "draft_action",
+      "draft_campaign_group_id",
+      "effective_status",
+      "execution_options",
+      "frequency_control_specs",
+      "fulltext_search",
+      "has_dynamic_creative_optimization_adsets",
+      "has_product_catalog",
+      "has_secondary_skadnetwork_reporting",
+      "id",
+      "idempotency_key",
+      "ids",
+      "include_in_ad_study_cell_id",
+      "include_in_ad_study_id",
+      "incremental_conversion_optimization_config",
+      "is_adset_budget_sharing_enabled",
+      "is_autobid",
+      "is_average_price_pacing",
+      "is_ba_skip_delayed_eligible",
+      "is_budget_schedule_enabled",
+      "is_collaborative_ads",
+      "is_direct_send_campaign",
+      "is_draft_only",
+      "is_full_funnel",
+      "is_hp1_enabled",
+      "is_job_openning_post",
+      "is_message_campaign",
+      "is_message_marketing",
+      "is_meta_moment_maker_enabled",
+      "is_odax_campaign_group",
+      "is_opted_into_experiments",
+      "is_pca_unifiable",
+      "is_pca_unified",
+      "is_post_processing_actor",
+      "is_reels_trending_ads_enabled",
+      "is_reviewer_admin",
+      "is_skadnetwork_attribution",
+      "is_using_l3_schedule",
+      "is_using_target_cpa",
+      "issues_info",
+      "iterative_split_test_configs",
+      "kpi_custom_conversion_id",
+      "kpi_type",
+      "last_budget_toggling_time",
+      "lifetime_budget",
+      "lifetime_spent",
+      "lifetime_target_spend",
+      "lightweight_split_test",
+      "lightweight_split_test_options",
+      "linked_testimonial_brief_id",
+      "marketing_messages_callsite",
+      "marketing_messages_channel",
+      "marketing_messages_drip_next_l2",
+      "marketing_messages_drip_start_l2",
+      "marketing_messages_product_identity",
+      "mc_experience_config",
+      "metrics_metadata",
+      "migrate_to_advantage_plus",
+      "ml_ranking_for_mobile",
+      "ml_ranking_for_mobile_scaled",
+      "name",
+      "naming_template_custom_fields",
+      "objective",
+      "objective_for_cost",
+      "objective_for_results",
+      "objective_for_results_label",
+      "optimal_delivery_growth_opportunities",
+      "optimization_type",
+      "optimization_types",
+      "pacing_type",
+      "primary_attribution",
+      "product_catalog_id",
+      "product_catalog_name",
+      "promoted_object",
+      "recommendations",
+      "regulated_category",
+      "request_source",
+      "rf_campaign_type",
+      "rf_prediction_id",
+      "run_status",
+      "scale_good_campaign",
+      "session_id",
+      "should_prorate_budget",
+      "smart_promotion_type",
+      "source_campaign",
+      "source_campaign_id",
+      "source_recommendation_type",
+      "special_ad_categories",
+      "special_ad_category",
+      "special_ad_category_country",
+      "spend_cap",
+      "split_test_config",
+      "split_test_free_form_campaign_group",
+      "split_test_status",
+      "split_test_winner",
+      "start_time",
+      "status",
+      "stop_time",
+      "study_ids",
+      "study_name",
+      "tag_ids",
+      "time_suggestion",
+      "today_spent",
+      "topline_id",
+      "ui_flow",
+      "updated_time",
+      "value_spec_event_funnel",
+      "yesterday_spent"
+    ],
+    "adset": [
+      "account_id",
+      "acting_business_id",
+      "action_categories",
+      "action_types",
+      "ad_account_control_mutation_callsite_internal",
+      "ad_count",
+      "ad_format_plan",
+      "ad_keywords",
+      "ad_set_goal",
+      "ad_strategy_id",
+      "adasset_feed",
+      "adcampaign_group",
+      "adjust_lookalikes",
+      "adlabel_ids",
+      "adlabels",
+      "adlabels_operation",
+      "adrules",
+      "ads_guidance_qe_exposure",
+      "adset_schedule",
+      "anchor_click_through_attribution_window_seconds",
+      "anchor_engaged_view_attribution_window_seconds",
+      "anchor_event_attribution_window_days",
+      "anchor_view_through_attribution_window_seconds",
+      "anomaly_insights",
+      "asset_feed_id",
+      "asset_feed_optimization_type",
+      "attribution_count_type",
+      "attribution_setting",
+      "attribution_spec",
+      "attribution_window_days",
+      "attribution_window_seconds",
+      "audience_reach_insights",
+      "audience_reached_percentage",
+      "auto_scale_config",
+      "automatic_manual_state",
+      "best_creative",
+      "bid_adjustments",
+      "bid_amount",
+      "bid_constraint_source",
+      "bid_constraints",
+      "bid_constraints_spec",
+      "bid_info",
+      "bid_schedules",
+      "bid_strategy",
+      "bid_type",
+      "billing_event",
+      "biz_ai_enabled_state",
+      "bizai_call_config_id",
+      "brand_audience",
+      "brand_audience_id",
+      "brand_awareness_media_type",
+      "brand_safety_config",
+      "breakdown_effect_eligibility",
+      "budget",
+      "budget_limit",
+      "budget_pool_ids",
+      "budget_remaining",
+      "budget_reset_period",
+      "budget_scaling_cost_target",
+      "budget_scaling_extra_budget",
+      "budget_schedule_specs",
+      "budget_source",
+      "budget_split_metadata_id",
+      "budget_split_set_id",
+      "budget_strategy",
+      "buying_type",
+      "calling_settings",
+      "campaign",
+      "campaign_active_time",
+      "campaign_attribution",
+      "campaign_creation_source",
+      "campaign_goal",
+      "campaign_goal_engaged_custom_audience_exclusions",
+      "campaign_goal_engaged_custom_audience_inclusions",
+      "campaign_goal_existing_customers_auto_exclusion_retention_days",
+      "campaign_goal_existing_customers_custom_audience_exclusions",
+      "campaign_goal_existing_customers_custom_audience_inclusions",
+      "campaign_goal_is_ca_expansion_enabled",
+      "campaign_goal_is_existing_customers_auto_exclusion_enabled",
+      "campaign_goal_is_lookalike_inclusion_enabled",
+      "campaign_goal_lookalike_custom_audience_inclusions",
+      "campaign_goal_type",
+      "campaign_group_id",
+      "campaign_group_name",
+      "campaign_group_spec",
+      "campaign_id",
+      "campaign_schedule",
+      "campaign_spec",
+      "campaign_status",
+      "campaign_targeting_consolidation",
+      "card_status",
+      "catalog_vertical",
+      "checkout_payment_ids",
+      "compliance_section",
+      "compliance_section_india",
+      "configured_status",
+      "contextual_bundling_spec",
+      "conversion_goal_id",
+      "conversion_location",
+      "conversion_locations",
+      "conversion_pixel_id",
+      "conversion_value_expression_spec",
+      "cost_bidding_mode",
+      "cpr_benchmark",
+      "created_time",
+      "creative_diversity_data",
+      "creative_diversity_label",
+      "creative_diversity_score",
+      "creative_fatigue_prediction_ple",
+      "creative_sequence",
+      "creative_sequence_repetition_pattern",
+      "cta_message_id",
+      "current_spend",
+      "custom_attribution_dataset",
+      "custom_event_type",
+      "custom_labels",
+      "custom_labels_operation",
+      "daily_budget",
+      "daily_imps",
+      "daily_min_spend_target",
+      "daily_spend_cap",
+      "date_format",
+      "delivery_age",
+      "delivery_gender",
+      "delivery_info",
+      "delivery_insights",
+      "delivery_location",
+      "delivery_status",
+      "delivery_status_status",
+      "delivery_status_sub_status",
+      "delivery_sub_status",
+      "delivery_view_unsupported_reasons",
+      "destination_type",
+      "draft_action",
+      "draft_campaign_id",
+      "dsa_beneficiary",
+      "dsa_payor",
+      "dynamic_creative_optimization_mode",
+      "effective_status",
+      "end_time",
+      "engaged_video_view_attribution_window_seconds",
+      "estimated_budget_spending_percentage",
+      "execution_options",
+      "existing_customer_budget_percentage",
+      "external_bid",
+      "frequency_cap",
+      "frequency_cap_reset_period",
+      "frequency_control_specs",
+      "friendly_name",
+      "full_funnel_exploration_mode",
+      "fulltext_search",
+      "guidance_lift_estimate",
+      "has_active_aco_autoflow_ad",
+      "has_active_da_aco_ad",
+      "has_bid_schedules_enabled",
+      "has_inspiration_gallery_consent",
+      "id",
+      "idempotency_key",
+      "include_in_ad_study_cell_id",
+      "include_in_ad_study_id",
+      "infer_dsa_default_account_values",
+      "instagram_actor_id",
+      "instagram_user_id",
+      "instant_checkout_type",
+      "internal_campaign_type",
+      "invoicing_limit",
+      "io_number",
+      "is_autobid",
+      "is_average_price_pacing",
+      "is_ba_skip_delayed_eligible",
+      "is_bid_constrained",
+      "is_bonus_media",
+      "is_budget_constrained",
+      "is_budget_schedule_enabled",
+      "is_collaborative_ads",
+      "is_cost_constrained",
+      "is_dc_follow_optimized",
+      "is_draft_only",
+      "is_dynamic_creative",
+      "is_dynamic_creative_asset_customization",
+      "is_dynamic_creative_format_automation",
+      "is_dynamic_creative_optimization",
+      "is_eligible_for_dynamic_creative_optimization",
+      "is_in_learning_stage",
+      "is_incremental_attribution_enabled",
+      "is_lifetime_flex_with_valid_schedule",
+      "is_message_campaign",
+      "is_message_marketing",
+      "is_optimization_goal_set_explicitly",
+      "is_organic_ad_joint_optimized",
+      "is_pca_unifiable_with_catalog",
+      "is_post_processing_actor",
+      "is_pv_follow_optimized",
+      "is_reviewer_admin",
+      "is_sac_cfca_terms_certified",
+      "is_sequenced_conversion_creation",
+      "is_suboptimal_cbo_calibration",
+      "is_unified_attribution_window",
+      "is_using_target_cpa",
+      "issues_info",
+      "learning_stage_info",
+      "lifetime_budget",
+      "lifetime_frequency_cap",
+      "lifetime_imps",
+      "lifetime_min_spend_target",
+      "lifetime_reach",
+      "lifetime_spend_cap",
+      "lifetime_spent",
+      "lifetime_target_spend",
+      "lightweight_split_test",
+      "lightweight_split_test_options",
+      "line_number",
+      "live_video_ad_campaign_config",
+      "low_creative_reach",
+      "marketing_goal",
+      "marketing_messages_product_identity",
+      "max_budget_spend_percentage",
+      "messaging_structured_lead_spec",
+      "messaging_structured_lead_template_id",
+      "meta_moment_maker_spec",
+      "metrics_metadata",
+      "min_budget_spend_percentage",
+      "min_spend_target",
+      "min_video_view_seconds",
+      "minimum_budget_required",
+      "multi_ads",
+      "multi_event_conversion_attribution_window_seconds",
+      "multi_optimization_goal_weight",
+      "name",
+      "naming_template_custom_fields",
+      "neko_has_mixed_promoted_objects",
+      "neko_promoted_object_id",
+      "neko_promoted_object_url",
+      "objective",
+      "objective_for_cost",
+      "objective_for_results",
+      "optimal_delivery_growth_opportunities",
+      "optimization_goal",
+      "optimization_path",
+      "optimization_sub_event",
+      "optimization_type",
+      "optimization_types",
+      "paced_bid_info",
+      "pacing_type",
+      "package_selector",
+      "partnership_ad_content_list_id",
+      "partnership_ad_content_lists",
+      "placement",
+      "placement_edit",
+      "placement_soft_opt_out",
+      "pps_peer_benchmarks",
+      "primary_campaign_id",
+      "product_delivery_preference",
+      "promoted_object",
+      "prorated_daily_budget",
+      "publisher_platforms_status",
+      "rb_prediction_id",
+      "recommendations",
+      "recurring_budget_semantics",
+      "regional_compliance_warning_section",
+      "regional_regulated_categories",
+      "regional_regulation_identities",
+      "relative_value",
+      "repeat_reach_state",
+      "reporting_audience",
+      "request_source",
+      "retail_audience_config",
+      "review_feedback",
+      "rf_prediction_id",
+      "run_status",
+      "saved_audience",
+      "saved_audience_id",
+      "schedule",
+      "search_themes",
+      "session_id",
+      "shops_ads_metadata_tags",
+      "shops_traffic_percentage",
+      "should_prorate_budget",
+      "source_adset",
+      "source_adset_id",
+      "source_campaign_id",
+      "sourced_content_brief_id",
+      "special_ad_categories",
+      "spend_cap",
+      "spending_limit_type",
+      "split_test_config_splits_index",
+      "start_time",
+      "status",
+      "stop_time",
+      "study_ids",
+      "tag_ids",
+      "target_spec_id",
+      "targeting",
+      "targeting_age_max",
+      "targeting_age_min",
+      "targeting_as_signal",
+      "targeting_contextual_targeting_categories",
+      "targeting_countries",
+      "targeting_expansion_spec",
+      "targeting_genders",
+      "targeting_optimization_types",
+      "time_based_ad_rotation_id_blocks",
+      "time_based_ad_rotation_intervals",
+      "time_start",
+      "time_stop",
+      "time_suggestion",
+      "time_updated",
+      "top_observations",
+      "topline_id",
+      "trending_topics_spec",
+      "tune_for_category",
+      "ui_flow",
+      "updated_time",
+      "use_accelerated_delivery",
+      "use_new_app_click",
+      "use_upstream_event",
+      "valid_bid_types",
+      "validate_only",
+      "value_adjustment_rule_collection_id",
+      "value_rule_set_id",
+      "value_rules_applied",
+      "value_rules_entry_point",
+      "value_rules_spec",
+      "view_through_attribution_window_days",
+      "view_through_attribution_window_seconds",
+      "visitor_lookalike_selected",
+      "whatsapp_business_phone_number_id"
+    ],
+    "ad": [
+      "account_id",
+      "acting_business_id",
+      "action_categories",
+      "action_types",
+      "ad_account_fbid",
+      "ad_account_id",
+      "ad_active_time",
+      "ad_creation_source",
+      "ad_labels_spec",
+      "ad_review_feedback",
+      "ad_schedule_end_time",
+      "ad_schedule_start_time",
+      "ad_strategy_id",
+      "adgroup_review_feedback",
+      "adgroup_spec",
+      "adgroup_status",
+      "adlabel_ids",
+      "adlabels",
+      "adlabels_operation",
+      "adset",
+      "adset_id",
+      "adset_spec",
+      "appeal_request",
+      "asset_feed_id",
+      "audience_id",
+      "bid_amount",
+      "bid_info",
+      "bid_strategy",
+      "bid_type",
+      "biz_ai_enabled_state",
+      "branded_content_post_publish_errors",
+      "bucket_id",
+      "campaign",
+      "campaign_group_id",
+      "campaign_group_name",
+      "campaign_id",
+      "campaign_name",
+      "campaign_spec",
+      "can_aggregate_social_feedback_on_edit",
+      "cluster_id",
+      "configured_status",
+      "conversion_domain",
+      "conversion_specs",
+      "created_by",
+      "created_time",
+      "creative",
+      "creative_actor_id",
+      "creative_asset_groups_metadata",
+      "creative_asset_groups_spec",
+      "creative_audience_pairing_persona",
+      "creative_automation_spec",
+      "creative_body",
+      "creative_created_inline",
+      "creative_delivery_push",
+      "creative_history",
+      "creative_id",
+      "creative_ids",
+      "creative_instagram_permalink_url",
+      "creative_link_url",
+      "creative_source",
+      "creative_title",
+      "creative_tools",
+      "ctv_website_url",
+      "dataset_split_specs",
+      "date_format",
+      "dco_review_feedback",
+      "dco_type",
+      "decision_id",
+      "delivery_info",
+      "delivery_status",
+      "delivery_status_status",
+      "delivery_status_sub_status",
+      "demolink_hash",
+      "disapprove_codes",
+      "display_sequence",
+      "draft_action",
+      "draft_adgroup_id",
+      "dynamic_creative_optimization_adgroup_type",
+      "dynamic_creative_optimization_asset_metadata",
+      "dynamic_creative_optimization_split_test_mode",
+      "effective_status",
+      "end_time",
+      "engagement_audience",
+      "execution_options",
+      "failed_delivery_checks",
+      "force_adgroup_inline_creation",
+      "force_dco_mutation",
+      "force_reinfer_computed_fields",
+      "force_run_status",
+      "formats",
+      "found_or_inferred_instagram_actor_on_creative_level",
+      "fulltext_search",
+      "funding_page_id",
+      "id",
+      "idempotency_key",
+      "include_demolink_hashes",
+      "include_in_ad_study_cell_id",
+      "include_in_ad_study_id",
+      "is_autobid",
+      "is_creative_flex_feature_aware",
+      "is_draft_only",
+      "is_eligible_for_message_editing",
+      "is_f2_md_website_entry_point",
+      "is_message_campaign",
+      "is_message_marketing",
+      "is_organic_ad_joint_optimized",
+      "is_reviewer_admin",
+      "is_sequencing_update",
+      "issues_info",
+      "last_meaningful_touched_by_app_id",
+      "last_updated_by_app_id",
+      "leads",
+      "legacy_targeting",
+      "lightweight_split_test",
+      "lightweight_split_test_options",
+      "manual_review_requested",
+      "marketing_messages_product_identity",
+      "max_bid",
+      "meta_reward_adgroup_status",
+      "metadata",
+      "mrl_settings",
+      "name",
+      "naming_template_custom_fields",
+      "objective",
+      "objective_for_cost",
+      "objective_for_results",
+      "objective_source",
+      "objective_was_inferred",
+      "optimal_delivery_growth_opportunities",
+      "optimization_goal",
+      "page_types",
+      "placement",
+      "placement_config_id",
+      "prefetched_social_cluster_id",
+      "preview_link",
+      "preview_shareable_link",
+      "primary_adgroup_id",
+      "priority",
+      "product_set_optimization_setting",
+      "reason",
+      "recommendations",
+      "related_media_user_opted_out",
+      "related_page_icon_uri",
+      "related_page_id",
+      "related_page_name",
+      "related_page_post",
+      "related_page_post_id",
+      "review_config",
+      "run_status_user_set",
+      "shops_ads_internal_adgroup_type",
+      "shops_ads_metadata_tags",
+      "shops_ads_with_offsite_checkout",
+      "skip_activity_logging",
+      "skip_bid_info_override_check",
+      "source_ad",
+      "source_ad_id",
+      "source_app_id",
+      "special_ad_categories",
+      "start_time",
+      "status",
+      "stop_time",
+      "subscriber_list_tags",
+      "sync_source_ad_id",
+      "tag_ids",
+      "target_spec_hash",
+      "target_spec_id",
+      "targeting",
+      "targets_spec",
+      "time_created",
+      "time_start",
+      "time_stop",
+      "time_updated",
+      "trace_id",
+      "trace_span",
+      "tracking_and_conversion_with_defaults",
+      "tracking_pixel_ids",
+      "tracking_specs",
+      "updated_time",
+      "use_upstream_event",
+      "validate_only",
+      "view_tags",
+      "whatsapp_business_hsm_id"
+    ],
+    "creative": [
+      "account_id",
+      "actor_id",
+      "actor_type",
+      "ad_disclaimer_spec",
+      "ad_preview_multi_photo_overlay_count",
+      "ad_sensitive_context_id",
+      "additional_data",
+      "adlabels",
+      "adlabels_operation",
+      "app_experience_spec",
+      "applink_treatment",
+      "asset_feed_id",
+      "asset_feed_spec",
+      "authorization_category",
+      "auto_update",
+      "biz_ai",
+      "body",
+      "boost_asset_spec",
+      "branded_content",
+      "branded_content_boosting_type",
+      "branded_content_sponsor_page_id",
+      "bundle_folder_id",
+      "business_ad_data_id",
+      "call_to_action",
+      "call_to_action_type",
+      "caption_ids",
+      "catalog_story_spec",
+      "categorization_criteria",
+      "category_media_source",
+      "cluster_id",
+      "collaborative_ads_lsb_image_bank_id",
+      "contextual_multi_ads",
+      "creative_id",
+      "creative_insights",
+      "creative_optimization_spec",
+      "creative_optional",
+      "creative_sourcing_spec",
+      "degree_of_freedom_spec",
+      "degrees_of_freedom_spec",
+      "derived_object_story_id",
+      "destination_set_id",
+      "destination_spec",
+      "dynamic_ad_voice",
+      "effective_authorization_category",
+      "effective_instagram_media_id",
+      "effective_instagram_story_id",
+      "effective_object_story_id",
+      "enable_direct_install",
+      "enable_launch_instant_app",
+      "execution_options",
+      "existing_post_title",
+      "facebook_branded_content",
+      "force_create_new_creative",
+      "force_download_image",
+      "format_transformation_spec",
+      "generative_asset_spec",
+      "house_shops_ads_seller_content",
+      "id",
+      "image_crops",
+      "image_file",
+      "image_hash",
+      "image_url",
+      "instagram_actor_id",
+      "instagram_asset_id",
+      "instagram_branded_content",
+      "instagram_dynamic_medias",
+      "instagram_media_id",
+      "instagram_permalink_url",
+      "instagram_story_id",
+      "instagram_user_id",
+      "instant_checkout_setting",
+      "interactive_components_spec",
+      "is_dco_internal",
+      "link_deep_link_url",
+      "link_destination_display_url",
+      "link_og_id",
+      "link_target",
+      "link_url",
+      "live_video_reminder",
+      "marketing_message_spec",
+      "marketing_message_structured_spec",
+      "marketing_messages_product_identity",
+      "media_optimization_spec",
+      "media_sourcing_spec",
+      "media_type",
+      "messenger_sponsored_message",
+      "mmu_object_story_spec",
+      "mockup_id",
+      "name",
+      "normalized_bc_trigger",
+      "object_id",
+      "object_store_url",
+      "object_story_id",
+      "object_story_spec",
+      "object_type",
+      "object_url",
+      "omnichannel_link_spec",
+      "optimization_type",
+      "page_id",
+      "page_privacy_policy_url",
+      "page_welcome_message",
+      "page_whatsapp_number_id",
+      "photo_album_converted_creative_id",
+      "photo_album_converted_creative_version_id",
+      "photo_album_source_object_story_id",
+      "place_page_set_id",
+      "platform_customizations",
+      "playable_asset_id",
+      "portrait_customizations",
+      "previews",
+      "product_data",
+      "product_set_id",
+      "product_suggestion_settings",
+      "recommender_settings",
+      "referral_id",
+      "regional_regulation_disclaimer_spec",
+      "related_page_id",
+      "related_page_name",
+      "scraped_link_data_map",
+      "shop_spec",
+      "source_facebook_post_id",
+      "source_instagram_media_id",
+      "status",
+      "stored_object_story_spec",
+      "story_graphql_token",
+      "story_id",
+      "template_url",
+      "template_url_spec",
+      "text_type",
+      "threads_media_id",
+      "threads_user_id",
+      "thumbnail_height",
+      "thumbnail_id",
+      "thumbnail_source",
+      "thumbnail_url",
+      "thumbnail_width",
+      "title",
+      "type",
+      "uca_draft_version",
+      "url_tags",
+      "use_page_actor_override",
+      "video_data",
+      "video_hd",
+      "video_id",
+      "visual_hash",
+      "wamo_whatsapp_identity_spec",
+      "whats_app_business_asset_id",
+      "whats_app_business_phone_number",
+      "whatsapp_business_phone_number_id",
+      "whatsapp_business_profile_id",
+      "whatsapp_channel_spec",
+      "whatsapp_mm_business_phone_number_id"
+    ]
+  },
+  "object_field_sources": [
+    {
+      "module": "AdsAPIAdCampaignGroupFields",
+      "module_sha256": "b89d07d4c009517454cad9c9da5a43a49b7a31406f5fdf1b92ebad8edbe9836d",
+      "script_sha256": "3c7de32f7de0b89953b2ecd5b31ff65bf34367e671f7f9e67134f6eb2d163000",
+      "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4ijsg4/yq/l/en_US-j/Y731TQMByU4.js"
+    },
+    {
+      "module": "AdsAPIAdCampaignFields",
+      "module_sha256": "3e01ae72e0d47aadc38486462cad3daec1d3d75561f4239d3d0f444fb68d3efd",
+      "script_sha256": "3c7de32f7de0b89953b2ecd5b31ff65bf34367e671f7f9e67134f6eb2d163000",
+      "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4ijsg4/yq/l/en_US-j/Y731TQMByU4.js"
+    },
+    {
+      "module": "AdsAPIAdgroupFields",
+      "module_sha256": "1e307fcf06d4b7361821301dc7931c234723360c7bd1e4b0f31787053bb5d5e6",
+      "script_sha256": "f45273ee31b82049ca473e4c7b1025166c696b69591175d4e9c8bdbc35cdd522",
+      "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4itLS4/yO/l/en_US-j/YjHG_hCa_oy.js"
+    },
+    {
+      "module": "ApiAdCreativeFields",
+      "module_sha256": "3ba7d7280b758ed778675c3ff03978d6f0b1ace93a641c892aec9433ed60fab7",
+      "script_sha256": "f45273ee31b82049ca473e4c7b1025166c696b69591175d4e9c8bdbc35cdd522",
+      "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4itLS4/yO/l/en_US-j/YjHG_hCa_oy.js"
+    }
+  ],
+  "story_field_sources": [
+    {
+      "module": "ApiObjectStorySpecLinkFields",
+      "module_sha256": "d13a0354fd9b5607ab11ff421850566cf347feb44c023f381e0d791645061db3",
+      "script_sha256": "f45273ee31b82049ca473e4c7b1025166c696b69591175d4e9c8bdbc35cdd522",
+      "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4itLS4/yO/l/en_US-j/YjHG_hCa_oy.js"
+    },
+    {
+      "module": "ApiObjectStorySpecVideoFields",
+      "module_sha256": "7980178447f34099525dbfec3770a77637c87daf26b6fcaa238088b2d5f7d02f",
+      "script_sha256": "f45273ee31b82049ca473e4c7b1025166c696b69591175d4e9c8bdbc35cdd522",
+      "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4itLS4/yO/l/en_US-j/YjHG_hCa_oy.js"
+    }
+  ],
+  "session_bootstrap": {
+    "module": "WebApiApplication",
+    "method": "init",
+    "authorization_argument": 0,
+    "application_id_argument": 1,
+    "source": {
+      "module_sha256": "7aeb2472bebae64f8bb85ebb609c1c97fc161c092caceac4b589a076c507aa53",
+      "script_sha256": "0e74cb8e83a621f733d5189dafb5c1c98ab638e997dd6158b5bb2441f0474733",
+      "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4iB7f4/y4/l/en_US-j/R0rKxJEINu1.js"
+    }
+  },
+  "creative_adapter_sources": [
+    {
+      "module": "AdsUEditorAdgroupSetInstagramPostV2ReducerPluginUtils",
+      "module_sha256": "12f169d094fdec36380d834effdbc16481ef97dcda2f07af93d7608b9d1f0565",
+      "script_sha256": "59794e46a3d8997451bc02430eff4d84f253029ca964c97fe2c4a7c31dabee06",
+      "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4iKoj4/y5/l/en_US-j/GVCAIgZZ3iU.js"
+    },
+    {
+      "module": "ApiAdCreativeFields",
+      "module_sha256": "3ba7d7280b758ed778675c3ff03978d6f0b1ace93a641c892aec9433ed60fab7",
+      "script_sha256": "f45273ee31b82049ca473e4c7b1025166c696b69591175d4e9c8bdbc35cdd522",
+      "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4itLS4/yO/l/en_US-j/YjHG_hCa_oy.js"
+    },
+    {
+      "module": "ApiObjectStorySpecLinkFields",
+      "module_sha256": "d13a0354fd9b5607ab11ff421850566cf347feb44c023f381e0d791645061db3",
+      "script_sha256": "f45273ee31b82049ca473e4c7b1025166c696b69591175d4e9c8bdbc35cdd522",
+      "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4itLS4/yO/l/en_US-j/YjHG_hCa_oy.js"
+    },
+    {
+      "module": "ApiObjectStorySpecVideoFields",
+      "module_sha256": "7980178447f34099525dbfec3770a77637c87daf26b6fcaa238088b2d5f7d02f",
+      "script_sha256": "f45273ee31b82049ca473e4c7b1025166c696b69591175d4e9c8bdbc35cdd522",
+      "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4itLS4/yO/l/en_US-j/YjHG_hCa_oy.js"
+    }
+  ],
+  "resource_types": {
+    "interests": "interests",
+    "behaviors": "behaviors"
+  }
+}

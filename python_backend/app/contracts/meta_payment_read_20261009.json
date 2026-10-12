@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "revision": "20261009-payment-read-v2",
+  "revision": "payment-read-2026-10-12-source-refresh",
   "scope": "read_only_no_card_submission",
   "evidence": {
     "source": "Safari PDF of explicit maintenance export",
@@ -46,10 +46,24 @@
         "paymentActivitySummaryStartTime": "$summary_start",
         "pendingPaymentsStartTime": "$pending_start",
         "shouldFetchPaymentActivitySummary": false,
-        "__relay_internal__pv__BillingPaymentSettingsFrontierMigrationGKrelayprovider": false
+        "__relay_internal__pv__BillingPaymentSettingsFrontierMigrationGKrelayprovider": false,
+        "pendingPaymentsCallsite": "PENDING_PAYMENTS_SETTINGS_VIEW",
+        "optimizedLoopCount": 8,
+        "enableTAOPrimary": true
       },
       "response_parser": "exact_billable_account_v1",
-      "read_options": "Summary disabled, legacy UI migration branch selected; neither option changes asset identity."
+      "read_options": "Summary disabled, legacy UI migration branch selected; neither option changes asset identity.",
+      "source_refresh": {
+        "observed_at": "2026-10-12",
+        "artifact_factory_sha256": "a2ba0732b2f49d3e6d1cf4d9661f8ccbf2f5c95212f7df87fcb33eb933cf7843",
+        "source_doc_id": "28797973873175785",
+        "installed_literal_defaults": {
+          "pendingPaymentsCallsite": "PENDING_PAYMENTS_SETTINGS_VIEW",
+          "optimizedLoopCount": 8,
+          "enableTAOPrimary": true
+        },
+        "live_response_verified": false
+      }
     },
     "READ_CREDENTIAL": {
       "doc_id": "27586872297608269",
@@ -87,7 +101,7 @@
       "read_options": "Observed default includes deferred country, currency and timezone options; read-only."
     },
     "READ_OPTIONS": {
-      "doc_id": "29195809800004536",
+      "doc_id": "28265228839826899",
       "friendly_name": "BillingSelectPaymentMethodPageViewManagerQuery",
       "endpoint_url": "https://business.facebook.com/api/graphql/",
       "operation_kind": "query",
@@ -98,7 +112,23 @@
         "skipDeferredFragments": false
       },
       "response_parser": "exact_payment_page_v1",
-      "read_options": "Root sender defaults userIntent to null. Remaining query defaults observed in artifact; no task/mutation execution."
+      "read_options": "Root sender defaults userIntent to null. Remaining query defaults observed in artifact; no task/mutation execution.",
+      "source_refresh": {
+        "observed_at": "2026-10-12",
+        "artifact_factory_sha256": "bb8da35d67ba2a50480d708aa635c3ea53379026ea2464ab1e69d3a5974e341c",
+        "script_sha256": [
+          "dcd3a88d477ef0ed1af0a45a7c32d06d387a5ca51033f37c63d0d5be29a040b2"
+        ],
+        "source_doc_id": "28265228839826899",
+        "variable_schema_equal": true,
+        "response_scope_fields_present": [
+          "data.payment_account.billable_account.id",
+          "data.payment_account.billing_payment_method_options",
+          "data.payment_account.id",
+          "data.payment_account.payment_legacy_account_id"
+        ],
+        "live_response_verified": false
+      }
     },
     "READ_ALL_CREDENTIALS": {
       "doc_id": "24871928132404465",
@@ -112,7 +142,7 @@
       "read_options": "Observed query has no filter, allowlist or pagination. Prove exact returned payment node against a fresh READ_ACCOUNT; hydrate card metadata separately."
     },
     "READ_VERIFY_OPTIONS": {
-      "doc_id": "29195809800004536",
+      "doc_id": "28265228839826899",
       "friendly_name": "BillingSelectPaymentMethodPageViewManagerQuery",
       "endpoint_url": "https://business.facebook.com/api/graphql/",
       "operation_kind": "query",
@@ -123,7 +153,23 @@
         "skipDeferredFragments": false
       },
       "response_parser": "exact_payment_page_v1",
-      "read_options": "Observed BillingAddPaymentMethodRoot entrypoint forwards userIntent; BillingUserIntent enum includes VERIFY_PAYMENT_METHOD. Query only; does not run a wizard task or bank authorization."
+      "read_options": "Observed BillingAddPaymentMethodRoot entrypoint forwards userIntent; BillingUserIntent enum includes VERIFY_PAYMENT_METHOD. Query only; does not run a wizard task or bank authorization.",
+      "source_refresh": {
+        "observed_at": "2026-10-12",
+        "artifact_factory_sha256": "bb8da35d67ba2a50480d708aa635c3ea53379026ea2464ab1e69d3a5974e341c",
+        "script_sha256": [
+          "dcd3a88d477ef0ed1af0a45a7c32d06d387a5ca51033f37c63d0d5be29a040b2"
+        ],
+        "source_doc_id": "28265228839826899",
+        "variable_schema_equal": true,
+        "response_scope_fields_present": [
+          "data.payment_account.billable_account.id",
+          "data.payment_account.billing_payment_method_options",
+          "data.payment_account.id",
+          "data.payment_account.payment_legacy_account_id"
+        ],
+        "live_response_verified": false
+      }
     },
     "READ_SDC_CANDIDATES": {
       "doc_id": "25160732503612508",

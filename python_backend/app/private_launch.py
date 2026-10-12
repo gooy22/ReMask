@@ -1266,6 +1266,9 @@ class PrivateLaunchService:
         if getattr(contracts, "protocol", None) == "private_ads_manager_versioned":
             from .private_ads_launch import AdsManagerLaunch
             self.ads_manager = AdsManagerLaunch(self)
+            from .private_ads_reads import AdsManagerReadCatalog
+            self.reads = AdsManagerReadCatalog(self.ads_manager.catalog)
+            self.resources = AdvertisingResourceStore(self.reads)
         self._preflight_cache: dict[
             tuple[str, str, str, str, str, str, str],
             tuple[float, int, dict[str, Any]],
@@ -1457,6 +1460,9 @@ class PrivateLaunchService:
 
     async def run_delivery(self, *, item_id, profile_id, context, session, payload, task_idempotency_key=None):
         """Change delivery of this worker's existing objects; never create new ones."""
+        if self.ads_manager is not None:
+            return await self.ads_manager.run_delivery(profile_id=profile_id, context=context, session=session,
+                payload=payload, task_idempotency_key=task_idempotency_key)
         del item_id
         from .private_launch_extensions import OperationKey
         from .private_launch_verify import proof, _complete

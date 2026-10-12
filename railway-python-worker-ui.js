@@ -1061,7 +1061,11 @@ function pythonWorkerRenderJob(job) {
             ACTIVATE_ADSET:'Статус группы',ACTIVATE_AD:'Статус объявления',
             DRAFT:'Черновик рекламы',FRAGMENT_CAMPAIGN:'Черновик кампании',
             FRAGMENT_AD_SET:'Черновик группы',FRAGMENT_AD:'Черновик объявления',
-            PUBLISH:'Публикация рекламы',IMAGE:'Загрузка изображения'};
+            PUBLISH:'Публикация рекламы',IMAGE:'Загрузка изображения',
+            VIDEO_START:'Подготовка видео',VIDEO_FINISH:'Обработка видео',
+            DELIVERY_AD_FRAGMENT:'Черновик статуса объявления',DELIVERY_AD_PUBLISH:'Статус объявления',
+            DELIVERY_ADSET_FRAGMENT:'Черновик статуса группы',DELIVERY_ADSET_PUBLISH:'Статус группы',
+            DELIVERY_CAMPAIGN_FRAGMENT:'Черновик статуса кампании',DELIVERY_CAMPAIGN_PUBLISH:'Статус кампании'};
           const details=document.createElement('details');
           const summary=document.createElement('summary');summary.textContent='Шаги рекламы';
           const pre=document.createElement('pre');
@@ -1069,11 +1073,11 @@ function pythonWorkerRenderJob(job) {
             const parts=String(step.step||'').split(':');
             const operation=parts[0]==='ADS_MANAGER'?parts[1]:parts[0];
             const publication=step.publication||{};
-            const description=publication.code==='PUBLISH_PENDING'?'Meta обрабатывает публикацию'
+            const description=step.phase_receipt===true?'Диапазон загрузки принят':publication.code==='PUBLISH_PENDING'?'Meta обрабатывает публикацию'
               :publication.code==='PUBLISH_FAILED'?'Meta отклонила публикацию'
               :step.verified===true?'Подтверждено'
               :step.submitted===true?'Отправлено, результат уточняется':String(step.status||'');
-            return [(labels[operation]||operation),'РК '+step.ad_account_id,description].join(' · ');
+            return [(labels[operation]||(operation.startsWith('VIDEO_TRANSFER_')?'Передача видео':operation)),'РК '+step.ad_account_id,description].join(' · ');
           }).join('\n');
           details.appendChild(summary);details.appendChild(pre);errorTd.appendChild(details);
         }

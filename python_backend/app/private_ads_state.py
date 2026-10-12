@@ -25,7 +25,7 @@ class AdsManagerSubmitter:
         self.actor_id = actor_id
 
     async def submit(self, client, *, operation, path, params, receipt, files=None,
-                     media_digest=""):
+                     media_digest="", multipart=False):
         if not re.fullmatch(r"[A-Z][A-Z0-9_]{0,50}(?::[a-f0-9]{64})?", operation):
             raise fail("INVALID_OPERATION", "Advertising journal operation is malformed")
         params = copy.deepcopy(params)
@@ -33,9 +33,11 @@ class AdsManagerSubmitter:
         # Encoding before a claim catches invalid values without poisoning
         # the no-replay journal. Credentials are exclusively client memory.
         encoded = flatten_params(params)
+        parts = {key: {"filename": value[0], "mime_type": value[2] if len(value) > 2 else ""}
+                 for key, value in (files or {}).items()}
         fingerprint = hashlib.sha256(json.dumps({"target": self.target,
             "launch": self.launch_fingerprint, "source": self.source_digest, "actor_id": self.actor_id,
-            "path": path, "params": encoded, "media_digest": media_digest},
+            "path": path, "params": encoded, "media_digest": media_digest, "multipart": multipart, "file_parts": parts},
             sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         prior = await self.state.step(self.launch_key, key)
         if prior:
@@ -61,7 +63,10 @@ class AdsManagerSubmitter:
             claimed = True
 
         try:
-            response = await client.post(path, params, before_submit=claim, files=files)
+            options = {"before_submit": claim, "files": files}
+            if multipart:
+                options["multipart"] = True
+            response = await client.post(path, params, **options)
         except Exception:
             if claimed:
                 raise fail("RECONCILE_REQUIRED", "Advertising response was lost; resume requires independent inspection") from None
@@ -70,7 +75,7 @@ class AdsManagerSubmitter:
             raise fail("SUBMIT_CLAIM_REQUIRED", "Advertising sender did not claim its submission")
         try:
             result = receipt(response)
-            allowed = {"draft_id", "fragment_id", "ad_object_id", "operation_id", "image_hash", "video_id"}
+            allowed = {"draft_id", "fragment_id", "ad_object_id", "operation_id", "image_hash", "video_id", "upload_session_id", "start_offset", "end_offset", "old_status"}
             if (not isinstance(result, dict) or not result or set(result) - allowed
                     or any(not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,160}", value)
                            for value in result.values())):

@@ -1,21 +1,22 @@
 {
   "version": 1,
-  "revision": "meta-launch-2026-10-12-private-image-carousel-paused",
+  "revision": "meta-launch-2026-10-13-private-media-source",
   "steps": {},
   "operations": {},
   "reads": {},
   "creative_formats": [
     "SINGLE",
-    "CAROUSEL"
+    "CAROUSEL",
+    "INSTAGRAM_POST"
   ],
   "pending_evidence": [
     "LIVE_INITIALIZER_LAYOUT",
     "LIVE_IMAGE_PAUSED_CANARY",
-    "VIDEO_UPLOAD",
-    "INSTAGRAM_POST",
-    "ACTIVATION",
-    "SELECTED_ASSET_QUERIES",
-    "LIVE_CAROUSEL_PAUSED_CANARY"
+    "LIVE_CAROUSEL_PAUSED_CANARY",
+    "LIVE_VIDEO_PAUSED_CANARY",
+    "LIVE_INSTAGRAM_POST_PAUSED_CANARY",
+    "LIVE_RESOURCE_RESPONSES",
+    "LIVE_DELIVERY_READBACK"
   ],
   "protocol": "private_ads_manager_versioned"
 }
