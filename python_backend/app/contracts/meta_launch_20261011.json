@@ -1,9 +1,20 @@
 {
   "version": 1,
-  "revision": "meta-launch-2026-10-12-offline",
+  "revision": "meta-launch-2026-10-12-private-image-paused",
   "steps": {},
   "operations": {},
   "reads": {},
-  "creative_formats": ["SINGLE"],
-  "pending_evidence": ["CAMPAIGN", "ADSET", "CREATIVE", "AD", "MEDIA_UPLOAD", "ACTIVATION", "FAMILY_PUBLICATION", "ACCOUNT_PAGES", "ASSET_QUERIES"]
+  "creative_formats": [
+    "SINGLE"
+  ],
+  "pending_evidence": [
+    "LIVE_INITIALIZER_LAYOUT",
+    "LIVE_IMAGE_PAUSED_CANARY",
+    "VIDEO_UPLOAD",
+    "CAROUSEL",
+    "INSTAGRAM_POST",
+    "ACTIVATION",
+    "SELECTED_ASSET_QUERIES"
+  ],
+  "protocol": "private_ads_manager_versioned"
 }
