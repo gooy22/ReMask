@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import AsyncMock, patch
 
 from app.private_ads_draft import fragment_params, flatten_params, publication_status, publish_params
 from app.private_ads_http import context_from_document
@@ -212,7 +213,8 @@ class PublisherTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_pending_publication_resumes_status_without_new_post(self):
         self.client.pending = True
-        with self.assertRaises(ProvisioningError) as error:await self.launch()
+        with patch("app.private_ads_publication.asyncio.sleep", new=AsyncMock()):
+            with self.assertRaises(ProvisioningError) as error:await self.launch()
         self.assertEqual(error.exception.code, "PRIVATE_ADS_DRAFT_PUBLISH_PENDING")
         self.assertEqual(len(self.client.posts), 5)
         self.client.pending = False

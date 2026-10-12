@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import copy
 import json
+import asyncio
+import time
 
 from .action_result import ActionResult
 from .private_ads_draft import (FRAGMENT_FIELDS, LEVELS, PUBLISH_FIELDS, fail,
@@ -107,10 +109,16 @@ class AdsManagerDraftPublisher:
         publication = await self.submitter.submit(client, operation="PUBLISH",
             path="/" + draft_id + "/publish", params=publish_params(fragments),
             receipt=lambda row: {"operation_id": identity(row.get("async_request_set_id"))})
-        response = await client.get("/addraft_" + draft_id + "/addraft_publish_statuses",
-            {"async_request_set_ids": [publication["operation_id"]], "fields": PUBLISH_FIELDS, "date_format": "U"})
-        progress = publication_status(response, operation_id=publication["operation_id"], fragment_ids=fragments)
-        if not progress["completed"]:
+        for attempt in range(12):
+            response = await client.get("/addraft_" + draft_id + "/addraft_publish_statuses",
+                {"async_request_set_ids": [publication["operation_id"]], "fields": PUBLISH_FIELDS, "date_format": "U"})
+            progress = publication_status(response, operation_id=publication["operation_id"], fragment_ids=fragments)
+            await self._progress(progress)
+            if progress["completed"]:
+                break
+            if attempt < 11:
+                await asyncio.sleep(3)
+        else:
             raise fail("PUBLISH_PENDING", "Meta is processing the saved publication; retry resumes its reads", True)
         proof = await verify_objects(client, copy.deepcopy(objects), copy.deepcopy(levels))
         ids = proof.get("entities") if isinstance(proof, dict) else None
@@ -125,3 +133,21 @@ class AdsManagerDraftPublisher:
         return {"status": "SUCCESS", "entities": clean, "draft_id": draft_id,
                 "publication_id": publication["operation_id"], "verified": True,
                 "browser_started": False, "transport": "private_ads_manager_http_h2"}
+
+    async def _progress(self, progress):
+        state, launch_key = self.submitter.state, self.submitter.launch_key
+        prior = await state.step(launch_key, OperationKey("ADS_MANAGER:PUBLISH"))
+        if not prior:
+            raise fail("RECONCILE_REQUIRED", "Publication progress has no saved operation")
+        evidence = copy.deepcopy(prior["result"].get("evidence", {}))
+        old = evidence.get("publication", {})
+        evidence["publication"] = {"operation_id": progress["operation_id"],
+            "status": progress["status"], "code": "PUBLISH_COMPLETED" if progress["completed"] else "PUBLISH_PENDING",
+            "poll_count": int(old.get("poll_count", 0)) + 1, "last_polled_at": int(time.time())}
+        evidence.pop("verification", None)
+        result = ActionResult.reconcile(prior["step"], code="PRIVATE_ADS_DRAFT_OBJECTS_UNVERIFIED"
+            if progress["completed"] else "PRIVATE_ADS_DRAFT_PUBLISH_PENDING",
+            message="Publication accepted; independent object verification pending", submitted=True, evidence=evidence)
+        result.entity_id = prior.get("entity_id") or progress["operation_id"]
+        if not await state.finish_read(prior, result):
+            raise fail("READ_PENDING", "Another worker updated publication progress", True)

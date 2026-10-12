@@ -95,7 +95,7 @@ class AdsManagerPrivateHttp:
         final = urlsplit(final_url)
         gate = _auth_gate(final_url, body)
         if gate:
-            raise fail("SESSION_UNAVAILABLE", "Ads Manager requires restoration of the profile session", True)
+            raise fail(gate, "Ads Manager requires restoration of the profile session", True)
         if (status != 200 or len(body.encode()) > 5_000_000 or final.scheme != "https"
                 or final.hostname not in {"adsmanager.facebook.com", "business.facebook.com"}
                 or final.path != "/adsmanager/manage/campaigns"
@@ -138,7 +138,8 @@ class AdsManagerPrivateHttp:
         if before_submit is not None:
             await before_submit()
         try:
-            async with session.request(method, url, headers=headers, allow_redirects=False, **options) as response:
+            async with session.request(method, url, headers=headers, allow_redirects=False,
+                                       request_timeout_seconds=300 if files else 60, **options) as response:
                 if response.http_version != "HTTP/2":
                     raise fail("PROTOCOL_UNAVAILABLE", "Advertising origin did not negotiate HTTP/2", True)
                 raw = await response.content.read(2_000_001)

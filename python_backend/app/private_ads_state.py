@@ -26,7 +26,7 @@ class AdsManagerSubmitter:
 
     async def submit(self, client, *, operation, path, params, receipt, files=None,
                      media_digest=""):
-        if not re.fullmatch(r"[A-Z][A-Z0-9_:]{0,119}", operation):
+        if not re.fullmatch(r"[A-Z][A-Z0-9_]{0,50}(?::[a-f0-9]{64})?", operation):
             raise fail("INVALID_OPERATION", "Advertising journal operation is malformed")
         params = copy.deepcopy(params)
         key = OperationKey("ADS_MANAGER:" + operation)
