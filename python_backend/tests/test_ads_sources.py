@@ -56,6 +56,61 @@ class LaunchAuditFailureTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(json.loads(logger.info.call_args.args[-1])['code'],'PROFILE_PROXY_UNAVAILABLE')
 
 
+class AdsBootstrapAuditTests(unittest.IsolatedAsyncioTestCase):
+    async def probe(self, *, error=None, inventory=True):
+        from app.private_ads_http import AdsManagerContext
+        context = SimpleNamespace(cookies={'c_user': '123456'})
+        web = SimpleNamespace(bootstrap=AsyncMock(), graphql=AsyncMock(), fetch_text=AsyncMock())
+        session = SimpleNamespace(facebook_web=AsyncMock(return_value=web))
+        class FixtureSession:
+            async def __aenter__(self): return session
+            async def __aexit__(self, *args): pass
+        client = SimpleNamespace(context=AdsManagerContext('123456789', '987654321', '123456',
+            'https://adsmanager-graph.facebook.com', 'v22.0', '654321', 'synthetic-session-secret'))
+        pool = SimpleNamespace(profile_locks={'19': asyncio.Lock()},
+            resolver=SimpleNamespace(resolve=AsyncMock(return_value=context)),
+            private_launch=SimpleNamespace(contracts=SimpleNamespace(status=lambda: {}),
+                _inventory_row=lambda *args: {} if inventory else None))
+        with patch.dict(os.environ, {'REMASK_LAUNCH_HTTP_AUDIT_PROFILE': '19',
+                'REMASK_LAUNCH_HTTP_AUDIT_ACCOUNT': '123456789', 'REMASK_LAUNCH_HTTP_AUDIT_BUSINESS': '987654321',
+                'REMASK_LAUNCH_HTTP_AUDIT_ADS_BOOTSTRAP': '1', 'REMASK_LAUNCH_HTTP_AUDIT_SOURCES': '1',
+                'REMASK_LAUNCH_HTTP_AUDIT_SAVED': '0'}), \
+             patch('app.contract_maintenance.launch_http_audit.ProfileSession', return_value=FixtureSession()), \
+             patch('app.private_ads_http.AdsManagerPrivateHttp.open', new=AsyncMock(return_value=client, side_effect=error)) as opened, \
+             patch('app.contract_maintenance.launch_http_audit.collect_sources', new=AsyncMock()) as sources, \
+             patch('app.contract_maintenance.launch_http_audit.inspect_pages', new=AsyncMock()) as pages, \
+             patch('app.contract_maintenance.launch_http_audit.inspect_methods', new=AsyncMock()) as methods, \
+             patch('app.contract_maintenance.launch_http_audit.log') as logger:
+            await run(pool)
+        sources.assert_not_awaited(); pages.assert_not_awaited(); methods.assert_not_awaited()
+        web.bootstrap.assert_not_awaited(); web.graphql.assert_not_awaited()
+        self.assertNotIn('synthetic-session-secret', str(logger.info.call_args_list))
+        self.assertIn('mutation_posts=0', logger.info.call_args.args[0])
+        return opened, json.loads(logger.info.call_args.args[-1])
+
+    async def test_supported_fresh_context_is_reported_without_session_credentials_or_payment_reads(self):
+        opened, result = await self.probe()
+        opened.assert_awaited_once()
+        self.assertEqual(opened.await_args.kwargs, {'account_id': '123456789',
+            'business_id': '987654321', 'actor_id': '123456'})
+        self.assertEqual(result['code'], 'ADS_MANAGER_BOOTSTRAP_READY')
+        self.assertTrue(result['account_scope_verified'])
+        self.assertTrue(result['actor_verified'])
+
+    async def test_foreign_target_inventory_prevents_document_fetch(self):
+        opened, result = await self.probe(inventory=False)
+        opened.assert_not_awaited()
+        self.assertEqual(result['code'], 'PRIVATE_ADS_DRAFT_ACCOUNT_CONTEXT_UNAVAILABLE')
+
+    async def test_dead_proxy_diagnostic_stops_after_one_read_attempt(self):
+        error = RemoteRequestError('secret-proxy-user', meta_payload={'transport_failure': {'kind': 'ProxyError'}},
+            request_may_have_been_sent=False, transport_stage='bootstrap')
+        opened, result = await self.probe(error=error)
+        opened.assert_awaited_once()
+        self.assertEqual(result['code'], 'PROFILE_PROXY_UNAVAILABLE')
+        self.assertTrue(result['post_not_sent'])
+
+
 class AdsSourceTests(unittest.TestCase):
     def test_only_observed_unambiguous_public_resources_are_followed(self):
         resources = {"1": {"type": "js", "src": "https://static.xx.fbcdn.net/editor.js"},
