@@ -68,12 +68,23 @@ function remaskPrivatePaymentSelectorContainer(){
 function remaskPrivateRenderPaymentSelector(row,methods){
     const safe=(Array.isArray(methods)?methods:[]).filter(method=>
         method&&/^\d{4}$/.test(String(method.last4||'')));
-    const container=remaskPrivatePaymentSelectorContainer();
-    if(!container||!safe.length)return;
     const key=remaskPrivatePaymentKey(row.profile,row.ad_account_id);
+    let current=remaskPrivateSelectedPayment(row.profile,row.ad_account_id);
+    if(current&&!safe.some(method=>String(method.last4)===current.last4&&
+        (!current.type||String(method.type||'').toLowerCase()===current.type.toLowerCase()))){
+        delete remaskPrivatePaymentSelections[key];
+        remaskPrivatePendingClear();
+        current=null;
+    }
+    const container=remaskPrivatePaymentSelectorContainer();
+    if(!container)return;
     let block=Array.from(container.children||[]).find(
         node=>node?.dataset?.paymentKey===key
     );
+    if(!safe.length){
+        if(block)block.hidden=true;
+        return;
+    }
     if(!block){
         block=document.createElement('div');
         block.dataset.paymentKey=key;
@@ -100,13 +111,11 @@ function remaskPrivateRenderPaymentSelector(row,methods){
             if(typeof validateReady==='function')validateReady();
         });
     }
+    block.hidden=false;
     const select=Array.from(block.children||[]).find(
         node=>node?.dataset?.paymentSelect==='1'
     );
     if(!select)return;
-    const current=remaskPrivateSelectedPayment(
-        row.profile,row.ad_account_id
-    );
     select.textContent='';
     const placeholder=document.createElement('option');
     placeholder.value='';
@@ -122,7 +131,7 @@ function remaskPrivateRenderPaymentSelector(row,methods){
         if(
             current
             && current.last4===String(method.last4)
-            && (!current.type||current.type===String(method.type||''))
+            && (!current.type||current.type.toLowerCase()===String(method.type||'').toLowerCase())
         ) option.selected=true;
         select.appendChild(option);
     });

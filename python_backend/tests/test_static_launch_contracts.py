@@ -63,3 +63,23 @@ class StaticLaunchTests(unittest.TestCase):
             with self.assertRaises(ProvisioningError) as caught:
                 _effective_launch_payload(launch)
             self.assertEqual(caught.exception.code, 'PRIVATE_LAUNCH_MEDIA_CONTRACT_REQUIRED')
+
+    def test_omitting_format_cannot_bypass_local_media_or_carousel_guard(self):
+        for fields, code in (({'staged_media': [{'id': 'm-local'}]}, 'PRIVATE_LAUNCH_MEDIA_CONTRACT_REQUIRED'),
+                             ({'media_library_id': 'm-local'}, 'PRIVATE_LAUNCH_MEDIA_CONTRACT_REQUIRED'),
+                             ({'carousel_media_library_ids': ['m-local']}, 'PRIVATE_LAUNCH_MEDIA_CONTRACT_REQUIRED'),
+                             ({'carousel_cards': [{'link': 'https://example.test/'}]}, 'PRIVATE_LAUNCH_CAROUSEL_CONTRACT_REQUIRED')):
+            with self.subTest(fields=fields):
+                launch = {section: {'name': 'fixture'} for section in ('campaign', 'adset', 'creative', 'ad')}
+                launch['creative'].update(fields)
+                with self.assertRaises(ProvisioningError) as caught:
+                    _effective_launch_payload(launch)
+                self.assertEqual(caught.exception.code, code)
+
+    def test_non_scalar_creative_format_is_a_validation_error(self):
+        for value in ({}, [], True):
+            launch = {section: {'name': 'fixture'} for section in ('campaign', 'adset', 'creative', 'ad')}
+            launch['creative']['format'] = value
+            with self.assertRaises(ProvisioningError) as caught:
+                _effective_launch_payload(launch)
+            self.assertEqual(caught.exception.code, 'PRIVATE_LAUNCH_CREATIVE_FORMAT_INVALID')
