@@ -174,8 +174,6 @@ def resolved_creative(creative, page_id, media, instagram=None):
             result["url_tags"] = creative["url_tags"]
         return result
     if kind == "SINGLE":
-        if references and (creative.get("existing_image_hash") or creative.get("existing_video_id")):
-            raise fail("CREATIVE_INVALID", "Local media and existing assets cannot compete")
         if len(media) != 1:
             raise fail("CREATIVE_INVALID", "Single creative requires one confirmed media item")
         return (video_creative(creative, page_id, media[0]) if media[0].get("video_id")

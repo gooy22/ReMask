@@ -31,7 +31,7 @@ class ImageClient(DraftClient):
         if path in {'/777771','/777772','/777773'}:
             level = {'/777771':'campaign','/777772':'ad_set','/777773':'ad'}[path]
             fragment = next(row for row in self.fragments.values() if row['ad_object_type'] == level)
-            values = {row['field']:json.loads(row['new_value']) for row in fragment['values']}
+            values = {row['field']:copy.deepcopy(row['new_value']) for row in fragment['values']}
             if level == 'ad':
                 self.expected_creative = values['creative']
                 values['creative'] = {'id':'777774'}
@@ -128,3 +128,16 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
             await self.launch()
         self.assertEqual(self.client.uploads,1)
         self.assertEqual(len(self.client.posts),5)
+
+    async def test_saved_publication_resumes_without_billing_or_local_bytes(self):
+        result = await self.launch()
+        self.assertTrue(result['verified'])
+        self.media.path.unlink()
+        with patch('app.static_payment_read.inspect_methods', new=AsyncMock(side_effect=RuntimeError('synthetic billing outage'))), \
+             patch('app.private_launch_media.LaunchMediaResolver.resolve', new=AsyncMock(side_effect=FileNotFoundError())):
+            recovered = await self.launch()
+        self.assertTrue(recovered['verified'])
+        self.assertTrue(recovered['preflight']['resume_read_only'])
+        self.assertFalse(recovered['preflight']['payment_checked_live'])
+        self.assertEqual(self.client.uploads, 1)
+        self.assertEqual(len(self.client.posts), 5)

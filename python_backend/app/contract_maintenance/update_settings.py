@@ -95,7 +95,15 @@ def compile_candidate(sources_dir):
             schemas.append(names)
         except (KeyError, AttributeError):
             continue
-    if schemas != [set(output['operations']['READ_BM']['variables'])]:
+    installed = output['operations']['READ_BM']
+    # The UI preload binds four explicit arguments. New optional artifact
+    # defaults are independently source-reviewed and remain literal defaults;
+    # they are not invented explicit preload bindings.
+    defaults = installed.get('source_refresh', {}).get('installed_literal_defaults', {})
+    if not isinstance(defaults, dict) or any(key not in installed['variables'] or
+            (installed['variables'][key] != value or type(installed['variables'][key]) is not type(value)) for key, value in defaults.items()):
+        raise ValueError('Reviewed BM artifact defaults differ from installed variables')
+    if schemas != [set(installed['variables']) - set(defaults)]:
         raise ValueError('Observed top-level BM enumeration schema changed')
     output['operations']['READ_BM']['doc_id']=ids[0]
     output['operations']['READ_BM']['source_sha256']=hashlib.sha256(source.removeprefix('// Public selector metadata, preload sender and providers. Response not yet observed.\n').encode()).hexdigest()

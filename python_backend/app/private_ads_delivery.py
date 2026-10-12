@@ -7,26 +7,29 @@ import hashlib
 import json
 
 from .private_ads_draft import (FRAGMENT_FIELDS, PUBLISH_FIELDS, fail, fragment_params,
-                                identity, publication_status, publish_params)
+                                fragment_values_match, identity, publication_receipt, publication_status, publish_params)
 from .private_ads_http import AdsManagerPrivateHttp
 from .private_ads_publication import AdsManagerDraftPublisher
 from .private_ads_state import AdsManagerSubmitter
+from .private_ads_verify import _same
 from .private_launch_extensions import OperationKey
 
 
-async def _chain(client, entities, page_id):
+async def _chain(client, entities, page_id, bindings=None):
     account = client.context.account_id
     rows = {}
     for section in ("campaign", "adset", "ad", "creative"):
         fields = ["id", "account_id"]
         if section != "creative":
-            fields.append("status")
+            fields += ["status", "effective_status"]
         if section in {"adset", "ad"}:
             fields.append("campaign_id")
         if section == "ad":
             fields += ["adset_id", "creative{id}"]
         if section == "creative":
             fields += ["object_id", "object_story_spec"]
+        expected = (bindings or {}).get(section, {})
+        fields = sorted(set(fields) | (set(expected) - {"creative"}))
         row = await client.get("/" + entities[section + "_id"], {"fields": fields})
         if (row.get("id") != entities[section + "_id"] or not isinstance(row.get("account_id"), str)
                 or row["account_id"].removeprefix("act_") != account):
@@ -42,6 +45,9 @@ async def _chain(client, entities, page_id):
             story = row.get("object_story_spec")
             if not ((isinstance(story, dict) and story.get("page_id") == page_id) or row.get("object_id") == page_id):
                 raise fail("DELIVERY_PAGE_MISMATCH", "Saved creative does not confirm the selected Page")
+        if any(field not in row or not _same(row[field], value, field)
+               for field, value in expected.items() if field not in {"status", "creative"}):
+            raise fail("DELIVERY_SPEC_MISMATCH", "Owned advertising settings changed since the verified source job")
         rows[section] = row
     return rows
 
@@ -80,6 +86,21 @@ async def run_delivery(launch, *, profile_id, context, session, payload, task_id
     if len(set(entities.values())) != 4:
         raise fail("DELIVERY_SOURCE_UNVERIFIED", "Source object identities are ambiguous")
     draft_id = identity(draft["result"]["evidence"]["receipt"].get("draft_id"))
+    bindings = {}
+    for section, operation in (("campaign", "FRAGMENT_CAMPAIGN"), ("adset", "FRAGMENT_AD_SET"), ("ad", "FRAGMENT_AD")):
+        record = await state.step(source_key, OperationKey("ADS_MANAGER:" + operation))
+        facts = (record or {}).get("result", {}).get("evidence", {})
+        values = facts.get("binding", {}).get("values")
+        if (not record or record.get("status") != "SUCCESS" or facts.get("actor_id") != actor
+                or facts.get("source_digest") != launch.source_digest
+                or facts.get("launch_fingerprint") != evidence.get("launch_fingerprint")
+                or facts.get("verification", {}).get("ad_object_id") != entities[section + "_id"]
+                or not isinstance(values, dict) or not values):
+            raise fail("DELIVERY_SOURCE_UNVERIFIED", "Source has no verified settings binding for every owned level")
+        bindings[section] = values
+    bindings["creative"] = bindings["ad"].get("creative", {})
+    if not isinstance(bindings["creative"], dict) or not bindings["creative"]:
+        raise fail("DELIVERY_SOURCE_UNVERIFIED", "Source has no verified creative settings")
     fingerprint = hashlib.sha256(json.dumps({"source": source_key, "target": target,
         "entities": entities, "delivery": desired}, sort_keys=True).encode()).hexdigest()
     await state.bind_plan(key, target, fingerprint, hashlib.sha256((launch.source_digest + actor).encode()).hexdigest())
@@ -106,7 +127,7 @@ async def run_delivery(launch, *, profile_id, context, session, payload, task_id
         if (not isinstance(row.get("id"), str) or row["id"].removeprefix("act_") != target["ad_account_id"]
                 or not isinstance(row.get("business"), dict) or row["business"].get("id") != target["business_id"]):
             raise fail("DELIVERY_SCOPE_MISMATCH", "Delivery account did not confirm its exact Business")
-    rows = await _chain(client, entities, target["page_id"])
+    rows = await _chain(client, entities, target["page_id"], bindings)
     sender = AdsManagerSubmitter(state, launch_key=key, profile_id=profile_id,
         business_id=target["business_id"], account_id=target["ad_account_id"], actor_id=actor,
         launch_fingerprint=fingerprint, source_digest=launch.source_digest)
@@ -125,7 +146,7 @@ async def run_delivery(launch, *, profile_id, context, session, payload, task_id
         level = "ad_set" if section == "adset" else section
         params = fragment_params(draft_id, level=level, action="modify", object_id=entities[section + "_id"],
                                  values={"status": desired[section]})
-        params["values"][0]["old_value"] = json.dumps(old)
+        params["values"][0]["old_value"] = old
         receipt = await sender.submit(client, operation=operation + "_FRAGMENT",
             path="/" + draft_id + "/addraft_fragments", params=params,
             receipt=lambda row: {"fragment_id": identity(row.get("id")), "old_status": old})
@@ -134,14 +155,13 @@ async def run_delivery(launch, *, profile_id, context, session, payload, task_id
                 or fragment.get("ad_draft_id") != draft_id or fragment.get("ad_object_id") != entities[section + "_id"]
                 or fragment.get("ad_object_type") != level):
             raise fail("DELIVERY_FRAGMENT_MISMATCH", "Status fragment does not belong to the saved advertising object")
-        values = fragment.get("values")
-        if (not isinstance(values, list) or len(values) != 1 or not isinstance(values[0], dict)
-                or values[0].get("field") != "status" or values[0].get("new_value") != json.dumps(desired[section])):
+        if not fragment_values_match(fragment.get("values"), {"status": desired[section]},
+                business_id=target["business_id"], old_values={"status": old}):
             raise fail("DELIVERY_FRAGMENT_MISMATCH", "Status fragment differs from the requested delivery")
         await publisher._confirm(operation + "_FRAGMENT", {"fragment_id": receipt["fragment_id"]})
         publication = await sender.submit(client, operation=operation + "_PUBLISH",
             path="/" + draft_id + "/publish", params=publish_params([receipt["fragment_id"]]),
-            receipt=lambda row: {"operation_id": identity(row.get("async_request_set_id"))})
+            receipt=publication_receipt)
         for attempt in range(12):
             response = await client.get("/addraft_" + draft_id + "/addraft_publish_statuses",
                 {"async_request_set_ids": [publication["operation_id"]], "fields": PUBLISH_FIELDS, "date_format": "U"})
@@ -152,14 +172,16 @@ async def run_delivery(launch, *, profile_id, context, session, payload, task_id
                 await asyncio.sleep(3)
         else:
             raise fail("PUBLISH_PENDING", "Saved delivery publication is still processing; resume its reads", True)
-        rows = await _chain(client, entities, target["page_id"])
+        rows = await _chain(client, entities, target["page_id"], bindings)
         if rows[section]["status"] != desired[section]:
             raise fail("DELIVERY_UNCONFIRMED", "Independent read has not confirmed the requested state", True)
         await publisher._confirm(operation + "_PUBLISH", {"entity_id": entities[section + "_id"], "status": desired[section]})
         completed.append({"step": operation, "status": "SUCCESS", "entity_id": entities[section + "_id"]})
-    rows = await _chain(client, entities, target["page_id"])
+    rows = await _chain(client, entities, target["page_id"], bindings)
     if any(rows[section]["status"] != desired[section] for section in desired):
         raise fail("DELIVERY_UNCONFIRMED", "Final delivery states differ from this request", True)
     return {"status": "SUCCESS", "verified": True, "entities": entities, **target,
-            "delivery": desired, "steps": completed, "source_launch_key": source_key,
+            "delivery": desired, "effective_statuses": {section: rows[section].get("effective_status")
+                for section in ("campaign", "adset", "ad")}, "delivery_running_verified": False,
+            "steps": completed, "source_launch_key": source_key,
             "delivery_key": key, "browser_started": False, "transport": "private_ads_manager_http_h2"}

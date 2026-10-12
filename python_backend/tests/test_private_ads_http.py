@@ -119,6 +119,13 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
                                before_submit=self.claim, files={'video_file_chunk': ('chunk', b'synthetic', 'video/mp4')})
         self.assertEqual(self.web.session.calls[-1][2]['headers']['X_FB_VIDEO_WATERFALL_ID'], waterfall)
 
+    async def test_read_only_publication_session_cannot_claim_any_post(self):
+        self.client.read_only = True
+        with self.assertRaises(ProvisioningError):
+            await self.client.post('/act_111111/addrafts', {}, before_submit=self.claim)
+        self.assertEqual(self.claims, 0)
+        self.assertEqual(self.web.session.calls, [])
+
 
 class PublishedReads(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):

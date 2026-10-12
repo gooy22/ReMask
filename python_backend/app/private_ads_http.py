@@ -93,6 +93,7 @@ def context_from_document(body, *, account_id, business_id, actor_id):
 class AdsManagerPrivateHttp:
     def __init__(self, web, context):
         self.web, self.context = web, context
+        self.read_only = False
         self._profile_proxy = web.profile.proxy
         self._cookie_digest = self._cookies()
 
@@ -136,6 +137,8 @@ class AdsManagerPrivateHttp:
             raise fail("INVALID_ROUTE", "Advertising request route is malformed")
         if path.startswith("/act_") and path.split("/")[1] != "act_" + self.context.account_id:
             raise fail("READ_SCOPE_MISMATCH", "Advertising route belongs to another account")
+        if method == "POST" and self.read_only:
+            raise fail("RESUME_READ_ONLY", "Saved publication recovery cannot dispatch another write")
         if method == "POST" and not callable(before_submit):
             raise fail("SUBMIT_CLAIM_REQUIRED", "Advertising writes require the durable submission journal")
         if before_submit is not None and method != "POST":

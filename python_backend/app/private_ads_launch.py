@@ -145,14 +145,14 @@ class AdsManagerLaunch:
             "payment_selection_required": required, "payment_methods": methods,
             "selected_payment_method": selected, "payment_selection_source": source}
 
-    async def _prepare_live(self, *, profile_id, context, session, payload, saved_media=None):
+    async def _prepare_live(self, *, profile_id, context, session, payload, saved_media=None, expected_creative=None):
         target, launch, references, fingerprint = self.prepare(profile_id, payload)
         if self.owner._inventory_row(context, target["business_id"], target["ad_account_id"]) is None:
             raise fail("ACCOUNT_CONTEXT_UNAVAILABLE", "The selected account is absent from this profile inventory")
         actor = identity(str(context.cookies.get("c_user") or ""))
         from .private_launch_media import LaunchMediaResolver
-        media = await LaunchMediaResolver().resolve(references) if references and saved_media is None else []
-        if (saved_media is None and len(media) != len(references)) or any(row.id != reference["id"] or row.media_type not in {"image", "video"}
+        media = await LaunchMediaResolver().resolve(references) if references and saved_media is None and expected_creative is None else []
+        if (saved_media is None and expected_creative is None and len(media) != len(references)) or any(row.id != reference["id"] or row.media_type not in {"image", "video"}
                 for row, reference in zip(media, references)):
             raise fail("MEDIA_FORMAT_UNAVAILABLE", "Managed media type is unsupported")
         web = await session.facebook_web()
@@ -162,6 +162,15 @@ class AdsManagerLaunch:
                 business_id=target["business_id"], actor_id=actor)
         except RemoteRequestError:
             raise fail("TRANSPORT_UNAVAILABLE", "Profile HTTP connection did not reach Ads Manager", True) from None
+        if expected_creative is not None:
+            client.read_only = True
+            row = await client.get("/act_" + target["ad_account_id"], {"fields": ["id", "business"]})
+            if (not isinstance(row.get("id"), str) or row["id"].removeprefix("act_") != target["ad_account_id"]
+                    or not isinstance(row.get("business"), dict) or row["business"].get("id") != target["business_id"]):
+                raise fail("ACCOUNT_SCOPE_UNVERIFIED", "Publication recovery account/Business is unconfirmed")
+            return target, launch, fingerprint, actor, client, [], {**target,
+                "resume_read_only": True, "payment_selection_required": False,
+                "payment_checked_live": False, "expected_creative": copy.deepcopy(expected_creative)}
         preflight = await self._preflight(client, web, payload, target)
         selections = self.owner._asset_selections(launch, bool(references))
         preflight["asset_checks"] = await self.owner._verify_assets(web,
@@ -230,6 +239,14 @@ class AdsManagerLaunch:
             return await self._finish_delivery(profile_id, context, session, payload, target, launch, key,
                 {"status": "SUCCESS", "entities": published["result"]["evidence"]["verification"]["entities"],
                  "launch_key": key, **target, "verified": True, "browser_started": False})
+        required = {"ADS_MANAGER:DRAFT", "ADS_MANAGER:FRAGMENT_CAMPAIGN", "ADS_MANAGER:FRAGMENT_AD_SET",
+                    "ADS_MANAGER:FRAGMENT_AD", "ADS_MANAGER:PUBLISH"}
+        saved = {row["step"]: row for row in saved_steps}
+        expected_creative = None
+        if required <= set(saved):
+            candidate = saved["ADS_MANAGER:FRAGMENT_AD"].get("result", {}).get("evidence", {}).get("binding", {}).get("creative")
+            if isinstance(candidate, dict):
+                expected_creative = candidate
         saved_media = []
         for reference in references:
             candidates = []
@@ -246,7 +263,7 @@ class AdsManagerLaunch:
             saved_media.append(candidates[0])
         target, launch, fingerprint, actor, client, media, proof = await self._prepare_live(
             profile_id=profile_id, context=context, session=session, payload=payload,
-            saved_media=saved_media if references else None)
+            saved_media=saved_media if references else None, expected_creative=expected_creative)
         if proof["payment_selection_required"]:
             raise fail("PAYMENT_SELECTION_REQUIRED", "Choose a currently linked card before creating advertising")
         sender = AdsManagerSubmitter(self.owner.state, launch_key=key, profile_id=profile_id,
@@ -257,8 +274,9 @@ class AdsManagerLaunch:
         for row in media:
             uploaded.append(await upload_video(client, sender, row) if row.media_type == "video"
                             else {"image_hash": await upload_image(client, sender, row)})
-        creative = resolved_creative(selection, target["page_id"], uploaded or proof.get("confirmed_media", []),
-                                     proof.get("instagram_media"))
+        creative = (copy.deepcopy(proof["expected_creative"]) if proof.get("resume_read_only")
+                    else resolved_creative(selection, target["page_id"], uploaded or proof.get("confirmed_media", []),
+                                           proof.get("instagram_media")))
         levels = {"campaign": copy.deepcopy(launch["campaign"]), "ad_set": copy.deepcopy(launch["adset"]),
                   "ad": {**copy.deepcopy(launch["ad"]), "creative": creative}}
         publisher = AdsManagerDraftPublisher(sender)
@@ -277,7 +295,8 @@ class AdsManagerLaunch:
             delivery = await self.run_delivery(profile_id=profile_id, context=context, session=session,
                 payload={**payload, **target, "source_launch_key": key, "delivery_key": delivery_key,
                          "status": "ACTIVE", "delivery": launch["delivery"]})
-            result.update(delivery=delivery["delivery"], delivery_key=delivery_key)
+            result.update(delivery=delivery["delivery"], delivery_key=delivery_key,
+                          effective_statuses=delivery["effective_statuses"], delivery_running_verified=False)
             result["steps"] = result.get("steps", []) + delivery["steps"]
         return result
 

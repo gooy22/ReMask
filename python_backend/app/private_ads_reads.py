@@ -29,7 +29,7 @@ class _ReadClient:
                 business_id=self.business, actor_id=self.actor)
         return await self.http.get(path.removeprefix("/" + self.catalog.data["api_version"]), params or {})
 
-    async def account(self):
+    async def account_record(self):
         row = await self.request("ACCOUNT_READ", params={"fields":
             ["id", "account_status", "business", "ad_account_promotable_objects"]})
         business = row.get("business")
@@ -70,17 +70,21 @@ class AdsManagerReadCatalog:
         if name not in self.rows:
             raise fail("RESOURCE_CONTRACT_REQUIRED", "Reviewed account query is unavailable for " + name)
         client = self.client(web, values)
-        account = await client.account()
+        account = await client.account_record()
         if account.get("account_status") != 1:
             raise fail("ACCOUNT_INACTIVE", "The selected advertising account is not active")
         if name == "instagram_media":
             actors = await self.read(web,"instagram_accounts",{**values,"query":""})
             records, seen = [], set()
+            requests = 0
             for actor in actors["data"]:
                 actor_id = identity(actor.get("id_v2"),"Instagram user V2")
                 params = {"ad_account_id":client.account,"fields":self.catalog.data["resource_fields"][name],"limit":100}
                 cursors = set()
                 for _ in range(5):
+                    requests += 1
+                    if requests > 25:
+                        raise fail("RESOURCE_READ_INCOMPLETE", "Instagram media exceeded its total request budget", True)
                     response = await client.request("INSTAGRAM_MEDIA_READ",values={"instagram_id":actor_id},params=params)
                     items = response.get("data")
                     if not isinstance(items,list) or any(not isinstance(r,dict) for r in items):
@@ -97,7 +101,8 @@ class AdsManagerReadCatalog:
                     if not isinstance(paging,dict):
                         raise fail("RESOURCE_READ_INCOMPLETE", "Instagram media pagination is invalid")
                     if not paging.get("next"): break
-                    cursor = (paging.get("cursors") or {}).get("after")
+                    cursor_data = paging.get("cursors")
+                    cursor = cursor_data.get("after") if isinstance(cursor_data, dict) else None
                     if not isinstance(cursor,str) or not 1 <= len(cursor) <= 4096 or cursor in cursors:
                         raise fail("RESOURCE_READ_INCOMPLETE", "Instagram media pagination is incomplete")
                     cursors.add(cursor); params["after"] = cursor
@@ -177,7 +182,8 @@ class AdsManagerReadCatalog:
                 if not paging.get("next"):
                     break
                 # Never follow a server next URL, which can carry authorization.
-                cursor = paging.get("cursors", {}).get("after")
+                cursor_data = paging.get("cursors")
+                cursor = cursor_data.get("after") if isinstance(cursor_data, dict) else None
                 if (not isinstance(cursor,str) or not 1 <= len(cursor) <= 4096
                         or cursor in cursors):
                     raise fail("RESOURCE_READ_INCOMPLETE", "Account resource pagination is incomplete")

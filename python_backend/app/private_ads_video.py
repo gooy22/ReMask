@@ -40,7 +40,8 @@ async def verify_video(client, video_id):
             raise fail("VIDEO_READ_INCOMPLETE", "Account video pagination is malformed", True)
         if not paging.get("next"):
             break
-        cursor = (paging.get("cursors") or {}).get("after")
+        cursor_data = paging.get("cursors")
+        cursor = cursor_data.get("after") if isinstance(cursor_data, dict) else None
         if not isinstance(cursor, str) or not 1 <= len(cursor) <= 4096 or cursor in cursors:
             raise fail("VIDEO_READ_INCOMPLETE", "Account video cursor is incomplete", True)
         cursors.add(cursor)

@@ -13,6 +13,7 @@ import re
 from .action_result import ActionResult
 from .private_ads_draft import fail, flatten_params
 from .private_launch_extensions import OperationKey
+from .private_ads_verify import stable_request_values
 
 
 class AdsManagerSubmitter:
@@ -37,7 +38,7 @@ class AdsManagerSubmitter:
                  for key, value in (files or {}).items()}
         fingerprint = hashlib.sha256(json.dumps({"target": self.target,
             "launch": self.launch_fingerprint, "source": self.source_digest, "actor_id": self.actor_id,
-            "path": path, "params": encoded, "media_digest": media_digest, "multipart": multipart, "file_parts": parts},
+            "path": path, "params": flatten_params(stable_request_values(params)), "media_digest": media_digest, "multipart": multipart, "file_parts": parts},
             sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         prior = await self.state.step(self.launch_key, key)
         if prior:
@@ -52,6 +53,11 @@ class AdsManagerSubmitter:
         evidence = {"operation_fingerprint": fingerprint,
                     "launch_fingerprint": self.launch_fingerprint,
                     "source_digest": self.source_digest, "actor_id": self.actor_id, "receipt": {}}
+        if operation in {"FRAGMENT_CAMPAIGN", "FRAGMENT_AD_SET", "FRAGMENT_AD"}:
+            values = {entry["field"]: entry.get("new_value") for entry in params.get("values", [])}
+            evidence["binding"] = {"values": stable_request_values(values)}
+            if isinstance(values.get("creative"), dict):
+                evidence["binding"]["creative"] = stable_request_values(values["creative"])
         intent = ActionResult.reconcile(key.value, code="PRIVATE_ADS_DRAFT_SUBMITTING",
             message="Advertising submission has a durable intent", evidence=evidence)
         claimed = False

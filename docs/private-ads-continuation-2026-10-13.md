@@ -28,3 +28,15 @@ No application test suite, live advertising mutation, payment/card submission, b
 Public sender/artifact evidence establishes schema, not successful live behavior. Fresh document initializer layout, actual resource responses, PAUSED image/carousel/video/Instagram canaries and delivery readback still need verification through the assigned working profile proxy.
 
 Saved plans are bound to the complete adapter/catalog digest. Jobs from the earlier deployed adapter revision are intentionally not silently resumed with changed source code. Their receipts remain intact; reconcile them on their matching revision before introducing an explicit migration. Replacing an unknown-reply job with a new key is not a recovery method.
+
+## Subsequent source and CI review
+
+Already completed CI for 82d857b was read without starting new checks. It reported the resource client method/attribute collision, undefined `references` in the resolved single-creative builder, a carousel receipt fixture with a competing filename, and a compiler assuming every installed BM variable was an explicit UI preload binding. Those code/fixture/schema defects are corrected in this continuation. No passing result is claimed for the new revision.
+
+A closer primary-source read also corrected two distinctions in the deployed adapter: outgoing draft `old_value`/`new_value` remain typed JSON (the response-to-UI-cache transform stringifies them only after reply), and raw publication fragment statuses are an array. An async handle is accepted only with explicit success. Exact account/fragment/content checks remain required; receipt alone is not success.
+
+The AD fragment journal retains the source-bound creative specification for subsequent reads, excluding ephemeral credentials and canonicalizing only generated fbcdn media URL query signatures. Destinations and UTM remain exact. Once the complete publication receipts are present, recovery enters an enforced READ-only session: no billing refresh, media materialization, eligibility mutation, upload, draft create or publish is dispatched. Saved request fingerprints and independent object reads still apply.
+
+The current browser account's settings route showed the Create Business Portfolio screen; it did not expose an existing Business settings surface. No portfolio was created for research. The five unobserved definitions remain pending rather than being replaced with guessed IDs.
+
+Activation/pause additionally retain all three source-bound field snapshots and compare current names, budgets, targeting, parents, Creative content and Page against them before publishing a status change. A manually changed specification is blocked rather than silently activated. Configured status and Meta effective status are distinct output fields; successful status configuration does not claim impressions or delivery approval. Source enum evidence already includes effective_status for Campaign, AdSet and Ad, so resource projections include it too.

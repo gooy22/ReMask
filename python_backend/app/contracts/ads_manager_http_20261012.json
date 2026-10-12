@@ -691,7 +691,8 @@
       "configured_status",
       "objective",
       "daily_budget",
-      "lifetime_budget"
+      "lifetime_budget",
+      "effective_status"
     ],
     "adsets": [
       "id",
@@ -702,7 +703,8 @@
       "campaign_id",
       "daily_budget",
       "lifetime_budget",
-      "targeting"
+      "targeting",
+      "effective_status"
     ],
     "ads": [
       "id",
@@ -712,7 +714,8 @@
       "configured_status",
       "campaign_id",
       "adset_id",
-      "creative{id}"
+      "creative{id}",
+      "effective_status"
     ],
     "pixels": [
       "id",
