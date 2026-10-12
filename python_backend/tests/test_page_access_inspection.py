@@ -241,9 +241,13 @@ class PageAccessApiTests(unittest.IsolatedAsyncioTestCase):
         state=SimpleNamespace(latest_profile_fan_pages=AsyncMock(return_value=[
             {'id':PAGE,'main_business_id':BM,'main_business_confirmed':True},
             {'id':'123456','main_business_id':BM,'main_business_confirmed':False}]))
-        with patch.object(api,'pool',SimpleNamespace(resolver=object(),provisioning_state=state)), \
-             patch('app.private_launch_read.inspect_profile_pages_http',AsyncMock(side_effect=asyncio.TimeoutError)):
+        catalog=object()
+        inspector=AsyncMock(side_effect=asyncio.TimeoutError)
+        with patch.object(api,'pool',SimpleNamespace(resolver=object(),provisioning_state=state,
+                                                   private_launch=SimpleNamespace(reads=catalog))), \
+             patch('app.private_launch_read.inspect_profile_pages_http',inspector):
             result=await api.profile_page_access('9','act_'+RK)
+        self.assertIs(inspector.await_args.kwargs['read_catalog'],catalog)
         self.assertEqual(result['account_id'],RK)
         self.assertEqual(result['diagnostic']['code'],'PAGE_ACCESS_INSPECTION_TIMEOUT')
         self.assertFalse(result['ad_account_page_access_verified'])
