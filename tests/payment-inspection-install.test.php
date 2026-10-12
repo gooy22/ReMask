@@ -19,7 +19,7 @@ try {
     file_put_contents($directory.'/html/no-bundle.php','<script src="scripts/unrelated.js?v=keep"></script>');
     $ui=file_get_contents(__DIR__.'/../railway-payment-inspection-ui.js');
     $urls=[];
-    foreach([$ui,$ui."\n// fixture release change\n",$ui."\n// fixture release change\n"] as $index=>$source){
+    foreach([$ui,$ui."\n// fixture release change\n",$ui."\n// fixture release change\n",$ui."\n// fixture release change\n"] as $index=>$source){
         file_put_contents($directory.'/input/railway-payment-inspection-ui.js',$source);
         file_put_contents($directory.'/html/ajax/metaHierarchy.php', <<<'PHP'
 <?php
@@ -43,6 +43,7 @@ function closeModal(){return;}
 async function showFunding(){return;}
 function annotateDeliveryRows(rows){return rows;}
 JS);
+        if($index===3)file_put_contents($directory.'/html/scripts/workspace.js',"\n// Workspace Assets fix\n",FILE_APPEND);
         foreach(['accounts.php'=>'219','workspace.php'=>'221','escaped.php'=>'222'] as $page=>$workerVersion){
             $previous=$urls[$page][$index-1]??('scripts/workspace.js?v=20261004-python-worker-ui-v'.$workerVersion.'-cookie-only-v1-numbered-v1-txt-v3&amp;payment_cards=old-hash');
             $markup='<script src="'.$previous.'"></script><script src="scripts/unrelated.js?v=keep"></script>';
@@ -64,7 +65,7 @@ JS);
         if(!is_file($directory.'/html/ajax/paymentCards.php')||!is_file($directory.'/html/classes/RemaskPaymentCardVault.php'))throw new RuntimeException('Card endpoint or vault not installed');
     }
     foreach($urls as $page=>$versions){
-        if($versions[0]===''||$versions[0]===$versions[1]||$versions[1]!==$versions[2])throw new RuntimeException('Workspace cache invalidation failed for '.$page);
+        if($versions[0]===''||$versions[0]===$versions[1]||$versions[1]!==$versions[2]||$versions[2]===$versions[3])throw new RuntimeException('Workspace cache invalidation failed for '.$page);
         if(!str_contains($versions[1],'-numbered-v1-txt-v3'))throw new RuntimeException('Other bundle versions were lost');
     }
     echo "card installer: changed UI gets a new bundle URL; identical builds stay stable\n";

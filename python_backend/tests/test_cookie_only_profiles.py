@@ -287,3 +287,13 @@ echo json_encode(['token'=>$saved->token,'cookies'=>$saved->cookies,'proxy'=>$sa
                 result=subprocess.run(['bash','-c',command],cwd=self.root,env=self.env,capture_output=True,text=True,timeout=5)
                 if result.returncode: failures.append(command+' '+result.stderr)
         self.assertEqual(failures,[],'Installed runtime contracts failed:\n'+'\n'.join(failures))
+        # The deployed page uses type="module". A classic-script/new Function
+        # check misses duplicate top-level function declarations in an ES module.
+        workspace=(self.root/'scripts/workspace.js').read_text()
+        self.assertEqual(workspace.count('async function fetchAsset('),1)
+        self.assertIn('REMASK_PRIVATE_WORKSPACE_ASSETS_V1',workspace)
+        self.assertIn('type="module"',(self.root/'workspace.php').read_text())
+        self.assertIsNotNone(shutil.which('node'),'Node is required for the installed module syntax contract')
+        result=subprocess.run(['node','--input-type=module','--check'],input=workspace,
+            capture_output=True,text=True,timeout=15)
+        self.assertEqual(result.returncode,0,'Installed Workspace module: '+result.stderr)

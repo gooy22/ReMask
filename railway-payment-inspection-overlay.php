@@ -122,10 +122,9 @@ foreach (['accounts.php', 'workspace.php'] as $name) {
     $html = file_get_contents($path);
     // These pages use custom modals; Bootstrap JS requires absent jQuery.
     $html = str_replace('<script src="styles/bootstrap.min.js"></script>', '', $html);
-    // The workspace bundle is cached by browsers. Every card UI change must
-    // produce a new URL, including deployments that leave the worker UI version
-    // unchanged. A content hash also stays stable across identical builds.
-    $cardHash = substr(hash('sha256', $cardUi), 0, 12);
+    // Hash the complete installed module, so non-card fixes also invalidate
+    // cached bundles when the worker UI version remains unchanged.
+    $cardHash = substr(hash('sha256', $js), 0, 12);
     // PHP templates may escape attribute quotes. Match the asset URL itself
     // and update every reference without depending on HTML quote syntax.
     $html = preg_replace_callback(
