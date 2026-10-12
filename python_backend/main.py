@@ -17,6 +17,7 @@ from app.models import CreateJobRequest, HealthResponse, JobAccepted, RetryRespo
 from app.runner import WorkerPool
 from app.session import ProfileContextError, ProfileSession, ProxyCheckError
 from app.session_auth_refresh import refresh_saved_auth_context
+from app.direct_test import direct_test_result
 from app.store import JobStore
 from app.facebook_business_browser import BROWSER_TERMINAL_ACCESS_CODES, BrowserBusinessError, FacebookBusinessBrowser
 from app.facebook_page_discovery import PageDiscoveryError, list_pages_via_private_graphql
@@ -1166,6 +1167,7 @@ async def ready():
         'worker_concurrency':CONCURRENCY,
         'profiles_visible':len(profiles),
         'profile_resolver':'ok',
+        'network_test':direct_test_result(os.getenv('REMASK_DIRECT_TEST_PROFILE', '')),
         'db_path':str(DB_PATH),
         'revision':str(
             os.getenv('RAILWAY_GIT_COMMIT_SHA')
@@ -1389,7 +1391,9 @@ async def profile_preflight(profile_id: str, purpose: str = 'business'):
         'profile_id':clean_profile,
         'purpose':purpose,
         'profile_context':'ok',
-        'proxy':'ok',
+        'proxy':'direct_test' if proxy_result.get('mode') == 'DIRECT_TEST' else 'ok',
+        'network_mode':proxy_result.get('mode', 'PROXY'),
+        'direct_test_until':proxy_result.get('expires_at', 0),
         'proxy_exit_ip':str(proxy_result.get('exit_ip') or ''),
         'proxy_latency_ms':int(proxy_result.get('latency_ms') or 0),
         'facebook_session':'browser',

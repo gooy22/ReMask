@@ -614,6 +614,9 @@ async function fetchAsset(resource,force=false){
 ASSET_UI;
     $workspace=substr_replace($workspace,$assetUi,$assetStart,$assetEnd-$assetStart);
 }
+$workspaceState=file_get_contents('/tmp/railway-workspace-state.js');
+if (!is_string($workspaceState) || $workspaceState==='') throw new RuntimeException('Workspace state helper missing');
+if (strpos($workspace,'REMASK_WORKSPACE_STATE_V1')===false) $workspace.="\n".$workspaceState;
 file_put_contents($workspacePath,$workspace);
 // Review/submit still have only a legacy Graph implementation. Do not silently
 // use that implementation when the user selected private-worker operation.

@@ -12,6 +12,7 @@ import logging
 from typing import Any
 
 import httpx
+from .direct_test import direct_test_deadline
 
 log = logging.getLogger("remask_worker")
 # HTTPX's INFO messages include full redirect URLs (including session IDs).
@@ -64,6 +65,7 @@ class PrivateHttpClient:
                  pool_size: int) -> None:
         self.proxy = proxy
         self.profile_name = profile_name
+        self.direct_test_until = direct_test_deadline(profile_name) if not proxy else 0
         self.timeout_seconds = timeout_seconds
         limits = httpx.Limits(max_connections=pool_size,
                               max_keepalive_connections=pool_size)
@@ -104,8 +106,10 @@ class PrivateHttpClient:
     async def request(self, method: str, url: str, **kwargs: Any):
         # Profile credentials must never leave through a direct connection,
         # even when a caller bypasses ProfileResolver or drops its proxy.
-        if not self.proxy:
+        if not self.proxy and not self.direct_test_until:
             raise httpx.ProxyError("Private request requires the profile proxy")
+        if self.direct_test_until and direct_test_deadline(self.profile_name) != self.direct_test_until:
+            raise httpx.ProxyError('DIRECT_TEST_EXPIRED')
         requested_proxy = kwargs.pop("proxy", self.proxy)
         if requested_proxy != self.proxy:
             raise httpx.ProxyError("Private request cannot change profile proxy")

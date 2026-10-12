@@ -12,6 +12,7 @@ from .models import ENTITY_RESULT_KEYS, ProvisioningError, ProvisioningStep
 from .funding_handler import validate_funding_result
 from .timeouts import browser_step_timeout, private_create_step_timeout
 from .proxy import ProxyChecker
+from ..direct_test import direct_test_result
 from .registry import get_handler
 from .state import ProvisioningStateStore
 from .transport import ProvisioningTransport, TransportError
@@ -238,10 +239,15 @@ class ProvisioningService:
                         step,
                         {"action_phase": "EXECUTE"},
                     )
-                    result = await ProxyChecker(
-                        context.proxy,
-                        context.user_agent,
-                    ).check()
+                    if getattr(context, 'direct_test_until', 0):
+                        result = direct_test_result(context.profile_id)
+                        if result is None:
+                            raise ProxyCheckError('DIRECT_TEST_EXPIRED')
+                    else:
+                        result = await ProxyChecker(
+                            context.proxy,
+                            context.user_agent,
+                        ).check()
                 else:
                     step_params = parameters.get(step.value)
                     if step_params is None:
