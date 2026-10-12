@@ -39,6 +39,14 @@ class AdsManagerLaunch:
         launch = _effective_launch_payload(payload.get("launch"))
         if any(value != "PAUSED" for value in launch.get("delivery", {}).values()):
             raise fail("DELIVERY_UNAVAILABLE", "Private draft activation is not enabled; select PAUSED creation")
+        for section in ("campaign", "adset"):
+            for field in ("daily_budget", "lifetime_budget"):
+                value = launch[section].get(field)
+                if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value <= 0):
+                    raise fail("BUDGET_INVALID", "Advertising budgets require positive integer minor currency units")
+        if not any(launch[section].get(field) for section in ("campaign", "adset")
+                   for field in ("daily_budget", "lifetime_budget")):
+            raise fail("BUDGET_REQUIRED", "Advertising requires a campaign or AdSet budget")
         creative = launch["creative"]
         allowed = {"name", "message", "link", "headline", "description", "call_to_action", "url_tags",
             "page_id", "format", "staged_media", "media_library_id", "existing_image_hash",
