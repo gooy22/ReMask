@@ -23,8 +23,12 @@ The publication driver accepts either the four existing CREATE contracts or one
 observed PUBLISH_FAMILY contract. Family publication must return all four exact
 IDs and independently query every object with the correct account, parents,
 Page and PAUSED state. It cannot switch publication strategy inside an existing
-Launch. This accommodates the observed draft-publishing entry points without
-assuming that Meta necessarily uses four independent CREATE requests.
+Launch. An approved alternative family sender may also return an asynchronous
+operation reference. The worker saves it before polling a pinned status query,
+checks the exact operation and account, then independently reads all four objects.
+Pending publication, unavailable reads and terminal failures have distinct saved
+states. Retry never repeats the publication POST. Accepting a request does not
+mark a campaign as created. Progress appears inside the existing Jobs UI.
 
 Creation remains PAUSED. Desired ACTIVE states are applied after publication and
 verification, in Ad -> Ad Set -> Campaign order. Existing Job objects can also
@@ -60,7 +64,12 @@ These declarations never enable a missing request contract.
 
 Each entry needs artifact/sender/READ source hashes and an observation date.
 Mutation contracts need the observed doc_id, friendly_name, endpoint, variables
-template and exact output paths. Queries need exact identity/account/relationship
+template and exact output paths. Asynchronous family contracts instead declare
+`async_publication.operation_id_path`, a `status_query`, explicit disjoint
+pending/success/failure states and bounded polling limits. Their status query
+must bind operation_id and ad_account_id, return those exact scopes and all four
+object references, and have separate `poll_sha256` evidence. Object verification
+remains mandatory after a successful status. Queries need exact identity/account/relationship
 paths. Video upload also requires a verified processing-ready state. File upload
 currently supports an observed single multipart GraphQL request. A chunked or
 non-GraphQL Meta uploader would require its actual protocol adapter; it must not
@@ -72,11 +81,31 @@ metadata and target_status. A resource query also receives query, limit and
 cursor. Cookies, FB auth tokens and request context stay inside ProfileSession;
 they are never stored in the contract manifest.
 
-The saved Meta source confirms callers of AdsDraftPublishDataManager, but not
-that sender's request envelope. It also does not establish exact-account Page,
-media-upload, family-publication or activation contracts. The earlier actor-wide
-promotable-Page query cannot substitute for account-specific advertising access.
-Numeric IDs in tests are fixtures, never production contracts.
+The original saved Meta snapshot contains publication callers. Further public
+GitHub source research found 25 archived modules, including the missing
+AdsDraftPublishDataManager and its lower transport chain, and nine real persisted
+operation IDs. Their URLs, pinned archive commit and file hashes are recorded in
+`docs/evidence/advertising-source-candidates-2026-10-12.json`. The archive commit's
+date does not prove the capture date or current usability of each module.
+
+The observed draft publication path runs through AdsGraphAPI / GraphAPICore /
+ApiClient with token transport. It is not an established cookie-only persisted
+GraphQL publication. The found Boost/LWI mutation is a separate promotion flow;
+the WhatsApp media mutation requires fb_access_token and existing WhatsApp media
+IDs. Neither is enabled for ReMask's full private advertising flow. The found
+account/Page/Instagram/tiered-object queries also lack complete approved sender
+variables and independent exact-account proof. Client Relay resolver fields must
+not be mistaken for fields present in an HTTP response. The earlier actor-wide
+promotable-Page query cannot prove account-specific advertising permission.
+
+An offline AST indexing command was added:
+`python -m app.contract_maintenance.ads_evidence SOURCE_DIR --output PATH`.
+It records literal persisted IDs, variable definitions, server selections,
+conflicting modules and missing imports. It never evaluates JS, contacts Meta,
+installs a manifest or marks a candidate as launch-ready. The optional maintenance
+collector now prioritizes known sender roots and retains generic transport
+helpers. Collection remains disabled while the proxy is unavailable. Numeric
+IDs in tests are fixtures, never production contracts.
 
 Before deployment, run the offline backend/UI/runtime tests, confirm the actual
 multipart or chunked uploader and publication protocol from source evidence, pin

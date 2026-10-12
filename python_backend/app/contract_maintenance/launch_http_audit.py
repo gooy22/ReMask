@@ -79,9 +79,10 @@ def inspect_saved_sources():
 
 async def collect_sources(web, *, account, business):
     from ..private_contract_discovery import _script_urls
-    from .ads_sources import compact_record, deferred_script_urls, module_records, public_script_url
+    from .ads_sources import DEFAULT_SENDER_MODULES, compact_record, deferred_script_urls, module_records, public_script_url
     preferred = [value.strip() for value in os.getenv("REMASK_LAUNCH_HTTP_AUDIT_MODULES", "").split(",")[:24]
                  if re.fullmatch(r"[A-Za-z0-9_.:$-]{1,180}", value.strip())]
+    preferred = list(dict.fromkeys(preferred + list(DEFAULT_SENDER_MODULES)))
     entry = ("https://adsmanager.facebook.com/adsmanager/manage/campaigns"
              f"?act={account}&business_id={business}")
     status, document, final = await web.fetch_text(entry, max_bytes=5_000_000, document_navigation=True)
@@ -133,7 +134,7 @@ async def collect_sources(web, *, account, business):
     deferred = deferred_script_urls(document, preferred=preferred)
     # Preserve the core entry scripts, then follow each selected publication
     # component's dependency closure before unrelated frontend modules.
-    urls = list(dict.fromkeys(direct + deferred))[:80]
+    urls = list(dict.fromkeys(direct[:8] + deferred + direct[8:]))[:80]
     timed_out = False
     try:
         async with asyncio.timeout(75):

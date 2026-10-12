@@ -3,7 +3,7 @@ import re
 
 from .provisioning.models import ProvisioningError
 
-_PATH = re.compile(r"data(?:\.[A-Za-z][A-Za-z0-9_]*)+")
+_PATH = re.compile(r"data(?:\.(?:[A-Za-z][A-Za-z0-9_]*|0|[1-9][0-9]*))+")
 _RELATIONS = {"CAMPAIGN": set(), "ADSET": {"campaign_id"},
               "CREATIVE": {"page_id"}, "AD": {"campaign_id", "adset_id", "creative_id"}}
 

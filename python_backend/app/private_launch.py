@@ -755,10 +755,10 @@ class PrivateLaunchStateStore:
         encode = lambda value: json.dumps(value, ensure_ascii=False, separators=(",", ":"))
         with self._connect() as con:
             cursor = con.execute("""UPDATE private_launch_steps
-                SET status=?,result_json=?,error_code=?,submitted=1,updated_at=?
+                SET status=?,entity_id=?,result_json=?,error_code=?,submitted=1,updated_at=?
                 WHERE launch_key=? AND step=? AND profile_id=? AND business_id=? AND ad_account_id=?
-                    AND status=? AND entity_id=? AND result_json=?""",
-                (result["status"], encode(result), result["code"], int(time.time()),
+                    AND status=? AND entity_id IS ? AND result_json=?""",
+                (result["status"], result.get("entity_id") or None, encode(result), result["code"], int(time.time()),
                  prior["launch_key"], prior["step"], prior["profile_id"], prior["business_id"],
                  prior["ad_account_id"], prior["status"], prior["entity_id"], encode(prior["result"])))
             return cursor.rowcount == 1
@@ -1387,6 +1387,9 @@ class PrivateLaunchService:
         if family:
             required[family.name] = family
             _render(family.row["variables"], values)
+            if family.row.get("async_publication"):
+                _render(family.row["async_publication"]["status_query"]["variables"],
+                        {**values, "operation_id": "<pending>"})
             for read in family.row["verification"].values():
                 _render(read["variables"], {**values, "entity_id": "<pending>"})
         for item in media:
@@ -1920,7 +1923,14 @@ class PrivateLaunchService:
             if evidence.get("launch_fingerprint") != fingerprint:
                 raise ProvisioningError("PRIVATE_LAUNCH_KEY_PAYLOAD_MISMATCH",
                     "Advertising operation belongs to another Launch configuration", retryable=False)
-            if saved["status"] in {"SUBMITTING", "RECONCILE_REQUIRED", "BLOCKED"} and not evidence.get("outputs"):
+            from .private_launch_publication import RETRY_CODES, pending_operation
+            family_contract = self.extensions.operations.get("PUBLISH_FAMILY")
+            resumable_publication = (saved["step"] == "PUBLISH_FAMILY" and family_contract is not None
+                and family_contract.row.get("async_publication") and pending_operation(evidence)
+                and evidence.get("contract_digest") == family_contract.digest
+                and evidence.get("publication", {}).get("code") in RETRY_CODES
+                and saved["status"] == "RECONCILE_REQUIRED")
+            if saved["status"] in {"SUBMITTING", "RECONCILE_REQUIRED", "BLOCKED"} and not evidence.get("outputs") and not resumable_publication:
                 raise ProvisioningError("PRIVATE_LAUNCH_RECONCILE_REQUIRED",
                     "A saved media or publication request has an unknown result; resubmission is blocked", retryable=False)
         meta_transport = MetaTransportRouter(session, private_only=True)

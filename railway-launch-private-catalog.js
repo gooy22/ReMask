@@ -492,9 +492,12 @@ async function remaskPrivatePollJob(jobId) {
             }
             const done=Number(job.items_done||job.items_completed||0);
             const total=Number(job.items_total||0);
+            const advertising=(job.items||[]).flatMap(item=>item.advertising_steps||[]);
+            const publishing=advertising.some(step=>step.publication?.code==='PUBLISH_PENDING');
             remaskPrivateShow(
                 'Задача '+jobId+' · '+String(job.status||'RUNNING')+
-                (total?' · '+done+'/'+total:'')
+                (total?' · '+done+'/'+total:'')+
+                (publishing?' · Meta обрабатывает публикацию. Retry Failed продолжит ожидание результата.':'')
             );
             if(['SUCCESS','FAILED','PARTIAL'].includes(String(job.status||'').toUpperCase())){
                 remaskPrivateFinalizeJob(job);

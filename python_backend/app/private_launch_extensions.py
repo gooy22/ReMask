@@ -81,7 +81,7 @@ def extension_contract(name, entry):
     source_evidence(entry, name)
     row = entry.get("contract")
     allowed = {"doc_id", "friendly_name", "endpoint_url", "variables", "request_envelope",
-               "output_paths", "verification", "file_field"}
+               "output_paths", "verification", "file_field", "async_publication"}
     if (name not in OPERATIONS or not isinstance(row, dict) or set(row) - allowed
             or not re.fullmatch(r"\d{5,40}", str(row.get("doc_id", "")))
             or not re.fullmatch(r"[A-Za-z0-9_]{1,180}", str(row.get("friendly_name", "")))
@@ -102,7 +102,14 @@ def extension_contract(name, entry):
         if name == "VIDEO_UPLOAD" and not verification.get("ready_path"):
             raise fail("MEDIA_READ_CONTRACT_REQUIRED", "Video must have an observed processing-ready state")
     elif name == "PUBLISH_FAMILY":
-        if set(paths) != {step.value.lower() + "_id" for step in STEP_ORDER}:
+        output_names = {step.value.lower() + "_id" for step in STEP_ORDER}
+        asynchronous = row.get("async_publication")
+        if asynchronous is not None:
+            from .private_launch_publication import validate_publication
+            if paths or not re.fullmatch(r"[a-f0-9]{64}", str(entry["evidence"].get("poll_sha256", ""))):
+                raise fail("STATIC_MANIFEST_INVALID", "Asynchronous publication needs separate status-source evidence and no immediate object paths")
+            validate_publication(asynchronous, output_names)
+        elif set(paths) != output_names:
             raise fail("STATIC_MANIFEST_INVALID", "Family publication requires all four exact object paths")
         if not isinstance(verification, dict) or set(verification) != {step.value for step in STEP_ORDER}:
             raise fail("VERIFICATION_CONTRACT_REQUIRED", "Family publication requires independent reads of every object")
@@ -123,6 +130,8 @@ def extension_contract(name, entry):
         raise fail("STATIC_MANIFEST_INVALID", "Advertising operation lacks exact scope, input or response bindings")
     if name not in {"IMAGE_UPLOAD", "VIDEO_UPLOAD"} and row.get("file_field"):
         raise fail("STATIC_MANIFEST_INVALID", "Only media upload may carry a file")
+    if name != "PUBLISH_FAMILY" and "async_publication" in row:
+        raise fail("STATIC_MANIFEST_INVALID", "Asynchronous publication belongs only to the family sender")
     digest = hashlib.sha256(json.dumps(entry, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     return ExtensionContract(name, row, digest)
 
@@ -199,6 +208,7 @@ class LaunchOperationRunner:
 
     async def run(self, *, web, contract, values, launch_key, launch_fingerprint, media=None):
         from .private_launch import PrivateLaunchContractStore, _complete_response, _lookup, _render
+        from .private_launch_publication import OPERATION_ID, pending_operation, poll_publication
         key = OperationKey(contract.name + (":" + media.sha256 if media else ""))
         fingerprint = hashlib.sha256(json.dumps({"launch": launch_fingerprint, "contract": contract.digest,
             "media": media.public() if media else None, "target_status": values.get("target_status"),
@@ -211,10 +221,11 @@ class LaunchOperationRunner:
         if prior:
             evidence = prior["result"].get("evidence", {})
             outputs = evidence.get("outputs", {})
+            asynchronous = bool(contract.row.get("async_publication") and pending_operation(evidence))
             saved_success = prior["status"] == "SUCCESS" and evidence.get("verification", {}).get("verified") is True
             if saved_success and not contract.name.startswith("ACTIVATE_"):
                 return outputs
-            if not saved_success and (not outputs or prior["status"] not in {"RECONCILE_REQUIRED", "SUBMITTING"}
+            if not saved_success and not asynchronous and (not outputs or prior["status"] not in {"RECONCILE_REQUIRED", "SUBMITTING"}
                     or (prior.get("error_code", "").endswith("READ_PENDING") and time.time() - prior["updated_at"] < 90)
                     or (prior["status"] == "SUBMITTING" and time.time() - prior["updated_at"] < 90)):
                 raise fail("RECONCILE_REQUIRED", "Saved advertising operation cannot be submitted again")
@@ -277,7 +288,16 @@ class LaunchOperationRunner:
                 if handle:
                     handle.close()
             from .private_launch_verify import _complete
-            if not outputs and _complete_response(response) and _complete(response):
+            if row.get("async_publication"):
+                # Even a partial mutation may supply a usable operation ID.
+                # It is only a READ handle: the exact operation/account and all
+                # object IDs must still be proven by the reviewed status query.
+                operation_id = _lookup(response, row["async_publication"]["operation_id_path"])
+                if not isinstance(operation_id, str) or not OPERATION_ID.fullmatch(operation_id):
+                    raise fail("RECONCILE_REQUIRED", "Publication returned no exact operation handle; replay is blocked")
+                evidence = {**evidence, "publication": {"operation_id": operation_id,
+                    "code": "PUBLISH_PENDING", "poll_count": 0}, "outputs": {}}
+            elif not outputs and _complete_response(response) and _complete(response):
                 outputs = {name: _lookup(response, path) for name, path in row["output_paths"].items()}
                 valid = all(isinstance(value, str) and (_MEDIA_ID.fullmatch(value) if contract.name == "IMAGE_UPLOAD"
                             else re.fullmatch(r"\d{5,40}", value)) for value in outputs.values())
@@ -285,16 +305,21 @@ class LaunchOperationRunner:
                     outputs = {}
                 if contract.name == "PUBLISH_FAMILY" and outputs and len(set(outputs.values())) != 4:
                     outputs = {}
-            if not outputs:
+            if not outputs and not pending_operation(evidence):
                 raise fail("RECONCILE_REQUIRED", "The advertising response did not contain all exact object references")
             evidence = {**evidence, "outputs": outputs}
             pending = ActionResult.reconcile(key.value, code="PRIVATE_LAUNCH_" + contract.name + "_READ_PENDING",
                 message="Advertising operation returned references; independent read is pending", submitted=True, evidence=evidence)
-            pending.entity_id = outputs.get("entity_id") or outputs.get("ad_id", "")
+            pending.entity_id = outputs.get("entity_id") or outputs.get("ad_id") or pending_operation(evidence)
             await self.state.save(launch_key=launch_key, profile_id=values["profile_id"], business_id=values["business_id"],
                 ad_account_id=values["ad_account_id"], step=key, status=pending.status.value,
                 entity_id=pending.entity_id, result=pending.as_dict(), error_code=pending.code, submitted=True)
             prior = await self.state.step(launch_key, key)
+        if contract.row.get("async_publication") and not outputs:
+            prior, outputs = await poll_publication(self.state, web, contract, values, prior)
+            evidence = prior["result"].get("evidence", {})
+            if prior["status"] == "SUCCESS" and evidence.get("verification", {}).get("verified") is True:
+                return outputs
         try:
             proof = await asyncio.wait_for(_verification(web, contract, values, outputs), timeout=60)
         except AuthenticationError as exc:

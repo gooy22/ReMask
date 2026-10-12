@@ -581,7 +581,7 @@ if (strpos($js,'REMASK_PRIVATE_LAUNCH_CATALOG_V1')===false) {
 file_put_contents($jsPath,$js);
 $phpPath=$root.'/launch.php';
 $php=file_get_contents($phpPath);
-$php=preg_replace('#scripts/launch\\.js(?:\\?[^"\\\']*)?#','scripts/launch.js?v=20261012-advertising-pipeline-v3',$php,1);
+$php=preg_replace('#scripts/launch\\.js(?:\\?[^"\\\']*)?#','scripts/launch.js?v=20261012-advertising-pipeline-v4',$php,1);
 $php=str_replace('official API, read only','состояние оплаты, read only',$php);
 $php=str_replace('Одна настройка → много FB-профилей и RK. Каждая цель использует свой token, proxy и account-specific assets.',
     'Сохранённые РК и FP доступны без новой синхронизации. Доступ FP для рекламы и привязку карты ещё нужно проверить.',$php);
@@ -592,4 +592,11 @@ $php=str_replace('Checks token access, RK status, Page/Instagram, Pixel, Custom 
 $php=str_replace('Shows the current funding source/status Meta exposes for each selected RK. ReMask does not change payment methods here.',
     'Платёжная привязка требует отдельной проверки Meta. Сохранённые ID не подтверждают готовность карты.',$php);
 file_put_contents($phpPath,$php);
+$workspacePath=$root.'/workspace.php';
+if (is_file($workspacePath)) {
+    $workspace=file_get_contents($workspacePath);
+    $workspace=preg_replace('#scripts/workspace\\.js(?:\\?[^"\\\']*)?#',
+        'scripts/workspace.js?v=20261012-python-worker-ui-v220-advertising-v4',$workspace,1);
+    file_put_contents($workspacePath,$workspace);
+}
 fwrite(STDERR,"[launch-private-catalog] local RK/Page reads installed; live advertising/payment permissions remain unverified\n");

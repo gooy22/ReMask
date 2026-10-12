@@ -844,6 +844,51 @@ class JobStore:
             business_id=str(result.get("business_id") or ""),
             account_name=str(result.get("account_name") or result.get("name") or "")))
 
+    @staticmethod
+    def _advertising_progress(con, item, tasks):
+        if not con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='private_launch_steps'").fetchone():
+            return []
+        progress, seen = [], set()
+        for task in tasks:
+            if task.get('action') != 'private_launch' or not isinstance(task.get('payload'), dict):
+                continue
+            payload = task['payload']
+            business = str(payload.get('business_id') or '').strip()
+            account = str(payload.get('ad_account_id') or '').removeprefix('act_').strip()
+            launch_key = str(payload.get('launch_key') or task.get('idempotency_key')
+                             or f"{item['profile_id']}:{business}:{account}").strip()
+            if not business.isdigit() or not account.isdigit() or len(launch_key) > 200:
+                continue
+            rows = con.execute("""SELECT step,status,entity_id,result_json,error_code,submitted,updated_at
+                FROM private_launch_steps WHERE launch_key=? AND profile_id=? AND business_id=? AND ad_account_id=?
+                ORDER BY created_at,step LIMIT 100""", (launch_key, item['profile_id'], business, account)).fetchall()
+            for row in rows:
+                identity = (launch_key, row['step'])
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                try:
+                    result = json.loads(row['result_json'] or '{}')
+                    evidence = result.get('evidence', {})
+                    if not isinstance(evidence, dict):
+                        continue
+                except (ValueError, TypeError, AttributeError):
+                    continue
+                outputs = evidence.get('outputs', {})
+                verification = evidence.get('verification', {})
+                publication = evidence.get('publication', {})
+                progress.append({'task_id': task['id'], 'step': row['step'], 'status': row['status'],
+                    'business_id': business, 'ad_account_id': account, 'entity_id': row['entity_id'],
+                    'submitted': None if row['submitted'] is None else bool(row['submitted']),
+                    'updated_at': row['updated_at'], 'code': row['error_code'],
+                    'verified': verification.get('verified') is True if isinstance(verification, dict) else False,
+                    'outputs': {key: value for key, value in outputs.items()
+                        if key in {'entity_id','campaign_id','adset_id','creative_id','ad_id'}
+                        and isinstance(value, str) and re.fullmatch(r'[A-Za-z0-9_-]{5,128}', value)} if isinstance(outputs, dict) else {},
+                    'publication': {key: publication[key] for key in ('operation_id','status','code','poll_count','last_polled_at')
+                        if key in publication} if isinstance(publication, dict) else {}})
+        return progress
+
     def _job_view_sync(self, job_id: str) -> dict[str, Any] | None:
         with self._connect() as con:
             job=con.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone()
@@ -878,6 +923,7 @@ class JobStore:
                             task['retryable'] = True
                             task['recovery_mode'] = 'verify_created_ad_account'
                 item['tasks']=tasks
+                item['advertising_steps']=self._advertising_progress(con, item, tasks)
                 provisioning_steps=[]
                 for pr in con.execute(
                     'SELECT * FROM provisioning_steps WHERE item_id=? ORDER BY created_at,step',
