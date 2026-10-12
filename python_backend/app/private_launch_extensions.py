@@ -6,6 +6,7 @@ READ paths must come from reviewed source evidence in the deployed manifest.
 from __future__ import annotations
 
 import asyncio
+import copy
 from dataclasses import dataclass
 import hashlib
 import json
@@ -209,6 +210,7 @@ class LaunchOperationRunner:
     async def run(self, *, web, contract, values, launch_key, launch_fingerprint, media=None):
         from .private_launch import PrivateLaunchContractStore, _complete_response, _lookup, _render
         from .private_launch_publication import OPERATION_ID, pending_operation, poll_publication
+        values = copy.deepcopy(values)
         key = OperationKey(contract.name + (":" + media.sha256 if media else ""))
         fingerprint = hashlib.sha256(json.dumps({"launch": launch_fingerprint, "contract": contract.digest,
             "media": media.public() if media else None, "target_status": values.get("target_status"),

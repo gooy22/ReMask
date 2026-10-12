@@ -151,7 +151,9 @@ class AdvertisingResourceStore:
     async def get(self, *, name, values, actor_id, force=False, web=None):
         if name not in RESOURCE_FIELDS:
             raise fail("RESOURCE_UNAVAILABLE", "Unsupported advertising resource")
-        scope = {key: values.get(key, "") for key in ("profile_id", "business_id", "ad_account_id", "query")}
+        scope = {key: values.get(key, "") for key in ("profile_id", "business_id", "ad_account_id", "query", "limit")}
+        scope["contract_digest"] = hashlib.sha256(json.dumps(self.catalog.rows.get(name),
+            sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         scope["actor_id"] = actor_id
         scope["resource"] = name
         key = hashlib.sha256(json.dumps(scope, sort_keys=True).encode()).hexdigest()

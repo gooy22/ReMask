@@ -690,14 +690,19 @@ class FacebookWebSession:
                         fb_dtsg = candidate_dtsg
                         break
 
-                except asyncio.TimeoutError:
-                    attempts.append(f"{bootstrap_url}: timeout")
-                    continue
-                except (aiohttp.ClientError, httpx.HTTPError) as exc:
-                    attempts.append(
-                        f"{bootstrap_url}: network {exc.__class__.__name__}"
-                    )
-                    continue
+                except (asyncio.TimeoutError, aiohttp.ClientError, httpx.HTTPError) as exc:
+                    # The failed profile route cannot establish cookie expiry.
+                    # Do not retry other origins or refresh DTSG through it.
+                    raise RemoteRequestError(
+                        "Facebook bootstrap connection failed: "
+                        f"{exc.__class__.__name__}; check the profile proxy",
+                        meta_payload={"transport_failure": {
+                            "kind": exc.__class__.__name__,
+                            "proxy_configured": bool(self.profile.proxy),
+                        }},
+                        request_may_have_been_sent=False,
+                        transport_stage="bootstrap",
+                    ) from exc
 
             if not fb_dtsg:
                 refresh_token, refresh_source = await self._fetch_dtsg_refresh_token(

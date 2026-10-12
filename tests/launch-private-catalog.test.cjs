@@ -22,7 +22,7 @@ assert.equal(label({account_status:1,funding_source_details:{id:'123'}}),'SOURCE
 assert.equal(controls.launchButton.disabled,true);
 assert.equal(controls.reviewLaunch.disabled,true);
 assert.equal(controls.dryRunPlan.disabled,true);
-assert.match(controls.reviewStatus.textContent,/Перед созданием рекламы/);
+assert.match(controls.reviewStatus.textContent,/Подготовьте план рекламы/);
 assert.equal(controls.preflight.textContent,'Загрузить сохранённые РК');
 console.log('Private Launch catalog and funding truth checks passed');
 
@@ -220,6 +220,10 @@ console.log('Private Launch catalog and funding truth checks passed');
       appendChild(child){this.children.push(child);child.parentNode=this;},
       addEventListener(kind,handler){this['on'+kind]=handler;}
     };
+    Object.defineProperty(node,'textContent',{
+      get(){return this._text||'';},
+      set(value){this._text=String(value);this.children=[];}
+    });
     if(tag==='select'){
       Object.defineProperty(node,'options',{get(){return this.children;}});
       node.selectedIndex=0;
@@ -257,6 +261,27 @@ console.log('Private Launch catalog and funding truth checks passed');
   assert.equal(selector.children.length,3);
   assert.match(selector.children[1].textContent,/Visa.*1111/);
   assert.match(selector.children[2].textContent,/Mastercard.*2222/);
+
+  // A new live list must invalidate a removed selection without selecting
+  // its replacement; no old masked card or pending request survives.
+  buttons.remaskPrivatePaymentSelectors=paymentHost.children[0];
+  selector.selectedIndex=1; selector.onchange();
+  assert.equal(privateCtx.remaskPrivateSelectedPayment('7','111111111').last4,'1111');
+  privateCtx.remaskPrivatePendingWrite('stale-fixture',{idempotency_key:'pending-fixture'});
+  privateCtx.remaskPrivateRenderPaymentSelector({profile:'7',ad_account_id:'111111111'},[
+    {type:'Mastercard',last4:'2222'}
+  ]);
+  assert.equal(privateCtx.remaskPrivateSelectedPayment('7','111111111'),null);
+  assert.equal(storage.has('remask_private_launch_pending_v1'),false);
+  assert.equal(selector.children.length,2);
+  assert.equal(selector.children[0].textContent,'Выберите карту');
+  assert.equal(selectorBlock.hidden,false);
+  selector.selectedIndex=1; selector.onchange();
+  assert.equal(privateCtx.remaskPrivateSelectedPayment('7','111111111').last4,'2222');
+  privateCtx.remaskPrivateRenderPaymentSelector({profile:'7',ad_account_id:'111111111'},[]);
+  assert.equal(privateCtx.remaskPrivateSelectedPayment('7','111111111'),null);
+  assert.equal(selectorBlock.hidden,true);
+  assert.equal(paymentHost.children.length,1);
 
   console.log('Private Launch UI uses worker review + independent per-RK jobs with durable idempotency.');
 })().catch(e=>{console.error(e);process.exitCode=1});

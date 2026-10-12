@@ -72,7 +72,10 @@ class LaunchMediaResolver:
                                    "Media Library is temporarily unavailable", retryable=True) from exc
         if not isinstance(payload, dict) or payload.get("ok") is not True or not isinstance(payload.get("media"), list):
             raise invalid("Media Library returned an invalid result")
-        rows = {row.get("id"): row for row in payload["media"] if isinstance(row, dict)}
+        if any(not isinstance(row, dict) or not isinstance(row.get("id"), str)
+               or not re.fullmatch(r"m-[a-f0-9]{24}", row["id"]) for row in payload["media"]):
+            raise invalid("Media Library returned an invalid reference")
+        rows = {row["id"]: row for row in payload["media"]}
         if set(rows) != set(ids) or len(rows) != len(payload["media"]):
             raise invalid("Media Library returned another media selection")
         output = []

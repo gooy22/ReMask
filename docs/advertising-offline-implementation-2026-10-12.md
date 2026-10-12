@@ -1,9 +1,9 @@
 # Advertising implementation prepared without live Meta checks
 
-This change is an offline implementation pass. The user reported that the proxy
-expired and asked to defer checks and fixes until later. No live Meta requests,
-test runs, CI validation or production deployment are claimed for this change.
-It belongs on the advertising branch until the validation pass is complete.
+This change implements and validates the advertising lifecycle offline. Live
+Meta requests remain disabled while the profile proxy is expired. Tests use
+synthetic contracts and local HTTP transports; none establish live Meta support.
+The actual CREATE, upload, activation and resource manifests remain empty.
 
 ## Implemented application paths
 
@@ -107,7 +107,7 @@ collector now prioritizes known sender roots and retains generic transport
 helpers. Collection remains disabled while the proxy is unavailable. Numeric
 IDs in tests are fixtures, never production contracts.
 
-Before deployment, run the offline backend/UI/runtime tests, confirm the actual
+Before enabling real publication, confirm the actual
 multipart or chunked uploader and publication protocol from source evidence, pin
 the corresponding manifests, and perform the agreed live canary once a working
 proxy/session is available. Synthetic tests cannot establish real Meta support.

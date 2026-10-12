@@ -1146,3 +1146,4 @@ class JobStore:
     def _execute(self, sql: str, args: tuple[Any, ...]) -> None:
         with self._connect() as con:
             con.execute(sql, args)
+

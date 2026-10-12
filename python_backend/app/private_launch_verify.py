@@ -54,7 +54,7 @@ def proof(payload, row, values):
     if not isinstance(account, str) or account.removeprefix("act_") != values["ad_account_id"]:
         return {"verified": False, "code": "READ_ACCOUNT_MISMATCH"}
     expected_status = values.get("expected_status", "PAUSED")
-    if expected_status not in {"PAUSED", "ACTIVE"}:
+    if not isinstance(expected_status, str) or expected_status not in {"PAUSED", "ACTIVE"}:
         return {"verified": False, "code": "READ_STATE_INVALID"}
     if row.get("status_path") and _lookup(payload, row["status_path"]) != expected_status:
         return {"verified": False, "code": "READ_" + expected_status + "_UNCONFIRMED"}

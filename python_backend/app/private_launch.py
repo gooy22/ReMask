@@ -1023,7 +1023,7 @@ def _effective_launch_payload(value: Any) -> dict[str, Any]:
         if not isinstance(row, dict):
             raise ProvisioningError("PRIVATE_LAUNCH_INVALID_INPUT", f"launch.{section} must be an object", retryable=False)
         requested = delivery.get(section, row.get("status", "PAUSED"))
-        if requested not in {"PAUSED", "ACTIVE"}:
+        if not isinstance(requested, str) or requested not in {"PAUSED", "ACTIVE"}:
             raise ProvisioningError("PRIVATE_LAUNCH_STATUS_INVALID", "Advertising supports PAUSED or ACTIVE delivery", retryable=False)
         desired[section] = requested
         effective[section] = {**row, "status": "PAUSED"}
@@ -1032,20 +1032,20 @@ def _effective_launch_payload(value: Any) -> dict[str, Any]:
     creative = effective.get("creative")
     if not isinstance(creative, dict):
         raise ProvisioningError("PRIVATE_LAUNCH_INVALID_INPUT", "launch.creative must be an object", retryable=False)
-    if "format" in creative:
+    from .private_launch_media import local_references, creative_with_media
+    local = local_references(creative)
+    if "format" in creative or local or creative.get("carousel_cards"):
         creative = dict(creative)
         effective["creative"] = creative
-        format_name = creative["format"]
-        if format_name not in {"SINGLE", "CAROUSEL", "INSTAGRAM_POST"}:
+        format_name = creative.get("format", "SINGLE")
+        if not isinstance(format_name, str) or format_name not in {"SINGLE", "CAROUSEL", "INSTAGRAM_POST"}:
             raise ProvisioningError("PRIVATE_LAUNCH_CREATIVE_FORMAT_INVALID", "Unsupported advertising format", retryable=False)
-        from .private_launch_media import local_references, creative_with_media
-        local = local_references(creative)
+        creative["format"] = format_name
+        if creative.get("carousel_cards") and format_name != "CAROUSEL":
+            raise ProvisioningError("PRIVATE_LAUNCH_CREATIVE_FORMAT_INVALID", "Carousel cards require CAROUSEL format", retryable=False)
         if format_name == "CAROUSEL":
-            if local:
-                planned = [{"image_hash": "planned-local-media"} for _ in local]
-                creative_with_media(creative, planned)
-            else:
-                creative_with_media(creative, [])
+            planned = [{"image_hash": "planned-local-media"} for _ in local]
+            creative_with_media(creative, planned)
             return effective
         media_keys = ("source_instagram_media_id",) if format_name == "INSTAGRAM_POST" else (
             "existing_image_hash", "existing_video_id", "existing_creative_id")
@@ -1159,7 +1159,6 @@ def _payment_selector(payload: dict[str, Any]) -> dict[str, str] | None:
 
 def _safe_payment_methods(methods: Any) -> list[dict[str, str]]:
     safe_methods: list[dict[str, str]] = []
-    seen: set[tuple[str, str]] = set()
     for row in methods if isinstance(methods, list) else []:
         if not isinstance(row, dict):
             continue
@@ -1172,10 +1171,9 @@ def _safe_payment_methods(methods: Any) -> list[dict[str, str]]:
             or not re.fullmatch(r"[A-Za-z][A-Za-z .+-]{0,39}", brand)
         ):
             continue
-        key = (brand.casefold(), last4)
-        if key in seen:
-            continue
-        seen.add(key)
+        # The private billing reader already deduplicates by credential ID.
+        # Distinct instruments can share brand/last4: keep that ambiguity
+        # instead of turning two cards into one auto-selected payment source.
         safe_methods.append({
             "type": brand,
             "last4": last4,
@@ -1456,8 +1454,9 @@ class PrivateLaunchService:
         del item_id
         from .private_launch_extensions import OperationKey
         from .private_launch_verify import proof, _complete
-        if not isinstance(payload, dict) or payload.get("status") not in {"ACTIVE", "PAUSED"}:
+        if not isinstance(payload, dict) or not isinstance(payload.get("status"), str) or payload["status"] not in {"ACTIVE", "PAUSED"}:
             raise ProvisioningError("PRIVATE_LAUNCH_STATUS_INVALID", "Choose ACTIVE or PAUSED delivery", retryable=False)
+        payload = copy.deepcopy(payload)
         source_key = str(payload.get("source_launch_key") or "").strip()
         key = str(payload.get("delivery_key") or task_idempotency_key or "").strip()
         if not source_key or not key or max(len(source_key),len(key)) > 200 or source_key == key:
@@ -1497,7 +1496,8 @@ class PrivateLaunchService:
         fingerprint = hashlib.sha256(json.dumps({"source":source_key,"target":target,"page_id":values["page_id"],
             "ids":ids,"status":payload["status"]},sort_keys=True).encode()).hexdigest()
         digest = hashlib.sha256(json.dumps({"actor_id":values["actor_id"],
-            "contracts":{section:contract.digest for section,contract in contracts.items()}},sort_keys=True).encode()).hexdigest()
+            "contracts":{section:contract.digest for section,contract in contracts.items()},
+            "source_reads": reads},sort_keys=True).encode()).hexdigest()
         await self.state.bind_plan(key,values,fingerprint,digest)
         transport = MetaTransportRouter(session,private_only=True)
         web = await transport.facebook_web()
@@ -1688,13 +1688,18 @@ class PrivateLaunchService:
             selected_payment_method: dict[str, str] = {}
             payment_selection_source = "selection_required"
         else:
-            selected_payment_method, payment_selection_source = (
-                _select_payment_method(
-                    safe_payment_methods,
-                    payment_selector,
-                )
-            )
-            selected = [method for method in funding["payment_methods"]
+            try:
+                selected_payment_method, payment_selection_source = _select_payment_method(
+                    safe_payment_methods, payment_selector)
+            except ProvisioningError as exc:
+                if exc.code != "PRIVATE_LAUNCH_PAYMENT_SELECTION_UNAVAILABLE":
+                    raise
+                # A stale selected mask must prompt a new explicit choice,
+                # never silently switch cards or leave the chooser stuck.
+                payment_selection_required = True
+                selected_payment_method = {}
+                payment_selection_source = "selection_unavailable"
+            selected = [method for method in funding["payment_methods"] if selected_payment_method
                 if method.get("last4") == selected_payment_method["last4"]
                 and str(method.get("type") or "").casefold() == selected_payment_method["type"].casefold()]
             if any(method.get("is_expired") is True for method in selected):
@@ -1888,6 +1893,8 @@ class PrivateLaunchService:
                 "Private Launch payload must be an object",
                 retryable=False,
             )
+
+        payload = copy.deepcopy(payload)
 
         # Durable submit uncertainty must outrank fresh Page/payment/contract
         # checks. Once a step may have crossed CREATE, a rerun must surface the

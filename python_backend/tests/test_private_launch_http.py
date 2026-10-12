@@ -109,6 +109,29 @@ class LaunchHttpReadTests(unittest.IsolatedAsyncioTestCase):
                 await service._review_preflight(**kwargs)
                 self.assertEqual(probe.await_count, 3)
 
+    async def test_removed_selected_card_requires_new_choice_and_never_switches_automatically(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            service = PrivateLaunchService(ProvisioningStateStore(str(Path(temporary)/"state.sqlite")),
+                contracts=PrivateLaunchContractStore(json.dumps(contracts())))
+            context = SimpleNamespace(profile_id="fixture", inventory_updated_at=int(time.time()),
+                ad_accounts=[{"ad_account_id": ACCOUNT, "business_id": BM, "account_status": 1}])
+            response = methods_response()
+            for key in ("billing_payment_methods_allowlist_customized", "primary_funding_source_customized"):
+                response["data"]["billable_account_by_asset_id"]["billing_payment_account"][key][0]["credential"]["needs_verification"] = False
+            web = self.web(); web.graphql.side_effect = [account_response(), response]
+            session = SimpleNamespace(facebook_web=AsyncMock(return_value=web),
+                browser_lease=lambda **kw: self.fail("Chromium must not be used"))
+            result = await service._live_preflight(context=context, profile_id="fixture", business_id=BM,
+                ad_account_id=ACCOUNT, page_id=PAGE, payment_selector={"type": "Visa", "last4": "9999"},
+                transport=MetaTransportRouter(session, private_only=True))
+            self.assertTrue(result["payment_selection_required"])
+            self.assertEqual(result["payment_selection_source"], "selection_unavailable")
+            self.assertEqual(result["selected_payment_method"], {})
+            self.assertEqual([row["last4"] for row in result["payment_methods"]], ["1234"])
+            self.assertTrue(all(set(row) <= {"type", "last4", "linkage_status"} for row in result["payment_methods"]))
+            self.assertEqual([call.args[0] for call in web.graphql.await_args_list],
+                ["28797973873175785", "28814526004898205"])
+
     def test_error_partial_or_metadata_id_cannot_be_success(self):
         for marker in ({"errors": [{}]}, {"error": 123}, {"hasNext": True}, {"extensions": {"is_final": False}}):
             value = {"data": {"create": {"id": "123456789"}}, **marker}

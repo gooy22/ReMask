@@ -55,7 +55,7 @@ class StaticLaunchTests(unittest.TestCase):
             StaticLaunchContractStore(self.manifest)
         self.assertEqual(caught.exception.code, 'PRIVATE_LAUNCH_STATIC_MANIFEST_INVALID')
 
-    def test_invalid_local_references_are_rejected_before_publication(self):
+    def test_local_media_cannot_be_mistaken_for_published_meta_media(self):
         for media in ({'staged_media': [{'id': 'm-local', 'sha256': 'a'*64}]},
                       {'media_library_id': 'm-local'}, {'carousel_media_library_ids': ['m-local']}):
             launch = {section: {'name': 'fixture'} for section in ('campaign', 'adset', 'creative', 'ad')}
@@ -63,3 +63,23 @@ class StaticLaunchTests(unittest.TestCase):
             with self.assertRaises(ProvisioningError) as caught:
                 _effective_launch_payload(launch)
             self.assertEqual(caught.exception.code, 'PRIVATE_LAUNCH_MEDIA_INVALID')
+
+    def test_omitting_format_cannot_bypass_local_media_or_carousel_guard(self):
+        for fields, code in (({'staged_media': [{'id': 'm-local'}]}, 'PRIVATE_LAUNCH_MEDIA_INVALID'),
+                             ({'media_library_id': 'm-local'}, 'PRIVATE_LAUNCH_MEDIA_INVALID'),
+                             ({'carousel_media_library_ids': ['m-local']}, 'PRIVATE_LAUNCH_MEDIA_INVALID'),
+                             ({'carousel_cards': [{'link': 'https://example.test/'}]}, 'PRIVATE_LAUNCH_CREATIVE_FORMAT_INVALID')):
+            with self.subTest(fields=fields):
+                launch = {section: {'name': 'fixture'} for section in ('campaign', 'adset', 'creative', 'ad')}
+                launch['creative'].update(fields)
+                with self.assertRaises(ProvisioningError) as caught:
+                    _effective_launch_payload(launch)
+                self.assertEqual(caught.exception.code, code)
+
+    def test_non_scalar_creative_format_is_a_validation_error(self):
+        for value in ({}, [], True):
+            launch = {section: {'name': 'fixture'} for section in ('campaign', 'adset', 'creative', 'ad')}
+            launch['creative']['format'] = value
+            with self.assertRaises(ProvisioningError) as caught:
+                _effective_launch_payload(launch)
+            self.assertEqual(caught.exception.code, 'PRIVATE_LAUNCH_CREATIVE_FORMAT_INVALID')

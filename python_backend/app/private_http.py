@@ -102,12 +102,16 @@ class PrivateHttpClient:
 
     @asynccontextmanager
     async def request(self, method: str, url: str, **kwargs: Any):
+        # Profile credentials must never leave through a direct connection,
+        # even when a caller bypasses ProfileResolver or drops its proxy.
+        if not self.proxy:
+            raise httpx.ProxyError("Private request requires the profile proxy")
         requested_proxy = kwargs.pop("proxy", self.proxy)
         if requested_proxy != self.proxy:
             raise httpx.ProxyError("Private request cannot change profile proxy")
         redirects = kwargs.pop("allow_redirects", False)
         request_budget = kwargs.pop("request_timeout_seconds", self.timeout_seconds)
-        request_budget = max(5.0, min(float(request_budget), 300.0))
+        request_budget = max(0.001, min(float(request_budget), 300.0))
         if request_budget != self.timeout_seconds:
             kwargs["timeout"] = httpx.Timeout(request_budget)
         log.info("[%s] private_http start method=%s host=%s", self.profile_name,

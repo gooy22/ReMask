@@ -95,6 +95,14 @@ class AdvertisingOperationTests(unittest.IsolatedAsyncioTestCase):
             await self.upload()
         self.assertEqual(self.web.posts,1)
 
+    async def test_changed_file_stops_before_durable_intent_or_upload(self):
+        self.media.path.write_bytes(b'changed bytes')
+        with self.assertRaises(ProvisioningError) as caught:
+            await self.upload()
+        self.assertEqual(caught.exception.code,'PRIVATE_LAUNCH_MEDIA_INVALID')
+        self.assertEqual(self.web.posts,0)
+        self.assertIsNone(await self.state.step('fixture-launch',OperationKey('IMAGE_UPLOAD:'+self.media.sha256)))
+
 
 class AdvertisingInputTests(unittest.TestCase):
     def test_desired_delivery_does_not_make_create_active(self):

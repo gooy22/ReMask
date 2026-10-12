@@ -1,6 +1,7 @@
 import asyncio
 from pathlib import Path
 import ssl
+import socket
 import subprocess
 import tempfile
 import unittest
@@ -22,7 +23,7 @@ class Chunks(httpx.AsyncByteStream):
 
 
 class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
-    def make(self, proxy=None, name="fixture", uid="123"):
+    def make(self, proxy="http://127.0.0.1:1", name="fixture", uid="123"):
         client = PrivateHttpClient(profile_name=name, cookies={"c_user": uid},
             proxy=proxy, user_agent="fixture-UA", timeout_seconds=5, pool_size=2)
         self.addAsyncCleanup(client.close)
@@ -86,6 +87,28 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status, 307)
         self.assertEqual(len(calls), 1)
 
+    async def test_graphql_multipart_stream_keeps_auth_and_claim_before_one_post(self):
+        import io
+        web = FacebookWebSession(WebProfile('fixture', {'c_user':'123'}, 'http://127.0.0.1:1', 'fixture-UA'))
+        self.addAsyncCleanup(web.close)
+        web.bootstrap = AsyncMock(return_value=FacebookBootstrap('fresh-dtsg','123'))
+        client = await web._ensure_session()
+        events=[]
+        async def claim():
+            events.append('claim')
+        async def handler(request):
+            events.append('post')
+            self.assertIn('multipart/form-data; boundary=',request.headers['content-type'])
+            body=await request.aread()
+            for value in (b'fresh-dtsg',b'fixture image bytes',b'name="file"; filename="fixture.png"',b'123456789'):
+                self.assertIn(value,body)
+            return httpx.Response(200,json={'data':{'upload':{'hash':'fixture_hash'}}})
+        await self.mock(client,handler)
+        result=await web.graphql('123456789',{'account':'123'},endpoint_url='https://www.facebook.com/api/graphql/',
+            before_submit=claim,multipart_files={'file':('fixture.png',io.BytesIO(b'fixture image bytes'),'image/png')})
+        self.assertEqual(result['data']['upload']['hash'],'fixture_hash')
+        self.assertEqual(events,['claim','post'])
+
     async def test_fresh_set_cookie_is_used_on_next_profile_request(self):
         client = self.make()
         seen = []
@@ -101,7 +124,7 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("xs=fresh-session", seen[1])
 
     async def test_failed_durable_intent_prevents_http2_post(self):
-        web = FacebookWebSession(WebProfile("fixture", {"c_user": "123"}, None, "fixture-UA"))
+        web = FacebookWebSession(WebProfile("fixture", {"c_user": "123"}, "http://127.0.0.1:1", "fixture-UA"))
         self.addAsyncCleanup(web.close)
         web._bootstrap = FacebookBootstrap("fresh-dtsg", "123")
         web.bootstrap = AsyncMock(return_value=web._bootstrap)
@@ -124,8 +147,170 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
                 self.fail("must not dispatch")
         handler.assert_not_awaited()
 
+    async def test_missing_proxy_blocks_every_request_before_dispatch(self):
+        client = self.make(proxy=None)
+        handler = AsyncMock()
+        await self.mock(client, handler)
+        for method in ("GET", "POST"):
+            for host in ("business.facebook.com", "static.xx.fbcdn.net"):
+                with self.subTest(method=method, host=host):
+                    with self.assertRaises(httpx.ProxyError):
+                        async with client.request(method, "https://" + host + "/"):
+                            self.fail("missing proxy must block dispatch")
+        handler.assert_not_awaited()
+
+    async def test_failed_proxy_never_retries_or_connects_directly(self):
+        # Every listener and DNS result is local. A direct connection or an
+        # environment-proxy fallback would hit the destination trap below.
+        direct, tunnels, tasks = [], [], set()
+        async def destination(reader, writer):
+            direct.append(True)
+            writer.close()
+            await writer.wait_closed()
+        origin = await asyncio.start_server(destination, "127.0.0.1", 0)
+        origin_port = origin.sockets[0].getsockname()[1]
+        actual_dns = socket.getaddrinfo
+        def local_dns(host, port, *args, **kwargs):
+            hostname = host.decode() if isinstance(host, bytes) else str(host)
+            if hostname.endswith("facebook.com"):
+                host = "127.0.0.1"
+            return actual_dns(host, port, *args, **kwargs)
+        try:
+            for failure in ("407", "503", "close", "timeout", "refused"):
+                async def reject(reader, writer):
+                    tasks.add(asyncio.current_task())
+                    try:
+                        tunnels.append(await reader.readuntil(b"\r\n\r\n"))
+                        if failure == "timeout":
+                            await reader.read()
+                        elif failure != "close":
+                            writer.write(("HTTP/1.1 " + failure + " Proxy unavailable\r\n"
+                                          "Content-Length: 0\r\nConnection: close\r\n\r\n").encode())
+                            await writer.drain()
+                    finally:
+                        writer.close()
+                        await writer.wait_closed()
+                server = await asyncio.start_server(reject, "127.0.0.1", 0)
+                port = server.sockets[0].getsockname()[1]
+                if failure == "refused":
+                    server.close()
+                    await server.wait_closed()
+                client = self.make("http://fixture-user:fixture-password@127.0.0.1:" + str(port))
+                client.timeout_seconds = 0.1
+                before = len(tunnels)
+                try:
+                    with patch("socket.getaddrinfo", side_effect=local_dns), patch.dict("os.environ", {
+                        "HTTP_PROXY": "http://127.0.0.1:" + str(origin_port),
+                        "HTTPS_PROXY": "http://127.0.0.1:" + str(origin_port),
+                        "ALL_PROXY": "http://127.0.0.1:" + str(origin_port),
+                        "NO_PROXY": "business.facebook.com",
+                    }), self.assertLogs("remask_worker", level="INFO") as logs:
+                        for method in ("GET", "POST"):
+                            with self.subTest(failure=failure, method=method):
+                                with self.assertRaises((httpx.TransportError, TimeoutError)):
+                                    async with client.request(method,
+                                            f"https://business.facebook.com:{origin_port}/api/graphql/"):
+                                        self.fail("failed proxy must not reach destination")
+                        self.assertNotIn("fixture-password", str(logs.output))
+                        self.assertNotIn("c_user", str(logs.output))
+                    self.assertEqual(direct, [])
+                    self.assertEqual(len(tunnels) - before, 0 if failure == "refused" else 2)
+                    self.assertTrue(all(b"cookie:" not in row.lower() for row in tunnels))
+                finally:
+                    await client.close()
+                    server.close()
+                    await server.wait_closed()
+                    for task in tasks:
+                        if not task.done():
+                            task.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
+        finally:
+            origin.close()
+            await origin.wait_closed()
+
+    async def test_bootstrap_network_failure_is_not_session_expiry_or_origin_retry(self):
+        for failure in (httpx.ProxyError("407 fixture-secret"),
+                        httpx.ConnectError("fixture-secret"),
+                        httpx.ConnectTimeout("fixture-secret"), TimeoutError()):
+            with self.subTest(failure=type(failure).__name__):
+                web = FacebookWebSession(WebProfile("fixture", {"c_user": "123"},
+                    "http://127.0.0.1:1", "fixture-UA"))
+                self.addAsyncCleanup(web.close)
+                client = await web._ensure_session()
+                calls = []
+                def handler(request):
+                    calls.append(request)
+                    raise failure
+                await self.mock(client, handler)
+                web._fetch_dtsg_refresh_token = AsyncMock()
+                with self.assertRaises(RemoteRequestError) as caught:
+                    await web.bootstrap()
+                self.assertEqual(len(calls), 1)
+                web._fetch_dtsg_refresh_token.assert_not_awaited()
+                self.assertFalse(caught.exception.request_may_have_been_sent)
+                self.assertEqual(caught.exception.transport_stage, "bootstrap")
+                self.assertEqual(caught.exception.meta_payload["transport_failure"]["kind"],
+                                 type(failure).__name__)
+                self.assertNotIn("fixture-secret", str(caught.exception))
+                self.assertIsNone(web._bootstrap)
+
+    async def test_proxy_recovery_can_bootstrap_again_without_replacing_cookies(self):
+        web = FacebookWebSession(WebProfile("fixture", {"c_user": "123", "xs": "fixture-xs"},
+            "http://127.0.0.1:1", "fixture-UA"))
+        self.addAsyncCleanup(web.close)
+        client = await web._ensure_session()
+        calls = []
+        def handler(request):
+            calls.append(request)
+            if len(calls) == 1:
+                raise httpx.ProxyError("407")
+            return httpx.Response(200, text='["DTSGInitialData",[],{"token":"fixture-dtsg"}]')
+        await self.mock(client, handler)
+        with self.assertRaises(RemoteRequestError):
+            await web.bootstrap()
+        bootstrap = await web.bootstrap()
+        self.assertEqual(bootstrap.fb_dtsg, "fixture-dtsg")
+        self.assertEqual(bootstrap.actor_id, "123")
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0].headers["cookie"], calls[1].headers["cookie"])
+        self.assertEqual(web.profile.cookies["xs"], "fixture-xs")
+
+    async def test_launch_proxy_failure_stops_before_read_or_create_without_browser(self):
+        from types import SimpleNamespace
+        import time
+        from app.private_launch import PrivateLaunchService, PrivateLaunchContractStore
+        from app.provisioning.meta_transport import MetaTransportRouter
+        from app.provisioning.models import ProvisioningError
+        from app.provisioning.state import ProvisioningStateStore
+        from tests.test_private_launch_service import contracts
+        import json
+
+        web = FacebookWebSession(WebProfile("fixture", {"c_user": "123"},
+            "http://127.0.0.1:1", "fixture-UA"))
+        self.addAsyncCleanup(web.close)
+        client = await web._ensure_session()
+        handler = AsyncMock(side_effect=httpx.ProxyError("407"))
+        await self.mock(client, handler)
+        web.graphql = AsyncMock()
+        session = SimpleNamespace(facebook_web=AsyncMock(return_value=web),
+            browser_lease=lambda **kwargs: self.fail("proxy outage must not start Chromium"))
+        with tempfile.TemporaryDirectory() as directory:
+            service = PrivateLaunchService(ProvisioningStateStore(str(Path(directory)/"state.sqlite")),
+                contracts=PrivateLaunchContractStore(json.dumps(contracts())))
+            context = SimpleNamespace(profile_id="fixture", inventory_updated_at=int(time.time()),
+                ad_accounts=[{"ad_account_id": "123456789", "business_id": "987654321", "account_status": 1}])
+            with self.assertRaises(ProvisioningError) as caught:
+                await service._live_preflight(context=context, profile_id="fixture",
+                    business_id="987654321", ad_account_id="123456789", page_id="111222333",
+                    transport=MetaTransportRouter(session, private_only=True))
+            self.assertEqual(caught.exception.code, "PRIVATE_LAUNCH_HTTP_PREFLIGHT_FAILED")
+            self.assertTrue(caught.exception.retryable)
+            handler.assert_awaited_once()
+            web.graphql.assert_not_awaited()
+            self.assertTrue(web.private_only)
+
     async def test_stream_reset_after_create_retains_ambiguous_intent_without_retry(self):
-        web = FacebookWebSession(WebProfile("fixture", {"c_user": "123"}, None, "fixture-UA"))
+        web = FacebookWebSession(WebProfile("fixture", {"c_user": "123"}, "http://127.0.0.1:1", "fixture-UA"))
         self.addAsyncCleanup(web.close)
         web._bootstrap = FacebookBootstrap("fresh-dtsg", "123")
         web.bootstrap = AsyncMock(return_value=web._bootstrap)
@@ -251,7 +436,7 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
             await writer.wait_closed()
         server = await asyncio.start_server(origin, "127.0.0.1", 0)
         try:
-            client = self.make()
+            client = self.make("http://127.0.0.1:" + str(server.sockets[0].getsockname()[1]))
             async with client.get("http://127.0.0.1:" + str(server.sockets[0].getsockname()[1])) as response:
                 self.assertEqual(response.http_version, "HTTP/1.1")
                 self.assertEqual(await response.text(), "ok")

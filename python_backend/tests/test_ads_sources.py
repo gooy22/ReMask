@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 from pathlib import Path
@@ -5,6 +6,9 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
+
+import httpx
+from fb_worker import AuthenticationError, RemoteRequestError
 
 from app.contract_maintenance.ads_sources import compact_record, deferred_script_urls, module_records, module_source, public_script_url
 from app.contract_maintenance.launch_http_audit import collect_sources, inspect_saved_sources
@@ -47,6 +51,14 @@ class AdsSourceTests(unittest.TestCase):
         self.assertEqual(deferred_script_urls(document, preferred=["AsyncRequest"]),
                          [resources["1"]["src"], resources["0"]["src"]])
 
+    def test_explicit_sender_priority_is_kept_in_requested_order(self):
+        resources = {str(i): {"type": "js", "src": f"https://static.xx.fbcdn.net/{i}.js"} for i in range(3)}
+        components = {name: {"r": [str(i)]} for i, name in enumerate(
+            ("AdsGraphAPI", "AdsDraftPublishDataManager", "AdsPublishUI"))}
+        urls = deferred_script_urls(json.dumps({"rsrcMap": resources, "compMap": components}),
+            preferred=["AdsDraftPublishDataManager", "AdsGraphAPI", "AdsDraftPublishDataManager"])
+        self.assertEqual(urls, [resources[str(i)]["src"] for i in (1, 0, 2)])
+
     def test_exact_selected_literal_transport_helper_is_retained_without_execution(self):
         source = '__d("AsyncRequest",[],(function(a,b,c,d,e,f){f.send=function(){throw "never run"};}),98);'
         self.assertEqual(list(module_records(source)), [])
@@ -85,8 +97,111 @@ class AdsSourceTests(unittest.TestCase):
             self.assertEqual(len(report), 1)
             self.assertTrue(next(row for row in json.loads(report[0]) if row["name"] == "AdsPublish")["present"])
 
+    def test_default_saved_inspection_exports_sender_and_transport_without_network(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)/"maintenance"; root.mkdir()
+            rows = [{"name": name, "source": "function(){return 1;}", "source_kind": "public_cdn"}
+                    for name in ("AsyncRequest", "AdsPromotablePageListLoaderGAPI", "AdsDraftPublishDataManager", "AdsNoise")]
+            (root/"ads-public-modules-candidate.json").write_text(json.dumps({"modules": rows}))
+            with patch.dict(os.environ, {"REMASK_DATA_DIR": temporary,
+                "REMASK_LAUNCH_HTTP_AUDIT_MODULES": ""}), \
+                    patch("app.contract_maintenance.launch_http_audit.log") as log:
+                inspect_saved_sources()
+            exported = [json.loads(call.args[1])["name"] for call in log.info.call_args_list if "evidence=" in call.args[0]]
+            self.assertEqual(exported, ["AdsDraftPublishDataManager", "AsyncRequest", "AdsPromotablePageListLoaderGAPI"])
+
 
 class AdsSourceTransportTests(unittest.IsolatedAsyncioTestCase):
+    def document(self, count):
+        urls = [f"https://static.xx.fbcdn.net/{i}.js" for i in range(count)]
+        return json.dumps({"rsrcMap": {str(i): {"type": "js", "src": url} for i, url in enumerate(urls)},
+            "compMap": {"AdsDraftPublishDataManager": {"r": [str(i) for i in range(count)]}}}), urls
+
+    async def test_default_sender_capture_reaches_400_observed_files_with_three_workers(self):
+        document, urls = self.document(401)
+        calls, active, peak = [], 0, 0
+        async def fetch(url, **kwargs):
+            nonlocal active, peak
+            if url not in urls:
+                return 200, document, url
+            calls.append(url)
+            active += 1; peak = max(peak, active)
+            try:
+                await asyncio.sleep(0)
+                name = "AsyncRequest" if url == urls[399] else "AdsFixture" + str(urls.index(url))
+                return 200, f'__d("{name}",[],function(a,b,c,d,e,f){{f.x=1;}});', url
+            finally:
+                active -= 1
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, {
+            "REMASK_DATA_DIR": temporary, "REMASK_LAUNCH_HTTP_AUDIT_MODULES": ""}):
+            web = SimpleNamespace(fetch_text=AsyncMock(side_effect=fetch), graphql=AsyncMock())
+            result = await collect_sources(web, account="123456789", business="987654321")
+            self.assertEqual(result["scripts_requested"], 400)
+            self.assertEqual(result["modules"], 400)
+            self.assertEqual(set(calls), set(urls[:400]))
+            self.assertEqual(peak, 3)
+            saved = json.loads((Path(temporary)/"maintenance"/"ads-public-modules-candidate.json").read_text())
+            self.assertIn("AsyncRequest", {row["name"] for row in saved["modules"]})
+            self.assertEqual(saved["capture"]["scripts_requested"], 400)
+            web.graphql.assert_not_awaited()
+
+    async def test_concurrent_byte_reservations_and_failed_reads_cannot_refill_budget(self):
+        document, urls = self.document(10)
+        for fail in (False, True):
+            with self.subTest(fail=fail), tempfile.TemporaryDirectory() as temporary, \
+                    patch.dict(os.environ, {"REMASK_DATA_DIR": temporary}), \
+                    patch("app.contract_maintenance.launch_http_audit.SCRIPT_BYTE_LIMIT", 100), \
+                    patch("app.contract_maintenance.launch_http_audit.CAPTURE_BYTE_LIMIT", 250):
+                requested = []
+                async def fetch(url, **kwargs):
+                    if url not in urls:
+                        return 200, document, url
+                    requested.append(kwargs["max_bytes"])
+                    await asyncio.sleep(0)
+                    if fail:
+                        raise RemoteRequestError("partial response lost")
+                    body = '__d("AdsFixture",[],function(a,b,c,d,e,f){f.x=1;});'
+                    return 200, body.ljust(kwargs["max_bytes"]), url
+                web = SimpleNamespace(fetch_text=AsyncMock(side_effect=fetch), graphql=AsyncMock())
+                result = await collect_sources(web, account="123456789", business="987654321")
+                self.assertEqual(sorted(requested), [50, 100, 100])
+                self.assertEqual(result["charged_bytes"], 250)
+                self.assertEqual(result["scripts_requested"], 3)
+                self.assertEqual(result["scripts_failed"], 3 if fail else 0)
+                web.graphql.assert_not_awaited()
+
+    async def test_proxy_or_auth_failure_cancels_other_reads_and_preserves_saved_evidence(self):
+        document, urls = self.document(400)
+        proxy_failure = RemoteRequestError("proxy route unavailable")
+        proxy_failure.__cause__ = httpx.ProxyError("407 fixture-secret")
+        for failure in (proxy_failure, AuthenticationError("login gate")):
+            with self.subTest(failure=type(failure).__name__), tempfile.TemporaryDirectory() as temporary, \
+                    patch.dict(os.environ, {"REMASK_DATA_DIR": temporary}):
+                target = Path(temporary)/"maintenance"/"ads-public-modules-candidate.json"
+                target.parent.mkdir(); target.write_text('{"modules":[{"name":"AdsPrevious"}]}')
+                previous = target.read_bytes()
+                started, cancelled = [], []
+                async def fetch(url, **kwargs):
+                    if url not in urls:
+                        return 200, document, url
+                    started.append(url)
+                    if url == urls[0]:
+                        await asyncio.sleep(0)
+                        raise failure
+                    try:
+                        await asyncio.Event().wait()
+                    finally:
+                        cancelled.append(url)
+                web = SimpleNamespace(fetch_text=AsyncMock(side_effect=fetch), graphql=AsyncMock())
+                with self.assertRaises(type(failure)) as caught:
+                    await collect_sources(web, account="123456789", business="987654321")
+                self.assertIs(caught.exception, failure)
+                self.assertLessEqual(len(started), 3)
+                self.assertEqual(set(cancelled), set(started) - {urls[0]})
+                self.assertEqual(target.read_bytes(), previous)
+                self.assertFalse(target.with_suffix(".tmp").exists())
+                web.graphql.assert_not_awaited()
+
     async def test_collection_only_gets_observed_public_urls_and_rejects_foreign_redirect(self):
         source = '__d("AdsPublish",[],function(a,b,c,d,e,f){f.x=1;},98);'
         document = '<script src="https://static.xx.fbcdn.net/a.js"></script><script src="https://evil.test/b.js"></script>'
