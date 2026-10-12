@@ -315,7 +315,7 @@ declare(strict_types=1);
 final class RemaskAdvertisingAssetBridge
 {
     public static function read(array $input, array $catalog, string $resource, bool $force = false): array {
-        $allowed=['pixels','custom_audiences','images','videos','creatives','instagram_accounts','instagram_media',
+        $allowed=['pages','pixels','custom_audiences','images','videos','creatives','instagram_accounts','instagram_media',
             'conversion_goals','campaigns','adsets','ads','insights','locations','interests','behaviors','locales'];
         if (!in_array($resource,$allowed,true)) throw new InvalidArgumentException('UNKNOWN_ADVERTISING_RESOURCE');
         $profile=trim((string)($input['profile'] ?? ''));
@@ -339,7 +339,8 @@ final class RemaskAdvertisingAssetBridge
         $raw=@file_get_contents($base.'/api/v1/profiles/'.rawurlencode($profile).'/advertising-resources?'.$params,false,$context);
         $data=is_string($raw)?json_decode($raw,true):null;
         if (!is_array($data) || ($data['ok'] ?? null)!==true
-            || ($data['profile'] ?? '')!==$profile || ($data['account_id'] ?? '')!==$account) {
+            || ($data['profile'] ?? '')!==$profile || ($data['account_id'] ?? '')!==$account
+            || ($data['resource'] ?? '')!==$resource) {
             $detail=is_array($data['detail'] ?? null)?(string)($data['detail']['code'] ?? ''):'';
             throw new RuntimeException($detail ?: 'ADVERTISING_RESOURCE_UNAVAILABLE');
         }
@@ -347,6 +348,29 @@ final class RemaskAdvertisingAssetBridge
     }
 }
 ASSET_BRIDGE
+);
+// Workspace assets use the same exact-account READ catalog as Launch.
+file_put_contents($root.'/ajax/metaAssetManager.php', <<<'ASSET_MANAGER'
+<?php
+declare(strict_types=1);
+/* REMASK_PRIVATE_WORKSPACE_ASSETS_V1 */
+require_once __DIR__.'/../settings.php';
+require_once __DIR__.'/../checkpassword.php';
+require_once __DIR__.'/../classes/MetaEndpoint.php';
+require_once __DIR__.'/../classes/RemaskPrivateLaunchCatalog.php';
+require_once __DIR__.'/../classes/RemaskAdvertisingAssetBridge.php';
+try {
+    $input=MetaEndpoint::input();
+    $profile=trim((string)($input['profile'] ?? ''));
+    if ($profile==='') throw new InvalidArgumentException('profile is required');
+    MetaEndpoint::accountForName($profile);
+    $action=strtolower(trim((string)($input['action'] ?? 'list')));
+    if ($action!=='list') throw new RuntimeException('PRIVATE_ADVERTISING_ASSET_MUTATION_CONTRACT_REQUIRED');
+    $resource=strtolower(trim((string)($input['resource'] ?? '')));
+    $force=filter_var($input['force'] ?? false,FILTER_VALIDATE_BOOLEAN);
+    MetaEndpoint::ok(RemaskAdvertisingAssetBridge::read($input,RemaskPrivateLaunchCatalog::load($profile),$resource,$force));
+} catch (Throwable $e) { MetaEndpoint::fail($e); }
+ASSET_MANAGER
 );
 file_put_contents($root.'/ajax/metaAssets.php', <<<'ASSETS'
 <?php
@@ -550,6 +574,37 @@ async function checkAssetsSelection(){
 READINESS_UI
 , $start, $end-$start);
 $workspace=str_replace('const n=state.selected[state.activeTab].size;', 'const n=selectedRows(state.activeTab).length;', $workspace);
+if (strpos($workspace,'REMASK_PRIVATE_WORKSPACE_ASSETS_V1')===false) $workspace.= <<<'ASSET_UI'
+
+/* REMASK_PRIVATE_WORKSPACE_ASSETS_V1 */
+async function fetchAsset(resource,force=false){
+  const {profile,accountId,generation}=state.asset;
+  if(!profile||!accountId)throw new Error('Выберите один РК для загрузки Assets.');
+  const account=String(accountId).replace(/^act_/,'');
+  const key=`${profile}|${resource}|${account}`;
+  if(force)state.asset.cache.delete(key);
+  if(!force&&state.asset.cache.has(key))return state.asset.cache.get(key);
+  if(state.asset.inflight.has(key)){
+    const existing=state.asset.inflight.get(key);
+    if(!force||existing.remaskPrivateForce===true)return existing;
+    await existing.catch(()=>null);
+    if(profile!==state.asset.profile||account!==String(state.asset.accountId).replace(/^act_/,'')||generation!==state.asset.generation)
+      throw new Error('Выбор РК изменился во время загрузки Assets.');
+    return fetchAsset(resource,true);
+  }
+  const pending=apiJson('ajax/metaAssetManager.php',post({profile,action:'list',resource,
+      account_id:accountId,force:force?'1':'0'})).then(data=>{
+    if(data?.profile!==profile||String(data?.account_id||'').replace(/^act_/,'')!==account||data?.resource!==resource)
+      throw new Error('Assets получены для другого профиля, РК или типа ресурса.');
+    if(generation===state.asset.generation)state.asset.cache.set(key,data);
+    return data;
+  }).finally(()=>{if(state.asset.inflight.get(key)===pending)state.asset.inflight.delete(key);});
+  pending.remaskPrivateForce=force===true;
+  state.asset.inflight.set(key,pending);
+  return pending;
+}
+
+ASSET_UI;
 file_put_contents($workspacePath,$workspace);
 // Review/submit still have only a legacy Graph implementation. Do not silently
 // use that implementation when the user selected private-worker operation.
@@ -596,7 +651,7 @@ $workspacePath=$root.'/workspace.php';
 if (is_file($workspacePath)) {
     $workspace=file_get_contents($workspacePath);
     $workspace=preg_replace('#scripts/workspace\\.js(?:\\?[^"\\\']*)?#',
-        'scripts/workspace.js?v=20261012-python-worker-ui-v220-advertising-v4',$workspace,1);
+        'scripts/workspace.js?v=20261012-python-worker-ui-v221-private-assets-v5',$workspace,1);
     file_put_contents($workspacePath,$workspace);
 }
 fwrite(STDERR,"[launch-private-catalog] local RK/Page reads installed; live advertising/payment permissions remain unverified\n");

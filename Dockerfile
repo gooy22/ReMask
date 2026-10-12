@@ -540,7 +540,9 @@ RUN set -eux; \
     ! test -f /var/www/html/ajax/metaPageHelper.php; \
     ! test -f /var/www/html/scripts/page-helper.js; \
     ! grep -q 'page-helper.js' /var/www/html/workspace.php; \
-    grep -Fq 'MetaEndpoint::cachedAsset($profile, $resource' /var/www/html/ajax/metaAssetManager.php; \
+    grep -q 'REMASK_PRIVATE_WORKSPACE_ASSETS_V1' /var/www/html/ajax/metaAssetManager.php; \
+    grep -q 'RemaskAdvertisingAssetBridge::read' /var/www/html/ajax/metaAssetManager.php; \
+    ! grep -q 'MetaEndpoint::service\|MetaEndpoint::cachedAsset' /var/www/html/ajax/metaAssetManager.php; \
     grep -q "resource:'pages'" /var/www/html/scripts/workspace.js; \
     ! grep -q 'hierarchy-autosync.js' /var/www/html/workspace.php; \
     mkdir -p /var/www/html/health /var/lib/remask /var/lib/remask/jobs /var/lib/remask/bundles /var/lib/remask/meta-cache /var/lib/remask/job-media /var/lib/remask/media-library /var/lib/remask/creative-presets; \

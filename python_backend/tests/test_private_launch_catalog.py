@@ -166,6 +166,75 @@ class PrivateLaunchCatalogTests(unittest.TestCase):
             self.assertIn('PRIVATE_LAUNCH_VERIFICATION_REQUIRED',(root/'ajax'/name).read_text())
             self.assertNotIn('cachedAsset',(root/'ajax'/name).read_text())
 
+    def workspace_assets(self, inputs):
+        root=Path(self.tmp.name)/'assets-endpoint'
+        for folder in ['ajax','classes']:(root/folder).mkdir(parents=True,exist_ok=True)
+        source=OVERLAY.read_text()
+        (root/'ajax/metaAssetManager.php').write_text(re.search(r"<<<'ASSET_MANAGER'\n(.*?)\nASSET_MANAGER",source,re.S).group(1))
+        (root/'classes/RemaskAdvertisingAssetBridge.php').write_text(re.search(r"<<<'ASSET_BRIDGE'\n(.*?)\nASSET_BRIDGE",source,re.S).group(1))
+        (root/'settings.php').write_text('<?php // isolated endpoint configuration')
+        (root/'checkpassword.php').write_text('<?php // authenticated fixture')
+        (root/'classes/RemaskPrivateLaunchCatalog.php').write_text('''<?php
+class RemaskPrivateLaunchCatalog {
+ public static function load($profile) {return ['ad_accounts'=>['data'=>[['account_id'=>'333333333'],['account_id'=>'444444444']]]];}
+}''')
+        (root/'classes/MetaEndpoint.php').write_text('''<?php
+class MetaEndpoint {
+ public static function input(){return $_POST;}
+ public static function accountForName($name){if($name!=='19')throw new InvalidArgumentException('UNKNOWN_PROFILE');}
+ public static function serviceForAccountName($name){throw new RuntimeException('LEGACY_SERVICE_CALLED');}
+ public static function cachedAsset(...$args){throw new RuntimeException('LEGACY_CACHE_CALLED');}
+ public static function ok($data){echo json_encode(['result'=>$data,'requests'=>$GLOBALS['fixture_requests']]);exit;}
+ public static function fail($e){echo json_encode(['error'=>$e->getMessage(),'requests'=>$GLOBALS['fixture_requests']]);exit;}
+}''')
+        prelude='''
+$GLOBALS['fixture_requests']=[];
+class FixtureWorkerStream {
+ public $context; private $body=''; private $offset=0;
+ public function stream_open($url,$mode,$options,&$opened_path){
+   parse_str(parse_url($url,PHP_URL_QUERY),$query);
+   $headers=stream_context_get_options($this->context)['http']['header'];
+   $GLOBALS['fixture_requests'][]=['path'=>parse_url($url,PHP_URL_PATH),'query'=>$query,
+      'worker_key_present'=>strpos($headers,'X-Remask-Worker-Key: fixture-private-key')!==false];
+   $this->body=json_encode(['ok'=>true,'profile'=>$_POST['response_profile'] ?? '19',
+      'account_id'=>$_POST['response_account'] ?? $query['account_id'],
+      'resource'=>$_POST['response_resource'] ?? $query['resource'],'data'=>[['id'=>'555555555']],
+      'checked_live'=>$query['force']==='true']);return true;
+ }
+ public function stream_read($length){$value=substr($this->body,$this->offset,$length);$this->offset+=strlen($value);return $value;}
+ public function stream_eof(){return $this->offset>=strlen($this->body);}
+ public function stream_stat(){return [];}
+}
+stream_wrapper_unregister('http');stream_wrapper_register('http','FixtureWorkerStream');
+putenv('REMASK_PYTHON_WORKER_URL=http://127.0.0.1:8081');putenv('REMASK_WORKER_API_KEY=fixture-private-key');
+'''
+        code=prelude+'$_POST=json_decode('+json.dumps(json.dumps(inputs))+',true);require '+json.dumps(str(root/'ajax/metaAssetManager.php'))+';'
+        result=subprocess.run(['php','-r',code],capture_output=True,text=True,check=True,timeout=10)
+        return json.loads(result.stdout)
+
+    def test_workspace_pages_use_selected_rk_and_private_worker_key(self):
+        result=self.workspace_assets({'profile':'19','resource':'pages','account_id':'act_333333333','force':'1'})
+        self.assertTrue(result['result']['checked_live'])
+        request=result['requests'][0]
+        self.assertEqual(request['path'],'/api/v1/profiles/19/advertising-resources')
+        self.assertEqual(request['query']['account_id'],'333333333')
+        self.assertEqual(request['query']['resource'],'pages')
+        self.assertEqual(request['query']['force'],'true')
+        self.assertTrue(request['worker_key_present'])
+
+    def test_workspace_rejects_foreign_resource_response_or_unbound_account(self):
+        for fields in [{'response_account':'999999999'},{'response_profile':'20'},{'response_resource':'pixels'}]:
+            result=self.workspace_assets({'profile':'19','resource':'pages','account_id':'act_333333333',**fields})
+            self.assertEqual(result['error'],'ADVERTISING_RESOURCE_UNAVAILABLE')
+        result=self.workspace_assets({'profile':'19','resource':'pages','account_id':'act_999999999'})
+        self.assertEqual(result['error'],'SELECT_ADVERTISING_ACCOUNT')
+        self.assertEqual(result['requests'],[])
+
+    def test_workspace_missing_mutation_contract_never_calls_legacy_service(self):
+        result=self.workspace_assets({'profile':'19','account_id':'act_333333333','action':'create_pixel'})
+        self.assertEqual(result['error'],'PRIVATE_ADVERTISING_ASSET_MUTATION_CONTRACT_REQUIRED')
+        self.assertEqual(result['requests'],[])
+
     def test_live_page_proof_cannot_cross_profile_account_or_expiry(self):
         import time
         proof={'profile_id':'7','account_id':'333333333','checked_live':True,
