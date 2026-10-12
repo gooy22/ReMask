@@ -14,19 +14,26 @@ from pathlib import Path
 import re
 from urllib.parse import urlsplit
 
+import httpx
+
 from ..private_auth import private_auth_error
 from ..private_inventory import _auth_gate
 from ..private_launch_read import inspect_pages
 from ..static_payment_read import inspect_methods
 from ..session import ProfileSession
 from ..provisioning.models import ProvisioningError
-from fb_worker import AuthenticationError
+from fb_worker import AuthenticationError, RemoteRequestError
 
 log = logging.getLogger("remask.launch_http_audit")
+
+SCRIPT_LIMIT = 400
+SCRIPT_BYTE_LIMIT = 5_000_000
+CAPTURE_BYTE_LIMIT = 50_000_000
 
 
 def inspect_saved_sources():
     """Review bounded public source evidence without another Meta request."""
+    from .ads_sources import PUBLICATION_TARGETS
     target = Path(os.getenv("REMASK_DATA_DIR") or "/var/lib/remask") / "maintenance" / "ads-public-modules-candidate.json"
     if not target.is_file() or target.stat().st_size > 20_000_000:
         return
@@ -43,11 +50,14 @@ def inspect_saved_sources():
         "AdsPromotablePageListStoreSourceFragment.graphql",
         "AdsPromotablePageListLoaderGAPI", "AdsPromotablePageListDataManager",
         "AdsPromotablePageDataProviderPlugin"}
+    selected.update(PUBLICATION_TARGETS)
+    selection_order = list(PUBLICATION_TARGETS)
     # Exact public module names only: no path, URL, expression or runtime eval.
     requested = os.getenv("REMASK_LAUNCH_HTTP_AUDIT_MODULES", "").split(",")
     if any(value.strip() for value in requested):
         selected = {value.strip() for value in requested[:24]
                     if re.fullmatch(r"[A-Za-z0-9_.:$-]{1,180}", value.strip())}
+        selection_order = [value.strip() for value in requested[:24] if value.strip() in selected]
     present = {row.get("name") for row in rows}
     report = []
     for name in sorted(selected):
@@ -58,7 +68,9 @@ def inspect_saved_sources():
                 for dependency in row.get("dependencies", []) if dependency not in present})[:40]})
     log.info("launch saved public module selection=%s", json.dumps(report))
     budget = 200_000
-    for row in sorted(rows, key=lambda row: (row.get("name", ""), row.get("sha256", ""))):
+    rank = {name: index for index, name in reversed(list(enumerate(selection_order)))}
+    for row in sorted(rows, key=lambda row: (rank.get(row.get("name"), len(rank)),
+                                           row.get("name", ""), row.get("sha256", ""))):
         source = row.get("source", "")
         if row.get("name") not in selected:
             continue
@@ -79,9 +91,10 @@ def inspect_saved_sources():
 
 async def collect_sources(web, *, account, business):
     from ..private_contract_discovery import _script_urls
-    from .ads_sources import compact_record, deferred_script_urls, module_records, public_script_url
+    from .ads_sources import PUBLICATION_TARGETS, compact_record, deferred_script_urls, module_records, public_script_url
     preferred = [value.strip() for value in os.getenv("REMASK_LAUNCH_HTTP_AUDIT_MODULES", "").split(",")[:24]
                  if re.fullmatch(r"[A-Za-z0-9_.:$-]{1,180}", value.strip())]
+    preferred = list(dict.fromkeys(preferred + list(PUBLICATION_TARGETS)))
     entry = ("https://adsmanager.facebook.com/adsmanager/manage/campaigns"
              f"?act={account}&business_id={business}")
     status, document, final = await web.fetch_text(entry, max_bytes=5_000_000, document_navigation=True)
@@ -113,48 +126,96 @@ async def collect_sources(web, *, account, business):
             elif identity not in modules:
                 skipped["source_budget"] += 1
     observe(document, "document")
-    semaphore = asyncio.Semaphore(3)
-    downloaded = 0
-    async def read(url):
-        nonlocal downloaded
-        async with semaphore:
-            if downloaded >= 50_000_000:
-                return
-            try:
-                code, source, final_url = await web.fetch_text(url, max_bytes=5_000_000, referer=entry)
-                downloaded += len(source.encode())
-                if 200 <= code < 300 and public_script_url(final_url) and not _auth_gate(final_url, source):
-                    observe(source, "public_cdn")
-            except AuthenticationError:
-                raise
-            except Exception:
-                return
     direct = [url for url in _script_urls(document, final, limit=24) if public_script_url(url)]
     deferred = deferred_script_urls(document, preferred=preferred)
-    # Preserve the core entry scripts, then follow each selected publication
-    # component's dependency closure before unrelated frontend modules.
-    urls = list(dict.fromkeys(direct + deferred))[:80]
+    # Request the observed sender/dependency resources before generic entry UI.
+    # Download workers remain bounded independently of the 400-file window.
+    urls = list(dict.fromkeys(deferred + direct))[:SCRIPT_LIMIT]
+    pending = iter(urls)
+    downloaded = charged = reserved = 0
+    attempted = failed = oversized = 0
+    condition = asyncio.Condition()
+    async def read_worker():
+        nonlocal downloaded, charged, reserved, attempted, failed, oversized
+        while True:
+            async with condition:
+                while CAPTURE_BYTE_LIMIT - charged - reserved <= 0 and reserved:
+                    await condition.wait()
+                budget = min(SCRIPT_BYTE_LIMIT, CAPTURE_BYTE_LIMIT - charged - reserved)
+                if budget <= 0:
+                    return
+                url = next(pending, None)
+                if url is None:
+                    return
+                reserved += budget
+                attempted += 1
+            # A failed/partially consumed response costs its reserved upper
+            # bound; an unavailable read must not replenish the byte budget.
+            consumed, received = budget, 0
+            try:
+                code, source, final_url = await web.fetch_text(url, max_bytes=budget, referer=entry)
+                size = len(source.encode())
+                received = size
+                consumed = min(size, budget)
+                if size > budget:
+                    oversized += 1
+                elif 200 <= code < 300 and public_script_url(final_url) and not _auth_gate(final_url, source):
+                    observe(source, "public_cdn")
+                else:
+                    failed += 1
+            except AuthenticationError:
+                raise
+            except RemoteRequestError as exc:
+                # fetch_text preserves its HTTP exception as __cause__. Stop
+                # the whole maintenance batch when the profile route fails.
+                if isinstance(exc.__cause__, (httpx.ProxyError, httpx.ConnectError, httpx.ConnectTimeout)):
+                    raise
+                failed += 1
+            except (httpx.ProxyError, httpx.ConnectError, httpx.ConnectTimeout):
+                raise
+            except Exception:
+                failed += 1
+            finally:
+                async with condition:
+                    downloaded += received
+                    charged += consumed
+                    reserved -= budget
+                    condition.notify_all()
     timed_out = False
     try:
         async with asyncio.timeout(75):
-            await asyncio.gather(*(read(url) for url in urls))
+            async with asyncio.TaskGroup() as group:
+                for _ in range(3):
+                    group.create_task(read_worker())
     except TimeoutError:
         timed_out = True
+    except ExceptionGroup as exc:
+        # Preserve auth/proxy classification across structured cancellation.
+        # Other worker failures are counted above instead of reaching here.
+        raise exc.exceptions[0] from exc
     root = Path(os.getenv("REMASK_DATA_DIR") or "/var/lib/remask") / "maintenance"
     root.mkdir(parents=True, exist_ok=True)
     target = root / "ads-public-modules-candidate.json"
     temporary = target.with_suffix(".tmp")
     if not modules:
-        return {"code": "ADS_SOURCE_NO_MODULES", "scripts": len(urls), "modules": 0, "timed_out": timed_out}
+        return {"code": "ADS_SOURCE_NO_MODULES", "scripts": len(urls), "modules": 0,
+            "timed_out": timed_out, "scripts_requested": attempted, "scripts_failed": failed,
+            "scripts_oversized": oversized, "downloaded_bytes": downloaded, "charged_bytes": charged}
     temporary.write_text(json.dumps({"scope": "candidate_only_not_installed",
         "modules": list(modules.values()), "deferred_scripts_observed": len(deferred),
         "scripts_observed": list(dict.fromkeys(direct + deferred)),
-        "capture": {"scripts_requested": len(urls), "downloaded_bytes": downloaded,
+        "capture": {"scripts_planned": len(urls), "scripts_requested": attempted,
+            "scripts_failed": failed, "scripts_oversized": oversized,
+            "downloaded_bytes": downloaded,
+            "charged_bytes": charged,
             "timed_out": timed_out, "skipped": skipped}}, ensure_ascii=False))
     temporary.replace(target)
     return {"code": "ADS_SOURCE_CANDIDATE_SAVED", "scripts": len(urls), "modules": len(modules),
             "deferred_scripts_observed": len(deferred), "downloaded_bytes": downloaded,
+            "charged_bytes": charged,
             "timed_out": timed_out,
+            "scripts_requested": attempted, "scripts_failed": failed,
+            "scripts_oversized": oversized,
             "skipped": skipped,
             "operation_modules": sorted({row["name"] for row in modules.values()
                 if row["name"].endswith((".graphql", "_facebookRelayOperation"))})[:100]}

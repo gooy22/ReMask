@@ -369,6 +369,16 @@ class PrivateLaunchPaymentSelectionTests(unittest.TestCase):
         self.assertEqual(selected["last4"], "1234")
         self.assertEqual(source, "single_live_method")
 
+    def test_distinct_credentials_with_same_mask_are_never_auto_selected(self):
+        methods = [{"credential_id": "111111111", "type": "Visa", "last4": "1234"},
+                   {"credential_id": "222222222", "type": "Visa", "last4": "1234"}]
+        with self.assertRaises(ProvisioningError) as caught:
+            _select_payment_method(methods, None)
+        self.assertEqual(caught.exception.code, "PRIVATE_LAUNCH_PAYMENT_SELECTION_REQUIRED")
+        with self.assertRaises(ProvisioningError) as caught:
+            _select_payment_method(methods, {"type": "Visa", "last4": "1234"})
+        self.assertEqual(caught.exception.code, "PRIVATE_LAUNCH_PAYMENT_SELECTION_AMBIGUOUS")
+
     def test_multiple_methods_require_explicit_masked_selection(self):
         methods = [
             {"type": "Visa", "last4": "1234"},

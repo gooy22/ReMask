@@ -8,6 +8,14 @@ from urllib.parse import urlsplit
 from ..private_contract_discovery import _LANGUAGE, _literal, _walk
 from tree_sitter import Parser
 
+# Exact dependencies observed in the saved 2026-10-11 publication callers.
+# These are capture targets, never executable or installed request contracts.
+PUBLICATION_TARGETS = (
+    "AdsDraftPublishDataManager", "AdsDraftPublishingManagerProvider",
+    "AdsGraphAPI", "AsyncRequest", "adsDraftPublishingPublishAction",
+    "adsDraftPublishingCreateFragmentAndPublishAction",
+)
+
 
 def public_script_url(url):
     try:
@@ -39,10 +47,10 @@ def deferred_script_urls(document, *, preferred=()):
                 else:
                     target[name] = value
     components, resources = maps["compMap"], maps["rsrcMap"]
-    preferred = set(preferred)
+    preferred = {name: index for index, name in reversed(list(enumerate(preferred)))}
     def priority(name):
         if name in preferred:
-            return (0, name)
+            return (0, preferred[name])
         if "Publish" in name and "PostPublish" not in name:
             return (1, name)
         if "GraphAPI" in name:

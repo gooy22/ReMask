@@ -140,3 +140,28 @@ existing Retry Failed action preserves the task idempotency key and Launch key;
 the resumed step sends only its pinned READ. Foreign-object proof failures
 retain retryable=false. A JobStore integration fixture covers the entire
 failure, retry, unchanged-key and query-only recovery path.
+
+Continuation on 12 October rebases the pending proxy/capture work onto release
+04841b1 (PR #127). Private HTTP rejects missing profile proxies before dispatch.
+A bootstrap connection failure is a sanitized transport error, never evidence
+of expired cookies, and does not retry other Meta origins or DTSG refresh.
+
+Advertising source collection now prioritizes the exact sender dependencies
+observed in the saved startPublish/startCreateFragmentAndPublish callers and
+can inspect up to 400 literal observed script URLs, with three workers and a
+75-second deadline. Concurrent reservations enforce the 50 MB byte budget;
+unknown partial reads consume their reserved budget. Proxy/connection/auth
+failures cancel the batch and preserve the previous snapshot. Candidates
+remain separate from the deployed static advertising manifest.
+
+Review no longer collapses distinct payment credentials with identical masked
+brand/last4 into one automatically selected card. A missing previously selected
+card requires a new explicit choice and clears the stale chooser state. Local
+media and carousel data cannot bypass pre-CREATE validation by omitting format.
+The initial PAUSED policy and independent READ/no-replay recovery are retained.
+The new UI cache tag is 20261012-advertising-worker-v3.
+
+Real publication CREATE/READ contracts are still absent from the deployed
+manifest. These changes prepare reliable collection and fix the launch input
+and transport paths; they do not establish a successful live publication.
+No live Meta request is needed for the regression fixtures above.

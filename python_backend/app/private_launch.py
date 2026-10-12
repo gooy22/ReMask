@@ -989,15 +989,18 @@ def _effective_launch_payload(value: Any) -> dict[str, Any]:
     creative = effective.get("creative")
     if not isinstance(creative, dict):
         raise ProvisioningError("PRIVATE_LAUNCH_INVALID_INPUT", "launch.creative must be an object", retryable=False)
+    if creative.get("staged_media") or creative.get("media_library_id") or creative.get("carousel_media_library_ids"):
+        raise ProvisioningError("PRIVATE_LAUNCH_MEDIA_CONTRACT_REQUIRED",
+            "Media is saved locally; a verified private Meta upload contract is required before publication.", retryable=False)
+    if creative.get("carousel_cards"):
+        raise ProvisioningError("PRIVATE_LAUNCH_CAROUSEL_CONTRACT_REQUIRED",
+            "A verified private carousel sender contract is required before publication.", retryable=False)
     if "format" in creative:
         creative = dict(creative)
         effective["creative"] = creative
         format_name = creative["format"]
-        if format_name not in {"SINGLE", "CAROUSEL", "INSTAGRAM_POST"}:
+        if not isinstance(format_name, str) or format_name not in {"SINGLE", "CAROUSEL", "INSTAGRAM_POST"}:
             raise ProvisioningError("PRIVATE_LAUNCH_CREATIVE_FORMAT_INVALID", "Unsupported advertising format", retryable=False)
-        if creative.get("staged_media") or creative.get("media_library_id") or creative.get("carousel_media_library_ids"):
-            raise ProvisioningError("PRIVATE_LAUNCH_MEDIA_CONTRACT_REQUIRED",
-                "Media is saved locally; a verified private Meta upload contract is required before publication.", retryable=False)
         if format_name == "CAROUSEL":
             raise ProvisioningError("PRIVATE_LAUNCH_CAROUSEL_CONTRACT_REQUIRED",
                 "A verified private carousel sender contract is required before publication.", retryable=False)
@@ -1106,7 +1109,6 @@ def _payment_selector(payload: dict[str, Any]) -> dict[str, str] | None:
 
 def _safe_payment_methods(methods: Any) -> list[dict[str, str]]:
     safe_methods: list[dict[str, str]] = []
-    seen: set[tuple[str, str]] = set()
     for row in methods if isinstance(methods, list) else []:
         if not isinstance(row, dict):
             continue
@@ -1119,10 +1121,9 @@ def _safe_payment_methods(methods: Any) -> list[dict[str, str]]:
             or not re.fullmatch(r"[A-Za-z][A-Za-z .+-]{0,39}", brand)
         ):
             continue
-        key = (brand.casefold(), last4)
-        if key in seen:
-            continue
-        seen.add(key)
+        # The private billing reader already deduplicates by credential ID.
+        # Distinct instruments can share brand/last4: keep that ambiguity
+        # instead of turning two cards into one auto-selected payment source.
         safe_methods.append({
             "type": brand,
             "last4": last4,
@@ -1357,13 +1358,18 @@ class PrivateLaunchService:
             selected_payment_method: dict[str, str] = {}
             payment_selection_source = "selection_required"
         else:
-            selected_payment_method, payment_selection_source = (
-                _select_payment_method(
-                    safe_payment_methods,
-                    payment_selector,
-                )
-            )
-            selected = [method for method in funding["payment_methods"]
+            try:
+                selected_payment_method, payment_selection_source = _select_payment_method(
+                    safe_payment_methods, payment_selector)
+            except ProvisioningError as exc:
+                if exc.code != "PRIVATE_LAUNCH_PAYMENT_SELECTION_UNAVAILABLE":
+                    raise
+                # A stale selected mask must prompt a new explicit choice,
+                # never silently switch cards or leave the chooser stuck.
+                payment_selection_required = True
+                selected_payment_method = {}
+                payment_selection_source = "selection_unavailable"
+            selected = [method for method in funding["payment_methods"] if selected_payment_method
                 if method.get("last4") == selected_payment_method["last4"]
                 and str(method.get("type") or "").casefold() == selected_payment_method["type"].casefold()]
             if any(method.get("is_expired") is True for method in selected):

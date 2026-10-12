@@ -516,7 +516,7 @@ if (strpos($js,'REMASK_PRIVATE_LAUNCH_CATALOG_V1')===false) {
 file_put_contents($jsPath,$js);
 $phpPath=$root.'/launch.php';
 $php=file_get_contents($phpPath);
-$php=preg_replace('#scripts/launch\\.js(?:\\?[^"\\\']*)?#','scripts/launch.js?v=20261011-advertising-worker-v2',$php,1);
+$php=preg_replace('#scripts/launch\\.js(?:\\?[^"\\\']*)?#','scripts/launch.js?v=20261012-advertising-worker-v3',$php,1);
 $php=str_replace('official API, read only','состояние оплаты, read only',$php);
 $php=str_replace('Одна настройка → много FB-профилей и RK. Каждая цель использует свой token, proxy и account-specific assets.',
     'Сохранённые РК и FP доступны без новой синхронизации. Доступ FP для рекламы и привязку карты ещё нужно проверить.',$php);
