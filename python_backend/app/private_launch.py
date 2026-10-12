@@ -1843,7 +1843,7 @@ class PrivateLaunchService:
             if row is None:
                 raise ProvisioningError("PRIVATE_LAUNCH_RESOURCE_CONTRACT_REQUIRED",
                     "A pinned resource query is required before publishing these selected assets",retryable=False)
-            _render(row["variables"],{"query":"","limit":500,**validation_values})
+            _render(row["variables"],{"query":"","limit":500,"cursor":"",**validation_values})
         preflight = await self._review_preflight(
             context=context,
             profile_id=profile_id,

@@ -123,6 +123,26 @@ class AdvertisingLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(plan['missing_contracts'],['CAMPAIGN','ADSET','CREATIVE','AD'])
         self.assertEqual(self.web.posts,0)
 
+    async def test_selected_pixel_with_paginated_read_is_validated_before_publication(self):
+        from app.private_advertising_reads import AdvertisingReadCatalog
+        row=copy.deepcopy(page_catalog().rows['pages'])
+        entry={'evidence':{'artifact_sha256':'a'*64,'sender_sha256':'b'*64,
+            'read_sha256':'c'*64,'observed_at':'2026-10-12'},'contract':row}
+        self.service.reads=AdvertisingReadCatalog({'reads':{'pixels':entry}})
+        self.payload['launch']['adset']['promoted_object']={'pixel_id':'777777777'}
+        original=self.web.graphql
+        async def read(doc_id,variables,**options):
+            if doc_id=='99009':
+                self.assertEqual(variables['cursor'],'')
+                self.assertEqual(self.web.posts,0)
+                return {'data':{'account':{'id':'123456789','pages':[{'id':'777777777','name':'Pixel'}],
+                    'has_next':False,'cursor':''}}}
+            return await original(doc_id,variables,**options)
+        self.web.graphql=read
+        result=await self.launch()
+        self.assertEqual(result['status'],'SUCCESS')
+        self.assertTrue(result['preflight']['asset_checks']['pixels']['verified'])
+
     async def test_non_scalar_delivery_status_is_validation_error(self):
         with self.assertRaises(ProvisioningError) as caught:
             await self.delivery({},'malformed-fixture')
