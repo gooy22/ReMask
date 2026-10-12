@@ -115,7 +115,7 @@ class AdvertisingLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.web.changes,[])
 
     async def test_plan_stays_offline_and_unconfigured_requests_are_reported(self):
-        service=PrivateLaunchService(self.state)
+        service=PrivateLaunchService(self.state,contracts=PrivateLaunchContractStore('{}'))
         plan=service.plan(profile_id='fixture',payload=self.payload)
         self.assertFalse(plan['ready'])
         self.assertFalse(plan['checked_live'])
