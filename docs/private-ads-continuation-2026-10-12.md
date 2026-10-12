@@ -26,7 +26,7 @@ configuration/ApiClient setter calls. Missing/conflicting configuration stops be
 mutation. The captured origin/version are defaults; SDK-routed browser URLs remain
 unconfirmed. A usable profile proxy and live canary remain necessary.
 
-Video, carousel, Instagram, selected Pixel/audience assets and activation are not
+Video, Instagram, selected Pixel/audience assets and activation are not
 enabled by this first image adapter and fail during preparation. Existing Relay
 fixtures and old durable launches are preserved; launch keys cannot mix protocols.
 The deployed manifest still controls which protocol is selected.
@@ -35,3 +35,18 @@ Local checks before the execution environment disconnected: 30 new synthetic tes
 and a combined 109-test advertising/HTTP2/old Launch run passed. The connected image
 path adds seven tests; its final validation is performed in GitHub CI.
 No Meta advertising, payment or bank mutation was submitted during development.
+
+The continuation also connects PAUSED image carousels (2–10 cards) through the
+same draft publisher. Each managed image upload is journaled by its checksum;
+resumption reads saved receipts and never replays a lost response. Existing image
+hashes require exact account-scoped reads. Card order, destinations, headlines,
+descriptions and CTA are preserved and independently checked in the final Creative.
+Automatic card reordering and the generated end card are explicitly disabled.
+
+The carousel schema is derived from three additional modules in the original,
+hash-verified scripts, recorded in private-ads-carousel-source-20261012.json.
+Invalid downstream fragment values now fail before media uploads. Ten carousel
+lifecycle cases and four read-only bootstrap audit cases were added. The optional
+REMASK_LAUNCH_HTTP_AUDIT_ADS_BOOTSTRAP mode checks the fresh selected-account document
+and independently reads the exact account/Business relation; it does not query payment settings, submit advertising or export session
+credentials. A real initializer/publication proof is still required.

@@ -1,0 +1,51 @@
+{
+  "scope": "public_source_schema_only",
+  "observed_on": "2026-10-12",
+  "repository_base": "c6638460d6152c40d0f9425a46ee8d9dc72eaf41",
+  "modules": [
+    {
+      "name": "AdsAdgroupChildAttachmentsFieldMappings",
+      "module_sha256": "04fafec6fac9628b72407faf4c7859a4015d7bbd2ba3c9fe244d9fa28e998bfa",
+      "script_sha256": "3c7de32f7de0b89953b2ecd5b31ff65bf34367e671f7f9e67134f6eb2d163000",
+      "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4ijsg4/yq/l/en_US-j/Y731TQMByU4.js",
+      "origin": "original_28fdfb9_script_hash_verified"
+    },
+    {
+      "name": "AdObjectStoryChildAttachmentSpecUtil",
+      "module_sha256": "56f42ae25e64c4c9d733151c5c9d6fa53a0a8eabf75ef1c5269cd3fa3a4f16ad",
+      "script_sha256": "3c7de32f7de0b89953b2ecd5b31ff65bf34367e671f7f9e67134f6eb2d163000",
+      "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4ijsg4/yq/l/en_US-j/Y731TQMByU4.js",
+      "origin": "original_28fdfb9_script_hash_verified"
+    },
+    {
+      "name": "ApiObjectStorySpecLinkFields",
+      "module_sha256": "d13a0354fd9b5607ab11ff421850566cf347feb44c023f381e0d791645061db3",
+      "script_sha256": "f45273ee31b82049ca473e4c7b1025166c696b69591175d4e9c8bdbc35cdd522",
+      "observed_url": "https://static.xx.fbcdn.net/rsrc.php/v4itLS4/yO/l/en_US-j/YjHG_hCa_oy.js",
+      "origin": "original_28fdfb9_script_hash_verified"
+    }
+  ],
+  "installed_fields": {
+    "link_data": [
+      "child_attachments",
+      "multi_share_optimized",
+      "multi_share_end_card"
+    ],
+    "child_attachments": [
+      "image_hash",
+      "link",
+      "name",
+      "description",
+      "call_to_action"
+    ]
+  },
+  "behavior": {
+    "preserves_input_card_order": true,
+    "automatic_card_reordering": false,
+    "generated_end_card": false,
+    "supported_media": "images_only",
+    "delivery": "PAUSED"
+  },
+  "live_request_response_captured": false,
+  "live_publication_confirmed": false
+}

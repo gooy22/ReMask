@@ -1,6 +1,6 @@
 """The existing Launch payload/journal adapted to private draft publication.
 
-The first supported format is a PAUSED image ad. Unsupported formats/delivery
+Supported formats are PAUSED single images and image carousels. Other delivery
 stop during preparation, before upload or draft creation.
 """
 from __future__ import annotations
@@ -8,9 +8,9 @@ import copy
 import hashlib
 from pathlib import Path
 from types import SimpleNamespace
-from urllib.parse import urlsplit
 
-from .private_ads_draft import fail, identity
+from .private_ads_draft import fail, fragment_params, identity
+from .private_ads_creative import carousel_creative, image_creative, validate_creative
 from .private_ads_http import AdsManagerPrivateHttp
 from .private_ads_media import upload_image, verify_image
 from .private_ads_publication import AdsManagerDraftPublisher
@@ -25,7 +25,7 @@ class AdsManagerLaunch:
         digest = hashlib.sha256(SOURCE_REVISION.encode())
         for name in ("private_ads_launch.py", "private_ads_http.py", "private_ads_draft.py",
                      "private_ads_state.py", "private_ads_media.py", "private_ads_publication.py",
-                     "private_ads_verify.py"):
+                     "private_ads_verify.py", "private_ads_creative.py"):
             digest.update(name.encode() + b"\0" + Path(__file__).with_name(name).read_bytes())
         self.source_digest = digest.hexdigest()
 
@@ -57,38 +57,36 @@ class AdsManagerLaunch:
         for section in ("campaign", "adset", "ad"):
             if not isinstance(launch[section].get("name"), str) or not launch[section]["name"].strip():
                 raise fail("INVALID_INPUT", "Campaign, AdSet and Ad names are required")
-        if creative.get("format", "SINGLE") != "SINGLE" or any(creative.get(key) for key in
-                ("existing_video_id", "existing_creative_id", "source_instagram_media_id", "instagram_actor_id")):
-            raise fail("CREATIVE_FORMAT_UNAVAILABLE", "This private draft adapter supports a single image")
         if creative.get("page_id") not in (None, "", target["page_id"]):
             raise fail("PAGE_MISMATCH", "Creative Page differs from the selected account binding")
-        for field in ("name", "message", "link"):
-            if not isinstance(creative.get(field), str) or not creative[field].strip():
-                raise fail("CREATIVE_INVALID", "Image creative name, text and destination URL are required")
-        try:
-            link = urlsplit(creative["link"])
-            valid = link.scheme in {"https", "http"} and link.hostname and not link.username and not link.password
-        except ValueError:
-            valid = False
-        if not valid:
-            raise fail("CREATIVE_INVALID", "Advertising destination URL is malformed")
         references = local_references(creative)
-        if not references and not creative.get("existing_image_hash"):
-            raise fail("MEDIA_REQUIRED", "Select an existing image or local Media Library image")
-        if len(references) > 1:
-            raise fail("CREATIVE_FORMAT_UNAVAILABLE", "A single image ad requires exactly one media item")
+        validate_creative(creative, references)
+        if len(launch["campaign"]["name"]) > 120:
+            raise fail("INVALID_INPUT", "Draft name is too long")
         selected = self.owner._asset_selections(launch, bool(references))
         if set(selected) - {"images"}:
             raise fail("ASSET_READ_UNAVAILABLE", "A selected advertising asset requires a scoped private read adapter")
+        # Encode every level before media POSTs, including nested auth and
+        # nonfinite/unsupported values. Invalid Ad input must not leave uploads.
+        placeholders = ["planned-image-hash"] * (len(creative["carousel_cards"])
+                        if creative.get("format") == "CAROUSEL" else 1)
+        story = (carousel_creative(creative, target["page_id"], placeholders)
+                 if creative.get("format") == "CAROUSEL" else image_creative(creative, target["page_id"], placeholders[0]))
+        for level, values in (("campaign", launch["campaign"]), ("ad_set", launch["adset"]),
+                              ("ad", {**launch["ad"], "creative": story})):
+            try:
+                fragment_params("100000", level=level, values=values)
+            except (TypeError, ValueError):
+                raise fail("INVALID_INPUT", "Advertising values cannot be encoded") from None
         return target, launch, references, _launch_fingerprint(payload, target["page_id"])
 
     def plan(self, *, profile_id, payload):
         target, launch, references, fingerprint = self.prepare(profile_id, payload)
         return {"configuration_valid": True, "ready": False, "checked_live": False,
-            "mutation_posts": 0, "target": target, "creative_format": "SINGLE",
+            "mutation_posts": 0, "target": target, "creative_format": launch["creative"].get("format", "SINGLE"),
             "delivery": {key: "PAUSED" for key in ("campaign", "adset", "ad")},
             "steps": [{"stage": stage, "label": label} for stage, label in
-                (("MEDIA", "Изображение"), ("DRAFT", "Черновик рекламы"),
+                (("MEDIA", "Изображения"), ("DRAFT", "Черновик рекламы"),
                  ("CAMPAIGN", "Кампания"), ("ADSET", "Группа объявлений"),
                  ("AD", "Объявление"), ("PUBLISH", "Публикация"), ("VERIFY", "Проверка объектов"))],
             "local_media": references, "media_resolution_required": bool(references),
@@ -145,7 +143,8 @@ class AdsManagerLaunch:
         actor = identity(str(context.cookies.get("c_user") or ""))
         from .private_launch_media import LaunchMediaResolver
         media = await LaunchMediaResolver().resolve(references) if references else []
-        if any(row.media_type != "image" for row in media):
+        if len(media) != len(references) or any(row.id != reference["id"] or row.media_type != "image"
+                for row, reference in zip(media, references)):
             raise fail("MEDIA_FORMAT_UNAVAILABLE", "This private draft adapter supports image uploads")
         web = await session.facebook_web()
         from fb_worker import RemoteRequestError
@@ -156,7 +155,11 @@ class AdsManagerLaunch:
             raise fail("TRANSPORT_UNAVAILABLE", "Profile HTTP connection did not reach Ads Manager", True) from None
         preflight = await self._preflight(client, web, payload, target)
         if not media:
-            await verify_image(client, launch["creative"]["existing_image_hash"])
+            creative = launch["creative"]
+            hashes = ([card["image_hash"] for card in creative["carousel_cards"]]
+                      if creative.get("format") == "CAROUSEL" else [creative["existing_image_hash"]])
+            for selected_hash in dict.fromkeys(hashes):
+                await verify_image(client, selected_hash)
         return target, launch, fingerprint, actor, client, media, preflight
 
     async def review(self, *, profile_id, context, payload, transport=None):
@@ -198,8 +201,15 @@ class AdsManagerLaunch:
         sender = AdsManagerSubmitter(self.owner.state, launch_key=key, profile_id=profile_id,
             business_id=target["business_id"], account_id=target["ad_account_id"], actor_id=actor,
             launch_fingerprint=fingerprint, source_digest=self.source_digest)
-        image_hash = await upload_image(client, sender, media[0]) if media else launch["creative"]["existing_image_hash"]
-        creative = image_creative(launch["creative"], target["page_id"], image_hash)
+        selection = launch["creative"]
+        if media:
+            hashes = [await upload_image(client, sender, row) for row in media]
+        elif selection.get("format") == "CAROUSEL":
+            hashes = [card["image_hash"] for card in selection["carousel_cards"]]
+        else:
+            hashes = [selection["existing_image_hash"]]
+        creative = (carousel_creative(selection, target["page_id"], hashes)
+                    if selection.get("format") == "CAROUSEL" else image_creative(selection, target["page_id"], hashes[0]))
         levels = {"campaign": copy.deepcopy(launch["campaign"]), "ad_set": copy.deepcopy(launch["adset"]),
                   "ad": {**copy.deepcopy(launch["ad"]), "creative": creative}}
         publisher = AdsManagerDraftPublisher(sender)
@@ -219,16 +229,4 @@ class AdsManagerLaunch:
                 "friendly_name": "AdsDraftPublishDataManager", "doc_id_configured": False}
                 for step in ("CAMPAIGN", "ADSET", "CREATIVE", "AD")},
             "operations": {"IMAGE_UPLOAD": {"configured": True, "active": True}},
-            "creative_formats": ["SINGLE"], "resources": {}, "checked_live": False}
-
-def image_creative(creative, page_id, image_hash):
-    link = {"link": creative["link"], "message": creative["message"], "image_hash": image_hash,
-            "call_to_action": {"type": str(creative.get("call_to_action") or "LEARN_MORE").upper()}}
-    if creative.get("headline"):
-        link["name"] = creative["headline"]
-    if creative.get("description"):
-        link["description"] = creative["description"]
-    result = {"name": creative["name"], "object_story_spec": {"page_id": page_id, "link_data": link}}
-    if creative.get("url_tags"):
-        result["url_tags"] = creative["url_tags"]
-    return result
+            "creative_formats": ["SINGLE", "CAROUSEL"], "resources": {}, "checked_live": False}

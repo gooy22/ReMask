@@ -1,20 +1,21 @@
 {
   "version": 1,
-  "revision": "meta-launch-2026-10-12-private-image-paused",
+  "revision": "meta-launch-2026-10-12-private-image-carousel-paused",
   "steps": {},
   "operations": {},
   "reads": {},
   "creative_formats": [
-    "SINGLE"
+    "SINGLE",
+    "CAROUSEL"
   ],
   "pending_evidence": [
     "LIVE_INITIALIZER_LAYOUT",
     "LIVE_IMAGE_PAUSED_CANARY",
     "VIDEO_UPLOAD",
-    "CAROUSEL",
     "INSTAGRAM_POST",
     "ACTIVATION",
-    "SELECTED_ASSET_QUERIES"
+    "SELECTED_ASSET_QUERIES",
+    "LIVE_CAROUSEL_PAUSED_CANARY"
   ],
   "protocol": "private_ads_manager_versioned"
 }

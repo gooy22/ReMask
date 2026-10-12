@@ -255,7 +255,8 @@ async def run(pool):
     if not profile or not all(re.fullmatch(r"\d{5,30}", value) for value in (account, business)):
         return
     # Report actual server configuration without IDs, variables or credentials.
-    contracts = pool.private_launch.contracts.status()
+    private = getattr(pool.private_launch, "ads_manager", None)
+    contracts = private.status()["contracts"] if private is not None else pool.private_launch.contracts.status()
     status = {step: {key: row.get(key) for key in ("configured", "active", "code", "friendly_name")}
               for step, row in contracts.items()}
     log.info("launch HTTP contract status browser_started=False contracts=%s", json.dumps(status))
@@ -266,6 +267,28 @@ async def run(pool):
                 async with ProfileSession(context, timeout_seconds=25) as session:
                     web = await session.facebook_web()
                     web.private_only = True
+                    if os.getenv("REMASK_LAUNCH_HTTP_AUDIT_ADS_BOOTSTRAP") == "1":
+                        # Read the selected-account document and account relation. Do not
+                        # inspect payment settings, export credentials, collect
+                        # sources or submit any advertising operation in this mode.
+                        from ..private_ads_http import AdsManagerPrivateHttp
+                        from ..private_ads_draft import fail, identity
+                        if pool.private_launch._inventory_row(context, business, account) is None:
+                            raise fail("ACCOUNT_CONTEXT_UNAVAILABLE", "Audit target is absent from profile inventory")
+                        actor = identity(str(context.cookies.get("c_user") or ""))
+                        client = await AdsManagerPrivateHttp.open(web, account_id=account,
+                                                                 business_id=business, actor_id=actor)
+                        row = await client.get("/act_" + account, {"fields": ["id", "business"]})
+                        if (not isinstance(row, dict) or not isinstance(row.get("id"), str)
+                                or row["id"].removeprefix("act_") != account
+                                or not isinstance(row.get("business"), dict)
+                                or row["business"].get("id") != business):
+                            raise fail("ACCOUNT_SCOPE_UNVERIFIED", "Audit read did not confirm the exact account/Business")
+                        log.info("launch Ads Manager bootstrap profile=%s account=%s browser_started=False mutation_posts=0 result=%s",
+                            profile, account, json.dumps({"code": "ADS_MANAGER_BOOTSTRAP_READY",
+                                "account_scope_verified": True, "actor_verified": True, "account_read_checked_live": True,
+                                "origin": client.context.origin, "version": client.context.version}))
+                        return
                     await web.bootstrap()
                     if os.getenv("REMASK_LAUNCH_HTTP_AUDIT_SOURCES") == "1":
                         source = await collect_sources(web, account=account, business=business)
