@@ -46,7 +46,7 @@ Automatic card reordering and the generated end card are explicitly disabled.
 The carousel schema is derived from three additional modules in the original,
 hash-verified scripts, recorded in private-ads-carousel-source-20261012.json.
 Invalid downstream fragment values now fail before media uploads. Ten carousel
-lifecycle cases and three read-only bootstrap audit cases were added. The optional
-REMASK_LAUNCH_HTTP_AUDIT_ADS_BOOTSTRAP mode checks only the fresh selected-account
-document; it does not query payment settings, submit advertising or export session
+lifecycle cases and four read-only bootstrap audit cases were added. The optional
+REMASK_LAUNCH_HTTP_AUDIT_ADS_BOOTSTRAP mode checks the fresh selected-account document
+and independently reads the exact account/Business relation; it does not query payment settings, submit advertising or export session
 credentials. A real initializer/publication proof is still required.

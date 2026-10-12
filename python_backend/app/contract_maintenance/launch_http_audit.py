@@ -268,7 +268,7 @@ async def run(pool):
                     web = await session.facebook_web()
                     web.private_only = True
                     if os.getenv("REMASK_LAUNCH_HTTP_AUDIT_ADS_BOOTSTRAP") == "1":
-                        # One read-only selected-account document probe. Do not
+                        # Read the selected-account document and account relation. Do not
                         # inspect payment settings, export credentials, collect
                         # sources or submit any advertising operation in this mode.
                         from ..private_ads_http import AdsManagerPrivateHttp
@@ -278,9 +278,15 @@ async def run(pool):
                         actor = identity(str(context.cookies.get("c_user") or ""))
                         client = await AdsManagerPrivateHttp.open(web, account_id=account,
                                                                  business_id=business, actor_id=actor)
+                        row = await client.get("/act_" + account, {"fields": ["id", "business"]})
+                        if (not isinstance(row, dict) or not isinstance(row.get("id"), str)
+                                or row["id"].removeprefix("act_") != account
+                                or not isinstance(row.get("business"), dict)
+                                or row["business"].get("id") != business):
+                            raise fail("ACCOUNT_SCOPE_UNVERIFIED", "Audit read did not confirm the exact account/Business")
                         log.info("launch Ads Manager bootstrap profile=%s account=%s browser_started=False mutation_posts=0 result=%s",
                             profile, account, json.dumps({"code": "ADS_MANAGER_BOOTSTRAP_READY",
-                                "account_scope_verified": True, "actor_verified": True,
+                                "account_scope_verified": True, "actor_verified": True, "account_read_checked_live": True,
                                 "origin": client.context.origin, "version": client.context.version}))
                         return
                     await web.bootstrap()

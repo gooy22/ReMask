@@ -57,7 +57,7 @@ class LaunchAuditFailureTests(unittest.IsolatedAsyncioTestCase):
 
 
 class AdsBootstrapAuditTests(unittest.IsolatedAsyncioTestCase):
-    async def probe(self, *, error=None, inventory=True):
+    async def probe(self, *, error=None, inventory=True, returned_account='123456789'):
         from app.private_ads_http import AdsManagerContext
         context = SimpleNamespace(cookies={'c_user': '123456'})
         web = SimpleNamespace(bootstrap=AsyncMock(), graphql=AsyncMock(), fetch_text=AsyncMock())
@@ -66,7 +66,8 @@ class AdsBootstrapAuditTests(unittest.IsolatedAsyncioTestCase):
             async def __aenter__(self): return session
             async def __aexit__(self, *args): pass
         client = SimpleNamespace(context=AdsManagerContext('123456789', '987654321', '123456',
-            'https://adsmanager-graph.facebook.com', 'v22.0', '654321', 'synthetic-session-secret'))
+            'https://adsmanager-graph.facebook.com', 'v22.0', '654321', 'synthetic-session-secret'),
+            get=AsyncMock(return_value={'id': 'act_' + returned_account, 'business': {'id': '987654321'}}))
         pool = SimpleNamespace(profile_locks={'19': asyncio.Lock()},
             resolver=SimpleNamespace(resolve=AsyncMock(return_value=context)),
             private_launch=SimpleNamespace(contracts=SimpleNamespace(status=lambda: {}),
@@ -86,6 +87,10 @@ class AdsBootstrapAuditTests(unittest.IsolatedAsyncioTestCase):
         web.bootstrap.assert_not_awaited(); web.graphql.assert_not_awaited()
         self.assertNotIn('synthetic-session-secret', str(logger.info.call_args_list))
         self.assertIn('mutation_posts=0', logger.info.call_args.args[0])
+        if error is not None or not inventory:
+            client.get.assert_not_awaited()
+        else:
+            client.get.assert_awaited_once_with('/act_123456789', {'fields': ['id', 'business']})
         return opened, json.loads(logger.info.call_args.args[-1])
 
     async def test_supported_fresh_context_is_reported_without_session_credentials_or_payment_reads(self):
@@ -96,6 +101,11 @@ class AdsBootstrapAuditTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['code'], 'ADS_MANAGER_BOOTSTRAP_READY')
         self.assertTrue(result['account_scope_verified'])
         self.assertTrue(result['actor_verified'])
+        self.assertTrue(result['account_read_checked_live'])
+
+    async def test_foreign_live_account_is_not_bootstrap_success(self):
+        _, result = await self.probe(returned_account='888888888')
+        self.assertEqual(result['code'], 'PRIVATE_ADS_DRAFT_ACCOUNT_SCOPE_UNVERIFIED')
 
     async def test_foreign_target_inventory_prevents_document_fetch(self):
         opened, result = await self.probe(inventory=False)
