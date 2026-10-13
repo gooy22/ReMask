@@ -358,6 +358,13 @@ async def verify_payment_card_http(resolver, profile, payload, *, state=None):
                     and isinstance(credential, dict)):
                 saved_id = str(credential.get('id') or credential.get('credential_id') or '')
 
+            # Brand and last four digits are display metadata, never an
+            # authorization identity. Read-only inspection can report a mask,
+            # but a financial mutation requires the exact retained Save ID.
+            if not saved_id and operation in ('authorize', 'verify_code', 'authorize_bank', 'verify_bank'):
+                return {**base, 'code': 'CARD_VERIFICATION_EXACT_CREDENTIAL_REQUIRED',
+                        'funding': {**methods, 'profile_id': profile}}
+
             choices = [m for m in methods.get('payment_methods', ())
                        if m.get('type') == card[0] and m.get('last4') == card[1]
                        and (not saved_id or m.get('credential_id') == saved_id)]
