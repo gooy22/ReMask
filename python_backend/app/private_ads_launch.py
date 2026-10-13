@@ -216,6 +216,9 @@ class AdsManagerLaunch:
                     or evidence.get("source_digest") != self.source_digest):
                 raise fail("SAVED_OPERATION_MISMATCH", "Launch key belongs to another protocol, target or configuration")
             if not evidence.get("receipt"):
+                if isinstance(evidence.get("response_error"), dict):
+                    from .private_ads_http import AdsManagerResponseError
+                    raise AdsManagerResponseError(evidence["response_error"])
                 raise fail("RECONCILE_REQUIRED", "An advertising submission has an unknown reply; replay is blocked")
         actor = identity(str(context.cookies.get("c_user") or ""))
         digest = hashlib.sha256((self.source_digest + actor).encode()).hexdigest()
