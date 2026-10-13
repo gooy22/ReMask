@@ -165,6 +165,15 @@ class AutoPlanTests(unittest.TestCase):
             self.assertRegex(params['BUSINESS']['user_email'],r'^[a-f0-9]{24}@gmail\.com$')
         self.assertEqual(len(scopes),3); self.assertEqual(names,{'PrgssTeam'})
 
+    def test_bulk_profile_order_never_prioritizes_hardcoded_identity(self):
+        req=request(1)
+        second=req.profiles[0].model_copy(deep=True)
+        third=req.profiles[0].model_copy(deep=True)
+        second.profile_id='9'
+        third.profile_id='21'
+        rows=expand_auto_profiles([req.profiles[0],second,third],'job')
+        self.assertEqual([row.profile_id for row in rows],['7','9','21'])
+
     def test_explicit_business_contact_is_preserved_for_each_auto_unit(self):
         chosen_email='verified.owner@example.com'
         rows=expand_auto_profiles(request(2,parameters={
