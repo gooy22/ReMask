@@ -49,6 +49,23 @@ class DirectTestTests(unittest.IsolatedAsyncioTestCase):
                     pass
         client._client.stream.assert_not_called()
 
+
+    async def test_renewed_direct_lease_cannot_reauthorize_existing_profile_session(self):
+        with patch.dict(os.environ, {'REMASK_DIRECT_TEST_PROFILE': '21',
+                                      'REMASK_DIRECT_TEST_UNTIL': '1600'}):
+            context = await self.resolver('21')
+        self.assertEqual(context.direct_test_until, 1600)
+        async with ProfileSession(context) as session:
+            with patch.object(session, '_get_session', new_callable=AsyncMock) as get_session:
+                for patch_values in (
+                    {'REMASK_DIRECT_TEST_PROFILE': '21', 'REMASK_DIRECT_TEST_UNTIL': '1700'},
+                    {'REMASK_DIRECT_TEST_PROFILE': '22', 'REMASK_DIRECT_TEST_UNTIL': '1600'},
+                ):
+                    with self.subTest(patch_values=patch_values), patch.dict(os.environ, patch_values):
+                        with self.assertRaisesRegex(ProfileContextError, 'DIRECT_TEST_EXPIRED'):
+                            await session.request('GET', 'https://www.facebook.com/')
+                get_session.assert_not_called()
+
     async def test_unselected_profile_cannot_connect_directly(self):
         client = PrivateHttpClient(profile_name='20', cookies={}, proxy=None,
             user_agent='fixture', timeout_seconds=1, pool_size=1)
