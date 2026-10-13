@@ -165,6 +165,25 @@ class CardVerificationHTTPTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result['sdc_candidate'])
         self.assertFalse(result['sdc_credential_match'])
 
+    async def test_single_masked_card_never_authorizes_without_exact_saved_credential(self):
+        # A unique Visa/last4 match still does not prove it is the vault card.
+        for operation in ('authorize', 'verify_code', 'authorize_bank', 'verify_bank'):
+            with self.subTest(operation=operation), \
+                 patch('app.payment_card_verification.resolve_payment_asset',
+                       AsyncMock(return_value=self.asset)), \
+                 patch('app.session.ProfileSession', SessionFixture), \
+                 patch('app.payment_card_verification.account_proof', return_value=self.evidence), \
+                 patch('app.payment_card_verification.methods_proof', return_value=self.methods), \
+                 patch('app.payment_card_verification.execute', AsyncMock(return_value={})) as execute:
+                result = await verify_payment_card_http(
+                    self.resolver, '21', {**self.payload, 'operation': operation})
+                self.assertEqual(result['status'], 'BLOCKED')
+                self.assertEqual(result['code'], 'CARD_VERIFICATION_EXACT_CREDENTIAL_REQUIRED')
+                self.assertFalse(result['verification_triggered'])
+                self.assertFalse(result['submitted'])
+                self.assertEqual([call.args[1] for call in execute.await_args_list],
+                                 ['READ_ACCOUNT', 'READ_METHODS'])
+
     async def test_inconsistent_card_selection_refuses_mutation(self):
         self.methods['payment_methods'].append(
             {**self.methods['payment_methods'][0], 'credential_id': 'cred_2'})
