@@ -213,7 +213,11 @@
         $('adAccount')?.closest('[class*="col-"]')?.classList.add('wf-account-selector');
     }
     function enhanceDynamic() {
-        Object.entries(labels).forEach(([id,label])=>{const el=$(id);if(el)translate(el,label,tips[id]);});
+        Object.entries(labels).forEach(([id,label])=>{
+            const el=$(id);
+            if(el)translate(el,id==='dailyBudget' && $('budgetPeriod')?.value==='LIFETIME'
+                ? 'Бюджет на весь срок' : label,tips[id]);
+        });
         document.querySelectorAll('.cr-sdk-field,.rm-meta-field').forEach(wrap=>{
             const input=wrap.querySelector('[data-meta-field],[data-launch-meta-field]');if(!input)return;
             const field=input.dataset.metaField||input.dataset.launchMetaField;

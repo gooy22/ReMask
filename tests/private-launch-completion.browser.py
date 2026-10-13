@@ -119,6 +119,7 @@ class InstalledLaunchTests(unittest.TestCase):
         self.page.locator('#endTime').fill('2026-11-01T18:00')
         self.save_and_reload()
         self.assertEqual(self.page.locator('#budgetPeriod').input_value(), 'LIFETIME')
+        self.assertEqual(self.page.locator('label[for="dailyBudget"]').inner_text(), 'Бюджет на весь срок')
         self.page.evaluate('fixtureLaunch.geo()')
         payload = self.page.evaluate('fixtureLaunch.payload()')
         section = payload['campaign'] if 'lifetime_budget' in payload['campaign'] else payload['adset']
