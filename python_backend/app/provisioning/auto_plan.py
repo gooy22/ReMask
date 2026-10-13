@@ -12,7 +12,8 @@ WORDS = ("Amber", "Cedar", "Meadow", "Harbor", "Willow", "Maple", "Orchid", "Sil
 
 def expand_auto_profiles(profiles: list[Any], job_id: str) -> list[Any]:
     expanded = []
-    profiles=sorted(profiles,key=lambda p: str(p.profile_id)!='9')
+    # Honor the caller's profile order. Scheduling must not privilege an
+    # unrelated historical Facebook profile in every new bulk Job.
     for row_index, profile in enumerate(profiles):
         auto_tasks = [task for task in profile.tasks if task.action == "provisioning" and task.payload.get("auto_generate") is True]
         if not auto_tasks:
@@ -58,9 +59,11 @@ def expand_auto_profiles(profiles: list[Any], job_id: str) -> list[Any]:
             for key in ("page_id", "existing_page_id", "business_id", "bm_id", "ad_account_id"):
                 params["FAN_PAGES"].pop(key, None)
             if "BUSINESS" in steps:
+                # Never invent a mailbox that the Facebook account cannot
+                # verify. Preserve the operator's explicit contact or let the
+                # Business handler use the authenticated profile email.
                 params["BUSINESS"] = {**params.get("BUSINESS", {}), "name": title,
-                    "user_email": secrets.token_hex(12) + "@gmail.com", "use_created_page": False,
-                    "attach_page": False}
+                    "use_created_page": False, "attach_page": False}
                 params["BUSINESS"].pop("page_id", None)
                 params["BUSINESS"].pop("primary_page_id", None)
             if "AD_ACCOUNT" in steps:

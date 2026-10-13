@@ -150,10 +150,11 @@ class AutoPlanTests(unittest.TestCase):
 
     def test_units_have_independent_bm_scopes_and_one_named_common_page(self):
         rows=expand_auto_profiles(request(3).profiles,'job'); self.assertEqual(len(rows),3)
-        scopes=set(); names=set(); emails=set()
+        scopes=set(); names=set()
         for row in rows:
             task=row.tasks[0]; payload=task.payload; params=payload['parameters']
-            scopes.add(payload['scope_key']); names.add(params['FAN_PAGES']['names'][0]); emails.add(params['BUSINESS']['user_email'])
+            scopes.add(payload['scope_key']); names.add(params['FAN_PAGES']['names'][0])
+            self.assertNotIn('user_email',params['BUSINESS'])
             self.assertEqual(task.idempotency_key,payload['scope_key']); self.assertEqual(params['FAN_PAGES']['count'],1)
             self.assertFalse(params['BUSINESS']['use_created_page']); self.assertNotIn('page_id',params['BUSINESS'])
             self.assertTrue(params['FAN_PAGES']['common_page'])
@@ -161,8 +162,27 @@ class AutoPlanTests(unittest.TestCase):
             self.assertEqual(payload['steps'][-1],'PAGE_ACCESS')
             self.assertIs(params['BUSINESS']['attach_page'],False)
             self.assertEqual(params['AD_ACCOUNT']['currency'],'USD'); self.assertFalse(payload['generated']['contact_email_registered'])
-            self.assertRegex(params['BUSINESS']['user_email'],r'^[a-f0-9]{24}@gmail\.com$')
-        self.assertEqual(len(scopes),3); self.assertEqual(names,{'PrgssTeam'}); self.assertEqual(len(emails),3)
+        self.assertEqual(len(scopes),3); self.assertEqual(names,{'PrgssTeam'})
+
+    def test_bulk_profile_order_never_prioritizes_hardcoded_identity(self):
+        req=request(1)
+        second=req.profiles[0].model_copy(deep=True)
+        third=req.profiles[0].model_copy(deep=True)
+        second.profile_id='9'
+        third.profile_id='21'
+        rows=expand_auto_profiles([req.profiles[0],second,third],'job')
+        self.assertEqual([row.profile_id for row in rows],['7','9','21'])
+
+    def test_explicit_business_contact_is_preserved_for_each_auto_unit(self):
+        chosen_email='verified.owner@example.com'
+        rows=expand_auto_profiles(request(2,parameters={
+            'AD_ACCOUNT':{'currency':'USD','timezone_id':1},
+            'BUSINESS':{'user_email':chosen_email}}).profiles,'job')
+        self.assertEqual(len(rows),2)
+        self.assertTrue(all(row.tasks[0].payload['parameters']['BUSINESS']['user_email']
+                            == chosen_email for row in rows))
+        self.assertTrue(all(row.tasks[0].payload['generated']['contact_email_registered'] is False
+                            for row in rows))
 
     def test_invalid_counts_and_order(self):
         for count in [0,21,True,1.5]:
