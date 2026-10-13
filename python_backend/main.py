@@ -3628,6 +3628,8 @@ async def private_advertising_resources(profile_id: str, resource: str, account_
 @app.post('/api/v1/profiles/{profile_id}/advertising-helper/{helper}',dependencies=[Depends(require_key)])
 async def private_advertising_helper(profile_id: str, helper: str, payload: dict = Body(...)):
     from app.private_ads_helpers import read_form_helper
+    from app.private_auth import private_auth_error
+    from fb_worker import AuthenticationError
     adapter = getattr(pool.private_launch, 'ads_manager', None)
     if not adapter or helper not in {'placements','audience_estimate','preview'}:
         raise HTTPException(status_code=409, detail='PRIVATE_HELPER_SOURCE_REQUIRED')
@@ -3651,6 +3653,10 @@ async def private_advertising_helper(profile_id: str, helper: str, payload: dict
                 {'profile_id':profile,'ad_account_id':account,'business_id':next(iter(businesses))},
                 helper, payload)
         return {'ok': True, **result}
+    except AuthenticationError as error:
+        normalized = private_auth_error(error)
+        raise HTTPException(status_code=409, detail={'code':normalized.code,
+            'message':str(normalized)}) from None
     except (ProvisioningError, ProfileContextError) as error:
         raise HTTPException(status_code=409, detail={'code':getattr(error,'code','PROFILE_CONTEXT_ERROR'),
             'message':str(error)}) from None
