@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ASSET = (ROOT / 'railway-workflow-ui.js').read_text()
 SCHEMA = {
     'campaign': {'fields': {'adlabels':'list<Object>'}, 'enums': {
-        'objective':['OUTCOME_TRAFFIC','OUTCOME_SALES'], 'special_ad_categories':['NONE'],
+        'objective':['OUTCOME_TRAFFIC','OUTCOME_SALES','DEPRECATED_CLICKS','WILDCARD_INTERNAL_ONLY','OUTCOME_ACQUISITION','OUTCOME_APP_PROMOTION'], 'special_ad_categories':['NONE'],
         'bid_strategy':['LOWEST_COST_WITHOUT_CAP'], 'status':['PAUSED','ACTIVE']}},
     'adset': {'fields': {}, 'enums': {'optimization_goal':['LINK_CLICKS'],
         'billing_event':['IMPRESSIONS'], 'bid_strategy':['LOWEST_COST_WITHOUT_CAP'], 'status':['PAUSED']}},
@@ -59,6 +59,7 @@ class WorkflowTests(unittest.TestCase):
                 if(String(url).includes('metaPreflight.php')) data={ad_accounts:{data:[{account_id:'123456',name:'Fixture RK'}]}};
                 if(String(url).includes('metaTemplateTargetingSearch.php')){
                     const params=new URLSearchParams(options.body);window.fixtureRequests.push(Object.fromEntries(params));
+                    if(window.fixtureTargetingError) return {ok:false,status:409,text:async()=>JSON.stringify({ok:false,error:window.fixtureTargetingError})};
                     const type=params.get('type');data={account_id:'123456',checked_live:true,account_scope_verified:true,data:[
                         type==='locations'?{key:'US',name:'United States',type:'country',country_code:'US'}:
                         {id:'34567',key:'34567',name:'Fixture '+type} ]};
@@ -68,7 +69,7 @@ class WorkflowTests(unittest.TestCase):
         else:
             self.page.add_script_tag(content='window.fetch=async url=>({ok:true,status:200,text:async()=>JSON.stringify('+json.dumps({'ok':True,'data':{'schema':SCHEMA,'items':[]}})+')});')
         source = (ROOT / 'railway-v100-creatives.js').read_text()
-        self.page.add_script_tag(content=source+'\nwindow.testCreative={build:buildMetaBuilder,populate:populateMetaBuilder,open:openEditor};')
+        self.page.add_script_tag(content=source+'\nwindow.testCreative={build:buildMetaBuilder,populate:populateMetaBuilder,open:openEditor,primary:populatePrimaryMetaControls};')
         self.page.wait_for_function("document.getElementById('mbObjective').options.length===2", timeout=5000)
         if enhanced:
             self.page.add_script_tag(content=ASSET)
@@ -121,6 +122,45 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(targeting['locales'],[34567])
         self.assertEqual(targeting['interests'][0]['id'],'34567')
         self.assertEqual(targeting['behaviors'][0]['id'],'34567')
+
+    def test_connection_error_explains_repair_without_losing_settings_or_retry(self):
+        self.creative(context=True)
+        self.page.locator('#mbCampaignDailyBudget').fill('500')
+        self.page.get_by_role('button',name='Аудитория',exact=True).click()
+        self.page.locator('#mbInterestSearch').fill('fixture')
+        self.page.locator('#mbInterestSearch').press('Enter')
+        self.page.locator('#mbInterestResults .cr-target-result').click()
+        before=self.page.evaluate('testCreative.build()')
+        self.page.evaluate("window.fixtureTargetingError={code:'PRIVATE_ADS_DRAFT_CHECKPOINT_REQUIRED',message:'Meta требует подтверждения входа в профиле «19». Уже введённые настройки можно сохранить.',settings_preserved:true}")
+        count=self.page.evaluate('fixtureRequests.length')
+        self.page.locator('#mbLanguageSearch').fill('russia')
+        self.page.locator('#mbLanguageSearch').press('Enter')
+        self.page.locator('#mbLanguageResults [role=status]').wait_for()
+        self.assertIn('подтверждения входа',self.page.locator('#mbLanguageResults').inner_text())
+        link=self.page.locator('#mbLanguageResults').get_by_role('link',name='Открыть аккаунты')
+        self.assertEqual(link.get_attribute('href'),'accounts.php')
+        self.assertEqual(link.get_attribute('target'),'_blank')
+        self.assertEqual(self.page.evaluate('testCreative.build()'),before)
+        self.assertEqual(self.page.evaluate('fixtureRequests.length'),count+1)
+        self.assertEqual(self.page.locator('#mbLanguageResults .cr-target-result').count(),0)
+
+    def test_objectives_match_launch_and_preserve_saved_legacy_value(self):
+        self.creative()
+        self.assertEqual(self.page.locator('#mbObjective').evaluate('(el)=>Array.from(el.options).map(o=>o.value)'),['OUTCOME_TRAFFIC','OUTCOME_SALES'])
+        builder=self.page.evaluate('testCreative.build()')
+        builder['campaign']['objective']='LINK_CLICKS'
+        self.page.evaluate('(builder)=>testCreative.open({id:"fixture",name:"Legacy",meta_builder:builder})',builder)
+        self.assertEqual(self.page.evaluate('testCreative.build().campaign.objective'),'LINK_CLICKS')
+        self.assertTrue(self.page.locator('#mbObjective [data-saved-objective]').is_disabled())
+        self.assertTrue(self.page.locator('#creativeObjectiveHint').is_visible())
+        self.page.evaluate('testCreative.primary()')
+        self.assertEqual(self.page.evaluate('testCreative.build().campaign.objective'),'LINK_CLICKS')
+        self.page.locator('#mbObjective').select_option('OUTCOME_SALES')
+        self.assertFalse(self.page.locator('#creativeObjectiveHint').is_visible())
+        self.assertEqual(self.page.evaluate('testCreative.build().campaign.objective'),'OUTCOME_SALES')
+        self.page.locator('#cancelCreative').click()
+        self.page.locator('#newCreative').click()
+        self.assertEqual(self.page.locator('#mbObjective [data-saved-objective]').count(),0)
 
     def test_grouping_and_translation_preserve_original_serialization(self):
         self.creative(False)

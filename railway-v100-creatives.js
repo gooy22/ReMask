@@ -822,7 +822,9 @@ async function searchCreativeTargeting(kind) {
         if (error?.name === 'AbortError') return;
         if (creativeTargetingControllers[kind] !== controller) return;
         if (results) {
-            results.innerHTML = '<div class="cr-target-empty">Meta: ' + esc(error.message) + '</div>';
+            const message = error.meta?.message || 'Не удалось загрузить подсказки Meta. Проверьте подключение в «Аккаунтах». Уже введённые настройки можно сохранить.';
+            results.innerHTML = '<div class="cr-target-empty" role="status">' + esc(message) +
+                ' <a href="accounts.php" target="_blank" rel="noopener">Открыть аккаунты</a></div>';
             results.classList.add('open');
         }
     } finally {
@@ -889,7 +891,11 @@ function constrainTargetingCheckboxes(selector, attr, allowed) {
 function populatePrimaryMetaControls() {
     if (!metaSdkSchema) return;
 
-    setMetaSelectOptions('mbObjective', schemaEnum('campaign','objective'), {fallback:'OUTCOME_TRAFFIC'});
+    const savedObjective = $('mbObjective').selectedOptions[0]?.dataset.savedObjective === '1' ? $('mbObjective').value : '';
+    const objectives = ['OUTCOME_TRAFFIC','OUTCOME_SALES','OUTCOME_LEADS','OUTCOME_ENGAGEMENT','OUTCOME_AWARENESS']
+        .filter(value => schemaEnum('campaign','objective').includes(value));
+    setMetaSelectOptions('mbObjective', objectives, {fallback:'OUTCOME_TRAFFIC'});
+    if (savedObjective) remaskRestoreCreativeObjective(savedObjective);
     setMetaSelectOptions('mbSpecialCategory', schemaEnum('campaign','special_ad_categories'), {fallback:'NONE'});
     setMetaSelectOptions('mbCampaignBidStrategy', schemaEnum('campaign','bid_strategy'), {placeholder:'Meta default'});
     setMetaSelectOptions('mbCampaignStatus', schemaEnum('campaign','status'), {fallback:'PAUSED'});
@@ -1252,6 +1258,33 @@ function setCheckboxValues(selector, attr, values) {
         el.checked = wanted.has(String(el.getAttribute(attr)));
     });
 }
+function remaskRestoreCreativeObjective(value) {
+    const select = $('mbObjective');
+    select.querySelectorAll('[data-saved-objective]').forEach(option => option.remove());
+    if (value) {
+        if (!Array.from(select.options).some(option => option.value === value)) {
+            const option = new Option(String(value) + ' (сохранённая цель)', String(value));
+            option.dataset.savedObjective = '1';
+            option.disabled = true;
+            select.appendChild(option);
+        }
+        select.value = String(value);
+    }
+    remaskCreativeObjectiveHint();
+}
+function remaskCreativeObjectiveHint() {
+    let hint = $('creativeObjectiveHint');
+    if (!hint) {
+        hint = document.createElement('div');
+        hint.id = 'creativeObjectiveHint'; hint.className = 'cr-hint';
+        $('mbObjective').parentElement.appendChild(hint);
+    }
+    const saved = $('mbObjective').selectedOptions[0]?.dataset.savedObjective === '1';
+    hint.textContent = saved ? 'Сохранённая цель сохранена без изменений. Для нового залива выберите поддерживаемую цель рекламы.' : '';
+    hint.hidden = !saved;
+}
+$('mbObjective')?.addEventListener('change', remaskCreativeObjectiveHint);
+
 function populateMetaBuilder(builder) {
     builder = builder || {};
     const campaign = builder.campaign || {};
@@ -1262,7 +1295,7 @@ function populateMetaBuilder(builder) {
     const ad = builder.ad || {};
 
     $('mbCampaignName').value = campaign.name || '';
-    if (campaign.objective && Array.from($('mbObjective').options).some((o) => o.value === campaign.objective)) $('mbObjective').value = campaign.objective;
+    remaskRestoreCreativeObjective(campaign.objective);
     $('mbBuyingType').value = campaign.buying_type || 'AUCTION';
     $('mbSpecialCategory').value = (campaign.special_ad_categories || [])[0] || 'NONE';
     $('mbCampaignBidStrategy').value = campaign.bid_strategy || '';
