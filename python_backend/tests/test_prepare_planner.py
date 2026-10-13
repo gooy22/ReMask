@@ -129,6 +129,12 @@ class PreparePlannerTests(unittest.IsolatedAsyncioTestCase):
         desired = PrepareService._desired({})
         self.assertEqual(desired.ad_accounts, 1)
 
+    def test_prepare_rejects_ambiguous_account_counts_before_side_effects(self):
+        for value in (True, False, 1.5, 2.9, '2', '2.5', None, [], {}):
+            with self.subTest(value=value), self.assertRaises(ProvisioningError) as error:
+                PrepareService._desired({'desired':{'ad_accounts':value}})
+            self.assertEqual(error.exception.code,'PREPARE_INVALID_AD_ACCOUNT_COUNT')
+
     def test_four_bundle_request_is_capped_to_two_bms_per_profile(self):
         requested = PrepareService._desired(self._payload(bundles=4))
         self.assertEqual(requested.ad_accounts, 2)
