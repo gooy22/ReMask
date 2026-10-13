@@ -148,12 +148,17 @@ class PrivateLaunchCatalogTests(unittest.TestCase):
         for folder in ['classes','ajax','scripts']:
             (root/folder).mkdir(parents=True,exist_ok=True)
         (root/'scripts/launch.js').write_text('function validateReady(){}\n')
-        (root/'scripts/workspace.js').write_text('async function checkAssetsSelection(){}\nasync function showFunding(){}\n'.replace('checkAssetsSelection(){}','checkAssetsSelection(){ }'))
+        (root/'scripts/workspace.js').write_text(
+            'async function checkAssetsSelection(){ }\n'
+            'async function showFunding(){}\n'
+            'async function fetchAsset(resource,force=false){}\n'
+            'function fillSelect(){}\n')
         (root/'launch.php').write_text('<script src="scripts/launch.js?v=old"></script>')
         installer = Path(self.tmp.name)/'overlay.php'
         source = OVERLAY.read_text().replace("$root='/var/www/html';", '$root='+json.dumps(str(root))+';')
         source = source.replace('/tmp/railway-launch-private-catalog.js', str(ROOT/'railway-launch-private-catalog.js'))
         source = source.replace('/tmp/railway-confirmed-page-identities.php', str(ROOT/'railway-confirmed-page-identities.php'))
+        source = source.replace('/tmp/railway-workspace-state.js', str(ROOT/'railway-workspace-state.js'))
         installer.write_text(source)
         subprocess.run(['php','-l',str(installer)],capture_output=True,check=True,timeout=10)
         for _ in range(2):
