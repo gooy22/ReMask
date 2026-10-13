@@ -290,7 +290,7 @@ require_once __DIR__ . '/checkpassword.php';
             </div>
             <div id="mbBehaviorPills" class="cr-target-pills"></div>
           </div>
-          <div class="span-12 cr-muted">Подсказки загружаются из Meta автоматически. FB-профиль/RK в этом разделе выбирать не нужно.</div>
+          <div class="span-12 cr-muted">Подсказки загружаются из Meta для выбранного выше профиля и рекламного кабинета.</div>
           <details class="cr-raw-targeting">
             <summary>Расширенный Targeting JSON (официальные Meta-поля)</summary>
             <div class="cr-form-grid">
