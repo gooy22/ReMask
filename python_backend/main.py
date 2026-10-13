@@ -3570,6 +3570,16 @@ async def private_launch_contract_status():
         'resources':pool.private_launch.reads.status(),
     }
 
+@app.get('/api/v1/private-launch/schema',dependencies=[Depends(require_key)])
+async def private_launch_form_schema():
+    adapter = getattr(pool.private_launch, 'ads_manager', None)
+    if adapter is None:
+        raise HTTPException(status_code=409, detail='PRIVATE_FORM_SCHEMA_UNAVAILABLE')
+    return {'ok': True, **adapter.catalog.data['form_schema'],
+            'api_version': adapter.catalog.data['api_version'],
+            'source_digest': adapter.catalog.digest,
+            'object_fields': adapter.catalog.data['object_fields']}
+
 @app.post('/api/v1/private-launch/plan',dependencies=[Depends(require_key)])
 async def private_launch_plan(payload: dict = Body(...)):
     try:
@@ -3614,6 +3624,41 @@ async def private_advertising_resources(profile_id: str, resource: str, account_
         raise HTTPException(status_code=409,detail={'code':getattr(exc,'code','PROFILE_CONTEXT_ERROR'),'message':str(exc)}) from exc
     except asyncio.TimeoutError as exc:
         raise HTTPException(status_code=504,detail='ADVERTISING_RESOURCE_READ_TIMEOUT') from exc
+
+@app.post('/api/v1/profiles/{profile_id}/advertising-helper/{helper}',dependencies=[Depends(require_key)])
+async def private_advertising_helper(profile_id: str, helper: str, payload: dict = Body(...)):
+    from app.private_ads_helpers import read_form_helper
+    adapter = getattr(pool.private_launch, 'ads_manager', None)
+    if not adapter or helper not in {'placements','audience_estimate','preview'}:
+        raise HTTPException(status_code=409, detail='PRIVATE_HELPER_SOURCE_REQUIRED')
+    try:
+        profile = str(profile_id or '').strip()
+        if not profile or len(profile) > 160:
+            raise ValueError('INVALID_PROFILE')
+        account = pool.private_launch._id(payload.get('account_id'), 'account_id')
+        context = await pool.resolver.resolve(profile)
+        businesses = {str(row.get('business_id') or '') for row in context.ad_accounts or []
+            if isinstance(row, dict) and str(row.get('ad_account_id') or row.get('account_id')
+                or row.get('id') or '').removeprefix('act_') == account
+            and str(row.get('business_id') or '').isdigit()}
+        if len(businesses) != 1:
+            raise ProvisioningError('PRIVATE_LAUNCH_RK_NOT_IN_CONFIRMED_INVENTORY',
+                'Exact advertising account context is unavailable', retryable=False)
+        async with ProfileSession(context) as session:
+            web = await session.facebook_web()
+            web.private_only = True
+            result = await read_form_helper(web, adapter.catalog,
+                {'profile_id':profile,'ad_account_id':account,'business_id':next(iter(businesses))},
+                helper, payload)
+        return {'ok': True, **result}
+    except (ProvisioningError, ProfileContextError) as error:
+        raise HTTPException(status_code=409, detail={'code':getattr(error,'code','PROFILE_CONTEXT_ERROR'),
+            'message':str(error)}) from None
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail='INVALID_ADVERTISING_HELPER_INPUT') from None
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail='ADVERTISING_HELPER_READ_TIMEOUT') from None
+
 
 @app.get('/api/v1/private-launch/maintenance-candidate',dependencies=[Depends(require_key)])
 async def private_launch_maintenance_candidate():

@@ -103,3 +103,6 @@ jobs:
 
       - name: Creative serializer and Launch workflow interface
         run: /tmp/remask-browser-regression/bin/python tests/workflow-ui.browser.py
+
+      - name: Installed private Launch media and budget round trips
+        run: PYTHONPATH=python_backend /tmp/remask-browser-regression/bin/python tests/private-launch-completion.browser.py

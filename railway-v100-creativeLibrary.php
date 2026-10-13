@@ -151,7 +151,7 @@ try {
         $format = cl100_format((string)($_POST['format'] ?? 'SINGLE'));
         $cta = strtoupper(cl100_string('cta', 50));
         $allowedCta = ['LEARN_MORE','SIGN_UP','APPLY_NOW','CONTACT_US','SHOP_NOW','GET_OFFER'];
-        if (!in_array($cta, $allowedCta, true)) $cta = 'LEARN_MORE';
+        if (!preg_match('/^[A-Z][A-Z0-9_]{0,49}$/D', $cta)) throw new InvalidArgumentException('Invalid call-to-action type.');
 
         $destination = cl100_string('destination_url', 2000);
         if ($format !== 'INSTAGRAM_POST' && $destination !== '' && !filter_var($destination, FILTER_VALIDATE_URL)) {
@@ -236,7 +236,7 @@ try {
                         'error' => $errors[$index] ?? UPLOAD_ERR_NO_FILE,
                     ];
                     $media = cl100_add_upload($library, $one, 'carousel-' . ($index + 1));
-                    if (($media['media_type'] ?? '') !== 'image') throw new InvalidArgumentException('Carousel currently supports image cards only.');
+                    if (!in_array(($media['media_type'] ?? ''), ['image','video'], true)) throw new InvalidArgumentException('Carousel requires image or video media.');
                     $meta = is_array($cardsMeta[$index] ?? null) ? $cardsMeta[$index] : [];
                     $record['carousel'][] = [
                         'media_library_id' => (string)$media['id'],
@@ -269,12 +269,8 @@ try {
         }
 
         $saved = $store->save($id !== '' ? $id : null, $record);
-        $newMedia = cl100_media_ids($saved);
-        foreach (array_diff($previousMedia, $newMedia) as $oldId) {
-            if (!cl100_referenced($store, $oldId)) {
-                try { $library->delete($oldId); } catch (Throwable $ignored) {}
-            }
-        }
+        // Media Library files are shared by saved bundles and private Jobs.
+        // Editing a preset cannot dispose of their immutable media references.
 
         MetaEndpoint::ok(['item' => $saved, 'items' => cl100_public_items($store, $library)]);
         exit;
@@ -290,11 +286,7 @@ try {
         $id = trim((string)($_POST['id'] ?? ''));
         $removed = $store->delete($id);
         if ($removed === null) throw new InvalidArgumentException('Creative not found.');
-        foreach (cl100_media_ids($removed) as $oldId) {
-            if (!cl100_referenced($store, $oldId)) {
-                try { $library->delete($oldId); } catch (Throwable $ignored) {}
-            }
-        }
+        // The explicit Media Library lifecycle owns deletion of shared files.
         MetaEndpoint::ok(['deleted' => true, 'items' => cl100_public_items($store, $library)]);
         exit;
     }

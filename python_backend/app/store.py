@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import hashlib
 import re
 import sqlite3
 import time
@@ -850,20 +851,23 @@ class JobStore:
             return []
         progress, seen = [], set()
         for task in tasks:
-            if task.get('action') != 'private_launch' or not isinstance(task.get('payload'), dict):
+            if task.get('action') not in {'private_launch','private_delivery'} or not isinstance(task.get('payload'), dict):
                 continue
             payload = task['payload']
             business = str(payload.get('business_id') or '').strip()
             account = str(payload.get('ad_account_id') or '').removeprefix('act_').strip()
-            launch_key = str(payload.get('launch_key') or task.get('idempotency_key')
+            launch_key = str((payload.get('delivery_key') if task.get('action') == 'private_delivery' else payload.get('launch_key')) or task.get('idempotency_key')
                              or f"{item['profile_id']}:{business}:{account}").strip()
             if not business.isdigit() or not account.isdigit() or len(launch_key) > 200:
                 continue
-            rows = con.execute("""SELECT step,status,entity_id,result_json,error_code,submitted,updated_at
-                FROM private_launch_steps WHERE launch_key=? AND profile_id=? AND business_id=? AND ad_account_id=?
-                ORDER BY created_at,step LIMIT 100""", (launch_key, item['profile_id'], business, account)).fetchall()
+            delivery_key = ('ads-delivery:' + hashlib.sha256(launch_key.encode()).hexdigest()
+                            if task.get('action') == 'private_launch' else '')
+            rows = con.execute("""SELECT launch_key,step,status,entity_id,result_json,error_code,submitted,updated_at
+                FROM private_launch_steps WHERE launch_key IN (?,?) AND profile_id=? AND business_id=? AND ad_account_id=?
+                ORDER BY CASE WHEN step LIKE 'ADS_MANAGER:VIDEO_TRANSFER_%' THEN 1 ELSE 0 END,
+                         created_at,step LIMIT 100""", (launch_key, delivery_key, item['profile_id'], business, account)).fetchall()
             for row in rows:
-                identity = (launch_key, row['step'])
+                identity = (row['launch_key'], row['step'])
                 if identity in seen:
                     continue
                 seen.add(identity)
@@ -877,11 +881,16 @@ class JobStore:
                 outputs = evidence.get('outputs', {})
                 verification = evidence.get('verification', {})
                 publication = evidence.get('publication', {})
+                if (row['step'] == 'ADS_MANAGER:PUBLISH' and isinstance(verification, dict)
+                        and verification.get('verified') is True):
+                    outputs = verification.get('entities', {})
                 progress.append({'task_id': task['id'], 'step': row['step'], 'status': row['status'],
                     'business_id': business, 'ad_account_id': account, 'entity_id': row['entity_id'],
                     'submitted': None if row['submitted'] is None else bool(row['submitted']),
                     'updated_at': row['updated_at'], 'code': row['error_code'],
-                    'verified': verification.get('verified') is True if isinstance(verification, dict) else False,
+                    'phase_receipt': verification.get('phase_receipt') is True if isinstance(verification, dict) else False,
+                    'verified': (verification.get('verified') is True and verification.get('phase_receipt') is not True)
+                        if isinstance(verification, dict) else False,
                     'outputs': {key: value for key, value in outputs.items()
                         if key in {'entity_id','campaign_id','adset_id','creative_id','ad_id'}
                         and isinstance(value, str) and re.fullmatch(r'[A-Za-z0-9_-]{5,128}', value)} if isinstance(outputs, dict) else {},

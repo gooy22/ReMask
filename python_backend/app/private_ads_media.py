@@ -5,11 +5,13 @@ import hashlib
 import re
 from .private_ads_draft import fail
 
-def _image_receipt(response):
+def _image_receipt(response, filename=None):
     rows = response.get("images") if isinstance(response, dict) else None
     if not isinstance(rows, dict) or len(rows) != 1:
         raise fail("IMAGE_RECEIPT_UNAVAILABLE", "Image upload did not return one exact image")
-    row = next(iter(rows.values()))
+    key, row = next(iter(rows.items()))
+    if filename is not None and str(key).rsplit("/", 1)[-1] != filename:
+        raise fail("IMAGE_RECEIPT_UNAVAILABLE", "Image upload receipt belongs to another filename")
     image_hash = row.get("hash") if isinstance(row, dict) else None
     if not isinstance(image_hash, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,160}", image_hash):
         raise fail("IMAGE_RECEIPT_UNAVAILABLE", "Image upload returned no valid image hash")
@@ -46,7 +48,7 @@ async def upload_image(client, submitter, media):
         result = await submitter.submit(client, operation="IMAGE:" + media.sha256,
             path="/act_" + client.context.account_id + "/adimages", params={},
             files={media.path.name: (media.path.name, handle, media.mime_type)},
-            media_digest=media.sha256, receipt=_image_receipt)
+            media_digest=media.sha256, receipt=lambda response: _image_receipt(response, media.path.name))
     finally:
         handle.close()
     proof = await verify_image(client, result["image_hash"])

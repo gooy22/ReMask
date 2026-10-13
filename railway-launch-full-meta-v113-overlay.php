@@ -95,7 +95,7 @@ function remaskLaunchMetaFieldId(group, field) {
     return 'launchMeta_' + group + '_' + field.replace(/[^a-z0-9_]+/gi, '_');
 }
 function remaskLaunchMetaComplex(type) {
-    return /^(list<|map|Object|IDName|Ad|Ads)/.test(String(type || ''));
+    return /^(JSON|list<|map|Object|IDName|Ad|Ads)/.test(String(type || ''));
 }
 function remaskLaunchMetaParse(raw, type, field) {
     raw=String(raw ?? '').trim();
@@ -107,7 +107,7 @@ function remaskLaunchMetaParse(raw, type, field) {
     }
     if(type==='unsigned int'||type==='int'){
         const n=Number(raw);
-        if(!Number.isInteger(n)) throw new Error(field + ': нужно целое число');
+        if(!Number.isSafeInteger(n)) throw new Error(field + ': нужно целое число');
         return n;
     }
     if(type==='float'){
@@ -223,7 +223,8 @@ function remaskPopulateLaunchMetaSdkFields(builder) {
     document.querySelectorAll('[data-launch-meta-group][data-launch-meta-field]').forEach(el=>{
         const group=el.dataset.launchMetaGroup;
         const field=el.dataset.launchMetaField;
-        el.value=remaskLaunchMetaDisplay(builder[group]?.[field]);
+        const value=builder[group]?.[field];
+        el.value=el.dataset.launchMetaType==='JSON'&&value!==undefined?JSON.stringify(value):remaskLaunchMetaDisplay(value);
     });
 }
 function remaskFilterLaunchMetaFields() {

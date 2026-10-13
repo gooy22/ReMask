@@ -202,8 +202,11 @@ console.log('Private Launch catalog and funding truth checks passed');
   assert.equal(privateCtx.remaskPrivateFinalizeJob({status:'PARTIAL'}),'PARTIAL');
   assert.equal(storage.has('remask_private_launch_pending_v1'),true);
   assert.equal(privateCtx.remaskPrivateFinalizeJob({status:'SUCCESS'}),'SUCCESS');
+  assert.equal(storage.has('remask_private_launch_pending_v1'),true,
+    'unrelated or anonymous success cannot release a pending submission');
+  assert.equal(privateCtx.remaskPrivateFinalizeJob({status:'SUCCESS',idempotency_key:planned.request.idempotency_key}),'SUCCESS');
   assert.equal(storage.has('remask_private_launch_pending_v1'),false,
-    'only terminal SUCCESS may clear the pending request');
+    'only matching terminal SUCCESS may clear the pending request');
 
   // Recreate one pending request so the explicit clear helper stays covered.
   privateCtx.remaskPrivateJobRequest(config,reviewed);

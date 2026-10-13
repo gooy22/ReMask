@@ -12,7 +12,7 @@ import time
 
 from .action_result import ActionResult
 from .private_ads_draft import (FRAGMENT_FIELDS, LEVELS, PUBLISH_FIELDS, fail,
-                                fragment_params, identity, publication_status, publish_params)
+                                fragment_params, fragment_values_match, identity, publication_receipt, publication_status, publish_params)
 from .private_launch_extensions import OperationKey
 
 
@@ -85,20 +85,7 @@ class AdsManagerDraftPublisher:
                     or row.get("ad_object_type") != level
                     or (parent_id is not None and row.get("parent_ad_object_id") != parent_id)):
                 raise fail("READ_RELATION_MISMATCH", "Draft fragment identity or parent is unconfirmed")
-            observed = row.get("values")
-            if not isinstance(observed, list) or any(not isinstance(entry, dict) for entry in observed):
-                raise fail("READ_INCOMPLETE", "Draft fragment values are unavailable", True)
-            fields = [entry.get("field") for entry in observed]
-            if any(not isinstance(field, str) for field in fields) or len(set(fields)) != len(fields):
-                raise fail("READ_INCOMPLETE", "Draft fragment fields are ambiguous", True)
-            decoded = {}
-            try:
-                for entry in observed:
-                    value = entry.get("new_value")
-                    decoded[entry["field"]] = json.loads(value) if isinstance(value, str) else value
-            except (TypeError, ValueError):
-                raise fail("READ_INCOMPLETE", "Draft fragment values cannot be decoded", True) from None
-            if any(field not in decoded or decoded[field] != value for field, value in values.items()):
+            if not fragment_values_match(row.get("values"), values, business_id=scope["business_id"]):
                 raise fail("READ_SPEC_MISMATCH", "Saved draft settings differ from this Launch")
             objects[level] = identity(row.get("ad_object_id"))
             if objects[level] in list(objects.values())[:-1]:
@@ -108,7 +95,7 @@ class AdsManagerDraftPublisher:
             fragments.append(fragment_id);parent_id = objects[level]
         publication = await self.submitter.submit(client, operation="PUBLISH",
             path="/" + draft_id + "/publish", params=publish_params(fragments),
-            receipt=lambda row: {"operation_id": identity(row.get("async_request_set_id"))})
+            receipt=publication_receipt)
         for attempt in range(12):
             response = await client.get("/addraft_" + draft_id + "/addraft_publish_statuses",
                 {"async_request_set_ids": [publication["operation_id"]], "fields": PUBLISH_FIELDS, "date_format": "U"})
@@ -132,6 +119,7 @@ class AdsManagerDraftPublisher:
         await self._confirm("PUBLISH", {"operation_id": publication["operation_id"], "entities": clean})
         return {"status": "SUCCESS", "entities": clean, "draft_id": draft_id,
                 "publication_id": publication["operation_id"], "verified": True,
+                "effective_statuses": proof.get("effective_statuses", {}), "delivery_running_verified": False,
                 "browser_started": False, "transport": "private_ads_manager_http_h2"}
 
     async def _progress(self, progress):

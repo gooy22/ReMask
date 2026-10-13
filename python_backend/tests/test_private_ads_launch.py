@@ -22,19 +22,19 @@ class ImageClient(DraftClient):
             await before_submit()
             self.uploads += 1
             self.uploaded = next(iter(files.values()))[1].read()
-            return {'images': {'image.png': {'hash': 'fixture-image-hash'}}}
+            return {'images': {next(iter(files)): {'hash': 'fixture-image-hash'}}}
         return await super().post(path, params, before_submit=before_submit, files=files)
     async def get(self, path, params):
         if path.endswith('/adspixels'):
             return {'data':copy.deepcopy(self.pixels)}
         if path == '/act_111111':
-            return {'id':'act_111111','account_status':1,'business':{'id':'222222'},'promotable_page_ids':['555555']}
+            return {'id':'act_111111','account_status':1,'business':{'id':'222222'},'ad_account_promotable_objects':{'promotable_page_ids':['555555']}}
         if path.endswith('/adimages'):
             return {'data':[{'hash':'fixture-image-hash','account_id':'111111'}]}
         if path in {'/777771','/777772','/777773'}:
             level = {'/777771':'campaign','/777772':'ad_set','/777773':'ad'}[path]
             fragment = next(row for row in self.fragments.values() if row['ad_object_type'] == level)
-            values = {row['field']:json.loads(row['new_value']) for row in fragment['values']}
+            values = {row['field']:copy.deepcopy(row['new_value']) for row in fragment['values']}
             if level == 'ad':
                 self.expected_creative = values['creative']
                 values['creative'] = {'id':'777774'}
@@ -107,12 +107,10 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result['checked_live'])
         self.assertEqual(result['mutation_posts'],0)
         self.session.facebook_web.assert_not_awaited()
-    async def test_active_video_and_unsupported_creative_reject_before_any_post(self):
-        for change in ('active','video','advanced'):
+    async def test_competing_video_and_unsupported_creative_reject_before_any_post(self):
+        for change in ('competing_video','advanced'):
             payload = copy.deepcopy(self.payload)
-            if change == 'active':
-                payload['launch']['delivery']={'campaign':'ACTIVE'}
-            elif change == 'video':
+            if change == 'competing_video':
                 payload['launch']['creative']['existing_video_id']='777775'
             else:
                 payload['launch']['creative']['unsupported_option']=True
@@ -248,3 +246,15 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_ASSET_ACCESS_UNCONFIRMED')
         self.assertEqual(self.client.uploads,0)
         self.assertEqual(self.client.posts,[])
+    async def test_saved_publication_resumes_without_billing_or_local_bytes(self):
+        result = await self.launch()
+        self.assertTrue(result['verified'])
+        self.media.path.unlink()
+        with patch('app.static_payment_read.inspect_methods', new=AsyncMock(side_effect=RuntimeError('synthetic billing outage'))), \
+             patch('app.private_launch_media.LaunchMediaResolver.resolve', new=AsyncMock(side_effect=FileNotFoundError())):
+            recovered = await self.launch()
+        self.assertTrue(recovered['verified'])
+        self.assertTrue(recovered['preflight']['resume_read_only'])
+        self.assertFalse(recovered['preflight']['payment_checked_live'])
+        self.assertEqual(self.client.uploads, 1)
+        self.assertEqual(len(self.client.posts), 5)
