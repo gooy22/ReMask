@@ -107,7 +107,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(self.page.locator('.cr-tab[data-tab="creative"]').get_attribute('aria-current'),'step')
 
     def launch(self):
-        self.page.set_content('''<main><div class="launch-wrap">
+        self.page.set_content('''<style>label{display:inline}.form-control{display:inline-block!important;width:auto!important}</style><main><div class="launch-wrap">
         <div class="launch-card"><h5>Source</h5><div class="row"><div class="col-md-4">
         <label for="profile">Facebook profiles</label><select id="profile" multiple><option value="19">19</option><option value="21">21</option></select></div></div></div>
         <div class="launch-card"><h5>Campaign</h5><label>Campaign name</label><input id="campaignName"><select id="objective"><option value="OUTCOME_TRAFFIC">Traffic</option></select></div>
@@ -116,7 +116,7 @@ class WorkflowTests(unittest.TestCase):
         <div class="launch-card"><h5>Review</h5><button id="reviewLaunch" disabled>Review</button><button id="launchButton" disabled><i></i> LAUNCH SELECTED</button></div>
         </div></main><section id="launchMetaAllFields"><h3>API settings</h3><div class="rm-meta-note"></div>
         <details data-launch-meta-group="targeting"><summary><span>TARGETING</span></summary><div class="rm-meta-field" data-search="targeting custom_audiences Object"><label><span>custom_audiences</span><span class="rm-meta-type">Object</span></label><textarea data-launch-meta-field="custom_audiences">[{"id":"12345678"}]</textarea></div></details></section>''')
-        self.page.add_script_tag(content='window.changes=0;document.getElementById("profile").addEventListener("change",()=>window.changes++);')
+        self.page.add_script_tag(content='document.querySelectorAll("input,select,textarea").forEach(el=>el.classList.add("form-control"));window.changes=0;document.getElementById("profile").addEventListener("change",()=>window.changes++);')
         self.page.add_script_tag(content=ASSET)
 
     def test_profile_checkboxes_use_original_selection_and_do_not_launch(self):
@@ -146,6 +146,15 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(self.page.locator('#placementMode').input_value(),'AUTO')
         self.assertEqual(self.page.locator('#placementMode option:checked').inner_text(),'Автоматически (Advantage+)')
         self.assertEqual(self.page.locator('main #launchMetaAllFields').count(), 1)
+
+    def test_launch_fields_override_inline_theme_without_revealing_native_picker(self):
+        self.launch()
+        label=self.page.get_by_text('География',exact=True).bounding_box()
+        field=self.page.locator('#geoQuery').bounding_box()
+        wrapper=self.page.locator('#geoQuery').evaluate('(el)=>el.parentElement.getBoundingClientRect().width')
+        self.assertGreaterEqual(field['y'],label['y']+label['height'])
+        self.assertAlmostEqual(field['width'],wrapper,delta=1)
+        self.assertFalse(self.page.locator('#profile').is_visible())
 
 
 if __name__ == '__main__':
