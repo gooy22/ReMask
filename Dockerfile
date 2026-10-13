@@ -15,6 +15,8 @@ COPY python_backend/requirements.txt /tmp/remask-python-requirements.txt
 RUN python3 -m venv /opt/remask-venv \
     && /opt/remask-venv/bin/pip install --no-cache-dir -r /tmp/remask-python-requirements.txt
 COPY python_backend /opt/remask-python
+# The early backend schema regression also checks the installed UI routing source.
+COPY railway-private-completion-overlay.php /opt/railway-private-completion-overlay.php
 RUN /opt/remask-venv/bin/python -m compileall -q /opt/remask-python \
     && cd /opt/remask-python \
     && /opt/remask-venv/bin/python -c "import fb_worker; from app.session import ProfileSession; from app.facebook_business_browser import FacebookBusinessBrowser; from app.provisioning.registry import get_handler; from app.provisioning.private_create_handlers import business_handler, ad_account_handler; assert get_handler('BUSINESS') is business_handler; assert get_handler('AD_ACCOUNT') is ad_account_handler; assert fb_worker.WebSessionManager is fb_worker.FacebookWebSession; assert callable(ProfileSession.facebook_business_browser)" \
