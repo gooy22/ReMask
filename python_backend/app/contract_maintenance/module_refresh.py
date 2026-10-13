@@ -163,7 +163,9 @@ async def refresh_from_document(web, document, final_url):
 
 def _apply_snapshot(web, snapshot):
     current = getattr(web, '_reviewed_module_ids', {})
-    accepted = {name: row for name, row in current.get('accepted', {}).items() if row['until'] > time.monotonic()}
+    # Retain expired IDs as history: learning a new ID must never silently
+    # downgrade a later request to the older installed ID after a failed read.
+    accepted = dict(current.get('accepted', {}))
     blocked = set(current.get('blocked', [])) | set(snapshot['blocked'])
     for name in snapshot['blocked']:
         accepted.pop(name, None)
@@ -173,11 +175,19 @@ def _apply_snapshot(web, snapshot):
     web._reviewed_module_ids = {'accepted': accepted, 'blocked': sorted(blocked)}
 
 
+def refresh_due(web):
+    now = time.monotonic()
+    return now - getattr(web, '_module_refresh_attempted_at', 0) >= 60 and any(
+        row['until'] <= now for row in getattr(web, '_reviewed_module_ids', {}).get('accepted', {}).values())
+
+
 def effective_doc_id(web, friendly_name, original):
     snapshot = getattr(web, '_reviewed_module_ids', {})
     if friendly_name in snapshot.get('blocked', []):
         raise ProvisioningError('PRIVATE_MODULE_SCHEMA_CHANGED', 'Reviewed Facebook module changed; no request was submitted.')
     row = snapshot.get('accepted', {}).get(friendly_name)
+    if row and row['until'] <= time.monotonic() and row['doc_id'] != row['baseline_doc_id']:
+        raise ProvisioningError('PRIVATE_MODULE_REFRESH_REQUIRED', 'Updated Facebook module proof expired; no request was submitted.')
     if row and row['until'] > time.monotonic() and str(original) in {row['baseline_doc_id'], row['doc_id']}:
         return row['doc_id']
     return original

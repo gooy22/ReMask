@@ -555,6 +555,9 @@ class FacebookWebSession:
     ) -> FacebookBootstrap:
 
         if self._bootstrap is not None and not force:
+            from app.contract_maintenance.module_refresh import refresh_due
+            force = refresh_due(self)
+        if self._bootstrap is not None and not force:
             return self._bootstrap
 
         async with self._bootstrap_lock:
@@ -792,6 +795,7 @@ class FacebookWebSession:
 
     async def refresh_reviewed_modules(self, document: str, final_url: str) -> None:
         from app.contract_maintenance.module_refresh import refresh_from_document
+        self._module_refresh_attempted_at = asyncio.get_running_loop().time()
         try:
             await refresh_from_document(self, document, final_url)
         except asyncio.CancelledError:

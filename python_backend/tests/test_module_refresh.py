@@ -87,11 +87,25 @@ class SelectionTests(unittest.TestCase):
     def test_expired_proof_is_not_used_and_changed_module_revokes_old_proof(self):
         result = refresh.select_updates(self.updated(), self.refs, now=time.monotonic()-refresh.TTL-1)
         web = SimpleNamespace(_reviewed_module_ids=result)
-        self.assertEqual(refresh.effective_doc_id(web, self.name, self.old), self.old)
+        with self.assertRaises(ProvisioningError) as error:
+            refresh.effective_doc_id(web, self.name, self.old)
+        self.assertEqual(error.exception.code, 'PRIVATE_MODULE_REFRESH_REQUIRED')
         refresh._apply_snapshot(web, refresh.select_updates(self.updated(), self.refs))
         refresh._apply_snapshot(web, {'accepted': {}, 'blocked': [self.name]})
         with self.assertRaises(ProvisioningError):
             refresh.effective_doc_id(web, self.name, self.old)
+
+    def test_expired_new_id_is_not_downgraded_after_incomplete_refresh(self):
+        web=SimpleNamespace(_reviewed_module_ids=refresh.select_updates(self.updated(),self.refs,now=time.monotonic()-refresh.TTL-1))
+        refresh._apply_snapshot(web, {'accepted':{},'blocked':[]})
+        with self.assertRaises(ProvisioningError):
+            refresh.effective_doc_id(web,self.name,self.old)
+
+    def test_long_lived_session_refreshes_expired_proof_with_backoff(self):
+        web=SimpleNamespace(_reviewed_module_ids=refresh.select_updates(self.updated(),self.refs,now=time.monotonic()-refresh.TTL-1))
+        self.assertTrue(refresh.refresh_due(web))
+        web._module_refresh_attempted_at=time.monotonic()
+        self.assertFalse(refresh.refresh_due(web))
 
 
 class AutomaticReadsTests(unittest.IsolatedAsyncioTestCase):

@@ -32,6 +32,9 @@ retry, Chromium, JavaScript execution, credential logging or raw-source storage.
 Limits: 24 scripts, 2 MB per script, 12 MB total, 12-second wall clock cap. Cache
 identity includes the profile, actor, proxy and document resource URLs, with a
 30-minute proof lifetime and a 60-second retry backoff after an incomplete read.
+Long-lived sessions renew expired evidence through authenticated bootstrap. Once
+a newer ID has been observed, expiry or an incomplete read cannot silently
+downgrade submission to the older installed ID.
 
 14 installed operations have reproducible source baselines across Settings,
 Page creation/access, RK creation and payment reading/saving. A new persisted ID
