@@ -1,7 +1,8 @@
 """The captured AdsGraphAPI / ApiClient protocol on the profile HTTP/2 pool.
 
 Only fresh Ads Manager JSON configuration can initialize this client. It has
-no OAuth, configured-token, Chromium, alternate-profile or direct-route path.
+no OAuth, configured-token, Chromium, alternate-profile or implicit direct fallback.
+An explicit matching profile-scoped direct-test lease can authorize its route.
 Credentials are private memory; neither receipts nor diagnostics include them.
 """
 from __future__ import annotations
@@ -113,12 +114,16 @@ class AdsManagerPrivateHttp:
         if before_submit is not None and method != "POST":
             raise fail("INVALID_INPUT", "A read cannot claim a submission")
         self.web.private_only = True
-        if (str(self.web.profile.cookies.get("c_user") or "") != self.context.actor_id
-                or not self.web.profile.proxy):
+        if str(self.web.profile.cookies.get("c_user") or "") != self.context.actor_id:
             raise fail("PROFILE_CONTEXT_UNAVAILABLE", "Advertising profile route changed or is unavailable", True)
         session = await self.web._ensure_session()
         if session.proxy != self.web.profile.proxy:
             raise fail("PROFILE_CONTEXT_UNAVAILABLE", "Advertising proxy differs from the initialized profile", True)
+        if not self.web.profile.proxy:
+            from .direct_test import direct_test_deadline
+            deadline = direct_test_deadline(getattr(self.web.profile, "name", ""))
+            if not deadline or getattr(session, "direct_test_until", 0) != deadline:
+                raise fail("PROFILE_CONTEXT_UNAVAILABLE", "Advertising direct test is absent, changed or expired", True)
         from .private_launch import PrivateLaunchContractStore
         PrivateLaunchContractStore._reject_auth_material(params)
         url = self.context.origin + "/" + self.context.version + path

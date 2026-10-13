@@ -31,6 +31,9 @@ jobs:
       - name: Direct HTTP FP/RK contracts and inventory proofs
         working-directory: python_backend
         run: /tmp/remask-regression/bin/python -m unittest tests.test_ad_account_private_contract tests.test_fan_page_private_contract tests.test_private_inventory tests.test_private_inventory_queries tests.test_private_http tests.test_private_create_handlers tests.test_private_business_preflight tests.test_private_page_ownership tests.test_static_meta_contracts
+      - name: Private Launch installed module fixture
+        working-directory: python_backend
+        run: /tmp/remask-regression/bin/python -m unittest tests.test_private_launch_catalog.PrivateLaunchCatalogTests.test_installer_and_generated_php_lint_and_js_cache_bust
       - name: Backend regression suite
         working-directory: python_backend
         run: |

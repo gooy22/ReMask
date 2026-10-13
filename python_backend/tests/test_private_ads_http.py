@@ -1,8 +1,10 @@
 import copy
 import json
 from contextlib import asynccontextmanager
+import os
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from app.private_ads_http import AdsManagerPrivateHttp, context_from_document
 from app.private_ads_verify import verify_published_objects
@@ -67,6 +69,50 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ProvisioningError):
             await self.client.post("/act_111111/addrafts", {}, before_submit=self.claim)
         self.assertEqual(self.claims, 0)
+
+    def direct_fixture(self):
+        self.web.profile.name = '21'
+        self.web.profile.proxy = None
+        self.web.session.proxy = None
+        self.web.session.direct_test_until = 1600
+
+    async def test_explicit_profile_21_direct_lease_allows_http2_reads_and_claimed_post(self):
+        self.direct_fixture()
+        with patch.dict(os.environ, {'REMASK_DIRECT_TEST_PROFILE': '21', 'REMASK_DIRECT_TEST_UNTIL': '1600'}), \
+                patch('app.direct_test.time.time', return_value=1000):
+            await self.client.get('/act_111111', {'fields': ['id']})
+            await self.client.post('/act_111111/addrafts', {}, before_submit=self.claim)
+        self.assertEqual([row[0] for row in self.web.session.calls], ['GET', 'POST'])
+        self.assertEqual(self.claims, 1)
+        self.assertTrue(all(row[2]['allow_redirects'] is False for row in self.web.session.calls))
+
+    async def test_direct_lease_cannot_grant_another_profile_advertising_post(self):
+        self.direct_fixture()
+        self.web.profile.name = '22'
+        with patch.dict(os.environ, {'REMASK_DIRECT_TEST_PROFILE': '21', 'REMASK_DIRECT_TEST_UNTIL': '1600'}), \
+                patch('app.direct_test.time.time', return_value=1000), self.assertRaises(ProvisioningError):
+            await self.client.post('/act_111111/addrafts', {}, before_submit=self.claim)
+        self.assertEqual(self.claims, 0)
+        self.assertEqual(self.web.session.calls, [])
+
+    async def test_expired_or_changed_direct_lease_stops_before_claim(self):
+        self.direct_fixture()
+        for clock, until in ((1601, '1600'), (1000, '1601')):
+            with self.subTest(clock=clock, until=until), \
+                    patch.dict(os.environ, {'REMASK_DIRECT_TEST_PROFILE': '21', 'REMASK_DIRECT_TEST_UNTIL': until}), \
+                    patch('app.direct_test.time.time', return_value=clock), self.assertRaises(ProvisioningError):
+                await self.client.post('/act_111111/addrafts', {}, before_submit=self.claim)
+        self.assertEqual(self.claims, 0)
+        self.assertEqual(self.web.session.calls, [])
+
+    async def test_session_without_a_matching_direct_lease_stops_before_claim(self):
+        self.direct_fixture()
+        self.web.session.direct_test_until = 0
+        with patch.dict(os.environ, {'REMASK_DIRECT_TEST_PROFILE': '21', 'REMASK_DIRECT_TEST_UNTIL': '1600'}), \
+                patch('app.direct_test.time.time', return_value=1000), self.assertRaises(ProvisioningError):
+            await self.client.post('/act_111111/addrafts', {}, before_submit=self.claim)
+        self.assertEqual(self.claims, 0)
+        self.assertEqual(self.web.session.calls, [])
 
     async def test_changed_actor_foreign_account_and_unsafe_path_fail_before_claim(self):
         for path in ("/act_999999/addrafts", "/act_111111/addrafts?access_token=wrong", "https://other.invalid/path"):
