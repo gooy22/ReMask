@@ -12,6 +12,7 @@ from app.private_ads_draft import fragment_params, flatten_params, publication_s
 from app.private_ads_http import context_from_document
 from app.private_ads_state import AdsManagerSubmitter
 from app.private_ads_publication import AdsManagerDraftPublisher
+from app.private_launch_extensions import OperationKey
 from app.private_launch import PrivateLaunchStateStore
 from app.provisioning.models import ProvisioningError
 
@@ -210,6 +211,24 @@ class PublisherTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.client.posts), 5)
         self.assertEqual([row[1]["ad_object_type"] for row in self.client.posts[1:4]], ["campaign", "ad_set", "ad"])
         await self.launch();self.assertEqual(len(self.client.posts), 5)
+
+    async def test_confirmed_publication_preserved_after_stale_status(self):
+        await self.launch()
+        key = OperationKey("ADS_MANAGER:PUBLISH")
+        initial = await self.state.step("launch", key)
+        self.assertEqual(initial["status"], "SUCCESS")
+        self.assertTrue(initial["result"]["evidence"]["verification"]["verified"])
+        await self.launch()
+        repeated = await self.state.step("launch", key)
+        self.assertEqual(repeated["status"], "SUCCESS")
+        self.client.pending = True
+        with self.assertRaises(ProvisioningError) as error:
+            await self.launch()
+        self.assertEqual(error.exception.code, "PRIVATE_ADS_DRAFT_PUBLISH_STATUS_REGRESSION")
+        after = await self.state.step("launch", key)
+        self.assertEqual(after["status"], "SUCCESS")
+        self.assertEqual(after["result"], repeated["result"])
+        self.assertEqual(len(self.client.posts), 5)
 
     async def test_pending_publication_resumes_status_without_new_post(self):
         self.client.pending = True
