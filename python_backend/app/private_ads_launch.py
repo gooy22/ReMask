@@ -95,7 +95,7 @@ class AdsManagerLaunch:
 
     async def _preflight(self, client, web, payload, target):
         from .private_launch import _payment_selector, _safe_payment_methods, _select_payment_method
-        from .static_payment_read import inspect_methods
+        from .static_payment_read import inspect_methods, complete_methods
         account = target["ad_account_id"]
         row = await client.get("/act_" + account,
             {"fields": ["id", "account_status", "business", "promotable_page_ids"]})
@@ -110,9 +110,21 @@ class AdsManagerLaunch:
         if not isinstance(pages, list) or target["page_id"] not in pages:
             raise fail("PAGE_UNVERIFIED", "Live account response did not confirm advertising access to this Page")
         funding = await inspect_methods(web, account=account, business_id=target["business_id"])
-        if (funding.get("account_scope_verified") is not True or funding.get("checked_live") is not True
-                or funding.get("card_linked") is not True or funding.get("inventory_complete") is not True):
-            raise fail("PAYMENT_UNVERIFIED", "A fresh linked payment method is required on this exact account")
+        if (funding.get("account_scope_verified") is True
+                and funding.get("business_scope_verified") is True
+                and funding.get("payment_account_relation_verified") is True
+                and funding.get("methods_query_verified") is True
+                and funding.get("card_linked") is True
+                and funding.get("inventory_complete") is not True):
+            # The observed READ_METHODS query returns a filtered collection.
+            # Prove the complete account-scoped credential inventory before
+            # choosing a card; do not infer completeness from one visible card.
+            funding = await complete_methods(web, funding, business_id=target["business_id"])
+        if not all(funding.get(field) is True for field in (
+                "account_scope_verified", "business_scope_verified",
+                "payment_account_relation_verified", "methods_query_verified",
+                "checked_live", "card_linked", "inventory_complete")):
+            raise fail("PAYMENT_UNVERIFIED", "A complete fresh account-scoped payment read is required")
         methods = _safe_payment_methods(funding.get("payment_methods"))
         selection = _payment_selector(payload)
         required, selected, source = selection is None and len(methods) > 1, {}, "selection_required"
@@ -127,10 +139,19 @@ class AdsManagerLaunch:
         matched = [method for method in funding.get("payment_methods", []) if selected
                    and method.get("last4") == selected["last4"]
                    and str(method.get("type", "")).casefold() == selected["type"].casefold()]
-        if any(method.get("is_expired") is True for method in matched):
+        if len(matched) != 1:
+            raise fail("PAYMENT_UNVERIFIED", "Exactly one live payment method must match the selected card")
+        method = matched[0]
+        if method.get("is_expired") is True:
             raise fail("PAYMENT_EXPIRED", "The selected linked card has expired")
-        if any(method.get("needs_verification") is True or method.get("verification_tasks") for method in matched):
+        if (method.get("needs_verification") is True or method.get("verification_tasks")
+                or method.get("card_confirmation_status") == "REQUIRED"):
             raise fail("PAYMENT_CONFIRMATION_REQUIRED", "Meta requires confirmation of the linked card")
+        if (method.get("needs_verification") is not False
+                or method.get("verification_tasks_observed") is not True
+                or method.get("card_confirmation_status") != "CLEAR"):
+            raise fail("PAYMENT_CONFIRMATION_UNVERIFIED",
+                       "Selected card verification state was not conclusively cleared by Meta")
         return {**target, "account_status": 1, "browser_started": False, "transport": "private_http_h2",
             "page_access_checked_live": True, "payment_checked_live": True,
             "payment_selection_required": required, "payment_methods": methods,
