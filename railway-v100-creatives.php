@@ -239,6 +239,11 @@ require_once __DIR__ . '/checkpassword.php';
 
       <section class="cr-panel" data-panel="audience">
         <div class="cr-section-title">Audience / Targeting</div>
+        <div class="cr-form-grid" id="creativeMetaContext">
+          <div class="span-6 cr-field"><label for="creativeMetaProfile">Профиль Facebook для поиска</label><select id="creativeMetaProfile" class="form-control"><option value="">Выберите профиль</option></select></div>
+          <div class="span-6 cr-field"><label for="creativeMetaAccount">Рекламный кабинет</label><select id="creativeMetaAccount" class="form-control"><option value="">Выберите РК</option></select></div>
+          <div class="span-12 cr-hint" id="creativeMetaContextStatus">Выберите профиль и РК для поиска географии, интересов, поведения и языков. Настройки крео можно сохранять отдельно.</div>
+        </div>
         <div class="cr-form-grid">
           <div class="span-3 cr-field"><label>Age min</label><input id="mbAgeMin" type="number" min="13" max="65" class="form-control" value="18"></div>
           <div class="span-3 cr-field"><label>Age max</label><input id="mbAgeMax" type="number" min="13" max="65" class="form-control" value="65"></div>

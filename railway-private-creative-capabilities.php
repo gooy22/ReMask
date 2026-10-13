@@ -19,6 +19,10 @@ try {
         if (!$row instanceof FbAccount) continue;
         $out['profiles'][] = ['name'=>(string)$row->name, 'proxy_configured'=>$row->proxy !== null];
     }
+    $testProfile = trim((string)(getenv('REMASK_DIRECT_TEST_PROFILE') ?: ''));
+    $testUntil = (int)(getenv('REMASK_DIRECT_TEST_UNTIL') ?: 0);
+    $out['preferred_profile'] = $testUntil > time() && $testUntil <= time()+7200
+        && in_array($testProfile,array_column($out['profiles'],'name'),true) ? $testProfile : '';
     $out += ['profile'=>$profile,'account_id'=>$account,'ad_accounts'=>[], 'pages'=>[],
         'instagram_accounts'=>[],'pixels'=>[],'custom_audiences'=>[],'custom_conversions'=>[],
         'connected_instagram_accounts'=>[],'conversion_goals'=>[],'ad_images'=>[],
