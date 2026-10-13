@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+from datetime import datetime
 from urllib.parse import urlsplit, urlunsplit
 
 from .private_ads_draft import fail, identity
@@ -30,6 +31,15 @@ def stable_request_values(value, key=None):
 
 
 def _same(actual, expected, field=None):
+    if field in {'start_time', 'end_time'} and isinstance(expected, str):
+        if not isinstance(actual, str):
+            return False
+        try:
+            left = datetime.fromisoformat(actual.replace('Z', '+00:00'))
+            right = datetime.fromisoformat(expected.replace('Z', '+00:00'))
+            return left.tzinfo is not None and right.tzinfo is not None and left == right
+        except ValueError:
+            return False
     if field in {"image_url", "picture"} and isinstance(expected, str):
         return isinstance(actual, str) and stable_media_url(actual) == stable_media_url(expected)
     if isinstance(expected, int) and not isinstance(expected, bool):
@@ -62,7 +72,7 @@ async def verify_published_objects(client, objects, levels):
                          *({"creative{id}"} if level == "ad" else set())})
         row = await client.get("/" + entities[entity_name], {"fields": fields})
         _scope(row, account, entities[entity_name])
-        if row.get("status") != "PAUSED" or any(key not in row or not _same(row[key], value)
+        if row.get("status") != "PAUSED" or any(key not in row or not _same(row[key], value, key)
                                                for key, value in expected.items()):
             raise fail("OBJECT_SPEC_MISMATCH", "Published advertising settings differ from the saved Launch")
         effective[level] = row.get("effective_status")

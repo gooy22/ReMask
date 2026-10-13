@@ -9,6 +9,12 @@ from tests import test_private_ads_launch as launch_fixture
 
 
 class PrivateSchemaTests(unittest.TestCase):
+    def test_schedule_readback_compares_exact_instant_without_relaxing_other_strings(self):
+        from app.private_ads_verify import _same
+        self.assertTrue(_same('2026-11-01T20:00:00+0200', '2026-11-01T18:00:00.000Z', 'end_time'))
+        for actual in ('2026-11-01T18:00:01+0000', '2026-11-01T18:00:00', 'invalid'):
+            self.assertFalse(_same(actual, '2026-11-01T18:00:00.000Z', 'end_time'))
+        self.assertFalse(_same('2026-11-01T18:00:00+0000', '2026-11-01T18:00:00.000Z', 'name'))
     def test_form_fields_and_enums_have_private_source_provenance(self):
         catalog = AdsManagerRouteCatalog()
         form = catalog.data['form_schema']
