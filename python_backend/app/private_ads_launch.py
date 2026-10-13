@@ -124,6 +124,11 @@ class AdsManagerLaunch:
                 "payment_account_relation_verified", "methods_query_verified",
                 "checked_live", "card_linked", "inventory_complete")):
             raise fail("PAYMENT_UNVERIFIED", "A complete fresh account-scoped payment read is required")
+        if (funding.get("account_id") != account
+                or funding.get("business_id") != target["business_id"]
+                or not isinstance(funding.get("payment_account_id"), str)
+                or not funding["payment_account_id"].isdigit()):
+            raise fail("PAYMENT_SCOPE_UNVERIFIED", "Complete payment read belongs to another account or Business")
         methods = _safe_payment_methods(funding.get("payment_methods"))
         selection = _payment_selector(payload)
         required, selected, source = selection is None and len(methods) > 1, {}, "selection_required"
