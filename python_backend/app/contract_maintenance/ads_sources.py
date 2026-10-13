@@ -20,12 +20,18 @@ PUBLICATION_TARGETS = (
 )
 
 DEFAULT_SENDER_MODULES = PUBLICATION_TARGETS
+HTTP_SOURCE_DEPENDENCIES = (
+    "WebApiApplication", "ApiAdCreativeFields", "ApiObjectStorySpecLinkFields",
+    "ApiObjectStorySpecVideoFields", "VideoUploadRequest", "VideoUploadPostRequestManager",
+    "VideoUploadSession", "VideoCreatorProductType", "ShadowIGMediaFields",
+    "AdAccountTargetingUnifiedNodeDefaultFieldsStatic",
+)
 _TRANSPORT_MODULES = {"ApiClient", "ApiBatcher", "ApiClientUtils", "CORSRequest", "UrlMap",
                       "RequestProcessorBase", "RequestProcessorDefault", "RequestConstants"}
 
 
 def advertising_module_name(name):
-    return isinstance(name, str) and (name in _TRANSPORT_MODULES or bool(re.match(
+    return isinstance(name, str) and (name in _TRANSPORT_MODULES or name in HTTP_SOURCE_DEPENDENCIES or bool(re.match(
         r"(?:Ads|ads|useAds|BizKit.*Ads|cr:|GraphAPI|XAds|LWI|useLWI|WAWebBizAd|useWAWebBizAd|Ad(?:Account|Campaign|Creative|group|Draft|AsyncRequest|DeliveryStatus))", name)))
 
 

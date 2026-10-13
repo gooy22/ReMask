@@ -79,11 +79,15 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.web.profile.proxy = None
         self.web.session.proxy = None
         self.web.session.direct_test_until = 1600
+        with patch.dict(os.environ, {'REMASK_DIRECT_TEST_PROFILE':'21','REMASK_DIRECT_TEST_UNTIL':'1600'}), \
+                patch('app.direct_test.time.time',return_value=1000):
+            self.client = AdsManagerPrivateHttp(self.web, self.client.context)
 
     async def test_explicit_profile_21_direct_lease_allows_http2_reads_and_claimed_post(self):
         self.direct_fixture()
         with patch.dict(os.environ, {'REMASK_DIRECT_TEST_PROFILE': '21', 'REMASK_DIRECT_TEST_UNTIL': '1600'}), \
                 patch('app.direct_test.time.time', return_value=1000):
+            self.client = AdsManagerPrivateHttp(self.web, self.client.context)
             await self.client.get('/act_111111', {'fields': ['id']})
             await self.client.post('/act_111111/addrafts', {}, before_submit=self.claim)
         self.assertEqual([row[0] for row in self.web.session.calls], ['GET', 'POST'])
@@ -174,6 +178,39 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.web.fetch_text = foreign
         with self.assertRaises(ProvisioningError):
             await AdsManagerPrivateHttp.open(self.web, account_id="111111", business_id="222222", actor_id="123456")
+
+
+    async def test_changed_non_actor_cookie_requires_fresh_document_before_claim(self):
+        self.web.profile.cookies['xs'] = 'new-synthetic-cookie'
+        with self.assertRaises(ProvisioningError):
+            await self.client.post('/act_111111/addrafts', {}, before_submit=self.claim)
+        self.assertEqual(self.claims, 0)
+        self.assertEqual(self.web.session.calls, [])
+
+    async def test_profile_change_during_claim_cannot_dispatch(self):
+        async def change_profile():
+            self.claims += 1
+            self.web.profile.cookies['xs'] = 'new-synthetic-cookie'
+        with self.assertRaises(ProvisioningError):
+            await self.client.post('/act_111111/addrafts', {}, before_submit=change_profile)
+        self.assertEqual(self.claims, 1)
+        self.assertEqual(self.web.session.calls, [])
+
+    async def test_video_start_uses_formdata_and_transfer_uses_waterfall_header(self):
+        waterfall = 'a' * 32
+        await self.client.post('/act_111111/advideos', {'upload_phase': 'start', 'waterfall_id': waterfall},
+                               before_submit=self.claim, multipart=True)
+        self.assertEqual(self.web.session.calls[-1][2]['files']['upload_phase'], (None, 'start'))
+        await self.client.post('/act_111111/advideos', {'upload_phase': 'transfer', 'waterfall_id': waterfall},
+                               before_submit=self.claim, files={'video_file_chunk': ('chunk', b'synthetic', 'video/mp4')})
+        self.assertEqual(self.web.session.calls[-1][2]['headers']['X_FB_VIDEO_WATERFALL_ID'], waterfall)
+
+    async def test_read_only_publication_session_cannot_claim_any_post(self):
+        self.client.read_only = True
+        with self.assertRaises(ProvisioningError):
+            await self.client.post('/act_111111/addrafts', {}, before_submit=self.claim)
+        self.assertEqual(self.claims, 0)
+        self.assertEqual(self.web.session.calls, [])
 
 
 class PublishedReads(unittest.IsolatedAsyncioTestCase):

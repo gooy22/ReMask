@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from app.private_ads_draft import fragment_params, flatten_params, publication_status, publish_params
+from app.private_ads_draft import fragment_params, fragment_values_match, flatten_params, publication_receipt, publication_status, publish_params
 from app.private_ads_http import context_from_document, AdsManagerResponseError
 from app.private_ads_state import AdsManagerSubmitter
 from app.private_ads_publication import AdsManagerDraftPublisher
@@ -39,8 +39,9 @@ class WireTests(unittest.TestCase):
         result = fragment_params("123456", level="campaign", values=values)
         self.assertEqual(values, old)
         entries = {row["field"]: row for row in result["values"]}
-        self.assertEqual(entries["status"]["new_value"], '"PAUSED"')
-        self.assertEqual(entries["targeting"]["old_value"], "null")
+        self.assertEqual(entries["status"]["new_value"], "PAUSED")
+        self.assertIsNone(entries["targeting"]["old_value"])
+        self.assertEqual(entries["targeting"]["new_value"], values["targeting"])
         flat = flatten_params({"omitted": None, "empty": "", "boolean": False, "list": [1, 2]})
         self.assertEqual(flat, {"empty": "", "boolean": "false", "list": "[1,2]"})
 
@@ -99,6 +100,26 @@ class WireTests(unittest.TestCase):
         value["access_token"] = "synthetic-session-value"
         with self.assertRaises(ProvisioningError):
             context_from_document(json.dumps(value), account_id="111111", business_id="222222", actor_id="123456")
+
+
+    def test_raw_json_like_strings_are_not_reinterpreted(self):
+        expected = {"name": "true", "description": "null", "status": "PAUSED", "budget": 100, "enabled": False}
+        rows = [{"field": key, "old_value": None, "new_value": value} for key, value in expected.items()]
+        self.assertTrue(fragment_values_match(rows, expected))
+        rows[-1]["new_value"] = 0
+        self.assertFalse(fragment_values_match(rows, expected))
+
+    def test_raw_fragment_status_array_is_verified_without_ui_cache_wrapper(self):
+        row = completed()
+        row['data'][0]['fragment_statuses'] = row['data'][0]['fragment_statuses']['data']
+        self.assertTrue(publication_status(row, operation_id='789012',
+            fragment_ids=['111111', '222222', '333333'])['completed'])
+
+    def test_async_handle_does_not_override_explicit_publication_rejection(self):
+        for value in ({'success': False, 'async_request_set_id': '789012'}, {'async_request_set_id': '789012'}):
+            with self.assertRaises(ProvisioningError):
+                publication_receipt(value)
+
 
 
 class JournalTests(unittest.IsolatedAsyncioTestCase):

@@ -295,7 +295,10 @@ async def run(pool):
                         log.info("launch HTTP source audit browser_started=False result=%s", json.dumps(source))
                         if os.getenv("REMASK_LAUNCH_HTTP_AUDIT_SAVED") == "1":
                             inspect_saved_sources()
-                    pages, funding = await asyncio.gather(inspect_pages(web, account=account, business_id=business),
+                    page_read = (pool.private_launch.reads.pages(web, {"ad_account_id": account,
+                        "business_id": business, "query": "", "limit": 100}) if private is not None
+                        else inspect_pages(web, account=account, business_id=business))
+                    pages, funding = await asyncio.gather(page_read,
                         inspect_methods(web, account=account, business_id=business))
             log.info("launch HTTP readiness profile=%s account=%s browser_started=False mutation_posts=0 result=%s",
                 profile, account, json.dumps({"page_scope_verified": pages.get("account_scope_verified"),

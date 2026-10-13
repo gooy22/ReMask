@@ -42,7 +42,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(self.errors, [])
         self.page.close()
 
-    def creative(self, enhanced=True):
+    def creative(self, enhanced=True, context=False):
         html = re.sub(r'<\?php.*?\?>', '', (ROOT / 'railway-v100-creatives.php').read_text(), flags=re.S)
         html = re.sub(r'<script\b.*?</script>', '', html, flags=re.S)
         html = re.sub(r'<link\b[^>]*>', '', html)
@@ -52,13 +52,59 @@ class WorkflowTests(unittest.TestCase):
         if 'fixtureSidebar' not in html:
             html = re.sub(r'(<body\b[^>]*>)', r'\1<aside id="fixtureSidebar" style="position:fixed;left:0;top:0;width:201px;height:100vh;z-index:1000;background:#1a212c">Sidebar</aside>', html, count=1)
         self.page.set_content(html)
-        self.page.add_script_tag(content='window.fetch=async url=>({ok:true,status:200,text:async()=>JSON.stringify('+json.dumps({'ok':True,'data':{'schema':SCHEMA,'items':[]}})+')});')
+        if context:
+            metadata = {'schema':SCHEMA,'items':[],'profiles':[{'name':'19'},{'name':'20'}]}
+            self.page.add_script_tag(content='''window.fixtureRequests=[];window.fetch=async (url,options={})=>{
+                let data='''+json.dumps(metadata)+''';
+                if(String(url).includes('metaPreflight.php')) data={ad_accounts:{data:[{account_id:'123456',name:'Fixture RK'}]}};
+                if(String(url).includes('metaTargetingSearch.php')){
+                    const params=new URLSearchParams(options.body);window.fixtureRequests.push(Object.fromEntries(params));
+                    const type=params.get('type');data={account_id:'123456',checked_live:true,account_scope_verified:true,data:[
+                        type==='locations'?{key:'US',name:'United States',type:'country',country_code:'US'}:
+                        {id:'34567',key:'34567',name:'Fixture '+type} ]};
+                }
+                return {ok:true,status:200,text:async()=>JSON.stringify({ok:true,data})};
+            };''')
+        else:
+            self.page.add_script_tag(content='window.fetch=async url=>({ok:true,status:200,text:async()=>JSON.stringify('+json.dumps({'ok':True,'data':{'schema':SCHEMA,'items':[]}})+')});')
         source = (ROOT / 'railway-v100-creatives.js').read_text()
         self.page.add_script_tag(content=source+'\nwindow.testCreative={build:buildMetaBuilder,populate:populateMetaBuilder,open:openEditor};')
         self.page.wait_for_function("document.getElementById('mbObjective').options.length===2", timeout=5000)
         if enhanced:
             self.page.add_script_tag(content=ASSET)
         self.page.locator('#newCreative').click()
+
+    def test_targeting_without_context_prompts_without_invalid_meta_request(self):
+        self.creative(context=True)
+        self.page.get_by_role('button',name='Аудитория',exact=True).click()
+        self.page.locator('#mbLanguageSearch').fill('russia')
+        self.page.locator('#mbLanguageSearch').press('Enter')
+        self.assertIn('Выберите профиль Facebook', self.page.locator('#mbLanguageResults').inner_text())
+        self.assertEqual(self.page.evaluate('fixtureRequests'), [])
+        self.assertEqual(self.page.locator('#creativeMetaProfile option').count(), 3)
+
+    def test_all_targeting_searches_send_selected_profile_and_account(self):
+        self.creative(context=True)
+        self.page.get_by_role('button',name='Аудитория',exact=True).click()
+        self.page.locator('#creativeMetaProfile').select_option('19')
+        self.page.wait_for_function("document.querySelector('#creativeMetaAccount').value==='123456'")
+        for input_id,result_id,kind in [('mbGeoSearch','mbGeoResults','locations'),
+                ('mbInterestSearch','mbInterestResults','interests'),
+                ('mbBehaviorSearch','mbBehaviorResults','behaviors'),
+                ('mbLanguageSearch','mbLanguageResults','languages')]:
+            self.page.locator('#'+input_id).fill('fixture')
+            self.page.locator('#'+input_id).press('Enter')
+            self.page.locator('#'+result_id+' .cr-target-result').wait_for()
+            self.page.locator('#'+result_id+' .cr-target-result').click()
+            request=self.page.evaluate('fixtureRequests.at(-1)')
+            self.assertEqual(request['profile'],'19')
+            self.assertEqual(request['account_id'],'123456')
+            self.assertEqual(request['type'],kind)
+        targeting=self.page.evaluate('testCreative.build().targeting')
+        self.assertEqual(targeting['geo_locations']['countries'],['US'])
+        self.assertEqual(targeting['locales'],[34567])
+        self.assertEqual(targeting['interests'][0]['id'],'34567')
+        self.assertEqual(targeting['behaviors'][0]['id'],'34567')
 
     def test_grouping_and_translation_preserve_original_serialization(self):
         self.creative(False)

@@ -654,7 +654,7 @@ function syncCreativeTargetingRaw(kind) {
     } else if (kind === 'languages') {
         const values = (creativeTargetingSelections.languages || [])
             .map((row) => Number(row?.key ?? row?.id))
-            .filter((value) => Number.isInteger(value) && value > 0);
+            .filter((value) => Number.isSafeInteger(value) && value > 0);
         $('mbLocales').value = [...new Set(values)].join(',');
     }
 }
@@ -794,6 +794,14 @@ async function searchCreativeTargeting(kind) {
         return;
     }
 
+    if (!metaContext.profile || !metaContext.accountId) {
+        if (results) {
+            results.innerHTML = '<div class="cr-target-empty">Выберите профиль Facebook и рекламный кабинет выше.</div>';
+            results.classList.add('open');
+        }
+        return;
+    }
+
     const controller = new AbortController();
     creativeTargetingControllers[kind] = controller;
     if (results) {
@@ -802,6 +810,8 @@ async function searchCreativeTargeting(kind) {
     }
 
     const params = new URLSearchParams();
+    params.set('profile', metaContext.profile);
+    params.set('account_id', metaContext.accountId);
     params.set('type', cfg.apiType);
     params.set('q', query);
     params.set('limit', '25');
@@ -939,6 +949,8 @@ function renderMetaDatalist(id, rows, valueKey = 'id', labelKeys = ['name']) {
 async function loadMetaContext() {
     const data = await api('ajax/metaCreativeCapabilities.php');
     metaCapabilities = data || {};
+    remaskPrivatePopulateCreativeContext(data?.profiles || [], data?.preferred_profile || '');
+    remaskPrivateInstagramProfiles(data?.profiles || []);
     if (data?.schema) metaSdkSchema = data.schema;
     renderMetaDatalist(
         'mbConversionEventOptions',
@@ -954,7 +966,7 @@ function metaFieldId(group, field) {
 }
 function metaTypeIsComplex(type) {
     type = String(type || '');
-    return type.includes('list<') || type.includes('Object') || type.includes('map') || type.includes('Targeting') || type.includes('IDName') || type.includes('AdSet') || type.includes('AdCreative');
+    return type === 'JSON' || type.includes('list<') || type.includes('Object') || type.includes('map') || type.includes('Targeting') || type.includes('IDName') || type.includes('AdSet') || type.includes('AdCreative');
 }
 function metaFieldValue(el, type, field) {
     if (!el) return undefined;
@@ -969,7 +981,7 @@ function metaFieldValue(el, type, field) {
     }
     if (type === 'unsigned int' || type === 'int') {
         const value = Number(raw);
-        if (!Number.isInteger(value)) throw new Error(field + ': нужно целое число.');
+        if (!Number.isSafeInteger(value)) throw new Error(field + ': нужно целое число.');
         return value;
     }
     if (type === 'float') {
@@ -990,6 +1002,7 @@ function metaFieldValue(el, type, field) {
 }
 function metaFieldDisplayValue(value, type) {
     if (value === undefined || value === null) return '';
+    if (type === 'JSON') return JSON.stringify(value);
     if (type === 'bool') return value === true ? 'true' : value === false ? 'false' : '';
     if (typeof value === 'object') return JSON.stringify(value);
     return String(value);
@@ -1238,6 +1251,10 @@ function buildMetaBuilder() {
     }));
 
     const identity = {};
+    if ($('presetFormat').value === 'INSTAGRAM_POST') {
+        if ($('presetInstagramActor')?.value) identity.instagram_actor_id = $('presetInstagramActor').value;
+        if ($('presetInstagramId')?.value) existing_media.source_instagram_media_id = $('presetInstagramId').value;
+    }
 
     return {campaign, adset, targeting, identity, existing_media, creative, ad};
 }
@@ -1339,6 +1356,7 @@ function renderFormat() {
     const format = $('presetFormat').value;
     $('singleSection').style.display = format === 'SINGLE' ? 'block' : 'none';
     $('carouselSection').style.display = format === 'CAROUSEL' ? 'block' : 'none';
+    if ($('instagramSection')) $('instagramSection').style.display = format === 'INSTAGRAM_POST' ? 'block' : 'none';
 
 }
 function renderCarousel() {
@@ -1372,9 +1390,11 @@ function renderCarousel() {
         const name = useNewFiles ? row.name : (row.media?.original_name || ('Card ' + (index + 1)));
         const preview = useNewFiles ? carouselPreviewUrls[index] : (row.preview_url || '');
         const size = useNewFiles ? row.size : (row.media?.size_bytes || 0);
+        const mediaType = useNewFiles ? (String(row.type || '').startsWith('video/') ? 'video' : 'image')
+            : (row.media?.media_type || 'image');
 
         return '<div class="cr-carousel-row" data-index="' + index + '">' +
-            '<div class="cr-thumb">' + (preview ? '<img src="' + esc(preview) + '" alt="">' : (index + 1)) + '</div>' +
+            '<div class="cr-thumb">' + (preview ? mediaHtml(preview, mediaType) : (index + 1)) + '</div>' +
             '<div><b>' + esc(name) + '</b><div class="cr-hint">' + esc(formatBytes(size)) + '</div></div>' +
             '<input class="form-control car-headline" placeholder="Headline" value="' + esc(meta.headline || '') + '">' +
             '<input class="form-control car-description" placeholder="Description" value="' + esc(meta.description || '') + '">' +
@@ -1417,8 +1437,13 @@ function openEditor(item = null) {
     $('presetCta').value = item?.cta || 'LEARN_MORE';
     $('presetTags').value = item?.url_tags || '';
     $('presetFormat').value = item?.format || 'SINGLE';
+    if ($('presetInstagramId')) $('presetInstagramId').value = item?.instagram_media_id || item?.meta_builder?.existing_media?.source_instagram_media_id || '';
+    if ($('presetInstagramActor')) $('presetInstagramActor').value = item?.meta_builder?.identity?.instagram_actor_id || '';
     $('presetMedia').value = '';
     $('presetCarousel').value = '';
+    remaskPrivateInstagramReset();
+    if ($('presetInstagramId')) $('presetInstagramId').value = item?.instagram_media_id || item?.meta_builder?.existing_media?.source_instagram_media_id || '';
+    if ($('presetInstagramActor')) $('presetInstagramActor').value = item?.meta_builder?.identity?.instagram_actor_id || '';
 
     populateMetaBuilder(item?.meta_builder || {});
     $('singlePreview').innerHTML = item?.format === 'SINGLE' && item.media
@@ -1456,11 +1481,11 @@ function render() {
         let fileLabel = '';
         if (item.format === 'SINGLE') fileLabel = item.media?.original_name || 'Файл отсутствует';
         else if (item.format === 'CAROUSEL') fileLabel = (item.carousel?.length || 0) + ' карточок';
-        else fileLabel = 'Файл отсутствует';
+        else fileLabel = 'Instagram ' + (item.instagram_media_id || '');
 
         const objective = item.meta_builder?.campaign?.objective || '';
         const preview = item.preview_url
-            ? mediaHtml(item.preview_url, item.format === 'SINGLE' ? item.media?.media_type : 'image')
+            ? mediaHtml(item.preview_url, item.format === 'CAROUSEL' ? item.carousel?.[0]?.media?.media_type : item.media?.media_type)
             : '<div class="cr-empty">Нет превью</div>';
 
         return '<article class="cr-card" data-id="' + esc(item.id) + '">' +
@@ -1529,6 +1554,12 @@ async function save(event) {
         }
         form.append('carousel_cards', JSON.stringify(meta));
         for (const file of carouselFiles) form.append('carousel_media[]', file, file.name);
+    } else if (format === 'INSTAGRAM_POST') {
+        const mediaId = $('presetInstagramId')?.value || '';
+        if (!/^[1-9][0-9]{4,39}$/.test(mediaId)) {
+            setStatus('Выберите доступную публикацию Instagram.', 'bad'); switchTab('creative'); return;
+        }
+        form.append('instagram_media_id', mediaId);
     }
 
     $('saveCreative').disabled = true;
@@ -1685,3 +1716,125 @@ loadMetaSdkSchema().catch((error) => {
     if (statusEl) statusEl.textContent = 'SDK-схема недоступна: ' + error.message;
 });
 loadPlacementCapabilities(false);
+
+// Existing Instagram posts are selected from the exact-account private catalog.
+let remaskPrivateInstagramGeneration = 0;
+let remaskPrivateInstagramPosts = [];
+function remaskPrivateInstagramProfiles(profiles) {
+    const select = $('presetInstagramProfile');
+    if (!select) return;
+    select.innerHTML = '<option value="">Выберите профиль</option>';
+    for (const row of profiles) select.appendChild(new Option(String(row.name), String(row.name)));
+}
+function remaskPrivateInstagramReset() {
+    remaskPrivateInstagramGeneration++;
+    remaskPrivateInstagramPosts = [];
+    for (const [id, label] of [['presetInstagramAccount','Выберите РК'],['presetInstagramPost','Загрузите публикации']]) {
+        const select = $(id); if (select) { select.innerHTML = ''; select.appendChild(new Option(label, '')); }
+    }
+    if ($('presetInstagramId')) $('presetInstagramId').value = '';
+    if ($('presetInstagramActor')) $('presetInstagramActor').value = '';
+}
+$('presetInstagramProfile')?.addEventListener('change', async () => {
+    remaskPrivateInstagramReset();
+    const profile = $('presetInstagramProfile').value;
+    const generation = remaskPrivateInstagramGeneration;
+    if (!profile) return;
+    try {
+        const data = await api('ajax/metaPreflight.php?' + new URLSearchParams({profile}));
+        if (generation !== remaskPrivateInstagramGeneration) return;
+        for (const row of data?.ad_accounts?.data || []) {
+            const id = String(row.account_id || row.id || '').replace(/^act_/, '');
+            $('presetInstagramAccount').appendChild(new Option(String(row.name || id), id));
+        }
+        $('presetInstagramStatus').textContent = 'Выберите рекламный кабинет для загрузки публикаций.';
+    } catch (error) { if (generation === remaskPrivateInstagramGeneration) $('presetInstagramStatus').textContent = error.message; }
+});
+$('presetInstagramAccount')?.addEventListener('change', async () => {
+    const generation = ++remaskPrivateInstagramGeneration;
+    remaskPrivateInstagramPosts = [];
+    $('presetInstagramPost').innerHTML = '<option value="">Выберите публикацию</option>';
+    $('presetInstagramId').value = ''; $('presetInstagramActor').value = '';
+    const profile = $('presetInstagramProfile').value, account_id = $('presetInstagramAccount').value;
+    if (!profile || !account_id) return;
+    $('presetInstagramStatus').textContent = 'Загружаю доступные публикации…';
+    try {
+        const data = await api('ajax/metaAssetManager.php?' + new URLSearchParams({profile,account_id,resource:'instagram_media',force:'1',limit:'500'}));
+        if (generation !== remaskPrivateInstagramGeneration) return;
+        if (data.account_scope_verified !== true || data.checked_live !== true || String(data.account_id) !== account_id)
+            throw new Error('Доступ к публикациям выбранного РК не подтверждён.');
+        remaskPrivateInstagramPosts = data.data || [];
+        for (const row of remaskPrivateInstagramPosts) $('presetInstagramPost').appendChild(new Option(String(row.caption || row.id).slice(0,100), String(row.id)));
+        $('presetInstagramStatus').textContent = remaskPrivateInstagramPosts.length ? 'Публикации выбранного РК загружены.' : 'Доступных публикаций у выбранного РК нет.';
+    } catch (error) { if (generation === remaskPrivateInstagramGeneration) $('presetInstagramStatus').textContent = error.message; }
+});
+$('presetInstagramPost')?.addEventListener('change', () => {
+    const row = remaskPrivateInstagramPosts.find(item => String(item.id) === $('presetInstagramPost').value);
+    $('presetInstagramId').value = row ? String(row.id) : '';
+    $('presetInstagramActor').value = row ? String(row.instagram_actor_id || '') : '';
+});
+
+// Reusable creative settings still need an explicit account for private Meta searches.
+let remaskCreativeContextGeneration = 0;
+function remaskPrivateRememberCreativeContext() {
+    try { localStorage.setItem('remask.creativeMetaContext', JSON.stringify(metaContext)); } catch {}
+}
+function remaskPrivatePopulateCreativeContext(profiles, preferred = '') {
+    const select = $('creativeMetaProfile');
+    if (!select) return;
+    let remembered = {};
+    try { remembered = JSON.parse(localStorage.getItem('remask.creativeMetaContext') || '{}') || {}; } catch {}
+    const previous = metaContext.profile || remembered.profile || preferred || (profiles.length === 1 ? String(profiles[0].name) : '');
+    select.innerHTML = '<option value="">Выберите профиль</option>';
+    for (const row of profiles) select.appendChild(new Option(String(row.name), String(row.name)));
+    if (profiles.some(row => String(row.name) === previous)) {
+        select.value = previous;
+        remaskPrivateLoadCreativeAccounts(remembered.accountId || '').catch(() => {});
+    }
+}
+async function remaskPrivateLoadCreativeAccounts(preferred = '') {
+    const generation = ++remaskCreativeContextGeneration;
+    const profile = $('creativeMetaProfile')?.value || '';
+    metaContext = {profile, accountId:''};
+    const select = $('creativeMetaAccount');
+    select.innerHTML = '<option value="">Выберите РК</option>';
+    for (const kind of Object.keys(creativeTargetingControllers)) {
+        creativeTargetingControllers[kind]?.abort(); creativeTargetingControllers[kind] = null;
+        closeCreativeTargetResults(kind);
+    }
+    const status = $('creativeMetaContextStatus');
+    status.textContent = profile ? 'Загружаю сохранённые рекламные кабинеты…' : 'Выберите профиль и рекламный кабинет для поиска данных Meta.';
+    remaskPrivateRememberCreativeContext();
+    if (!profile) return;
+    try {
+        const data = await api('ajax/metaPreflight.php?' + new URLSearchParams({profile}));
+        if (generation !== remaskCreativeContextGeneration) return;
+        const accounts = Array.isArray(data?.ad_accounts?.data) ? data.ad_accounts.data : [];
+        for (const row of accounts) {
+            const id = String(row.account_id || row.id || '').replace(/^act_/, '');
+            if (/^[0-9]{5,30}$/.test(id)) select.appendChild(new Option(String(row.name || id), id));
+        }
+        if (preferred && Array.from(select.options).some(option => option.value === preferred)) select.value = preferred;
+        else if (select.options.length === 2) select.selectedIndex = 1;
+        remaskPrivateSelectCreativeAccount();
+    } catch (error) {
+        if (generation === remaskCreativeContextGeneration) status.textContent = 'Не удалось загрузить РК: ' + error.message;
+    }
+}
+function remaskPrivateSelectCreativeAccount() {
+    metaContext = {profile:$('creativeMetaProfile')?.value || '', accountId:$('creativeMetaAccount')?.value || ''};
+    for (const kind of Object.keys(creativeTargetingControllers)) {
+        creativeTargetingControllers[kind]?.abort(); creativeTargetingControllers[kind] = null;
+        closeCreativeTargetResults(kind);
+    }
+    remaskPrivateRememberCreativeContext();
+    $('creativeMetaContextStatus').textContent = metaContext.accountId
+        ? 'Поиск использует выбранный РК. Доступ Meta проверяется при запросе.'
+        : 'Выберите рекламный кабинет для поиска данных Meta.';
+    for (const kind of Object.keys(creativeTargetingSelections)) {
+        const input = $(creativeTargetSearchConfig(kind).input);
+        if (metaContext.accountId && String(input?.value || '').trim().length >= 2) searchCreativeTargeting(kind);
+    }
+}
+$('creativeMetaProfile')?.addEventListener('change', () => remaskPrivateLoadCreativeAccounts());
+$('creativeMetaAccount')?.addEventListener('change', remaskPrivateSelectCreativeAccount);

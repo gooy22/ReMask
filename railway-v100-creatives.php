@@ -90,7 +90,7 @@ require_once __DIR__ . '/checkpassword.php';
 .cr-carousel-row{display:grid;grid-template-columns:48px 150px minmax(130px,1fr) minmax(130px,1fr) minmax(160px,1.15fr);gap:8px;align-items:center;background:#1b1f25;border:1px solid #343a45;border-radius:8px;padding:7px}
 .cr-carousel-row .form-control{height:34px!important;font-size:12px!important;padding:6px 8px!important}
 .cr-thumb{width:48px;height:48px;background:#15181d;border-radius:6px;overflow:hidden;display:flex;align-items:center;justify-content:center;color:#7f8898}
-.cr-thumb img{width:100%;height:100%;object-fit:cover}
+.cr-thumb img,.cr-thumb video{width:100%;height:100%;object-fit:cover}
 .cr-modal-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;border-top:1px solid #343a45;background:#20242b}
 .cr-status{font-size:12px;color:#8993a3;min-height:18px}.cr-status.bad{color:#ff8f8f}.cr-status.ok{color:#69d99b}
 .cr-sdk-groups{display:grid;gap:10px}.cr-sdk-group{border:1px solid #343a45;border-radius:8px;background:#1d2128;overflow:hidden}.cr-sdk-group>summary{cursor:pointer;padding:10px 12px;color:#dbe0e8;font-size:12px;font-weight:700;list-style:none;display:flex;justify-content:space-between;align-items:center}.cr-sdk-group>summary::-webkit-details-marker{display:none}.cr-sdk-count{font-size:10px;color:#7f8898;font-weight:600}.cr-sdk-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;padding:0 12px 12px}.cr-sdk-field{min-width:0}.cr-sdk-field label{display:flex!important;justify-content:space-between;gap:8px;margin-bottom:5px!important}.cr-sdk-type{font-size:9px;color:#70798a;font-weight:500}.cr-sdk-field textarea{min-height:72px!important;height:72px!important}.cr-raw-json{margin-top:12px;border-top:1px solid #343a45;padding-top:10px}.cr-raw-json>summary{cursor:pointer;color:#9aa3b2;font-size:12px;font-weight:700;margin-bottom:10px}.cr-sdk-hidden{display:none!important}
@@ -239,6 +239,11 @@ require_once __DIR__ . '/checkpassword.php';
 
       <section class="cr-panel" data-panel="audience">
         <div class="cr-section-title">Audience / Targeting</div>
+        <div class="cr-form-grid" id="creativeMetaContext">
+          <div class="span-6 cr-field"><label for="creativeMetaProfile">Профиль Facebook для поиска</label><select id="creativeMetaProfile" class="form-control"><option value="">Выберите профиль</option></select></div>
+          <div class="span-6 cr-field"><label for="creativeMetaAccount">Рекламный кабинет</label><select id="creativeMetaAccount" class="form-control"><option value="">Выберите РК</option></select></div>
+          <div class="span-12 cr-hint" id="creativeMetaContextStatus">Выберите профиль и РК для поиска географии, интересов, поведения и языков. Настройки крео можно сохранять отдельно.</div>
+        </div>
         <div class="cr-form-grid">
           <div class="span-3 cr-field"><label>Age min</label><input id="mbAgeMin" type="number" min="13" max="65" class="form-control" value="18"></div>
           <div class="span-3 cr-field"><label>Age max</label><input id="mbAgeMax" type="number" min="13" max="65" class="form-control" value="65"></div>
@@ -285,7 +290,7 @@ require_once __DIR__ . '/checkpassword.php';
             </div>
             <div id="mbBehaviorPills" class="cr-target-pills"></div>
           </div>
-          <div class="span-12 cr-muted">Подсказки загружаются из Meta автоматически. FB-профиль/RK в этом разделе выбирать не нужно.</div>
+          <div class="span-12 cr-muted">Подсказки загружаются из Meta для выбранного выше профиля и рекламного кабинета.</div>
           <details class="cr-raw-targeting">
             <summary>Расширенный Targeting JSON (официальные Meta-поля)</summary>
             <div class="cr-form-grid">
@@ -378,7 +383,7 @@ require_once __DIR__ . '/checkpassword.php';
           <div class="span-4 cr-field"><label>CTA</label><select id="presetCta" class="form-control"><option value="LEARN_MORE">LEARN_MORE</option></select></div>
           <div class="span-8 cr-field"><label>Destination URL</label><input id="presetUrl" class="form-control" placeholder="https://..."></div>
           <div class="span-4 cr-field"><label>URL tags / UTM</label><input id="presetTags" class="form-control"></div>
-          <div class="span-4 cr-field"><label>Creative format</label><select id="presetFormat" class="form-control"><option value="SINGLE">Single image / video</option><option value="CAROUSEL">Carousel (2–10 images)</option></select></div>
+          <div class="span-4 cr-field"><label>Creative format</label><select id="presetFormat" class="form-control"><option value="SINGLE">Single image / video</option><option value="CAROUSEL">Карусель — фото и видео</option><option value="INSTAGRAM_POST">Публикация Instagram</option></select></div>
         </div>
 
         <div id="singleSection" class="cr-media-box">
@@ -390,7 +395,17 @@ require_once __DIR__ . '/checkpassword.php';
             </div>
           </div>
         </div>
-        <div id="carouselSection" class="cr-media-box" style="display:none"><label class="cr-file-btn" style="max-width:300px">ВЫБРАТЬ 2–10 ИЗОБРАЖЕНИЙ<input id="presetCarousel" type="file" accept="image/*" multiple></label><div id="carouselHint" class="cr-hint"></div><div id="carouselRows" class="cr-carousel-list"></div></div>
+        <div id="carouselSection" class="cr-media-box" style="display:none"><label class="cr-file-btn" style="max-width:300px">ВЫБРАТЬ 2–10 ФОТО / ВИДЕО<input id="presetCarousel" type="file" accept="image/*,video/*" multiple></label><div id="carouselHint" class="cr-hint"></div><div id="carouselRows" class="cr-carousel-list"></div></div>
+        <div id="instagramSection" class="cr-media-box" style="display:none">
+          <div class="cr-grid">
+            <div class="span-4 cr-field"><label for="presetInstagramProfile">Профиль</label><select id="presetInstagramProfile" class="form-control"><option value="">Выберите профиль</option></select></div>
+            <div class="span-4 cr-field"><label for="presetInstagramAccount">РК</label><select id="presetInstagramAccount" class="form-control"><option value="">Выберите РК</option></select></div>
+            <div class="span-4 cr-field"><label for="presetInstagramPost">Публикация</label><select id="presetInstagramPost" class="form-control"><option value="">Загрузите публикации</option></select></div>
+            <div class="span-6 cr-field"><label for="presetInstagramId">ID публикации</label><input id="presetInstagramId" class="form-control" readonly></div>
+            <div class="span-6 cr-field"><label for="presetInstagramActor">ID Instagram</label><input id="presetInstagramActor" class="form-control" readonly></div>
+          </div>
+          <div id="presetInstagramStatus" class="cr-hint">Выберите публикацию выбранного рекламного кабинета.</div>
+        </div>
       </section>
 
       <section class="cr-panel" data-panel="tracking">

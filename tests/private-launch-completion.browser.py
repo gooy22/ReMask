@@ -1,0 +1,147 @@
+"""Hermetic browser checks using the complete installed ReMask Launch module."""
+import json
+import re
+import subprocess
+import unittest
+from pathlib import Path
+from urllib.parse import urlparse, parse_qs
+from playwright.sync_api import sync_playwright
+from tests import test_cookie_only_profiles as runtime_fixture
+
+ROOT = Path(__file__).resolve().parents[1]
+MEDIA_ID = 'm-' + 'a' * 24
+MEDIA = {'id': MEDIA_ID, 'sha256': 'b' * 64, 'media_type': 'image', 'original_name': 'fixture.png'}
+
+class InstalledLaunchTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.build = runtime_fixture.CookieOnlyProfileTests('test_complete_runtime_overlay_order_and_installed_php_build_contracts')
+        cls.build.setUp()
+        cls.build.test_complete_runtime_overlay_order_and_installed_php_build_contracts()
+        cls.root = cls.build.root
+        cls.config = json.loads(subprocess.check_output(['php', '-r',
+            'require $argv[1]; echo json_encode(MetaLaunchValidator::schema());',
+            str(cls.root/'classes/MetaLaunchValidator.php')], text=True))
+        cls.schema = json.loads((ROOT/'python_backend/app/contracts/ads_manager_http_20261012.json').read_text())['form_schema']
+        cls.runtime = sync_playwright().start()
+        cls.browser = cls.runtime.chromium.launch(headless=True)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.browser.close(); cls.runtime.stop(); cls.build.tearDown()
+
+    def setUp(self):
+        self.bundles = []
+        self.missing = False
+        self.errors = []
+        self.page = self.browser.new_page()
+        self.page.set_default_timeout(5000)
+        self.page.on('pageerror', lambda e: self.errors.append(str(e)))
+        self.page.route('**/*', self.route)
+        self.page.goto('https://remask.fixture/launch.php')
+        self.page.wait_for_function('window.fixtureLaunch && document.querySelector("#bundleSelect option[value=fixture]") === null')
+        self.page.wait_for_function('document.querySelector("#creativeLibrarySelect option[value=preset]") !== null')
+
+    def tearDown(self):
+        self.assertEqual(self.errors, [])
+        self.page.close()
+
+    def route(self, route):
+        request = route.request
+        url = urlparse(request.url)
+        if url.hostname != 'remask.fixture':
+            route.abort(); return
+        path = url.path.lstrip('/')
+        if path == 'launch.php':
+            html = re.sub(r'<\?(?:php|=).*?\?>', '', (self.root/path).read_text(), flags=re.S)
+            # The PHP shell supplies jQuery on the real page; this fixture tests
+            # Launch itself and retains CSS without executing its shell plugin.
+            html = re.sub(r'<script src="styles/bootstrap.min.js"></script>', '', html)
+            route.fulfill(body=html, content_type='text/html'); return
+        file = self.root/path
+        if file.is_file() and not path.endswith('.php'):
+            body = file.read_bytes()
+            if path == 'scripts/launch.js':
+                body += b'\nwindow.fixtureLaunch={payload:()=>buildPayload(),capture:()=>bundleFormState(),restore:applyBundleData,geo:()=>{state.geo=[{type:"country",key:"US",country_code:"US",name:"United States"}];}};'
+            route.fulfill(body=body, content_type='application/javascript' if path.endswith('.js') else 'text/css'); return
+        data = {}
+        status = 200
+        if path == 'ajax/metaLaunchConfig.php': data = self.config
+        elif path == 'ajax/metaPrivateSchema.php': data = self.schema
+        elif path == 'ajax/metaJobsList.php': data = {'jobs': []}
+        elif path == 'ajax/creativeLibrary.php':
+            data = {'items': [{'id':'preset','name':'Fixture','format':'SINGLE','media_library_id':MEDIA_ID,
+                'media':MEDIA,'message':'Fixture message','headline':'Fixture headline','destination_url':'https://example.com/',
+                'meta_builder':{'campaign':{'daily_budget':500}}}]}
+        elif path == 'ajax/metaBundles.php':
+            fields = parse_qs(request.post_data or '')
+            if fields.get('action') == ['save']:
+                bundle = {'id':'fixture','name':fields['name'][0], 'data':json.loads(fields['data'][0]), 'updated_at':'2026-10-13T00:00:00Z'}
+                self.bundles = [bundle]
+                data['bundle'] = bundle
+            data['bundles'] = self.bundles
+        elif path == 'ajax/metaBundleMedia.php':
+            if self.missing:
+                status = 409
+            else:
+                ids = json.loads(parse_qs(url.query)['ids'][0])
+                data = {'media':[{**MEDIA,'id':id, 'media_type':'video' if i else 'image'} for i,id in enumerate(ids)]}
+        route.fulfill(status=status, json={'ok':status==200,'data':data,'error':{'message':'MEDIA_LIBRARY_ITEM_UNAVAILABLE'}})
+
+    def save_and_reload(self):
+        self.page.locator('#bundleName').fill('Fixture bundle')
+        self.page.locator('#bundleSave').click()
+        self.page.wait_for_function('document.querySelector("#bundleSelect").value === "fixture"')
+        self.page.reload()
+        self.page.wait_for_function('document.querySelector("#bundleSelect option[value=fixture]") !== null')
+        self.page.locator('#bundleSelect').select_option('fixture')
+        self.page.locator('#bundleLoad').click()
+        self.page.wait_for_function('document.querySelector("#launchResult").classList.contains("ready")')
+
+    def test_preset_media_and_edited_budget_survive_save_reload(self):
+        self.page.locator('#creativeLibrarySelect').select_option('preset')
+        self.page.locator('#dailyBudget').fill('700')
+        self.page.locator('#campaignName').fill('Edited campaign')
+        self.save_and_reload()
+        self.assertEqual(self.page.locator('#dailyBudget').input_value(), '700')
+        self.assertEqual(self.page.locator('#campaignName').input_value(), 'Edited campaign')
+        self.assertEqual(self.page.evaluate('fixtureLaunch.capture().media.media_library_id'), MEDIA_ID)
+        self.page.evaluate('fixtureLaunch.geo()')
+        payload = self.page.evaluate('fixtureLaunch.payload()')
+        self.assertEqual(payload['campaign'].get('daily_budget', payload['adset'].get('daily_budget')), 700)
+        self.page.locator('#clearCreativeLibrary').click()
+        self.assertIsNone(self.page.evaluate('fixtureLaunch.capture().media'))
+
+    def test_lifetime_budget_keeps_period_and_end_time(self):
+        self.page.locator('#creativeLibrarySelect').select_option('preset')
+        self.page.locator('#budgetPeriod').select_option('LIFETIME')
+        self.page.locator('#dailyBudget').fill('2000')
+        self.page.locator('#endTime').fill('2026-11-01T18:00')
+        self.save_and_reload()
+        self.assertEqual(self.page.locator('#budgetPeriod').input_value(), 'LIFETIME')
+        self.assertEqual(self.page.locator('label[for="dailyBudget"]').inner_text(), 'Бюджет на весь срок')
+        self.page.evaluate('fixtureLaunch.geo()')
+        payload = self.page.evaluate('fixtureLaunch.payload()')
+        section = payload['campaign'] if 'lifetime_budget' in payload['campaign'] else payload['adset']
+        self.assertEqual(section['lifetime_budget'], 2000)
+        self.assertNotIn('daily_budget', section)
+        self.assertTrue(payload['adset']['end_time'])
+
+    def test_missing_media_does_not_reuse_previous_preset(self):
+        self.page.locator('#creativeLibrarySelect').select_option('preset')
+        self.missing = True
+        with self.assertRaises(Exception):
+            self.page.evaluate('(data)=>fixtureLaunch.restore(data)', {'fields':{},'media':{'format':'SINGLE','media_library_id':MEDIA_ID}})
+        self.assertIsNone(self.page.evaluate('fixtureLaunch.capture().media'))
+
+    def test_mixed_carousel_restores_order_and_card_fields(self):
+        second = 'm-' + 'c' * 24
+        snapshot = {'fields':{'creativeFormat':'CAROUSEL'},'media':{'format':'CAROUSEL','carousel':[
+            {'media_library_id':MEDIA_ID,'headline':'First','link':'https://example.com/one'},
+            {'media_library_id':second,'headline':'Second','link':'https://example.com/two'}]}}
+        self.page.evaluate('(data)=>fixtureLaunch.restore(data)', snapshot)
+        media = self.page.evaluate('fixtureLaunch.capture().media')
+        self.assertEqual([x['media_library_id'] for x in media['carousel']], [MEDIA_ID,second])
+        self.assertEqual([x['headline'] for x in media['carousel']], ['First','Second'])
+
+if __name__ == '__main__': unittest.main()

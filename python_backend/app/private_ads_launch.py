@@ -1,7 +1,7 @@
 """The existing Launch payload/journal adapted to private draft publication.
 
-Supported formats are PAUSED single images and image carousels. Other delivery
-stop during preparation, before upload or draft creation.
+Creation is PAUSED; requested delivery follows verified publication. Media
+and account resources use the same fresh profile transport and durable journal.
 """
 from __future__ import annotations
 import copy
@@ -10,25 +10,27 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from .private_ads_draft import fail, fragment_params, identity
-from .private_ads_creative import carousel_creative, image_creative, validate_creative
+from .private_ads_creative import resolved_creative, validate_creative
 from .private_ads_http import AdsManagerPrivateHttp
 from .private_ads_media import upload_image, verify_image
+from .private_ads_video import upload_video, verify_video
 from .private_ads_publication import AdsManagerDraftPublisher
 from .private_ads_state import AdsManagerSubmitter
 from .private_ads_verify import verify_published_objects
 from .private_ads_resources import AdsManagerResourceCatalog, read_pixels
+from .private_launch_extensions import OperationKey
 
-SOURCE_REVISION = "ads-manager-private-2026-10-12"
+SOURCE_REVISION = "ads-manager-private-2026-10-13-media-resources"
 
 class AdsManagerLaunch:
     def __init__(self, owner):
         self.owner = owner
-        owner.reads = AdsManagerResourceCatalog(owner.reads)
-        owner.resources.catalog = owner.reads
-        digest = hashlib.sha256(SOURCE_REVISION.encode())
+        from .private_ads_catalog import AdsManagerRouteCatalog
+        self.catalog = AdsManagerRouteCatalog()
+        digest = hashlib.sha256((SOURCE_REVISION + self.catalog.digest).encode())
         for name in ("private_ads_launch.py", "private_ads_http.py", "private_ads_draft.py",
                      "private_ads_state.py", "private_ads_media.py", "private_ads_publication.py",
-                     "private_ads_verify.py", "private_ads_creative.py", "private_ads_resources.py"):
+                     "private_ads_verify.py", "private_ads_creative.py", "private_ads_video.py", "private_ads_delivery.py", "private_ads_catalog.py", "private_ads_reads.py", "private_ads_resources.py", "private_ads_helpers.py", "private_ads_preview.py"):
             digest.update(name.encode() + b"\0" + Path(__file__).with_name(name).read_bytes())
         self.source_digest = digest.hexdigest()
 
@@ -40,8 +42,6 @@ class AdsManagerLaunch:
         target = {"profile_id": str(profile_id), **{key: identity(payload.get(key))
                   for key in ("business_id", "ad_account_id", "page_id")}}
         launch = _effective_launch_payload(payload.get("launch"))
-        if any(value != "PAUSED" for value in launch.get("delivery", {}).values()):
-            raise fail("DELIVERY_UNAVAILABLE", "Private draft activation is not enabled; select PAUSED creation")
         for section in ("campaign", "adset"):
             for field in ("daily_budget", "lifetime_budget"):
                 value = launch[section].get(field)
@@ -54,7 +54,7 @@ class AdsManagerLaunch:
         allowed = {"name", "message", "link", "headline", "description", "call_to_action", "url_tags",
             "page_id", "format", "staged_media", "media_library_id", "existing_image_hash",
             "existing_video_id", "existing_creative_id", "source_instagram_media_id", "instagram_actor_id",
-            "carousel_cards", "carousel_media_library_ids"}
+            "carousel_cards", "carousel_media_library_ids", "official_params"}
         if set(creative) - allowed:
             raise fail("CREATIVE_FIELDS_UNAVAILABLE", "Selected creative options require their private draft adapter")
         for section in ("campaign", "adset", "ad"):
@@ -64,17 +64,36 @@ class AdsManagerLaunch:
             raise fail("PAGE_MISMATCH", "Creative Page differs from the selected account binding")
         references = local_references(creative)
         validate_creative(creative, references)
+        from .private_ads_creative import creative_options, option_media
+        creative_options(creative, self.catalog)
+        option_media(creative)
         if len(launch["campaign"]["name"]) > 120:
             raise fail("INVALID_INPUT", "Draft name is too long")
         selected = self.owner._asset_selections(launch, bool(references))
-        if set(selected) - {"images", "pixels"}:
-            raise fail("ASSET_READ_UNAVAILABLE", "A selected advertising asset requires a scoped private read adapter")
+        if set(selected) - set(self.catalog.data["resource_fields"]):
+            raise fail("ASSET_READ_UNAVAILABLE", "Selected asset has no reviewed account read")
+        for section in ("campaign", "adset", "ad"):
+            values = launch[section]
+            if (set(values) - set(self.catalog.data["object_fields"][section])
+                    or set(values) & {"id", "account_id", "campaign_id", "adset_id", "creative"}
+                    or values.get("acting_business_id", target["business_id"]) != target["business_id"]):
+                raise fail("OBJECT_FIELDS_UNAVAILABLE", "Advertising fields are unreviewed or supplied for another object")
+        budgets = [values[field] for values in (launch['campaign'],launch['adset'])
+                   for field in ('daily_budget','lifetime_budget') if field in values]
+        if len(budgets)>1 or any(type(value) is not int or not 0 < value <= 9_007_199_254_740_991 for value in budgets):
+            raise fail('BUDGET_INVALID','Use one positive integer budget in account minor units')
+        targeting = launch['adset'].get('targeting') or {}
+        if (not isinstance(targeting, dict)
+                or set(targeting) - set(self.catalog.data['object_fields']['targeting'])
+                or 'adgroup_id' in targeting
+                or any(field.startswith('effective_') for field in targeting)):
+            raise fail('TARGETING_FIELDS_UNAVAILABLE', 'Targeting contains unreviewed or read-only fields')
         # Encode every level before media POSTs, including nested auth and
         # nonfinite/unsupported values. Invalid Ad input must not leave uploads.
-        placeholders = ["planned-image-hash"] * (len(creative["carousel_cards"])
+        placeholders = [{"image_hash": "planned-image-hash"}] * (len(creative["carousel_cards"])
                         if creative.get("format") == "CAROUSEL" else 1)
-        story = (carousel_creative(creative, target["page_id"], placeholders)
-                 if creative.get("format") == "CAROUSEL" else image_creative(creative, target["page_id"], placeholders[0]))
+        story = resolved_creative(creative, target["page_id"], placeholders,
+            {"id": creative.get("source_instagram_media_id")})
         for level, values in (("campaign", launch["campaign"]), ("ad_set", launch["adset"]),
                               ("ad", {**launch["ad"], "creative": story})):
             try:
@@ -87,9 +106,9 @@ class AdsManagerLaunch:
         target, launch, references, fingerprint = self.prepare(profile_id, payload)
         return {"configuration_valid": True, "ready": False, "checked_live": False,
             "mutation_posts": 0, "target": target, "creative_format": launch["creative"].get("format", "SINGLE"),
-            "delivery": {key: "PAUSED" for key in ("campaign", "adset", "ad")},
+            "delivery": launch.get("delivery", {key: "PAUSED" for key in ("campaign", "adset", "ad")}),
             "steps": [{"stage": stage, "label": label} for stage, label in
-                (("MEDIA", "Изображения"), ("DRAFT", "Черновик рекламы"),
+                (("MEDIA", "Медиа рекламы"), ("DRAFT", "Черновик рекламы"),
                  ("CAMPAIGN", "Кампания"), ("ADSET", "Группа объявлений"),
                  ("AD", "Объявление"), ("PUBLISH", "Публикация"), ("VERIFY", "Проверка объектов"))],
             "local_media": references, "media_resolution_required": bool(references),
@@ -101,9 +120,10 @@ class AdsManagerLaunch:
         from .static_payment_read import inspect_methods, complete_methods
         account = target["ad_account_id"]
         row = await client.get("/act_" + account,
-            {"fields": ["id", "account_status", "business", "promotable_page_ids"]})
+            {"fields": ["id", "account_status", "business", "ad_account_promotable_objects"]})
         business = row.get("business") if isinstance(row, dict) else None
-        pages = row.get("promotable_page_ids") if isinstance(row, dict) else None
+        promotable = row.get("ad_account_promotable_objects") if isinstance(row, dict) else None
+        pages = promotable.get("promotable_page_ids") if isinstance(promotable, dict) else None
         if (not isinstance(row, dict) or not isinstance(row.get("id"), str)
                 or row["id"].removeprefix("act_") != account
                 or not isinstance(business, dict) or business.get("id") != target["business_id"]):
@@ -165,16 +185,16 @@ class AdsManagerLaunch:
             "payment_selection_required": required, "payment_methods": methods,
             "selected_payment_method": selected, "payment_selection_source": source}
 
-    async def _prepare_live(self, *, profile_id, context, session, payload):
+    async def _prepare_live(self, *, profile_id, context, session, payload, saved_media=None, expected_creative=None):
         target, launch, references, fingerprint = self.prepare(profile_id, payload)
         if self.owner._inventory_row(context, target["business_id"], target["ad_account_id"]) is None:
             raise fail("ACCOUNT_CONTEXT_UNAVAILABLE", "The selected account is absent from this profile inventory")
         actor = identity(str(context.cookies.get("c_user") or ""))
         from .private_launch_media import LaunchMediaResolver
-        media = await LaunchMediaResolver().resolve(references) if references else []
-        if len(media) != len(references) or any(row.id != reference["id"] or row.media_type != "image"
+        media = await LaunchMediaResolver().resolve(references) if references and saved_media is None and expected_creative is None else []
+        if (saved_media is None and expected_creative is None and len(media) != len(references)) or any(row.id != reference["id"] or row.media_type not in {"image", "video"}
                 for row, reference in zip(media, references)):
-            raise fail("MEDIA_FORMAT_UNAVAILABLE", "This private draft adapter supports image uploads")
+            raise fail("MEDIA_FORMAT_UNAVAILABLE", "Managed media type is unsupported")
         web = await session.facebook_web()
         from fb_worker import RemoteRequestError
         try:
@@ -182,21 +202,76 @@ class AdsManagerLaunch:
                 business_id=target["business_id"], actor_id=actor)
         except RemoteRequestError:
             raise fail("TRANSPORT_UNAVAILABLE", "Profile HTTP connection did not reach Ads Manager", True) from None
+        if expected_creative is not None:
+            client.read_only = True
+            row = await client.get("/act_" + target["ad_account_id"], {"fields": ["id", "business"]})
+            if (not isinstance(row.get("id"), str) or row["id"].removeprefix("act_") != target["ad_account_id"]
+                    or not isinstance(row.get("business"), dict) or row["business"].get("id") != target["business_id"]):
+                raise fail("ACCOUNT_SCOPE_UNVERIFIED", "Publication recovery account/Business is unconfirmed")
+            return target, launch, fingerprint, actor, client, [], {**target,
+                "resume_read_only": True, "payment_selection_required": False,
+                "payment_checked_live": False, "expected_creative": copy.deepcopy(expected_creative)}
         preflight = await self._preflight(client, web, payload, target)
+        creative = launch['creative']
+        if creative.get('existing_creative_id'):
+            selected_id = identity(creative['existing_creative_id'])
+            row = await client.get('/'+selected_id, {'fields':['id','account_id','object_story_spec','image_hash','video_id']})
+            from .private_ads_verify import _scope
+            _scope(row,target['ad_account_id'],selected_id)
+            story = row.get('object_story_spec') or {}
+            if not isinstance(story,dict):
+                raise fail('CREATIVE_FORMAT_UNAVAILABLE','Existing creative story is unconfirmed')
+            link = story.get('link_data') or {}
+            video = story.get('video_data') or {}
+            if not all(isinstance(part,dict) for part in (story,link,video)) or link.get('child_attachments'):
+                raise fail('CREATIVE_FORMAT_UNAVAILABLE','Select the explicit carousel format for carousel media')
+            image_id = row.get('image_hash') or link.get('image_hash')
+            video_id = row.get('video_id') or video.get('video_id')
+            if ((row.get('image_hash') and link.get('image_hash') and row['image_hash'] != link['image_hash'])
+                    or (row.get('video_id') and video.get('video_id') and row['video_id'] != video['video_id'])):
+                raise fail('MEDIA_UNVERIFIED','Existing creative media identities conflict')
+            if bool(image_id) == bool(video_id):
+                raise fail('MEDIA_UNVERIFIED','Existing creative did not confirm a single image or video')
+            creative.pop('existing_creative_id')
+            creative['existing_video_id' if video_id else 'existing_image_hash'] = video_id or image_id
+            preflight['existing_creative'] = {'id':selected_id,'account_id':target['ad_account_id'],'verified':True}
         selections = self.owner._asset_selections(launch, bool(references))
+        preflight["asset_checks"] = await self.owner._verify_assets(web,
+            {name: wanted for name, wanted in selections.items() if name not in {"images", "videos", "instagram_media", "pixels"}}, target)
         if selections.get("pixels"):
             inventory = await read_pixels(client)
             found = {row["id"] for row in inventory["data"]}
             if not set(selections["pixels"]) <= found:
                 raise fail("ASSET_ACCESS_UNCONFIRMED", "Selected pixel is not available to this ad account")
-            preflight["asset_checks"] = {"pixels": {"verified": True,
-                "selected": selections["pixels"], "checked_live": True}}
-        if not media:
-            creative = launch["creative"]
-            hashes = ([card["image_hash"] for card in creative["carousel_cards"]]
-                      if creative.get("format") == "CAROUSEL" else [creative["existing_image_hash"]])
-            for selected_hash in dict.fromkeys(hashes):
-                await verify_image(client, selected_hash)
+            preflight["asset_checks"]["pixels"] = {"verified": True,
+                "selected": selections["pixels"], "checked_live": True}
+        creative = launch["creative"]
+        from .private_ads_creative import option_media
+        extra_images, extra_videos = option_media(creative)
+        for selected_hash in extra_images: await verify_image(client,selected_hash)
+        for selected_video in extra_videos: await verify_video(client,selected_video)
+        if creative.get("format") == "INSTAGRAM_POST":
+            result = await self.owner.reads.read(web, "instagram_media", {**target, "query": "", "limit": 100})
+            matches = [row for row in result["data"] if row.get("id") == creative["source_instagram_media_id"]]
+            if len(matches) != 1:
+                raise fail("INSTAGRAM_UNVERIFIED", "Selected post is not available for advertising in this account")
+            if creative.get("instagram_actor_id") and matches[0].get("instagram_actor_id") != creative["instagram_actor_id"]:
+                raise fail("INSTAGRAM_ACTOR_MISMATCH", "Selected post belongs to another Instagram actor")
+            preflight["instagram_media"] = matches[0]
+        elif not media:
+            selected = saved_media or (creative["carousel_cards"] if creative.get("format") == "CAROUSEL" else
+                        [{"image_hash": creative.get("existing_image_hash"), "video_id": creative.get("existing_video_id")}])
+            preflight["confirmed_media"] = []
+            for item in selected:
+                proof = (await verify_video(client, item["video_id"]) if item.get("video_id")
+                         else await verify_image(client, item["image_hash"]))
+                preflight["confirmed_media"].append(proof)
+        # Validate video/Instagram wire values before any upload/draft POST.
+        placeholders = [{"video_id": "100001", "thumbnail_uri": "https://example.invalid/thumbnail"}
+                        if row.media_type == "video" else {"image_hash": "planned-image-hash"} for row in media]
+        story = resolved_creative(creative, target["page_id"], placeholders or preflight.get("confirmed_media", []),
+                                 preflight.get("instagram_media"))
+        fragment_params("100000", level="ad", values={**launch["ad"], "creative": story})
         return target, launch, fingerprint, actor, client, media, preflight
 
     async def review(self, *, profile_id, context, payload, transport=None):
@@ -218,7 +293,8 @@ class AdsManagerLaunch:
         if not key or len(key) > 200:
             raise fail("INVALID_INPUT", "Advertising launch key is missing or too long")
         await self.owner.state.init()
-        for prior in await self.owner.state.all_steps(key):
+        saved_steps = await self.owner.state.all_steps(key)
+        for prior in saved_steps:
             evidence = prior.get("result", {}).get("evidence", {})
             if (not prior["step"].startswith("ADS_MANAGER:")
                     or any(str(prior.get(name)) != str(target[name]) for name in
@@ -234,22 +310,50 @@ class AdsManagerLaunch:
         actor = identity(str(context.cookies.get("c_user") or ""))
         digest = hashlib.sha256((self.source_digest + actor).encode()).hexdigest()
         await self.owner.state.bind_plan(key, target, fingerprint, digest)
+        published = await self.owner.state.step(key, OperationKey("ADS_MANAGER:PUBLISH"))
+        if (launch.get("delivery") and published and published.get("status") == "SUCCESS"
+                and published.get("result", {}).get("evidence", {}).get("verification", {}).get("verified") is True):
+            return await self._finish_delivery(profile_id, context, session, payload, target, launch, key,
+                {"status": "SUCCESS", "entities": published["result"]["evidence"]["verification"]["entities"],
+                 "launch_key": key, **target, "verified": True, "browser_started": False})
+        required = {"ADS_MANAGER:DRAFT", "ADS_MANAGER:FRAGMENT_CAMPAIGN", "ADS_MANAGER:FRAGMENT_AD_SET",
+                    "ADS_MANAGER:FRAGMENT_AD", "ADS_MANAGER:PUBLISH"}
+        saved = {row["step"]: row for row in saved_steps}
+        expected_creative = None
+        if required <= set(saved):
+            candidate = saved["ADS_MANAGER:FRAGMENT_AD"].get("result", {}).get("evidence", {}).get("binding", {}).get("creative")
+            if isinstance(candidate, dict):
+                expected_creative = candidate
+        saved_media = []
+        for reference in references:
+            candidates = []
+            for prior in saved_steps:
+                prefix, separator, sha = prior["step"].removeprefix("ADS_MANAGER:").partition(":")
+                receipt = prior.get("result", {}).get("evidence", {}).get("receipt", {})
+                if (separator and prefix in {"IMAGE", "VIDEO_FINISH"} and len(sha) == 64
+                        and reference["id"] == "m-" + sha[:24]
+                        and (not reference.get("sha256") or reference["sha256"] == sha)):
+                    candidates.append({field: receipt[field] for field in ("image_hash", "video_id") if field in receipt})
+            if len(candidates) != 1 or not candidates[0]:
+                saved_media = None
+                break
+            saved_media.append(candidates[0])
         target, launch, fingerprint, actor, client, media, proof = await self._prepare_live(
-            profile_id=profile_id, context=context, session=session, payload=payload)
+            profile_id=profile_id, context=context, session=session, payload=payload,
+            saved_media=saved_media if references else None, expected_creative=expected_creative)
         if proof["payment_selection_required"]:
             raise fail("PAYMENT_SELECTION_REQUIRED", "Choose a currently linked card before creating advertising")
         sender = AdsManagerSubmitter(self.owner.state, launch_key=key, profile_id=profile_id,
             business_id=target["business_id"], account_id=target["ad_account_id"], actor_id=actor,
             launch_fingerprint=fingerprint, source_digest=self.source_digest)
         selection = launch["creative"]
-        if media:
-            hashes = [await upload_image(client, sender, row) for row in media]
-        elif selection.get("format") == "CAROUSEL":
-            hashes = [card["image_hash"] for card in selection["carousel_cards"]]
-        else:
-            hashes = [selection["existing_image_hash"]]
-        creative = (carousel_creative(selection, target["page_id"], hashes)
-                    if selection.get("format") == "CAROUSEL" else image_creative(selection, target["page_id"], hashes[0]))
+        uploaded = []
+        for row in media:
+            uploaded.append(await upload_video(client, sender, row) if row.media_type == "video"
+                            else {"image_hash": await upload_image(client, sender, row)})
+        creative = (copy.deepcopy(proof["expected_creative"]) if proof.get("resume_read_only")
+                    else resolved_creative(selection, target["page_id"], uploaded or proof.get("confirmed_media", []),
+                                           proof.get("instagram_media")))
         levels = {"campaign": copy.deepcopy(launch["campaign"]), "ad_set": copy.deepcopy(launch["adset"]),
                   "ad": {**copy.deepcopy(launch["ad"]), "creative": creative}}
         publisher = AdsManagerDraftPublisher(sender)
@@ -260,12 +364,28 @@ class AdsManagerLaunch:
             "steps": [{"step": name, "status": "SUCCESS", "entity_id": result["entities"][field]}
                       for name, field in (("CAMPAIGN", "campaign_id"), ("ADSET", "adset_id"),
                                           ("CREATIVE", "creative_id"), ("AD", "ad_id"))]})
+        return await self._finish_delivery(profile_id, context, session, payload, target, launch, key, result)
+
+    async def _finish_delivery(self, profile_id, context, session, payload, target, launch, key, result):
+        if launch.get("delivery"):
+            delivery_key = "ads-delivery:" + hashlib.sha256(key.encode()).hexdigest()
+            delivery = await self.run_delivery(profile_id=profile_id, context=context, session=session,
+                payload={**payload, **target, "source_launch_key": key, "delivery_key": delivery_key,
+                         "status": "ACTIVE", "delivery": launch["delivery"]})
+            result.update(delivery=delivery["delivery"], delivery_key=delivery_key,
+                          effective_statuses=delivery["effective_statuses"], delivery_running_verified=False)
+            result["steps"] = result.get("steps", []) + delivery["steps"]
         return result
+
+    async def run_delivery(self, *, profile_id, context, session, payload, task_idempotency_key=None):
+        from .private_ads_delivery import run_delivery
+        return await run_delivery(self, profile_id=profile_id, context=context, session=session,
+                                  payload=payload, task_idempotency_key=task_idempotency_key)
 
     def status(self):
         return {"protocol": "private_ads_manager_versioned", "source_revision": SOURCE_REVISION,
             "contracts": {step: {"configured": True, "active": True, "verification_configured": True,
                 "friendly_name": "AdsDraftPublishDataManager", "doc_id_configured": False}
                 for step in ("CAMPAIGN", "ADSET", "CREATIVE", "AD")},
-            "operations": {"IMAGE_UPLOAD": {"configured": True, "active": True}},
-            "creative_formats": ["SINGLE", "CAROUSEL"], "resources": self.owner.reads.status(), "checked_live": False}
+            "operations": {name: {"configured": True, "active": True} for name in ("IMAGE_UPLOAD", "VIDEO_UPLOAD", "ACTIVATE_CAMPAIGN", "ACTIVATE_ADSET", "ACTIVATE_AD")},
+            "creative_formats": ["SINGLE", "CAROUSEL", "INSTAGRAM_POST"], "resources": self.owner.reads.status(), "source_catalog_digest": self.catalog.digest, "checked_live": False}

@@ -34,7 +34,7 @@ class CarouselClient(launch_fixture.ImageClient):
         self.images[image_hash] = '111111'
         if raw == self.lose_after:
             raise TimeoutError('synthetic lost reply')
-        return {'images': {'card.png': {'hash': image_hash}}}
+        return {'images': {next(iter(files)): {'hash': image_hash}}}
 
     async def get(self, path, params):
         if path.endswith('/adimages'):
