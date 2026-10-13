@@ -105,6 +105,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertTrue(self.page.locator('#presetMessage').is_visible())
         self.page.wait_for_function("document.querySelector('.cr-tab[data-tab=creative]').getAttribute('aria-current')==='step'")
         self.assertEqual(self.page.locator('.cr-tab[data-tab="creative"]').get_attribute('aria-current'),'step')
+        self.assertTrue(self.page.locator('.cr-tab[data-tab="creative"]').evaluate('(el)=>{const r=el.getBoundingClientRect();return document.elementFromPoint(r.left+8,r.top+r.height/2).closest(".cr-tab")===el;}'))
 
     def launch(self):
         self.page.set_content('''<style>label{display:inline}.form-control{display:inline-block!important;width:auto!important}</style><main><div class="launch-wrap">
