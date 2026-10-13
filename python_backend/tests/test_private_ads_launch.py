@@ -129,6 +129,19 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(complete.await_args.kwargs['business_id'], '222222')
         self.assertEqual(self.client.posts, [])
 
+    async def test_filtered_empty_methods_can_recover_scoped_card_from_full_read(self):
+        full = {**self.funding, 'inventory_complete':True}
+        self.funding = {**self.funding, 'inventory_complete':False,
+                        'card_linked':False, 'payment_methods':[]}
+        with patch('app.static_payment_read.complete_methods',
+                   new=AsyncMock(return_value=full)) as complete:
+            review = await self.owner.review(profile_id='19', context=self.context,
+                                             payload=self.payload,
+                                             transport=SimpleNamespace(session=self.session))
+        self.assertTrue(review['ready'])
+        complete.assert_awaited_once()
+        self.assertEqual(self.client.posts, [])
+
     async def test_multiple_live_cards_stay_in_review_selection_required(self):
         self.funding['payment_methods'].append({
             'type':'Mastercard', 'last4':'5678', 'needs_verification':False,
