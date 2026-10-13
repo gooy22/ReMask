@@ -114,7 +114,6 @@ class AdsManagerLaunch:
                 and funding.get("business_scope_verified") is True
                 and funding.get("payment_account_relation_verified") is True
                 and funding.get("methods_query_verified") is True
-                and funding.get("card_linked") is True
                 and funding.get("inventory_complete") is not True):
             # The observed READ_METHODS query returns a filtered collection.
             # Prove the complete account-scoped credential inventory before
