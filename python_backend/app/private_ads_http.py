@@ -124,8 +124,12 @@ class AdsManagerPrivateHttp:
                 or parse_qs(final.query).get("act") != [account_id]
                 or parse_qs(final.query).get("business_id") != [business_id]):
             raise fail("BOOTSTRAP_SCOPE_UNVERIFIED", "Ads Manager did not confirm the requested account context", True)
-        return cls(web, context_from_document(body, account_id=account_id,
-                    business_id=business_id, actor_id=actor_id))
+        context = context_from_document(body, account_id=account_id,
+                    business_id=business_id, actor_id=actor_id)
+        refresh = getattr(web, 'refresh_reviewed_modules', None)
+        if callable(refresh):
+            await refresh(body, final_url)
+        return cls(web, context)
 
     async def request(self, method, path, params, *, before_submit=None, files=None):
         if method not in {"GET", "POST"} or not re.fullmatch(r"/[A-Za-z0-9_]+(?:/[A-Za-z0-9_]+)?", path):

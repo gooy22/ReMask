@@ -100,3 +100,6 @@ jobs:
       - name: Verify Details to Confirm capture and duplicate guards in Chromium
         run: PYTHONPATH=python_backend /tmp/remask-browser-regression/bin/python tests/meta-ad-account-dialogs.browser.py
 
+
+      - name: Creative serializer and Launch workflow interface
+        run: /tmp/remask-browser-regression/bin/python tests/workflow-ui.browser.py

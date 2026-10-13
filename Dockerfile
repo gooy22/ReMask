@@ -555,6 +555,8 @@ RUN set -eux; \
     mkdir -p /var/www/html/bin; \
     [ -f /var/lib/remask/accounts.json ] || printf '[]\n' > /var/lib/remask/accounts.json; \
     [ -f /var/lib/remask/bundles.json ] || printf '[]\n' > /var/lib/remask/bundles.json; \
+    php -l /tmp/railway-workflow-ui-overlay.php; \
+    php /tmp/railway-workflow-ui-overlay.php; \
     chown -R www-data:www-data /var/lib/remask /var/www/html; \
     chmod 700 /var/lib/remask; \
     chmod +x /var/www/html/docker-start.sh;

@@ -452,7 +452,7 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
         client = self.make()
         transports = set()
         for host in ('facebook.com', 'business.facebook.com', 'www.facebook.com',
-                     'secure.facebook.com', 'adsmanager.facebook.com', 'm.facebook.com'):
+                     'secure.facebook.com', 'adsmanager.facebook.com', 'm.facebook.com', 'static.xx.fbcdn.net'):
             with self.subTest(host=host):
                 transport = client._client._transport_for_url(httpx.URL('https://' + host + '/api/graphql/'))
                 self.assertTrue(transport._pool._http2)
@@ -460,7 +460,7 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(transport._pool._retries, 0)
                 transports.add(transport)
         self.assertEqual(len(transports), 1)  # one origin transport/pool per profile
-        for host in ('api.ipify.org', 'static.xx.fbcdn.net', 'evilfacebook.com', 'facebook.com.evil.test'):
+        for host in ('api.ipify.org', 'evilfbcdn.net', 'fbcdn.net.evil.test', 'evilfacebook.com', 'facebook.com.evil.test'):
             with self.subTest(host=host):
                 other = client._client._transport_for_url(httpx.URL('https://' + host))
                 self.assertTrue(other._pool._http1)
