@@ -64,8 +64,15 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
                       'ad':{'name':'ad'},'creative':{'name':'creative','message':'text',
                           'link':'https://example.com','headline':'headline','format':'SINGLE',
                           'media_library_id':self.media.id}}}
-        self.funding = {'account_scope_verified':True,'checked_live':True,'card_linked':True,
-            'inventory_complete':True,'payment_methods':[{'type':'Visa','last4':'1234'}]}
+        self.funding = {'account_id':'111111', 'business_id':'222222',
+            'payment_account_id':'333333',
+            'account_scope_verified':True,'business_scope_verified':True,
+            'payment_account_relation_verified':True,'methods_query_verified':True,
+            'checked_live':True,'card_linked':True, 'inventory_complete':True,
+            'payment_methods':[{'type':'Visa','last4':'1234',
+                'needs_verification':False, 'verification_tasks_observed':True,
+                'verification_tasks':[], 'card_confirmation_status':'CLEAR',
+                'is_expired':False}]}
         contexts = [
             patch('app.private_ads_launch.AdsManagerPrivateHttp.open',new=AsyncMock(return_value=self.client)),
             patch('app.private_launch_media.LaunchMediaResolver.resolve',new=AsyncMock(return_value=[self.media])),
@@ -111,6 +118,74 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
                                      session=self.session,payload=payload)
         self.assertEqual(self.client.uploads,0)
         self.assertEqual(self.client.posts,[])
+    async def test_filtered_methods_expand_using_exact_business_before_review(self):
+        self.funding['inventory_complete'] = False
+        expanded = {**self.funding, 'inventory_complete':True}
+        with patch('app.static_payment_read.complete_methods',
+                   new=AsyncMock(return_value=expanded)) as complete:
+            result = await self.owner.review(profile_id='19', context=self.context,
+                                             payload=self.payload,
+                                             transport=SimpleNamespace(session=self.session))
+        self.assertTrue(result['ready'])
+        complete.assert_awaited_once()
+        self.assertEqual(complete.await_args.kwargs['business_id'], '222222')
+        self.assertEqual(self.client.posts, [])
+
+    async def test_filtered_empty_methods_can_recover_scoped_card_from_full_read(self):
+        full = {**self.funding, 'inventory_complete':True}
+        self.funding.update(inventory_complete=False, card_linked=False, payment_methods=[])
+        with patch('app.static_payment_read.complete_methods',
+                   new=AsyncMock(return_value=full)) as complete:
+            review = await self.owner.review(profile_id='19', context=self.context,
+                                             payload=self.payload,
+                                             transport=SimpleNamespace(session=self.session))
+        self.assertTrue(review['ready'])
+        complete.assert_awaited_once()
+        self.assertEqual(self.client.posts, [])
+
+    async def test_multiple_live_cards_stay_in_review_selection_required(self):
+        self.funding['payment_methods'].append({
+            'type':'Mastercard', 'last4':'5678', 'needs_verification':False,
+            'verification_tasks_observed':True, 'verification_tasks':[],
+            'card_confirmation_status':'CLEAR', 'is_expired':False})
+        review = await self.owner.review(profile_id='19', context=self.context,
+                                        payload=self.payload,
+                                        transport=SimpleNamespace(session=self.session))
+        self.assertFalse(review['ready'])
+        self.assertTrue(review['preflight']['payment_selection_required'])
+        self.assertEqual(self.client.posts, [])
+        with self.assertRaises(ProvisioningError) as error:
+            await self.launch()
+        self.assertEqual(error.exception.code, 'PRIVATE_ADS_DRAFT_PAYMENT_SELECTION_REQUIRED')
+        self.assertEqual(self.client.posts, [])
+
+    async def test_incomplete_methods_refuse_publication_without_post(self):
+        self.funding['inventory_complete'] = False
+        with patch('app.static_payment_read.complete_methods',
+                   new=AsyncMock(return_value=self.funding)) as complete:
+            with self.assertRaises(ProvisioningError) as error:
+                await self.launch()
+        self.assertEqual(error.exception.code, 'PRIVATE_ADS_DRAFT_PAYMENT_UNVERIFIED')
+        complete.assert_awaited_once()
+        self.assertEqual(self.client.posts, [])
+        self.assertEqual(self.client.uploads, 0)
+
+    async def test_foreign_account_in_complete_payment_read_is_blocked(self):
+        self.funding['account_id'] = '999999'
+        with self.assertRaises(ProvisioningError) as error:
+            await self.launch()
+        self.assertEqual(error.exception.code, 'PRIVATE_ADS_DRAFT_PAYMENT_SCOPE_UNVERIFIED')
+        self.assertEqual(self.client.posts, [])
+        self.assertEqual(self.client.uploads, 0)
+
+    async def test_unknown_card_confirmation_does_not_pass_payment_readiness(self):
+        self.funding['payment_methods'][0]['card_confirmation_status'] = 'UNKNOWN'
+        with self.assertRaises(ProvisioningError) as error:
+            await self.launch()
+        self.assertEqual(error.exception.code, 'PRIVATE_ADS_DRAFT_PAYMENT_CONFIRMATION_UNVERIFIED')
+        self.assertEqual(self.client.posts, [])
+        self.assertEqual(self.client.uploads, 0)
+
     async def test_unverified_payment_prevents_upload_and_draft(self):
         self.funding['card_linked']=False
         with self.assertRaises(ProvisioningError):
