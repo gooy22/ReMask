@@ -129,6 +129,22 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(complete.await_args.kwargs['business_id'], '222222')
         self.assertEqual(self.client.posts, [])
 
+    async def test_multiple_live_cards_stay_in_review_selection_required(self):
+        self.funding['payment_methods'].append({
+            'type':'Mastercard', 'last4':'5678', 'needs_verification':False,
+            'verification_tasks_observed':True, 'verification_tasks':[],
+            'card_confirmation_status':'CLEAR', 'is_expired':False})
+        review = await self.owner.review(profile_id='19', context=self.context,
+                                        payload=self.payload,
+                                        transport=SimpleNamespace(session=self.session))
+        self.assertFalse(review['ready'])
+        self.assertTrue(review['preflight']['payment_selection_required'])
+        self.assertEqual(self.client.posts, [])
+        with self.assertRaises(ProvisioningError) as error:
+            await self.launch()
+        self.assertEqual(error.exception.code, 'PRIVATE_ADS_DRAFT_PAYMENT_SELECTION_REQUIRED')
+        self.assertEqual(self.client.posts, [])
+
     async def test_incomplete_methods_refuse_publication_without_post(self):
         self.funding['inventory_complete'] = False
         with patch('app.static_payment_read.complete_methods',
