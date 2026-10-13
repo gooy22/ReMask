@@ -7,7 +7,6 @@ let carouselPreviewUrls = [];
 let metaSdkSchema = null;
 let pendingMetaBuilder = null;
 let metaCapabilities = null;
-let metaContext = {profile:'', accountId:''};
 let audienceEstimateTimer = null;
 let audienceEstimateSeq = 0;
 let placementCapabilitiesTimer = null;
@@ -794,14 +793,6 @@ async function searchCreativeTargeting(kind) {
         return;
     }
 
-    if (!metaContext.profile || !metaContext.accountId) {
-        if (results) {
-            results.innerHTML = '<div class="cr-target-empty">Выберите профиль Facebook и рекламный кабинет выше.</div>';
-            results.classList.add('open');
-        }
-        return;
-    }
-
     const controller = new AbortController();
     creativeTargetingControllers[kind] = controller;
     if (results) {
@@ -810,14 +801,12 @@ async function searchCreativeTargeting(kind) {
     }
 
     const params = new URLSearchParams();
-    params.set('profile', metaContext.profile);
-    params.set('account_id', metaContext.accountId);
     params.set('type', cfg.apiType);
     params.set('q', query);
     params.set('limit', '25');
 
     try {
-        const data = await api('ajax/metaTargetingSearch.php', {
+        const data = await api('ajax/metaTemplateTargetingSearch.php', {
             method:'POST',
             headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8'},
             body:params.toString(),
@@ -949,7 +938,6 @@ function renderMetaDatalist(id, rows, valueKey = 'id', labelKeys = ['name']) {
 async function loadMetaContext() {
     const data = await api('ajax/metaCreativeCapabilities.php');
     metaCapabilities = data || {};
-    remaskPrivatePopulateCreativeContext(data?.profiles || [], data?.preferred_profile || '');
     remaskPrivateInstagramProfiles(data?.profiles || []);
     if (data?.schema) metaSdkSchema = data.schema;
     renderMetaDatalist(
@@ -1774,67 +1762,4 @@ $('presetInstagramPost')?.addEventListener('change', () => {
     $('presetInstagramActor').value = row ? String(row.instagram_actor_id || '') : '';
 });
 
-// Reusable creative settings still need an explicit account for private Meta searches.
-let remaskCreativeContextGeneration = 0;
-function remaskPrivateRememberCreativeContext() {
-    try { localStorage.setItem('remask.creativeMetaContext', JSON.stringify(metaContext)); } catch {}
-}
-function remaskPrivatePopulateCreativeContext(profiles, preferred = '') {
-    const select = $('creativeMetaProfile');
-    if (!select) return;
-    let remembered = {};
-    try { remembered = JSON.parse(localStorage.getItem('remask.creativeMetaContext') || '{}') || {}; } catch {}
-    const previous = metaContext.profile || remembered.profile || preferred || (profiles.length === 1 ? String(profiles[0].name) : '');
-    select.innerHTML = '<option value="">Выберите профиль</option>';
-    for (const row of profiles) select.appendChild(new Option(String(row.name), String(row.name)));
-    if (profiles.some(row => String(row.name) === previous)) {
-        select.value = previous;
-        remaskPrivateLoadCreativeAccounts(remembered.accountId || '').catch(() => {});
-    }
-}
-async function remaskPrivateLoadCreativeAccounts(preferred = '') {
-    const generation = ++remaskCreativeContextGeneration;
-    const profile = $('creativeMetaProfile')?.value || '';
-    metaContext = {profile, accountId:''};
-    const select = $('creativeMetaAccount');
-    select.innerHTML = '<option value="">Выберите РК</option>';
-    for (const kind of Object.keys(creativeTargetingControllers)) {
-        creativeTargetingControllers[kind]?.abort(); creativeTargetingControllers[kind] = null;
-        closeCreativeTargetResults(kind);
-    }
-    const status = $('creativeMetaContextStatus');
-    status.textContent = profile ? 'Загружаю сохранённые рекламные кабинеты…' : 'Выберите профиль и рекламный кабинет для поиска данных Meta.';
-    remaskPrivateRememberCreativeContext();
-    if (!profile) return;
-    try {
-        const data = await api('ajax/metaPreflight.php?' + new URLSearchParams({profile}));
-        if (generation !== remaskCreativeContextGeneration) return;
-        const accounts = Array.isArray(data?.ad_accounts?.data) ? data.ad_accounts.data : [];
-        for (const row of accounts) {
-            const id = String(row.account_id || row.id || '').replace(/^act_/, '');
-            if (/^[0-9]{5,30}$/.test(id)) select.appendChild(new Option(String(row.name || id), id));
-        }
-        if (preferred && Array.from(select.options).some(option => option.value === preferred)) select.value = preferred;
-        else if (select.options.length === 2) select.selectedIndex = 1;
-        remaskPrivateSelectCreativeAccount();
-    } catch (error) {
-        if (generation === remaskCreativeContextGeneration) status.textContent = 'Не удалось загрузить РК: ' + error.message;
-    }
-}
-function remaskPrivateSelectCreativeAccount() {
-    metaContext = {profile:$('creativeMetaProfile')?.value || '', accountId:$('creativeMetaAccount')?.value || ''};
-    for (const kind of Object.keys(creativeTargetingControllers)) {
-        creativeTargetingControllers[kind]?.abort(); creativeTargetingControllers[kind] = null;
-        closeCreativeTargetResults(kind);
-    }
-    remaskPrivateRememberCreativeContext();
-    $('creativeMetaContextStatus').textContent = metaContext.accountId
-        ? 'Поиск использует выбранный РК. Доступ Meta проверяется при запросе.'
-        : 'Выберите рекламный кабинет для поиска данных Meta.';
-    for (const kind of Object.keys(creativeTargetingSelections)) {
-        const input = $(creativeTargetSearchConfig(kind).input);
-        if (metaContext.accountId && String(input?.value || '').trim().length >= 2) searchCreativeTargeting(kind);
-    }
-}
-$('creativeMetaProfile')?.addEventListener('change', () => remaskPrivateLoadCreativeAccounts());
-$('creativeMetaAccount')?.addEventListener('change', remaskPrivateSelectCreativeAccount);
+// Template targeting uses an automatic server-side read context, never a publishing RK.

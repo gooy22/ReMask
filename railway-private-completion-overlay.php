@@ -2,6 +2,9 @@
 declare(strict_types=1);
 $root = '/var/www/html';
 foreach (['railway-private-form-schema.php'=>'classes/RemaskPrivateFormSchema.php',
+          'railway-private-inventory-identity.php'=>'classes/RemaskPrivateInventoryIdentity.php',
+          'railway-template-targeting-context.php'=>'classes/RemaskTemplateTargetingContext.php',
+          'railway-template-targeting-search.php'=>'ajax/metaTemplateTargetingSearch.php',
           'railway-private-creative-capabilities.php'=>'ajax/metaCreativeCapabilities.php'] as $source=>$target) {
     if (!copy('/tmp/'.$source, $root.'/'.$target)) throw new RuntimeException('PRIVATE_COMPLETION_COPY_FAILED');
 }
@@ -49,6 +52,17 @@ function completionReplace(string &$body, string $old, string $new, string $name
     if ($count !== 1) throw new RuntimeException('PRIVATE_COMPLETION_ANCHOR: '.$name.' '.$count);
     $body = str_replace($old, $new, $body);
 }
+$resolver = file_get_contents($root.'/ajax/pythonProfileContext.php');
+completionReplace($resolver, "require_once __DIR__ . '/../classes/MetaEndpoint.php';",
+    "require_once __DIR__ . '/../classes/MetaEndpoint.php';\nrequire_once __DIR__ . '/../classes/RemaskPrivateInventoryIdentity.php';", 'resolver-identities-class');
+completionReplace($resolver, '    $liveInventory = rmx_py_live_inventory($profile);', <<<'PHP_CODE'
+    $liveInventory = rmx_py_live_inventory($profile);
+    $confirmedBindings = json_decode((string)@file_get_contents('/var/lib/remask/workspace-provisioning-bindings.json'), true);
+    $personalScope = (string)(rmx_py_cookie_map($account->cookies)['c_user'] ?? '');
+    $liveInventory = RemaskPrivateInventoryIdentity::merge($liveInventory,
+        is_array($confirmedBindings) ? $confirmedBindings : [], $profile, $personalScope);
+PHP_CODE, 'resolver-confirmed-identities');
+file_put_contents($root.'/ajax/pythonProfileContext.php', $resolver);
 $creativeEndpoint = file_get_contents($root.'/ajax/creativeLibrary.php');
 completionReplace($creativeEndpoint, "require_once __DIR__ . '/../classes/MetaOfficialFields.php';",
     "require_once __DIR__ . '/../classes/RemaskPrivateFormSchema.php';", 'creative-validator');

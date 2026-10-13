@@ -73,6 +73,12 @@ jobs:
       - name: Card UI installation and browser cache invalidation
         run: php tests/payment-inspection-install.test.php
 
+      - name: Confirmed RK identity does not promote live advertising readiness
+        run: php tests/private-inventory-identity.test.php
+
+      - name: Universal template targeting lookup scope
+        run: php tests/template-targeting-context.test.php
+
       - name: Encrypted card storage and submission guard
         run: php tests/payment-card-vault.test.php
 
