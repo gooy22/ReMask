@@ -1,0 +1,146 @@
+{
+  "version": 1,
+  "policy": "exact_artifact_and_sender_id_only",
+  "operations": {
+    "BillingCountryCurrencyPageViewManagerQuery": {
+      "doc_id": "28388533884149241",
+      "artifact_modules": {
+        "BillingCountryCurrencyPageViewManagerQuery.graphql": "32af1a2c55cd5d3e59c25f988a757aee1f9887f8b0c8d7e2a60d7a409f11b824",
+        "BillingCountryCurrencyPageViewManagerQuery_facebookRelayOperation": "04f3c90cf1f24a5d3b4975499225e50ddad6f805ffecc40b155392a30e370aad"
+      },
+      "senders": {
+        "BillingCountryCurrencyPageViewManager.react": "01185074cd150d641549e7aff6aad08f2b9b7c6ef9cc3b927f68fb29d9b91124"
+      }
+    },
+    "BillingHubPaymentSettingsPaymentMethodsListQuery": {
+      "doc_id": "28814526004898205",
+      "artifact_modules": {
+        "BillingHubPaymentSettingsPaymentMethodsListQuery.graphql": "e662d5c392aaa194e3ad694582163bb347e147ee560a5e9dd1916b9e3fc58d28",
+        "BillingHubPaymentSettingsPaymentMethodsListQuery_facebookRelayOperation": "04f3c90cf1f24a5d3b4975499225e50ddad6f805ffecc40b155392a30e370aad"
+      },
+      "senders": {
+        "BillingHubPaymentSettingsPaymentMethodsList.react": "2548d436db9dff5b7f1177eaaa854081e2e4a2812d06d58bdd6ab4141b9dc52b"
+      }
+    },
+    "BillingHubPaymentSettingsViewQuery": {
+      "doc_id": "28797973873175785",
+      "artifact_modules": {
+        "BillingHubPaymentSettingsViewQuery.graphql": "fd31a8997e83db1144d7f4c1df85704be4d725535fd23e822323d95a7367b061"
+      },
+      "senders": {
+        "BillingHubPaymentSettingsView.entrypoint": "ce436d6cdecfa76e186b36e62f8f99b95a15f17b84013ccf56fa860a5406ab8e"
+      }
+    },
+    "BillingPaymentMethodDisplayUtilsQuery": {
+      "doc_id": "27586872297608269",
+      "artifact_modules": {
+        "BillingPaymentMethodDisplayUtilsQuery.graphql": "0b320e5f44f1250b9c2ab38db6402d377f4ecace1dc532cdd46862007a497c45",
+        "BillingPaymentMethodDisplayUtilsQuery_facebookRelayOperation": "04f3c90cf1f24a5d3b4975499225e50ddad6f805ffecc40b155392a30e370aad"
+      },
+      "senders": {
+        "BillingPaymentMethodDisplayUtils": "178bc82fff54686298c0e9f65771313ff09389f09b5113296ef05bcf3feb48dd"
+      }
+    },
+    "BillingSaveCardCredentialStateMutation": {
+      "doc_id": "28619313357728847",
+      "artifact_modules": {
+        "BillingSaveCardCredentialStateMutation.graphql": "e18b8da159ebaeae5b590bc8c677eb4551ae00b0ceb6cd0de8bdc8a96daad621",
+        "BillingSaveCardCredentialStateMutation_facebookRelayOperation": "ea937f006924767ca067fd7318c745496954add2079a177199b18a8e5aaae908"
+      },
+      "senders": {
+        "BillingSaveCardCredentialState": "f795d2a61e6cc2c9bad923edd0723cdcaf91d7dae0f29ba3457f310051397032"
+      }
+    },
+    "BillingSelectPaymentMethodPageViewManagerQuery": {
+      "doc_id": "29195809800004536",
+      "artifact_modules": {
+        "BillingSelectPaymentMethodPageViewManagerQuery.graphql": "c9873d4aba92990849bc667081869fda4b399252573c3a86da33e248c6ae1710",
+        "BillingSelectPaymentMethodPageViewManagerQuery_facebookRelayOperation": "04f3c90cf1f24a5d3b4975499225e50ddad6f805ffecc40b155392a30e370aad"
+      },
+      "senders": {
+        "BillingAddPaymentMethodRoot.entrypoint": "cf5d82d4bad4b672e7fcf8fb2cc14c63ed7b87ef28a75b1795f1c0c2dd41d431"
+      }
+    },
+    "BizKitSettingsAddUserAssetConnectionMutation": {
+      "doc_id": "10073595179327842",
+      "artifact_modules": {
+        "BizKitSettingsAddUserAssetConnectionMutation.graphql": "bc66f153d02e0bcd5a755849d2860d76b49f8fa0252e88d9170757ef73483cca",
+        "BizKitSettingsAddUserAssetConnectionMutation_facebookRelayOperation": "04f3c90cf1f24a5d3b4975499225e50ddad6f805ffecc40b155392a30e370aad"
+      },
+      "senders": {
+        "BizKitSettingsAddUserAssetConnectionMutation": "30cf25eb08c9ba9c188e1fda4624dab8404b537b0137611631457d75659e9a4b"
+      }
+    },
+    "BizKitSettingsClaimPageMutation": {
+      "doc_id": "27720923774230959",
+      "artifact_modules": {
+        "BizKitSettingsClaimPageMutation.graphql": "5c69c7abbd3a989461c5dc2313ca7f5efcb887da1f973d776ae9563d37f9d024",
+        "BizKitSettingsClaimPageMutation_facebookRelayOperation": "04f3c90cf1f24a5d3b4975499225e50ddad6f805ffecc40b155392a30e370aad"
+      },
+      "senders": {
+        "BizKitSettingsClaimPageMutation": "9bcdb8da7c301cdbd080a29fd3d6d94aa69121888148a263352446944101f760"
+      }
+    },
+    "BizKitSettingsConfigProviderQuery": {
+      "doc_id": "38731886369758684",
+      "artifact_modules": {
+        "BizKitSettingsConfigProviderQuery.graphql": "a05d673d561dc86996ca7dfc1c90791fcbb7fd0587b0df82a9d5d84c5f8d6852",
+        "BizKitSettingsConfigProviderQuery_facebookRelayOperation": "04f3c90cf1f24a5d3b4975499225e50ddad6f805ffecc40b155392a30e370aad"
+      },
+      "senders": {
+        "BizKitSettingsConfigProvider.react": "251644153265704448c21628090bcc79f69c530bf73908694a05c5c52c2602b9",
+        "BusinessCometBizSuiteSettingsAdAccounts.entrypoint": "91e541b9f3f0f5710b98cfa34ab4df41e34ba7d021db79bd6ab582860f96f7fa"
+      }
+    },
+    "BizKitSettingsCreateAdAccountMutation": {
+      "doc_id": "37914283651496237",
+      "artifact_modules": {
+        "BizKitSettingsCreateAdAccountMutation.graphql": "8f4fc4554823fd5a71bddbc3d6387e9a4539bfeaff72e8d2d2a5a70dd3ecee5b",
+        "BizKitSettingsCreateAdAccountMutation_facebookRelayOperation": "04f3c90cf1f24a5d3b4975499225e50ddad6f805ffecc40b155392a30e370aad"
+      },
+      "senders": {
+        "BizKitSettingsCreateAdAccountMutation": "bf8374491407e74a6b328ca20e57af7ce0cf46b38a705f5b89091bde3e91a8ca"
+      }
+    },
+    "BizKitSettingsCreateAdditionalProfilePlusMutation": {
+      "doc_id": "37911097395202007",
+      "artifact_modules": {
+        "BizKitSettingsCreateAdditionalProfilePlusMutation.graphql": "16e74b3aaa0b766a1f501c44b8f4d5c4df0ee965a58369e266b7be47fdcc2e28",
+        "BizKitSettingsCreateAdditionalProfilePlusMutation_facebookRelayOperation": "04f3c90cf1f24a5d3b4975499225e50ddad6f805ffecc40b155392a30e370aad"
+      },
+      "senders": {
+        "BizKitSettingsCreateAdditionalProfilePlusMutation": "05a3d83e7939baeb956588c1a229fab859ec3680194049bc12ec04bfdc36f36e"
+      }
+    },
+    "BizKitSettingsCreatePageModalQuery": {
+      "doc_id": "9501347186640687",
+      "artifact_modules": {
+        "BizKitSettingsCreatePageModalQuery.graphql": "2e94122ce4391458391ca3ee2440375de60399556de71f44e53455e79995dd4f",
+        "BizKitSettingsCreatePageModalQuery_facebookRelayOperation": "04f3c90cf1f24a5d3b4975499225e50ddad6f805ffecc40b155392a30e370aad"
+      },
+      "senders": {
+        "BizKitSettingsCreatePageModal.react": "5f8096f8d90663e68b35c39cfe4789c29eeaeae1972be226b20f53b7acdf8f4d"
+      }
+    },
+    "BusinessCometBizSuiteSettingsAdAccountsRootQuery": {
+      "doc_id": "26033539376343649",
+      "artifact_modules": {
+        "BusinessCometBizSuiteSettingsAdAccountsRootQuery.graphql": "44b3492aec91aa79d4788172cd9407947a88385389cff057b6df8db028599212",
+        "BusinessCometBizSuiteSettingsAdAccountsRootQuery_facebookRelayOperation": "04f3c90cf1f24a5d3b4975499225e50ddad6f805ffecc40b155392a30e370aad"
+      },
+      "senders": {
+        "BusinessCometBizSuiteSettingsAdAccountsViewContainer.entrypoint": "3a40ad67ed83ec59a2493e2142ad2d4114d15aa6b8d10875ec84da2619052833"
+      }
+    },
+    "useBizKitSettingsPageCategorySearchSourceQuery": {
+      "doc_id": "9327506520688752",
+      "artifact_modules": {
+        "useBizKitSettingsPageCategorySearchSourceQuery.graphql": "e55675deb9ee85669e268a8e85a0c5f4d73123e6a10cfb0652ad7dc1495f299e",
+        "useBizKitSettingsPageCategorySearchSourceQuery_facebookRelayOperation": "04f3c90cf1f24a5d3b4975499225e50ddad6f805ffecc40b155392a30e370aad"
+      },
+      "senders": {
+        "useBizKitSettingsPageCategorySearchSource": "7bcdfb7bf4dc5eb50604f062e81962709ba791a3593bfbc0f1ec5ca2738d33af"
+      }
+    }
+  }
+}

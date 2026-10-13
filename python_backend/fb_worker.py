@@ -770,6 +770,7 @@ class FacebookWebSession:
             )
 
             self._bootstrap = bootstrap
+            await self.refresh_reviewed_modules(body, final_url)
 
             log.info(
                 "[%s] FB bootstrap ready actor=%s lsd=%s jazoest=%s "
@@ -787,6 +788,18 @@ class FacebookWebSession:
 
     def invalidate_bootstrap(self) -> None:
         self._bootstrap = None
+        self._reviewed_module_ids = {}
+
+    async def refresh_reviewed_modules(self, document: str, final_url: str) -> None:
+        from app.contract_maintenance.module_refresh import refresh_from_document
+        try:
+            await refresh_from_document(self, document, final_url)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # Maintenance availability is not authentication proof. Preserve
+            # the reviewed snapshot and do not expose source/session values.
+            log.warning('module_refresh unavailable type=%s', type(exc).__name__)
 
     async def fetch_text_with_headers(
         self,
@@ -1023,6 +1036,7 @@ class FacebookWebSession:
                     request_context=self._extract_request_context(body), source_url=final_url,
                 )
                 self._bootstrap = current
+                await self.refresh_reviewed_modules(body, final_url)
                 if len(attempts) > 1:
                     log.info("[%s] BUSINESS precheck recovered through creation surface attempts=%s",
                              self.profile.name, json.dumps(attempts, separators=(",", ":")))
@@ -1153,6 +1167,8 @@ class FacebookWebSession:
                 bootstrap, business_id=next(iter(scoped_ids), ""),
                 business_create=friendly_name == "useBusinessCreationMutationMutation",
             )
+        from app.contract_maintenance.module_refresh import effective_doc_id as reviewed_doc_id
+        effective_doc_id = reviewed_doc_id(self, friendly_name, effective_doc_id)
         session = await self._ensure_session()
 
         form: dict[str, str] = {

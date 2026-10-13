@@ -89,7 +89,8 @@ class PrivateHttpClient:
             proxy=proxy, http1=False, http2=True, retries=0, limits=limits, trust_env=False,
         )
         self._client = httpx.AsyncClient(
-            transport=transport, mounts={"https://*facebook.com": facebook_transport}, http2=True, trust_env=False,
+            transport=transport, mounts={"https://*facebook.com": facebook_transport,
+                "https://*fbcdn.net": facebook_transport}, http2=True, trust_env=False,
             timeout=httpx.Timeout(timeout_seconds), cookies=jar,
             headers={"User-Agent": user_agent,
                      "Accept-Language": "en-US,en;q=0.9", "Accept": "*/*"},
