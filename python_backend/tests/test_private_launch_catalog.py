@@ -154,10 +154,12 @@ class PrivateLaunchCatalogTests(unittest.TestCase):
         source = OVERLAY.read_text().replace("$root='/var/www/html';", '$root='+json.dumps(str(root))+';')
         source = source.replace('/tmp/railway-launch-private-catalog.js', str(ROOT/'railway-launch-private-catalog.js'))
         source = source.replace('/tmp/railway-confirmed-page-identities.php', str(ROOT/'railway-confirmed-page-identities.php'))
+        source = source.replace('/tmp/railway-workspace-state.js', str(ROOT/'railway-workspace-state.js'))
         installer.write_text(source)
         subprocess.run(['php','-l',str(installer)],capture_output=True,check=True,timeout=10)
         for _ in range(2):
-            subprocess.run(['php',str(installer)],capture_output=True,check=True,timeout=10)
+            result = subprocess.run(['php',str(installer)],capture_output=True,text=True,timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
         for file in [*root.glob('classes/*.php'),*root.glob('ajax/*.php')]:
             subprocess.run(['php','-l',str(file)],capture_output=True,check=True,timeout=10)
         self.assertIn('20261012-advertising-pipeline-v4', (root/'launch.php').read_text())

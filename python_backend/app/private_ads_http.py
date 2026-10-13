@@ -1,7 +1,8 @@
 """The captured AdsGraphAPI / ApiClient protocol on the profile HTTP/2 pool.
 
 Only fresh Ads Manager JSON configuration can initialize this client. It has
-no OAuth, configured-token, Chromium, alternate-profile or direct-route path.
+no OAuth, configured-token, Chromium, alternate-profile or implicit direct fallback.
+An explicit matching profile-scoped direct-test lease can authorize its route.
 Credentials are private memory; neither receipts nor diagnostics include them.
 """
 from __future__ import annotations
