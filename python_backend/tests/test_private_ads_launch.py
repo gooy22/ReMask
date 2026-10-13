@@ -205,3 +205,21 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
             await self.launch()
         self.assertEqual(self.client.uploads,1)
         self.assertEqual(len(self.client.posts),5)
+
+    async def test_launch_retry_keeps_explicit_rejection_without_upload_or_post_replay(self):
+        from app.private_ads_http import AdsManagerResponseError
+        original_post = self.client.post
+        async def reject_draft(path, params, *, before_submit, files):
+            if path.endswith('/addrafts'):
+                await before_submit()
+                self.client.posts.append((path, params))
+                raise AdsManagerResponseError({'http_status':400, 'code':100})
+            return await original_post(path, params, before_submit=before_submit, files=files)
+        self.client.post = reject_draft
+        for _ in range(2):
+            with self.assertRaises(ProvisioningError) as caught:
+                await self.launch()
+            self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_REQUEST_REJECTED')
+            self.assertIn('code=100', str(caught.exception))
+        self.assertEqual(self.client.uploads,1)
+        self.assertEqual(len(self.client.posts),1)

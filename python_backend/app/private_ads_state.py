@@ -12,6 +12,7 @@ import re
 
 from .action_result import ActionResult
 from .private_ads_draft import fail, flatten_params
+from .private_ads_http import AdsManagerResponseError
 from .private_launch_extensions import OperationKey
 
 
@@ -46,6 +47,9 @@ class AdsManagerSubmitter:
             saved = evidence.get("receipt")
             if isinstance(saved, dict) and saved:
                 return copy.deepcopy(saved)
+            diagnostic = evidence.get("response_error")
+            if isinstance(diagnostic, dict):
+                raise AdsManagerResponseError(diagnostic)
             raise fail("RECONCILE_REQUIRED", "Advertising submission has no known reply; automatic replay is blocked")
         evidence = {"operation_fingerprint": fingerprint,
                     "launch_fingerprint": self.launch_fingerprint,
@@ -62,6 +66,16 @@ class AdsManagerSubmitter:
 
         try:
             response = await client.post(path, params, before_submit=claim, files=files)
+        except AdsManagerResponseError as exc:
+            if claimed:
+                evidence["response_error"] = exc.diagnostic
+                rejected = ActionResult.reconcile(key.value, code=exc.code,
+                    message=str(exc) + "; retained submission cannot be replayed automatically",
+                    submitted=True, evidence=evidence)
+                prior = await self.state.step(self.launch_key, key)
+                if not prior or not await self.state.finish_read(prior, rejected):
+                    raise fail("READ_PENDING", "Another worker updated advertising progress", True) from None
+            raise
         except Exception:
             if claimed:
                 raise fail("RECONCILE_REQUIRED", "Advertising response was lost; resume requires independent inspection") from None

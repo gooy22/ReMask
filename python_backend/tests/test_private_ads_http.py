@@ -13,19 +13,23 @@ from tests.test_private_ads_draft import document
 
 
 class Body:
+    def __init__(self, payload):self.payload = payload
     async def read(self, size):
-        return b'{"id":"555555"}'
+        return self.payload
 
 
 class Session:
     proxy = "http://synthetic-proxy.invalid:8080"
     protocol = "HTTP/2"
     calls = []
+    response_status = 200
+    response_body = b'{"id":"555555"}'
 
     @asynccontextmanager
     async def request(self, method, url, **options):
         self.calls.append((method, url, options))
-        yield SimpleNamespace(http_version=self.protocol, status=200, content=Body())
+        yield SimpleNamespace(http_version=self.protocol, status=self.response_status,
+                              content=Body(self.response_body))
 
 
 class Web:
@@ -132,6 +136,38 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.web.session.protocol = "HTTP/1.1"
         with self.assertRaises(ProvisioningError):
             await self.client.get("/act_111111", {"fields": ["id"]})
+
+    async def test_explicit_meta_error_preserves_typed_reason_without_secret_message(self):
+        self.web.session.response_body = json.dumps({'error':{
+            'code':100, 'error_subcode':1815753, 'type':'OAuthException', 'is_transient':False,
+            'message':'synthetic-session-value', 'error_user_msg':'synthetic-private-content',
+            'fbtrace_id':'synthetic-session-value'}}).encode()
+        for status in (200, 400):
+            self.web.session.response_status = status
+            with self.subTest(status=status), self.assertRaises(ProvisioningError) as caught:
+                await self.client.post('/act_111111/addrafts', {}, before_submit=self.claim)
+            error = caught.exception
+            self.assertEqual(error.code, 'PRIVATE_ADS_DRAFT_REQUEST_REJECTED')
+            self.assertEqual(error.diagnostic, {'http_status':status, 'code':100,
+                'error_subcode':1815753, 'type':'OAuthException', 'is_transient':False})
+            self.assertIn('code=100', str(error))
+            self.assertNotIn('synthetic-', str(error))
+
+    async def test_http_rejection_without_json_still_preserves_received_status(self):
+        self.web.session.response_status = 403
+        self.web.session.response_body = b'<html>synthetic-private-content</html>'
+        with self.assertRaises(ProvisioningError) as caught:
+            await self.client.get('/act_111111', {})
+        self.assertEqual(caught.exception.diagnostic, {'http_status':403})
+        self.assertNotIn('synthetic-', str(caught.exception))
+
+    async def test_malformed_error_metadata_cannot_enter_diagnostics(self):
+        self.web.session.response_body = json.dumps({'error':{'code':True,
+            'error_subcode':'synthetic-session-value', 'type':{'access_token':'synthetic-session-value'},
+            'is_transient':'yes'}}).encode()
+        with self.assertRaises(ProvisioningError) as caught:
+            await self.client.get('/act_111111', {})
+        self.assertEqual(caught.exception.diagnostic, {'http_status':200})
 
     async def test_foreign_bootstrap_url_is_rejected(self):
         async def foreign(url, **kwargs):return 200, document(), url.replace("act=111111", "act=999999")

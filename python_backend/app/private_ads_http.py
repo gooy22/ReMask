@@ -17,6 +17,27 @@ from .private_inventory import _auth_gate, _json_payloads
 from .provisioning.models import ProvisioningError
 
 
+class AdsManagerResponseError(ProvisioningError):
+    """A received rejection, with only typed non-secret response metadata."""
+    def __init__(self, diagnostic):
+        safe = {}
+        for key in ("http_status", "code", "error_subcode"):
+            value = diagnostic.get(key)
+            if type(value) is int and 0 <= value <= 2_147_483_647:
+                safe[key] = value
+        if type(diagnostic.get("is_transient")) is bool:
+            safe["is_transient"] = diagnostic["is_transient"]
+        if (isinstance(diagnostic.get("type"), str) and diagnostic["type"] in
+                {"OAuthException", "GraphMethodException", "GraphAPIException", "ApplicationException"}):
+            safe["type"] = diagnostic["type"]
+        self.diagnostic = safe
+        details = [f"{key}={value}" for key, value in safe.items()]
+        message = "Meta rejected the advertising request"
+        if details:
+            message += " (" + ", ".join(details) + ")"
+        super().__init__("PRIVATE_ADS_DRAFT_REQUEST_REJECTED", message, retryable=False)
+
+
 def _walk(value, depth=0):
     if depth > 32:
         raise fail("BOOTSTRAP_CONFIG_INVALID", "Ads Manager configuration exceeds its nesting limit")
@@ -150,9 +171,18 @@ class AdsManagerPrivateHttp:
                 raw = await response.content.read(2_000_001)
                 if len(raw) > 2_000_000:
                     raise fail("RESPONSE_TOO_LARGE", "Advertising response exceeds its body budget")
+                try:
+                    result = json.loads(raw)
+                except (ValueError, UnicodeDecodeError):
+                    if response.status != 200:
+                        raise AdsManagerResponseError({"http_status": response.status}) from None
+                    raise fail("RESPONSE_INVALID", "Advertising response could not be decoded") from None
+                if isinstance(result, dict) and (result.get("error") or result.get("errors")):
+                    error = result.get("error")
+                    raise AdsManagerResponseError({**(error if isinstance(error, dict) else {}),
+                                                   "http_status": response.status})
                 if response.status != 200:
-                    raise fail("HTTP_REJECTED", "Ads Manager rejected the advertising request", True)
-                result = json.loads(raw)
+                    raise AdsManagerResponseError({"http_status": response.status})
         except Exception as exc:
             if isinstance(exc, ProvisioningError):
                 raise

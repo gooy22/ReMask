@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from app.private_ads_draft import fragment_params, flatten_params, publication_status, publish_params
-from app.private_ads_http import context_from_document
+from app.private_ads_http import context_from_document, AdsManagerResponseError
 from app.private_ads_state import AdsManagerSubmitter
 from app.private_ads_publication import AdsManagerDraftPublisher
 from app.private_launch_extensions import OperationKey
@@ -136,6 +136,29 @@ class JournalTests(unittest.IsolatedAsyncioTestCase):
         rows = await self.state.all_steps("launch")
         self.assertEqual(rows[0]["status"], "RECONCILE_REQUIRED")
         self.assertFalse(rows[0]["result"]["verified"])
+
+    async def test_explicit_rejection_survives_restart_without_post_replay(self):
+        class Client:
+            count = 0
+            async def post(inner, path, params, *, before_submit, files):
+                await before_submit();inner.count += 1
+                raise AdsManagerResponseError({'http_status':400, 'code':100,
+                    'error_subcode':1815753, 'message':'synthetic-secret'})
+        client = Client()
+        for _ in range(2):
+            self.sender.state = PrivateLaunchStateStore(Path(self.tmp.name)/'state.sqlite')
+            with self.assertRaises(ProvisioningError) as caught:
+                await self.sender.submit(client, operation='DRAFT', path='/act_111111/addrafts',
+                    params={'name':'test'}, receipt=lambda row:{'draft_id':row['id']})
+            self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_REQUEST_REJECTED')
+            self.assertIn('code=100', str(caught.exception))
+        self.assertEqual(client.count, 1)
+        rows = await self.state.all_steps('launch')
+        self.assertEqual(rows[0]['status'], 'RECONCILE_REQUIRED')
+        self.assertEqual(rows[0]['submitted'], 1)
+        self.assertFalse(rows[0]['result']['verified'])
+        self.assertNotIn('synthetic-secret', json.dumps(rows))
+        self.assertEqual(rows[0]['result']['evidence']['receipt'], {})
 
     async def test_changed_inputs_cannot_reuse_receipt(self):
         class Client:
