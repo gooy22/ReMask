@@ -12,7 +12,8 @@ WORDS = ("Amber", "Cedar", "Meadow", "Harbor", "Willow", "Maple", "Orchid", "Sil
 
 def expand_auto_profiles(profiles: list[Any], job_id: str) -> list[Any]:
     expanded = []
-    profiles=sorted(profiles,key=lambda p: str(p.profile_id)!='9')
+    # Honor the caller's profile order. Scheduling must not privilege an
+    # unrelated historical Facebook profile in every new bulk Job.
     for row_index, profile in enumerate(profiles):
         auto_tasks = [task for task in profile.tasks if task.action == "provisioning" and task.payload.get("auto_generate") is True]
         if not auto_tasks:
