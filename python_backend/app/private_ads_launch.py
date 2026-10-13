@@ -136,22 +136,23 @@ class AdsManagerLaunch:
                     raise
                 required = True
                 source = "selection_unavailable"
-        matched = [method for method in funding.get("payment_methods", []) if selected
-                   and method.get("last4") == selected["last4"]
-                   and str(method.get("type", "")).casefold() == selected["type"].casefold()]
-        if len(matched) != 1:
-            raise fail("PAYMENT_UNVERIFIED", "Exactly one live payment method must match the selected card")
-        method = matched[0]
-        if method.get("is_expired") is True:
-            raise fail("PAYMENT_EXPIRED", "The selected linked card has expired")
-        if (method.get("needs_verification") is True or method.get("verification_tasks")
-                or method.get("card_confirmation_status") == "REQUIRED"):
-            raise fail("PAYMENT_CONFIRMATION_REQUIRED", "Meta requires confirmation of the linked card")
-        if (method.get("needs_verification") is not False
-                or method.get("verification_tasks_observed") is not True
-                or method.get("card_confirmation_status") != "CLEAR"):
-            raise fail("PAYMENT_CONFIRMATION_UNVERIFIED",
-                       "Selected card verification state was not conclusively cleared by Meta")
+        if not required:
+            matched = [method for method in funding.get("payment_methods", []) if selected
+                       and method.get("last4") == selected["last4"]
+                       and str(method.get("type", "")).casefold() == selected["type"].casefold()]
+            if len(matched) != 1:
+                raise fail("PAYMENT_UNVERIFIED", "Exactly one live payment method must match the selected card")
+            method = matched[0]
+            if method.get("is_expired") is True:
+                raise fail("PAYMENT_EXPIRED", "The selected linked card has expired")
+            if (method.get("needs_verification") is True or method.get("verification_tasks")
+                    or method.get("card_confirmation_status") == "REQUIRED"):
+                raise fail("PAYMENT_CONFIRMATION_REQUIRED", "Meta requires confirmation of the linked card")
+            if (method.get("needs_verification") is not False
+                    or method.get("verification_tasks_observed") is not True
+                    or method.get("card_confirmation_status") != "CLEAR"):
+                raise fail("PAYMENT_CONFIRMATION_UNVERIFIED",
+                           "Selected card verification state was not conclusively cleared by Meta")
         return {**target, "account_status": 1, "browser_started": False, "transport": "private_http_h2",
             "page_access_checked_live": True, "payment_checked_live": True,
             "payment_selection_required": required, "payment_methods": methods,
