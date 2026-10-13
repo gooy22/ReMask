@@ -16,6 +16,7 @@ class ImageClient(DraftClient):
     def __init__(self):
         super().__init__()
         self.uploads = 0
+        self.pixels = [{'id':'888881','name':'Account pixel','is_unavailable':False}]
     async def post(self, path, params, *, before_submit, files):
         if path.endswith('/adimages'):
             await before_submit()
@@ -24,6 +25,8 @@ class ImageClient(DraftClient):
             return {'images': {'image.png': {'hash': 'fixture-image-hash'}}}
         return await super().post(path, params, before_submit=before_submit, files=files)
     async def get(self, path, params):
+        if path.endswith('/adspixels'):
+            return {'data':copy.deepcopy(self.pixels)}
         if path == '/act_111111':
             return {'id':'act_111111','account_status':1,'business':{'id':'222222'},'promotable_page_ids':['555555']}
         if path.endswith('/adimages'):
@@ -223,3 +226,25 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn('code=100', str(caught.exception))
         self.assertEqual(self.client.uploads,1)
         self.assertEqual(len(self.client.posts),1)
+
+    async def test_selected_account_pixel_publishes_and_verifies_without_duplicate_post(self):
+        self.payload['launch']['adset']['promoted_object'] = {'pixel_id':'888881','custom_event_type':'LEAD'}
+        plan = self.owner.plan(profile_id='19', payload=self.payload)
+        self.assertTrue(plan['configuration_valid'])
+        self.assertEqual(plan['mutation_posts'],0)
+        result = await self.launch()
+        self.assertTrue(result['preflight']['asset_checks']['pixels']['verified'])
+        self.assertTrue(result['verified'])
+        await self.launch()
+        self.assertEqual(self.client.uploads,1)
+        self.assertEqual(len(self.client.posts),5)
+
+    async def test_absent_or_unavailable_pixel_stops_before_upload_and_draft(self):
+        self.payload['launch']['adset']['promoted_object'] = {'pixel_id':'888881'}
+        for rows in ([], [{'id':'888881','name':'Pixel','is_unavailable':True}]):
+            self.client.pixels = rows
+            with self.subTest(rows=rows), self.assertRaises(ProvisioningError) as caught:
+                await self.launch()
+            self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_ASSET_ACCESS_UNCONFIRMED')
+        self.assertEqual(self.client.uploads,0)
+        self.assertEqual(self.client.posts,[])

@@ -1,0 +1,42 @@
+{
+  "observed_on": "2026-10-12",
+  "implementation_on": "2026-10-13",
+  "research_commit": "28fdfb98eebc6804ddf85007b36601f79ec47c5f",
+  "script_url": "https://static.xx.fbcdn.net/rsrc.php/v4i2V74/y4/l/en_US-j/LDUsMHrnl_w.js",
+  "script_sha256": "7a06217f05ff63510dd5aee8cad75cbed2ec5ba584c80fc1240d5243333d4881",
+  "matches_original_captured_script": true,
+  "modules": [
+    {
+      "module": "SignalSearchDataManager",
+      "module_call_sha256": "e61845597e1014058d8438481c748c29eebe00e9a44fe60a9b6f2c1461cf53b8"
+    },
+    {
+      "module": "SignalsConversionDataManager",
+      "module_call_sha256": "16fbf9465a1b41e173cc0c9a209298849354646f25612b879cde1b2c6b1e930b"
+    },
+    {
+      "module": "AdsPixelDataManagerLoader",
+      "module_call_sha256": "ddb57522f6daa7b9261706e8d3cd90ab01f7155dcdd9fe6703eec2b5b2c7da58"
+    },
+    {
+      "module": "SignalsAdAccountPixelIDListStore",
+      "module_call_sha256": "81143ae4a4aa19dccfc17ea4b18157a22c07bb085f8d0068fd1ecc8039922c19"
+    }
+  ],
+  "installed_read": {
+    "resource": "pixels",
+    "method": "GET",
+    "path": "/v22.0/act_{ad_account_id}/adspixels",
+    "fields": [
+      "id",
+      "name",
+      "is_unavailable"
+    ],
+    "limit": 300
+  },
+  "paging_reference": "https://github.com/facebook/facebook-java-business-sdk/blob/main/src/main/java/com/facebook/ads/sdk/APINodeList.java",
+  "live_request_response_recorded": false,
+  "live_publication_verified": false,
+  "transport": "existing_profile_cookie_http2_session",
+  "mutation_posts_during_source_review": 0
+}

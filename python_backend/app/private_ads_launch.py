@@ -16,16 +16,19 @@ from .private_ads_media import upload_image, verify_image
 from .private_ads_publication import AdsManagerDraftPublisher
 from .private_ads_state import AdsManagerSubmitter
 from .private_ads_verify import verify_published_objects
+from .private_ads_resources import AdsManagerResourceCatalog, read_pixels
 
 SOURCE_REVISION = "ads-manager-private-2026-10-12"
 
 class AdsManagerLaunch:
     def __init__(self, owner):
         self.owner = owner
+        owner.reads = AdsManagerResourceCatalog(owner.reads)
+        owner.resources.catalog = owner.reads
         digest = hashlib.sha256(SOURCE_REVISION.encode())
         for name in ("private_ads_launch.py", "private_ads_http.py", "private_ads_draft.py",
                      "private_ads_state.py", "private_ads_media.py", "private_ads_publication.py",
-                     "private_ads_verify.py", "private_ads_creative.py"):
+                     "private_ads_verify.py", "private_ads_creative.py", "private_ads_resources.py"):
             digest.update(name.encode() + b"\0" + Path(__file__).with_name(name).read_bytes())
         self.source_digest = digest.hexdigest()
 
@@ -64,7 +67,7 @@ class AdsManagerLaunch:
         if len(launch["campaign"]["name"]) > 120:
             raise fail("INVALID_INPUT", "Draft name is too long")
         selected = self.owner._asset_selections(launch, bool(references))
-        if set(selected) - {"images"}:
+        if set(selected) - {"images", "pixels"}:
             raise fail("ASSET_READ_UNAVAILABLE", "A selected advertising asset requires a scoped private read adapter")
         # Encode every level before media POSTs, including nested auth and
         # nonfinite/unsupported values. Invalid Ad input must not leave uploads.
@@ -180,6 +183,14 @@ class AdsManagerLaunch:
         except RemoteRequestError:
             raise fail("TRANSPORT_UNAVAILABLE", "Profile HTTP connection did not reach Ads Manager", True) from None
         preflight = await self._preflight(client, web, payload, target)
+        selections = self.owner._asset_selections(launch, bool(references))
+        if selections.get("pixels"):
+            inventory = await read_pixels(client)
+            found = {row["id"] for row in inventory["data"]}
+            if not set(selections["pixels"]) <= found:
+                raise fail("ASSET_ACCESS_UNCONFIRMED", "Selected pixel is not available to this ad account")
+            preflight["asset_checks"] = {"pixels": {"verified": True,
+                "selected": selections["pixels"], "checked_live": True}}
         if not media:
             creative = launch["creative"]
             hashes = ([card["image_hash"] for card in creative["carousel_cards"]]
@@ -251,11 +262,10 @@ class AdsManagerLaunch:
                                           ("CREATIVE", "creative_id"), ("AD", "ad_id"))]})
         return result
 
-    @staticmethod
-    def status():
+    def status(self):
         return {"protocol": "private_ads_manager_versioned", "source_revision": SOURCE_REVISION,
             "contracts": {step: {"configured": True, "active": True, "verification_configured": True,
                 "friendly_name": "AdsDraftPublishDataManager", "doc_id_configured": False}
                 for step in ("CAMPAIGN", "ADSET", "CREATIVE", "AD")},
             "operations": {"IMAGE_UPLOAD": {"configured": True, "active": True}},
-            "creative_formats": ["SINGLE", "CAROUSEL"], "resources": {}, "checked_live": False}
+            "creative_formats": ["SINGLE", "CAROUSEL"], "resources": self.owner.reads.status(), "checked_live": False}
