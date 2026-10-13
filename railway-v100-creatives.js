@@ -1814,7 +1814,7 @@ async function remaskPrivateLoadCreativeAccounts(preferred = '') {
             const id = String(row.account_id || row.id || '').replace(/^act_/, '');
             if (/^[0-9]{5,30}$/.test(id)) select.appendChild(new Option(String(row.name || id), id));
         }
-        if (Array.from(select.options).some(option => option.value === preferred)) select.value = preferred;
+        if (preferred && Array.from(select.options).some(option => option.value === preferred)) select.value = preferred;
         else if (select.options.length === 2) select.selectedIndex = 1;
         remaskPrivateSelectCreativeAccount();
     } catch (error) {
