@@ -52,14 +52,17 @@ class PrepareService:
                 retryable=False,
             )
 
-        try:
-            ad_accounts = int(raw.get("ad_accounts", 1))
-        except (TypeError, ValueError) as exc:
+        value = raw.get("ad_accounts", 1)
+        # Bool, float and decimal-looking strings can silently change a
+        # requested topology when coerced with int(). Reject before a Job
+        # can create a different number of BMs or ad accounts.
+        if isinstance(value, bool) or not isinstance(value, int):
             raise ProvisioningError(
                 "PREPARE_INVALID_AD_ACCOUNT_COUNT",
                 "desired.ad_accounts must be an integer",
                 retryable=False,
-            ) from exc
+            )
+        ad_accounts = value
         if not 1 <= ad_accounts <= 20:
             raise ProvisioningError(
                 "PREPARE_INVALID_AD_ACCOUNT_COUNT",
