@@ -154,6 +154,7 @@ validatePayloadClient = function(payload, accountIds) {
 };
 applyCreativeLibrarySelection = function() {
     remaskBundleMedia = null;
+    remaskBundleRestoreGeneration++;
     remaskPrivateOriginalApplyPreset();
     const builder = remaskSelectedCreativePreset?.meta_builder || {};
     const lifetime = builder.campaign?.lifetime_budget || builder.adset?.lifetime_budget;
@@ -201,7 +202,9 @@ remaskApplySavedMetaBuilderToPayload = function(payload) {
 };
 
 // Restored local media belongs to this form, not to a later unrelated upload.
-$('media')?.addEventListener('change', () => { if ($('media').files.length) remaskBundleMedia = null; });
+$('media')?.addEventListener('change', () => {
+    if ($('media').files.length) { remaskBundleMedia = null; remaskBundleRestoreGeneration++; }
+});
 $('carouselMedia')?.addEventListener('change', () => {
     if (!$('carouselMedia').files.length) return;
     remaskBundleMedia = null;
@@ -210,4 +213,6 @@ $('carouselMedia')?.addEventListener('change', () => {
     renderCarouselCards();
 });
 $('carouselCards')?.addEventListener('input', () => { invalidateLaunchReview(); validateReady(); });
-$('creativeFormat')?.addEventListener('change', () => { remaskBundleMedia = null; });
+$('creativeFormat')?.addEventListener('change', () => {
+    remaskBundleMedia = null; remaskBundleRestoreGeneration++;
+});
