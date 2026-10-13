@@ -140,6 +140,14 @@ class AdsManagerDraftPublisher:
         if not prior:
             raise fail("RECONCILE_REQUIRED", "Publication progress has no saved operation")
         evidence = copy.deepcopy(prior["result"].get("evidence", {}))
+        # Do not downgrade a confirmed publication on repeat or stale reads.
+        if prior["status"] == "SUCCESS" and evidence.get("verification", {}).get("verified") is True:
+            saved = evidence.get("publication", {})
+            if saved.get("operation_id") != progress["operation_id"]:
+                raise fail("SAVED_OPERATION_MISMATCH", "Publication belongs to another operation")
+            if not progress["completed"]:
+                raise fail("PUBLISH_STATUS_REGRESSION", "Confirmed publication returned pending status", True)
+            return
         old = evidence.get("publication", {})
         evidence["publication"] = {"operation_id": progress["operation_id"],
             "status": progress["status"], "code": "PUBLISH_COMPLETED" if progress["completed"] else "PUBLISH_PENDING",
