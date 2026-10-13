@@ -430,7 +430,8 @@ class MetaSession:
         url: str,
         **kwargs: Any,
     ) -> aiohttp.ClientResponse:
-        if getattr(self.context, 'direct_test_until', 0) and not direct_test_deadline(self.context.profile_id):
+        if (self.context.direct_test_until and
+                direct_test_deadline(self.context.profile_id) != self.context.direct_test_until):
             raise ProfileContextError('DIRECT_TEST_EXPIRED', retryable=False)
         session = await self._get_session()
         return await session.request(method, url, **kwargs)
