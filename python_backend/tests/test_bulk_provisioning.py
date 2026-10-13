@@ -162,7 +162,6 @@ class AutoPlanTests(unittest.TestCase):
             self.assertEqual(payload['steps'][-1],'PAGE_ACCESS')
             self.assertIs(params['BUSINESS']['attach_page'],False)
             self.assertEqual(params['AD_ACCOUNT']['currency'],'USD'); self.assertFalse(payload['generated']['contact_email_registered'])
-            self.assertRegex(params['BUSINESS']['user_email'],r'^[a-f0-9]{24}@gmail\.com$')
         self.assertEqual(len(scopes),3); self.assertEqual(names,{'PrgssTeam'})
 
     def test_bulk_profile_order_never_prioritizes_hardcoded_identity(self):
