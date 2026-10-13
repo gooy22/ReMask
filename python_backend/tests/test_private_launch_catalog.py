@@ -148,7 +148,9 @@ class PrivateLaunchCatalogTests(unittest.TestCase):
         for folder in ['classes','ajax','scripts']:
             (root/folder).mkdir(parents=True,exist_ok=True)
         (root/'scripts/launch.js').write_text('function validateReady(){}\n')
-        (root/'scripts/workspace.js').write_text('async function checkAssetsSelection(){}\nasync function showFunding(){}\n'.replace('checkAssetsSelection(){}','checkAssetsSelection(){ }'))
+        (root/'scripts/workspace.js').write_text(
+            'async function fetchAsset(resource){return null;}\nfunction fillSelect(){}\n'
+            'async function checkAssetsSelection(){ }\nasync function showFunding(){}\n')
         (root/'launch.php').write_text('<script src="scripts/launch.js?v=old"></script>')
         installer = Path(self.tmp.name)/'overlay.php'
         source = OVERLAY.read_text().replace("$root='/var/www/html';", '$root='+json.dumps(str(root))+';')
