@@ -64,7 +64,9 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
                       'ad':{'name':'ad'},'creative':{'name':'creative','message':'text',
                           'link':'https://example.com','headline':'headline','format':'SINGLE',
                           'media_library_id':self.media.id}}}
-        self.funding = {'account_scope_verified':True,'business_scope_verified':True,
+        self.funding = {'account_id':'111111', 'business_id':'222222',
+            'payment_account_id':'333333',
+            'account_scope_verified':True,'business_scope_verified':True,
             'payment_account_relation_verified':True,'methods_query_verified':True,
             'checked_live':True,'card_linked':True, 'inventory_complete':True,
             'payment_methods':[{'type':'Visa','last4':'1234',
@@ -165,6 +167,14 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
                 await self.launch()
         self.assertEqual(error.exception.code, 'PRIVATE_ADS_DRAFT_PAYMENT_UNVERIFIED')
         complete.assert_awaited_once()
+        self.assertEqual(self.client.posts, [])
+        self.assertEqual(self.client.uploads, 0)
+
+    async def test_foreign_account_in_complete_payment_read_is_blocked(self):
+        self.funding['account_id'] = '999999'
+        with self.assertRaises(ProvisioningError) as error:
+            await self.launch()
+        self.assertEqual(error.exception.code, 'PRIVATE_ADS_DRAFT_PAYMENT_SCOPE_UNVERIFIED')
         self.assertEqual(self.client.posts, [])
         self.assertEqual(self.client.uploads, 0)
 
