@@ -32,6 +32,7 @@ class WorkflowTests(unittest.TestCase):
 
     def setUp(self):
         self.page = self.browser.new_page(viewport={'width':1440,'height':1000})
+        self.page.set_default_timeout(5000)
         self.errors = []
         self.page.on('pageerror', lambda error:self.errors.append(str(error)))
         # Every test is hermetic. No Facebook or production request is allowed.
@@ -46,10 +47,10 @@ class WorkflowTests(unittest.TestCase):
         html = re.sub(r'<script\b.*?</script>', '', html, flags=re.S)
         html = re.sub(r'<link\b[^>]*>', '', html)
         self.page.set_content(html)
-        self.page.add_script_tag(content='window.fetch=async url=>({ok:true,status:200,text:async()=>JSON.stringify('+json.dumps({'schema':SCHEMA,'items':[]})+')});')
+        self.page.add_script_tag(content='window.fetch=async url=>({ok:true,status:200,text:async()=>JSON.stringify('+json.dumps({'ok':True,'data':{'schema':SCHEMA,'items':[]}})+')});')
         source = (ROOT / 'railway-v100-creatives.js').read_text()
         self.page.add_script_tag(content=source+'\nwindow.testCreative={build:buildMetaBuilder,populate:populateMetaBuilder,open:openEditor};')
-        self.page.wait_for_function("document.getElementById('mbObjective').options.length===2")
+        self.page.wait_for_function("document.getElementById('mbObjective').options.length===2", timeout=5000)
         if enhanced:
             self.page.add_script_tag(content=ASSET)
         self.page.locator('#newCreative').click()
@@ -113,7 +114,9 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(self.page.locator('#profile').evaluate('(el)=>Array.from(el.selectedOptions).map(o=>o.value)'), ['19','21'])
         self.assertEqual(self.page.evaluate('window.changes'), 2)
         self.assertFalse(self.page.locator('#launchButton').is_enabled())
-        self.page.locator('#profile').select_option(['21'])
+        # Preset/catalog hydration updates the hidden source, then emits its
+        # normal change event. User interaction happens through checkboxes.
+        self.page.locator('#profile').evaluate('(el)=>{for(const option of el.options)option.selected=option.value==="21";el.dispatchEvent(new Event("change",{bubbles:true}));}')
         self.assertFalse(self.page.get_by_role('checkbox', name='19', exact=True).is_checked())
 
     def test_dynamic_field_search_and_values_survive_repeated_updates(self):

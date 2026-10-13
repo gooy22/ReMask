@@ -137,7 +137,11 @@ async def refresh_from_document(web, document, final_url):
                     if status != 200 or size > budget or not public_script_url(final):
                         failures += 1
                         continue
-                    rows.extend(row for row in module_records(source, selected=wanted) if row['name'] in wanted)
+                    # Parse bounded public code away from the worker event loop.
+                    # Each parser is local; no JavaScript is executed.
+                    parsed = await asyncio.to_thread(lambda: [row for row in
+                        module_records(source, selected=wanted) if row['name'] in wanted])
+                    rows.extend(parsed)
                 except asyncio.CancelledError:
                     raise
                 except Exception:
