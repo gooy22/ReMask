@@ -13,7 +13,7 @@ foreach (['creatives.php', 'launch.php'] as $page) {
         throw new RuntimeException('Workflow UI body anchor missing: ' . $page);
     }
     $html = preg_replace('#<script[^>]+data-remask-workflow-ui[^>]*></script>\s*#', '', $html);
-    $html = str_replace('</body>', '<script src="scripts/workflow-ui.js?v=20261013-1" data-remask-workflow-ui defer></script>' . "\n</body>", $html);
+    $html = str_replace('</body>', '<script src="scripts/workflow-ui.js?v=20261013-2" data-remask-workflow-ui defer></script>' . "\n</body>", $html);
     file_put_contents($path, $html);
 }
 fwrite(STDERR, "[workflow-ui] Creatives and Launch presentation installed\n");

@@ -46,6 +46,11 @@ class WorkflowTests(unittest.TestCase):
         html = re.sub(r'<\?php.*?\?>', '', (ROOT / 'railway-v100-creatives.php').read_text(), flags=re.S)
         html = re.sub(r'<script\b.*?</script>', '', html, flags=re.S)
         html = re.sub(r'<link\b[^>]*>', '', html)
+        # Real runtime sidebar has z-index 1000 and overlaps wide editors if
+        # the modal keeps the old 900 layer. Reproduce that shell in fixtures.
+        html = html.replace('<body>', '<body><aside id="fixtureSidebar" style="position:fixed;left:0;top:0;width:201px;height:100vh;z-index:1000;background:#1a212c">Sidebar</aside>')
+        if 'fixtureSidebar' not in html:
+            html = re.sub(r'(<body\b[^>]*>)', r'\1<aside id="fixtureSidebar" style="position:fixed;left:0;top:0;width:201px;height:100vh;z-index:1000;background:#1a212c">Sidebar</aside>', html, count=1)
         self.page.set_content(html)
         self.page.add_script_tag(content='window.fetch=async url=>({ok:true,status:200,text:async()=>JSON.stringify('+json.dumps({'ok':True,'data':{'schema':SCHEMA,'items':[]}})+')});')
         source = (ROOT / 'railway-v100-creatives.js').read_text()
@@ -94,12 +99,19 @@ class WorkflowTests(unittest.TestCase):
         self.page.get_by_role('button', name='Объявление', exact=True).click()
         self.assertTrue(self.page.locator('#presetMessage').is_visible())
 
+    def test_editor_navigation_is_above_real_runtime_sidebar(self):
+        self.creative()
+        self.page.locator('.cr-tab[data-tab="creative"]').click()
+        self.assertTrue(self.page.locator('#presetMessage').is_visible())
+        self.page.wait_for_function("document.querySelector('.cr-tab[data-tab=creative]').getAttribute('aria-current')==='step'")
+        self.assertEqual(self.page.locator('.cr-tab[data-tab="creative"]').get_attribute('aria-current'),'step')
+
     def launch(self):
         self.page.set_content('''<main><div class="launch-wrap">
         <div class="launch-card"><h5>Source</h5><div class="row"><div class="col-md-4">
         <label for="profile">Facebook profiles</label><select id="profile" multiple><option value="19">19</option><option value="21">21</option></select></div></div></div>
         <div class="launch-card"><h5>Campaign</h5><label>Campaign name</label><input id="campaignName"><select id="objective"><option value="OUTCOME_TRAFFIC">Traffic</option></select></div>
-        <div class="launch-card"><h5>Ad Set</h5><div class="row"><input id="adsetName"><div><label>Daily budget</label><input id="dailyBudget" value="500"><span class="muted">Minor currency units</span></div></div></div>
+        <div class="launch-card"><h5>Ad Set</h5><div class="row"><input id="adsetName"><div><label>Daily budget</label><input id="dailyBudget" value="500"><span class="muted">Minor currency units</span></div><div class="col-md-6"><label>GEO search</label><div class="input-group"><input id="geoQuery"></div></div><select id="placementMode"><option value="AUTO">Advantage+ / automatic</option><option value="MANUAL">Manual platforms</option></select></div></div>
         <div class="launch-card"><h5>Creative</h5><input id="creativeName"></div>
         <div class="launch-card"><h5>Review</h5><button id="reviewLaunch" disabled>Review</button><button id="launchButton" disabled><i></i> LAUNCH SELECTED</button></div>
         </div></main><section id="launchMetaAllFields"><h3>API settings</h3><div class="rm-meta-note"></div>
@@ -130,6 +142,9 @@ class WorkflowTests(unittest.TestCase):
         self.assertLess(len(field.get_attribute('data-search')), 200)
         self.assertEqual(self.page.locator('[data-launch-meta-field]').input_value(), before)
         self.assertEqual(self.page.locator('#dailyBudget').input_value(), '500')
+        self.assertEqual(self.page.get_by_label('География', exact=True).count(),1)
+        self.assertEqual(self.page.locator('#placementMode').input_value(),'AUTO')
+        self.assertEqual(self.page.locator('#placementMode option:checked').inner_text(),'Автоматически (Advantage+)')
         self.assertEqual(self.page.locator('main #launchMetaAllFields').count(), 1)
 
 
