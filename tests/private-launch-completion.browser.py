@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 from playwright.sync_api import sync_playwright
-from tests.test_cookie_only_profiles import CookieOnlyProfileTests
+from tests import test_cookie_only_profiles as runtime_fixture
 
 ROOT = Path(__file__).resolve().parents[1]
 MEDIA_ID = 'm-' + 'a' * 24
@@ -15,7 +15,7 @@ MEDIA = {'id': MEDIA_ID, 'sha256': 'b' * 64, 'media_type': 'image', 'original_na
 class InstalledLaunchTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.build = CookieOnlyProfileTests('test_complete_runtime_overlay_order_and_installed_php_build_contracts')
+        cls.build = runtime_fixture.CookieOnlyProfileTests('test_complete_runtime_overlay_order_and_installed_php_build_contracts')
         cls.build.setUp()
         cls.build.test_complete_runtime_overlay_order_and_installed_php_build_contracts()
         cls.root = cls.build.root
@@ -54,12 +54,15 @@ class InstalledLaunchTests(unittest.TestCase):
         path = url.path.lstrip('/')
         if path == 'launch.php':
             html = re.sub(r'<\?(?:php|=).*?\?>', '', (self.root/path).read_text(), flags=re.S)
+            # The PHP shell supplies jQuery on the real page; this fixture tests
+            # Launch itself and retains CSS without executing its shell plugin.
+            html = re.sub(r'<script src="styles/bootstrap.min.js"></script>', '', html)
             route.fulfill(body=html, content_type='text/html'); return
         file = self.root/path
         if file.is_file() and not path.endswith('.php'):
             body = file.read_bytes()
             if path == 'scripts/launch.js':
-                body += b'\nwindow.fixtureLaunch={payload:()=>buildPayload(),capture:()=>bundleFormState(),restore:applyBundleData,geo:()=>{state.geo=[{type:"country",key:"US",name:"United States"}];}};'
+                body += b'\nwindow.fixtureLaunch={payload:()=>buildPayload(),capture:()=>bundleFormState(),restore:applyBundleData,geo:()=>{state.geo=[{type:"country",key:"US",country_code:"US",name:"United States"}];}};'
             route.fulfill(body=body, content_type='application/javascript' if path.endswith('.js') else 'text/css'); return
         data = {}
         status = 200
