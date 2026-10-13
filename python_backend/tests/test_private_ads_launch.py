@@ -131,8 +131,7 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_filtered_empty_methods_can_recover_scoped_card_from_full_read(self):
         full = {**self.funding, 'inventory_complete':True}
-        self.funding = {**self.funding, 'inventory_complete':False,
-                        'card_linked':False, 'payment_methods':[]}
+        self.funding.update(inventory_complete=False, card_linked=False, payment_methods=[])
         with patch('app.static_payment_read.complete_methods',
                    new=AsyncMock(return_value=full)) as complete:
             review = await self.owner.review(profile_id='19', context=self.context,
