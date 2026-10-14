@@ -24,10 +24,20 @@ class HelperTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result['checked_live'])
         self.assertFalse(result['browser_started'])
         self.client.account_record.assert_awaited_once()
+        self.client.account_record.assert_awaited_once_with(require_active=False,currency=True)
         self.assertEqual(self.client.request.await_args.args[0], 'DELIVERY_ESTIMATE')
         self.client.request.return_value = {'data':[{'estimate_ready':False,'estimate_mau_lower_bound':-1}]}
         result = await read_form_helper(None, self.catalog, self.values, 'audience_estimate', self.inputs)
         self.assertIsNone(result['lower_bound']); self.assertIsNone(result['upper_bound'])
+
+    async def test_estimate_currency_comes_only_from_fresh_exact_account(self):
+        self.client.account_record.return_value={'currency':'JPY'}
+        result=await read_form_helper(None,self.catalog,self.values,'audience_estimate',
+            {**self.inputs,'currency':'USD','daily_budget':500,'is_cbo_enabled':True})
+        self.assertEqual(result['currency'],'JPY')
+        params=self.client.request.await_args.kwargs['params']
+        self.assertEqual(params['currency'],'JPY');self.assertTrue(params['is_cbo_enabled'])
+        self.assertNotIn('daily_budget',params)
 
     async def test_foreign_account_scope_stops_before_estimate_dispatch(self):
         self.client.account_record.side_effect = ProvisioningError('RESOURCE_SCOPE_MISMATCH','foreign account',retryable=False)

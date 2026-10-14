@@ -63,8 +63,18 @@ class WorkflowTests(unittest.TestCase):
         schema=module_metadata.get('schema',SCHEMA)
         if context:
             metadata = {**module_metadata,'schema':schema,'items':[],'profiles':[{'name':'19'},{'name':'20'}],'preferred_profile':preferred}
-            self.page.add_script_tag(content='''window.fixtureRequests=[];window.fixtureUrls=[];window.fixtureSaves=[];window.fetch=async (url,options={})=>{
+            self.page.add_script_tag(content='''window.fixtureRequests=[];window.fixtureUrls=[];window.fixtureSaves=[];window.fixtureEstimates=[];window.fixtureEstimateWaits=[];window.fetch=async (url,options={})=>{
                 window.fixtureUrls.push(String(url));
+                if(String(url).includes('metaTemplateAdvertisingHelper.php')){
+                    const params=Object.fromEntries(new URLSearchParams(options.body));window.fixtureEstimates.push(params);
+                    const data=params.helper==='placements'?{options:{instagram_positions:['story']}}:
+                        window.fixtureEstimateData||{estimate_ready:true,lower_bound:1000,upper_bound:5000,currency:'USD',
+                            forecast:{available:true,reach:1200,actions:15,budget_minor_units:200}};
+                    const response={ok:!window.fixtureEstimateError,status:window.fixtureEstimateError?409:200,text:async()=>JSON.stringify({ok:!window.fixtureEstimateError,
+                        error:{message:'Сессия недоступна. Настройки можно сохранить.'},data:{checked_live:true,account_scope_verified:true,transport:'private_http_h2',template_account_bound:false,...data}})};
+                    if(window.fixtureDelayEstimate)return await new Promise(resolve=>window.fixtureEstimateWaits.push(()=>resolve(response)));
+                    return response;
+                }
                 if(options.body instanceof FormData && options.body.get('action')==='save') {
                     window.fixtureSaves.push(Object.fromEntries(options.body));
                     return {ok:true,status:200,text:async()=>JSON.stringify({ok:true,data:{items:[]}})};
@@ -88,7 +98,53 @@ class WorkflowTests(unittest.TestCase):
         self.page.wait_for_function("document.getElementById('mbObjective').options.length===2", timeout=5000)
         if enhanced:
             self.page.add_script_tag(content=ASSET)
+            self.page.add_script_tag(content=(ROOT/'railway-advertising-tools.js').read_text())
         self.page.locator('#newCreative').click()
+
+    def prepare_estimate(self):
+        self.creative(context=True,modules=True)
+        self.page.evaluate('testCreative.open({id:"fixture",name:"Estimate",meta_builder:{campaign:{objective:"OUTCOME_TRAFFIC"},adset:{daily_budget:200},targeting:{geo_locations:{countries:["US"]},age_min:21,age_max:55}}})')
+        self.page.get_by_role('button',name='Аудитория',exact=True).click()
+
+    def test_potential_audience_and_forecast_use_private_template_context_without_binding(self):
+        self.prepare_estimate()
+        self.page.get_by_role('button',name='Рассчитать аудиторию',exact=True).click()
+        self.page.wait_for_function('document.querySelector("[data-rm-estimates]").textContent.includes("1 000")')
+        request=self.page.evaluate('fixtureEstimates.at(-1)')
+        self.assertNotIn('profile',request);self.assertNotIn('account_id',request)
+        self.assertEqual(json.loads(request['targeting_spec'])['age_min'],21)
+        self.assertEqual(request['daily_budget'],'200');self.assertEqual(request['is_cbo_enabled'],'false')
+        self.assertIn('1 200',self.page.locator('[data-rm-estimates]').inner_text())
+        builder=self.page.evaluate('testCreative.build()')
+        self.assertEqual(builder['identity'],{});self.assertNotIn('forecast',builder)
+        self.page.get_by_role('button',name='Проверить места показа',exact=True).click()
+        self.page.wait_for_function('document.querySelector("[data-rm-placement-status]").textContent.includes("Meta вернула")')
+
+    def test_not_ready_and_expired_source_leave_settings_editable(self):
+        self.prepare_estimate()
+        self.page.evaluate('window.fixtureEstimateData={estimate_ready:false,lower_bound:1000,upper_bound:5000,forecast:{available:false,reason:"META_FORECAST_NOT_READY"}}')
+        self.page.get_by_role('button',name='Рассчитать аудиторию',exact=True).click()
+        self.page.wait_for_function('document.querySelector("[data-rm-estimates]").textContent.includes("Ещё не готова")')
+        self.assertNotIn('5 000',self.page.locator('[data-rm-estimates]').inner_text())
+        self.page.evaluate('window.fixtureEstimateError=true')
+        self.page.get_by_role('button',name='Рассчитать аудиторию',exact=True).click()
+        self.page.wait_for_function('document.querySelector("[data-rm-estimates]").textContent.includes("Сессия недоступна")')
+        self.assertEqual(self.page.evaluate('testCreative.build().targeting.age_min'),21)
+        self.assertEqual(self.page.evaluate('testCreative.build().adset.daily_budget'),200)
+
+    def test_old_estimate_cannot_replace_result_after_targeting_change(self):
+        self.prepare_estimate()
+        self.page.evaluate('window.fixtureDelayEstimate=true')
+        self.page.get_by_role('button',name='Рассчитать аудиторию',exact=True).click()
+        self.page.wait_for_function('fixtureEstimateWaits.length===1')
+        self.page.locator('#mbAgeMin').fill('25')
+        self.page.evaluate('window.fixtureDelayEstimate=false;window.fixtureEstimateData={estimate_ready:true,lower_bound:7000,upper_bound:9000,forecast:{available:false}}')
+        self.page.get_by_role('button',name='Рассчитать аудиторию',exact=True).click()
+        self.page.wait_for_function('document.querySelector("[data-rm-estimates]").textContent.includes("7 000")')
+        self.page.evaluate('fixtureEstimateWaits[0]()')
+        self.page.wait_for_timeout(30)
+        self.assertIn('7 000',self.page.locator('[data-rm-estimates]').inner_text())
+        self.assertNotIn('1 000',self.page.locator('[data-rm-estimates]').inner_text())
 
     def test_module_choices_save_and_reopen_without_manual_ids(self):
         self.creative(context=True,modules=True)
