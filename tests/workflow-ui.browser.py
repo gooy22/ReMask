@@ -93,6 +93,7 @@ class WorkflowTests(unittest.TestCase):
     def test_module_choices_save_and_reopen_without_manual_ids(self):
         self.creative(context=True,modules=True)
         self.page.get_by_role('button',name='Места показа',exact=True).click()
+        for details in self.page.locator('#wf-panel-placements details:not([open])').all():details.locator(':scope > summary').click()
         self.page.locator('#mbUserDevice_choices').fill('iphone 17')
         self.page.locator('#mbUserDevice_choices').press('Enter')
         self.page.get_by_role('button',name='iphone 17',exact=True).click()
@@ -121,7 +122,7 @@ class WorkflowTests(unittest.TestCase):
         self.creative(context=True,modules=True)
         self.page.get_by_role('button',name='Объявление',exact=True).click()
         self.page.locator('#mbDegreesOfFreedom').evaluate('(source)=>{source.value=JSON.stringify({creative_features_spec:{standard_enhancements:{enroll_status:"OPT_OUT"}}});}')
-        self.page.locator('#mbDegreesOfFreedom + .rm-module-structure').get_by_role('button',name='Настроить',exact=True).click()
+        self.page.locator('#mbDegreesOfFreedom').locator('..').locator('.rm-module-structure').get_by_role('button',name='Настроить',exact=True).click()
         dialog=self.page.get_by_role('dialog',name='Улучшения креатива',exact=False)
         # The actual associated label may include the old technical hint.
         if dialog.count()==0:dialog=self.page.get_by_role('dialog').last
