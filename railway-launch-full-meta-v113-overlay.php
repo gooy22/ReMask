@@ -182,6 +182,16 @@ function remaskRenderLaunchMetaFields() {
             input.dataset.launchMetaField=field;
             input.dataset.launchMetaType=type;
             input.addEventListener('change',()=>{
+                if(group==='targeting' && field.endsWith('_positions')) {
+                    const positions=remaskLaunchMetaParse(input.value,type,field);
+                    if(Array.isArray(positions) && positions.length) {
+                        $('placementMode').value='MANUAL';
+                        const platform=field.slice(0,-'_positions'.length);
+                        for(const checkbox of document.querySelectorAll('.publisher-platform'))
+                            if(checkbox.value===platform)checkbox.checked=true;
+                        updatePlacementControls();
+                    }
+                }
                 invalidateLaunchReview();
                 validateReady();
             });
