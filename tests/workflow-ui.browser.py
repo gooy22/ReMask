@@ -52,6 +52,7 @@ class WorkflowTests(unittest.TestCase):
         if 'fixtureSidebar' not in html:
             html = re.sub(r'(<body\b[^>]*>)', r'\1<aside id="fixtureSidebar" style="position:fixed;left:0;top:0;width:201px;height:100vh;z-index:1000;background:#1a212c">Sidebar</aside>', html, count=1)
         self.page.set_content(html)
+        self.page.add_script_tag(content='const fixtureCsrf=document.createElement("meta");fixtureCsrf.name="remask-csrf";fixtureCsrf.content="fixture-csrf";document.head.prepend(fixtureCsrf);')
         module_metadata={}
         if modules:
             import sys,copy
@@ -66,6 +67,7 @@ class WorkflowTests(unittest.TestCase):
             self.page.add_script_tag(content='''window.fixtureRequests=[];window.fixtureUrls=[];window.fixtureSaves=[];window.fixtureEstimates=[];window.fixtureEstimateWaits=[];window.fetch=async (url,options={})=>{
                 window.fixtureUrls.push(String(url));
                 if(String(url).includes('metaTemplateAdvertisingHelper.php')){
+                    if(options.headers?.['X-ReMask-CSRF']!=='fixture-csrf')return {ok:false,status:403,text:async()=>JSON.stringify({ok:false,error:{message:'CSRF validation failed.'}})};
                     const params=Object.fromEntries(new URLSearchParams(options.body));window.fixtureEstimates.push(params);
                     const data=params.helper==='placements'?{options:{instagram_positions:['story']}}:
                         window.fixtureEstimateData||{estimate_ready:true,lower_bound:1000,upper_bound:5000,currency:'USD',
