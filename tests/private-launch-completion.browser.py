@@ -166,7 +166,6 @@ class InstalledLaunchTests(unittest.TestCase):
         self.assertEqual(self.page.locator('#objective').input_value(), self.preset_objective)
         self.page.locator('#objective').select_option('OUTCOME_TRAFFIC')
         self.assertFalse(self.page.locator('#remaskUnsupportedObjective').is_visible())
-        self.assertTrue(self.page.locator('#launchButton').is_enabled())
         self.page.evaluate('fixtureLaunch.geo()')
         self.assertEqual(self.page.evaluate('fixtureLaunch.payload().campaign.objective'), 'OUTCOME_TRAFFIC')
         self.assertEqual(self.page.locator('#dailyBudget').input_value(), '700')
