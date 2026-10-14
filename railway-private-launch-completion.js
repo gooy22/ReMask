@@ -4,14 +4,14 @@
 const remaskPrivateOriginalTargetingApiJson = apiJson;
 apiJson = async function(url, options = {}) {
     if (String(url).split('?')[0].endsWith('ajax/metaTargetingSearch.php')
-            && typeof options.body?.get === 'function') {
-        const input = options.body;
+            && (typeof options.body === 'string' || typeof options.body?.get === 'function')) {
+        const input = typeof options.body === 'string' ? new URLSearchParams(options.body) : options.body;
         const body = new URLSearchParams();
         for (const key of ['type','q','limit']) {
             const value = input.get(key);
             if (value !== null) body.set(key, value);
         }
-        return remaskPrivateOriginalTargetingApiJson('ajax/metaTemplateTargetingSearch.php', {...options, body});
+        return remaskPrivateOriginalTargetingApiJson('ajax/metaTemplateTargetingSearch.php', {...options, body:body.toString()});
     }
     return remaskPrivateOriginalTargetingApiJson(url, options);
 };
