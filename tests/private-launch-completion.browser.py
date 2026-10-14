@@ -68,6 +68,7 @@ class InstalledLaunchTests(unittest.TestCase):
             # The PHP shell supplies jQuery on the real page; this fixture tests
             # Launch itself and retains CSS without executing its shell plugin.
             html = re.sub(r'<script src="styles/bootstrap.min.js"></script>', '', html)
+            html=html.replace('<head>','<head><meta name="remask-csrf" content="fixture-csrf">',1)
             route.fulfill(body=html, content_type='text/html'); return
         file = self.root/path
         if file.is_file() and not path.endswith('.php'):
@@ -84,6 +85,8 @@ class InstalledLaunchTests(unittest.TestCase):
             data = self.config
         elif path == 'ajax/metaPrivateSchema.php': data = self.schema
         elif path in ('ajax/metaTemplateAdvertisingHelper.php','ajax/metaAudienceEstimate.php','ajax/metaPlacementCapabilities.php','ajax/metaCreativePreview.php'):
+            if request.headers.get('x-remask-csrf')!='fixture-csrf':
+                route.fulfill(status=403,json={'ok':False,'error':{'message':'CSRF validation failed.'}});return
             fields=parse_qs(request.post_data or '');self.estimate_requests.append((path,fields))
             if self.estimate_failure:
                 route.fulfill(status=409,json={'ok':False,'error':{'message':'Сессия недоступна. Настройки можно сохранить.'}});return

@@ -67,10 +67,7 @@
         const body=new URLSearchParams();
         for(const [key,value] of Object.entries(input))if(value!==undefined)body.set(key,typeof value==='object'?JSON.stringify(value):String(value));
         if(scoped){body.set('profile',destination.profile);body.set('account_id',destination.account_id);}else body.set('helper',helper);
-        const response=await fetch('ajax/'+endpoint,{method:'POST',body,signal});
-        const envelope=JSON.parse(await response.text());
-        if(!response.ok||envelope.ok!==true)throw new Error(envelope.error?.message||envelope.detail?.message||'Meta временно не вернула данные. Настройки можно сохранить.');
-        const data=envelope.data;
+        const data=await (creative?api:apiJson)('ajax/'+endpoint,{method:'POST',body,signal});
         if(!data||data.checked_live!==true||data.account_scope_verified!==true||data.transport!=='private_http_h2'
             ||(scoped?(data.profile!==destination.profile||String(data.account_id)!==destination.account_id):data.template_account_bound!==false))
             throw new Error('Источник оценки не подтверждён. Настройки можно сохранить.');
