@@ -83,7 +83,8 @@
     #creativeForm .cr-editor textarea.form-control{height:94px!important;min-height:94px!important}
     #creativeForm .cr-field label{font-size:12px!important;color:#c9d4e4!important}
     .wf-panel-description{color:var(--wf-muted);font-size:12px;line-height:1.6;margin-bottom:22px}
-    .wf-summary{grid-column:3;grid-row:1;border-left:1px solid var(--wf-line);padding:24px 18px;background:#181e28;overflow:auto;color:#e1e9f6}
+    .wf-summary{grid-column:3;grid-row:1;border-left:1px solid var(--wf-line);padding:24px 18px;background:#181e28;overflow:auto;color:#e1e9f6;min-width:0}
+    .wf-summary,#creativeForm>.cr-editor{scrollbar-color:#425064 #181e28;scrollbar-width:thin}
     .wf-summary h4{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:#9dafc7;margin:0 0 18px}
     .wf-summary dl{margin:0}.wf-summary dt{font-size:11px;color:#91a2ba;margin-top:16px}.wf-summary dd{font-size:13px;margin:5px 0 0;overflow-wrap:anywhere;line-height:1.5}
     .wf-note{border:1px solid #354965;background:#202d42;color:#a9c0df;border-radius:9px;padding:12px;font-size:11px;line-height:1.6;margin-top:24px}
