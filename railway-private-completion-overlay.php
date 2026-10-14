@@ -10,6 +10,8 @@ foreach (['railway-private-form-schema.php'=>'classes/RemaskPrivateFormSchema.ph
 }
 if (!copy('/opt/remask-python/app/contracts/meta_targeting_reference_20261014.json',
     $root.'/classes/meta-targeting-reference.json')) throw new RuntimeException('TARGETING_MODULE_COPY_FAILED');
+if (!copy('/opt/remask-python/app/contracts/meta_editor_modules_20261014.json',
+    $root.'/classes/meta-editor-modules.json')) throw new RuntimeException('EDITOR_MODULE_COPY_FAILED');
 $schemaEndpoint = <<<'PHP_CODE'
 <?php
 require_once __DIR__.'/../settings.php';
@@ -76,7 +78,8 @@ $reference=json_decode(file_get_contents($root.'/classes/meta-targeting-referenc
 $names=[];
 foreach ($reference['locales'] as $row) $names[$row['id']]=$row['name'];
 $languageNames='const remaskModuleLanguageNames='.json_encode($names,JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR).";\n";
-$launch = $languageNames.file_get_contents($root.'/scripts/launch.js');
+$moduleControls=file_get_contents('/tmp/railway-meta-module-controls.js')."\n";
+$launch = $languageNames.$moduleControls.file_get_contents($root.'/scripts/launch.js');
 $launch = str_replace("name:'Язык #'+id", "name:remaskModuleLanguageNames[String(id)]||('Язык #'+id)", $launch);
 completionReplace($launch, "            binding.instagram_actor_id = String(page?.instagram_business_account?.id || '');",
     "            binding.instagram_actor_id = String(page?.instagram_business_account?.id || '');\n            binding.source_instagram_media_id = '';", 'instagram-destination-reset');
@@ -147,7 +150,7 @@ $launch = str_replace('ajax/metaSdkSchema.php', 'ajax/metaPrivateSchema.php', $l
 $launch = str_replace('Официальная SDK-схема загружена. Поля ниже участвуют в Launch Review и создании Job.',
     'Приватная схема Ads Manager загружена. Доступ к ресурсам проверяется для выбранного РК.', $launch);
 file_put_contents($root.'/scripts/launch.js', $launch);
-$creatives = $languageNames.file_get_contents($root.'/scripts/creatives.js');
+$creatives = $languageNames.$moduleControls.file_get_contents($root.'/scripts/creatives.js');
 $creatives = str_replace("name:'Язык #' + id", "name:remaskModuleLanguageNames[String(id)]||('Язык #' + id)", $creatives);
 $creatives = str_replace(['SDK-схема загружена','SDK-схема недоступна','Official Meta SDK placements',
     'Нет в текущей Meta SDK schema'], ['Приватная схема Ads Manager загружена','Приватная схема недоступна',

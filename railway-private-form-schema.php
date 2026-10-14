@@ -13,8 +13,8 @@ final class RemaskPrivateFormSchema
         $context = stream_context_create(['http' => ['method' => 'GET', 'timeout' => 15,
             'ignore_errors' => true, 'follow_location' => 0,
             'header' => "Accept: application/json\r\nX-Remask-Worker-Key: ".$key."\r\n"]]);
-        $raw = @file_get_contents($base.'/api/v1/private-launch/schema', false, $context, 0, 524289);
-        $row = is_string($raw) && strlen($raw) <= 524288 ? json_decode($raw, true) : null;
+        $raw = @file_get_contents($base.'/api/v1/private-launch/schema', false, $context, 0, 1048577);
+        $row = is_string($raw) && strlen($raw) <= 1048576 ? json_decode($raw, true) : null;
         if (!is_array($row) || ($row['ok'] ?? null) !== true
             || ($row['source'] ?? '') !== 'reviewed_private_ads_manager_modules'
             || !is_array($row['schema'] ?? null) || !is_array($row['object_fields'] ?? null)

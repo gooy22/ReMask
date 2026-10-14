@@ -13,7 +13,9 @@ try {
     $input = MetaEndpoint::input();
     $type = strtolower(trim((string)($input['type'] ?? '')));
     $type = ['language'=>'locales','languages'=>'locales','locale'=>'locales'][$type] ?? $type;
-    if (!in_array($type, ['locations','interests','behaviors','locales'], true)) throw new InvalidArgumentException('UNKNOWN_TARGETING_TYPE');
+    $editor=json_decode((string)file_get_contents(__DIR__.'/../classes/meta-editor-modules.json'),true,512,JSON_THROW_ON_ERROR);
+    $types=array_keys($editor['targeting_types'] ?? []);
+    if (!in_array($type, array_merge(['locations','interests','behaviors','locales'],$types), true)) throw new InvalidArgumentException('UNKNOWN_TARGETING_TYPE');
     $query = trim((string)($input['q'] ?? ''));
     if (strlen($query) > 200) throw new InvalidArgumentException('INVALID_TARGETING_QUERY');
     $module = RemaskModuleTargetingReference::search($type,$query,

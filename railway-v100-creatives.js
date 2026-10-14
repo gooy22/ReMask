@@ -948,6 +948,7 @@ function renderMetaDatalist(id, rows, valueKey = 'id', labelKeys = ['name']) {
 async function loadMetaContext() {
     const data = await api('ajax/metaCreativeCapabilities.php');
     metaCapabilities = data || {};
+    if (typeof remaskModuleControls !== "undefined") remaskModuleControls.configure(data);
     if (data?.schema) metaSdkSchema = data.schema;
     renderMetaDatalist(
         'mbConversionEventOptions',

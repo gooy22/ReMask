@@ -82,7 +82,7 @@ const remaskLaunchCoveredFields = {
         'age_min','age_max','genders','locales','geo_locations','excluded_geo_locations',
         'interests','behaviors','flexible_spec','exclusions','publisher_platforms',
         'facebook_positions','instagram_positions','messenger_positions','audience_network_positions',
-        'threads_positions','whatsapp_positions','device_platforms','user_os','user_device'
+        'threads_positions','whatsapp_positions','device_platforms'
     ]),
     creative:new Set([
         'name','degrees_of_freedom_spec','asset_feed_spec','platform_customizations',
@@ -243,6 +243,7 @@ function remaskFilterLaunchMetaFields() {
 async function remaskLoadLaunchMetaSdkSchema() {
     const data=await apiJson('ajax/metaSdkSchema.php');
     remaskLaunchMetaSchema=data?.schema||{};
+    if(typeof remaskModuleControls!=="undefined")remaskModuleControls.configure(data);
     remaskRenderLaunchMetaFields();
 }
 function remaskCurrentMetaBuilderForJob() {

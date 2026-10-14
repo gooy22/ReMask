@@ -8,7 +8,7 @@ import json
 from .private_ads_catalog import identity
 from .private_ads_draft import fail
 from .private_ads_http import AdsManagerPrivateHttp
-from .private_advertising_reads import RESOURCE_FIELDS
+from .private_advertising_reads import RESOURCE_FIELDS, TARGETING_TYPES
 
 
 class _ReadClient:
@@ -29,16 +29,16 @@ class _ReadClient:
                 business_id=self.business, actor_id=self.actor)
         return await self.http.get(path.removeprefix("/" + self.catalog.data["api_version"]), params or {})
 
-    async def account_record(self):
+    async def account_record(self, *, require_active=True):
         row = await self.request("ACCOUNT_READ", params={"fields":
             ["id", "account_status", "business", "ad_account_promotable_objects"]})
         business = row.get("business")
         if (not isinstance(row.get("id"), str) or row["id"].removeprefix("act_") != self.account
                 or not isinstance(business, dict) or business.get("id") != self.business):
             raise fail("RESOURCE_SCOPE_MISMATCH", "Resource account did not confirm the exact Business")
-        if type(row.get("account_status")) not in {int, str} or str(row["account_status"]) != "1":
+        if require_active and (type(row.get("account_status")) not in {int, str} or str(row["account_status"]) != "1"):
             raise fail("ACCOUNT_INACTIVE", "Resource account is not active")
-        return {**row, "account_status": 1}
+        return row
 
 
 class AdsManagerReadCatalog:
@@ -56,6 +56,8 @@ class AdsManagerReadCatalog:
                             "locales":"LOCALES_READ"}.items():
             if route in catalog.data["routes"]:
                 self.rows[name] = {"route": route, "catalog_digest": catalog.digest}
+        for name in TARGETING_TYPES:
+            self.rows[name] = {"route":"TARGETING_SEARCH", "catalog_digest":catalog.digest}
         if "INSTAGRAM_MEDIA_READ" in catalog.data["routes"]:
             self.rows["instagram_media"] = {"route":"INSTAGRAM_MEDIA_READ","catalog_digest":catalog.digest}
 
@@ -70,10 +72,11 @@ class AdsManagerReadCatalog:
         if name not in self.rows:
             raise fail("RESOURCE_CONTRACT_REQUIRED", "Reviewed account query is unavailable for " + name)
         client = self.client(web, values)
-        account = await client.account_record()
-        if account.get("account_status") != 1:
+        reference = name in TARGETING_TYPES | {"locations","locales"}
+        account = await client.account_record(require_active=not reference)
+        if not reference and str(account.get("account_status")) != "1":
             raise fail("ACCOUNT_INACTIVE", "The selected advertising account is not active")
-        if name in {"interests", "behaviors"} and not str(values.get("query") or "").strip():
+        if name in TARGETING_TYPES and not str(values.get("query") or "").strip():
             return await self.browse_targeting(client, name, values)
         if name == "instagram_media":
             actors = await self.read(web,"instagram_accounts",{**values,"query":""})
@@ -120,7 +123,8 @@ class AdsManagerReadCatalog:
                         "source":"account_promotable_page_ids"} for v in ids]
         else:
             route = self.rows[name]["route"]
-            fields = self.catalog.data.get("resource_fields", {}).get(name)
+            fields = (["id","name","type","path","description","audience_size_lower_bound","audience_size_upper_bound"]
+                if name in TARGETING_TYPES else self.catalog.data.get("resource_fields", {}).get(name))
             if not isinstance(fields, list) or not fields:
                 raise fail("RESOURCE_CONTRACT_REQUIRED", "Source field projection is missing for " + name)
             records, seen, cursors = [], set(), set()
@@ -129,7 +133,7 @@ class AdsManagerReadCatalog:
                 fields.append("is_connected_to_ad_account.ad_account_id("+client.account+")")
             params = {"fields":fields, "limit":min(100, int(values.get("limit",100)))}
             if name == "instagram_accounts": params["business_id"] = client.business
-            if name in {"interests","behaviors","locations"}:
+            if name in TARGETING_TYPES | {"locations"}:
                 query = str(values.get("query") or "").strip()
                 if not query:
                     return {"data":[],"account_id":client.account,"account_scope_verified":True,
@@ -140,7 +144,7 @@ class AdsManagerReadCatalog:
                         "ad_account_id":client.account,"place_fallback":True,"bulk_upload":False}
                 else:
                     params.update(accountId=client.account,q=query,
-                        whitelisted_types=[self.catalog.data["resource_types"][name]])
+                        whitelisted_types=[name])
             if name == "locales": params = {"type":"adlocale","limit":100}
             if name == "insights": params.update(level="ad",date_preset="last_30d")
             for _ in range(5):
@@ -151,6 +155,8 @@ class AdsManagerReadCatalog:
                 for row in items:
                     if not isinstance(row, dict):
                         raise fail("RESOURCE_READ_INCOMPLETE", "Account resource has an invalid row")
+                    if name in TARGETING_TYPES and (row.get("valid") is False or row.get("type",name) != name):
+                        continue
                     if name == "creatives":
                         if row.get("account_id") != client.account:
                             raise fail("RESOURCE_SCOPE_MISMATCH", "Creative parent belongs to another advertising account")
@@ -161,7 +167,7 @@ class AdsManagerReadCatalog:
                         if row.get("has_create_ads_access") is not True or row.get("is_connected_to_ad_account") is not True:
                             continue
                     key = json.dumps({k:v for k,v in row.items() if k in RESOURCE_FIELDS[name]},sort_keys=True) if name == "insights" else row.get("key" if name in {"locations","locales"} else "hash" if name == "images" else "id")
-                    if name in {"locations","locales"} and isinstance(key,int) and not isinstance(key,bool): key = str(key)
+                    if name in TARGETING_TYPES | {"locations","locales"} and isinstance(key,int) and not isinstance(key,bool): key = str(key)
                     if name != "insights" and (not isinstance(key, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,160}", key)):
                         raise fail("RESOURCE_READ_INCOMPLETE", "Account resource has no exact identity")
                     if "account_id" in row and row["account_id"] != client.account:
@@ -170,6 +176,7 @@ class AdsManagerReadCatalog:
                         continue
                     seen.add(key)
                     clean = {k:v for k,v in row.items() if k in RESOURCE_FIELDS[name]}
+                    if name in TARGETING_TYPES: clean["id"]=key
                     if name in {"locations","locales"}: clean.update(id=key,key=key)
                     if name == "conversion_goals" and isinstance(row.get("pixel"),dict):
                         clean["pixel_id"] = identity(row["pixel"].get("id"),"pixel")
@@ -193,7 +200,7 @@ class AdsManagerReadCatalog:
             else:
                 raise fail("RESOURCE_READ_INCOMPLETE", "Account resource pagination exceeded its request budget", True)
         query = str(values.get("query", "")).casefold()
-        if query and name not in {"interests","behaviors","locations","insights"}:
+        if query and name not in TARGETING_TYPES | {"locations","insights"}:
             records = [r for r in records if any(query in str(r.get(k,"")).casefold() for k in ("id","hash","name","title"))]
         return {"data":records, "account_id":client.account, "account_scope_verified":True,
                 "checked_live":True, "checked_at":int(time.time()), "source":"ads_manager_private_http"}
@@ -223,7 +230,7 @@ class AdsManagerReadCatalog:
             if row.get("type") != name or row.get("valid") is False:
                 continue
             key = str(row.get("id") or "")
-            if not re.fullmatch(r"[0-9]{5,40}", key) or not isinstance(row.get("name"), str):
+            if not re.fullmatch(r"[0-9]{1,40}", key) or not isinstance(row.get("name"), str):
                 continue
             clean = {k:v for k,v in row.items() if k in RESOURCE_FIELDS[name]}
             clean["id"] = key

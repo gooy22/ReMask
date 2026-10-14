@@ -42,7 +42,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(self.errors, [])
         self.page.close()
 
-    def creative(self, enhanced=True, context=False, preferred=""):
+    def creative(self, enhanced=True, context=False, preferred="", modules=False):
         html = re.sub(r'<\?php.*?\?>', '', (ROOT / 'railway-v100-creatives.php').read_text(), flags=re.S)
         html = re.sub(r'<script\b.*?</script>', '', html, flags=re.S)
         html = re.sub(r'<link\b[^>]*>', '', html)
@@ -52,8 +52,17 @@ class WorkflowTests(unittest.TestCase):
         if 'fixtureSidebar' not in html:
             html = re.sub(r'(<body\b[^>]*>)', r'\1<aside id="fixtureSidebar" style="position:fixed;left:0;top:0;width:201px;height:100vh;z-index:1000;background:#1a212c">Sidebar</aside>', html, count=1)
         self.page.set_content(html)
+        module_metadata={}
+        if modules:
+            import sys,copy
+            sys.path.insert(0,str(ROOT/'python_backend'))
+            from app.editor_modules import form_schema
+            from app.private_ads_catalog import AdsManagerRouteCatalog
+            module_metadata=form_schema(AdsManagerRouteCatalog())
+            module_metadata['schema']['campaign']['enums']['objective']=SCHEMA['campaign']['enums']['objective']
+        schema=module_metadata.get('schema',SCHEMA)
         if context:
-            metadata = {'schema':SCHEMA,'items':[],'profiles':[{'name':'19'},{'name':'20'}],'preferred_profile':preferred}
+            metadata = {**module_metadata,'schema':schema,'items':[],'profiles':[{'name':'19'},{'name':'20'}],'preferred_profile':preferred}
             self.page.add_script_tag(content='''window.fixtureRequests=[];window.fixtureUrls=[];window.fixtureSaves=[];window.fetch=async (url,options={})=>{
                 window.fixtureUrls.push(String(url));
                 if(options.body instanceof FormData && options.body.get('action')==='save') {
@@ -73,12 +82,54 @@ class WorkflowTests(unittest.TestCase):
             };''')
         else:
             self.page.add_script_tag(content='window.fetch=async url=>({ok:true,status:200,text:async()=>JSON.stringify('+json.dumps({'ok':True,'data':{'schema':SCHEMA,'items':[]}})+')});')
+        if modules:self.page.add_script_tag(content=(ROOT/'railway-meta-module-controls.js').read_text())
         source = (ROOT / 'railway-v100-creatives.js').read_text()
         self.page.add_script_tag(content=source+'\nwindow.testCreative={build:buildMetaBuilder,populate:populateMetaBuilder,open:openEditor,primary:populatePrimaryMetaControls};')
         self.page.wait_for_function("document.getElementById('mbObjective').options.length===2", timeout=5000)
         if enhanced:
             self.page.add_script_tag(content=ASSET)
         self.page.locator('#newCreative').click()
+
+    def test_module_choices_save_and_reopen_without_manual_ids(self):
+        self.creative(context=True,modules=True)
+        self.page.get_by_role('button',name='Места показа',exact=True).click()
+        self.page.locator('#mbUserDevice_choices').fill('iphone 17')
+        self.page.locator('#mbUserDevice_choices').press('Enter')
+        self.page.get_by_role('button',name='iphone 17',exact=True).click()
+        self.page.locator('#mbUserOs_choices').fill('iOS 26.0')
+        self.page.locator('#mbUserOs_choices').press('Enter')
+        self.page.get_by_role('button',name='iOS 26.0 и новее',exact=True).click()
+        self.page.get_by_role('button',name='Дополнительно',exact=True).click()
+        self.page.locator('.cr-sdk-group[data-sdk-group="targeting"] > summary').click()
+        self.page.locator('#sdk_targeting_education_statuses_choices').press('Enter')
+        self.page.get_by_role('button',name='High School',exact=True).click()
+        self.page.locator('#sdk_targeting_work_employers_choices').fill('Fixture')
+        self.page.locator('#sdk_targeting_work_employers_choices').press('Enter')
+        self.page.get_by_role('button',name='Fixture work_employers',exact=True).click()
+        builder=self.page.evaluate('testCreative.build()')
+        self.assertEqual(builder['targeting']['user_device'],['iphone 17'])
+        self.assertEqual(builder['targeting']['user_os'],['iOS_ver_26.0_and_above'])
+        self.assertEqual(builder['targeting']['education_statuses'],[1])
+        self.assertEqual(builder['targeting']['work_employers'],[{'id':'34567','name':'Fixture work_employers'}])
+        self.assertEqual(self.page.evaluate('fixtureRequests.at(-1).type'),'work_employers')
+        self.assertNotIn('profile',self.page.evaluate('fixtureRequests.at(-1)'))
+        self.page.evaluate('(builder)=>testCreative.open({id:"fixture",name:"Choices",meta_builder:builder})',builder)
+        self.assertEqual(self.page.evaluate('testCreative.build()'),builder)
+        self.assertEqual(self.page.get_by_role('button',name='Удалить iphone 17').count(),1)
+
+    def test_nested_module_fields_edit_without_json_and_keep_value_types(self):
+        self.creative(context=True,modules=True)
+        self.page.get_by_role('button',name='Объявление',exact=True).click()
+        self.page.locator('#mbDegreesOfFreedom').evaluate('(source)=>{source.value=JSON.stringify({creative_features_spec:{standard_enhancements:{enroll_status:"OPT_OUT"}}});}')
+        self.page.locator('#mbDegreesOfFreedom + .rm-module-structure').get_by_role('button',name='Настроить',exact=True).click()
+        dialog=self.page.get_by_role('dialog',name='Улучшения креатива',exact=False)
+        # The actual associated label may include the old technical hint.
+        if dialog.count()==0:dialog=self.page.get_by_role('dialog').last
+        dialog.get_by_role('textbox',name='Значение enroll_status',exact=True).fill('OPT_IN')
+        dialog.get_by_role('button',name='Сохранить',exact=True).click()
+        self.assertEqual(self.page.evaluate('testCreative.build().creative.degrees_of_freedom_spec'),{'creative_features_spec':{'standard_enhancements':{'enroll_status':'OPT_IN'}}})
+        self.assertFalse(self.page.locator('#mbDegreesOfFreedom').is_visible())
+        self.assertEqual(self.page.locator('.rm-module-structure').count()>1,True)
 
     def test_instagram_template_saves_without_profile_account_or_owned_post(self):
         self.creative(context=True)
