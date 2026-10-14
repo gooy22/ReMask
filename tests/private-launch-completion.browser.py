@@ -68,7 +68,8 @@ class InstalledLaunchTests(unittest.TestCase):
             # The PHP shell supplies jQuery on the real page; this fixture tests
             # Launch itself and retains CSS without executing its shell plugin.
             html = re.sub(r'<script src="styles/bootstrap.min.js"></script>', '', html)
-            html=html.replace('<head>','<head><meta name="remask-csrf" content="fixture-csrf">',1)
+            html=html.replace('<meta name="remask-csrf" content=""/>','<meta name="remask-csrf" content="fixture-csrf"/>',1)
+            self.assertIn('content="fixture-csrf"',html)
             route.fulfill(body=html, content_type='text/html'); return
         file = self.root/path
         if file.is_file() and not path.endswith('.php'):
