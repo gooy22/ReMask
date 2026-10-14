@@ -43,6 +43,8 @@ class InstalledLaunchTests(unittest.TestCase):
         self.lookup_failure = False
         self.instagram_requests = []
         self.instagram_wrong_scope = False
+        self.estimate_requests=[]
+        self.estimate_failure=False
         self.page = self.browser.new_page()
         self.page.set_default_timeout(5000)
         self.page.on('pageerror', lambda e: self.errors.append(str(e)))
@@ -81,6 +83,17 @@ class InstalledLaunchTests(unittest.TestCase):
                 return
             data = self.config
         elif path == 'ajax/metaPrivateSchema.php': data = self.schema
+        elif path in ('ajax/metaTemplateAdvertisingHelper.php','ajax/metaAudienceEstimate.php','ajax/metaPlacementCapabilities.php','ajax/metaCreativePreview.php'):
+            fields=parse_qs(request.post_data or '');self.estimate_requests.append((path,fields))
+            if self.estimate_failure:
+                route.fulfill(status=409,json={'ok':False,'error':{'message':'Сессия недоступна. Настройки можно сохранить.'}});return
+            scope={'profile':fields.get('profile',[''])[0],'account_id':fields.get('account_id',[''])[0]}
+            data={'checked_live':True,'account_scope_verified':True,'transport':'private_http_h2',
+                'template_account_bound':True,'estimate_ready':True,'lower_bound':1000,'upper_bound':5000,'currency':'USD',
+                'forecast':{'available':True,'reach':1200,'actions':15,'budget_minor_units':500},
+                'options':{'instagram_positions':['story']},'body':'<div>Fixture Meta preview</div>'}
+            if path=='ajax/metaTemplateAdvertisingHelper.php':data['template_account_bound']=False
+            else:data.update(scope)
         elif path == 'ajax/metaAssetManager.php':
             fields=parse_qs(request.post_data or '');self.instagram_requests.append(fields)
             account=fields['account_id'][0];actor='456789' if account=='123456' else '678901'
@@ -131,6 +144,49 @@ class InstalledLaunchTests(unittest.TestCase):
         self.page.locator('#bundleSelect').select_option('fixture')
         self.page.locator('#bundleLoad').click()
         self.page.wait_for_function('document.querySelector("#launchResult").classList.contains("ready")')
+
+    def test_launch_estimate_without_profile_uses_template_source_and_keeps_bundle_generic(self):
+        self.page.evaluate('fixtureLaunch.geo()')
+        self.page.locator('[data-rm-estimate]').click()
+        self.page.wait_for_function('document.querySelector("[data-rm-estimates]").textContent.includes("1 000")')
+        path,request=self.estimate_requests[-1]
+        self.assertEqual(path,'ajax/metaTemplateAdvertisingHelper.php')
+        self.assertNotIn('profile',request);self.assertNotIn('account_id',request)
+        self.save_and_reload()
+        self.assertNotIn('forecast',self.bundles[0]['data'])
+
+    def test_launch_estimates_and_previews_each_selected_account_in_its_own_scope(self):
+        self.page.evaluate('fixtureLaunch.geo();fixtureLaunch.instagramTargets()')
+        for button in self.page.get_by_role('button',name='Загрузить публикации Instagram',exact=True).all():
+            button.click()
+        for select in self.page.get_by_role('combobox',name='Публикация Instagram для РК',exact=False).all():
+            select.locator('option[value="789012"]').wait_for(state='attached')
+            select.select_option('789012')
+        self.page.locator('[data-rm-estimate]').click()
+        self.page.wait_for_function('document.querySelectorAll("[data-rm-estimates] article").length===2')
+        requests=[fields for path,fields in self.estimate_requests if path=='ajax/metaAudienceEstimate.php']
+        self.assertEqual([(r['profile'][0],r['account_id'][0]) for r in requests],[('20','123456'),('21','234567')])
+        self.page.locator('[data-rm-preview]').click()
+        self.page.wait_for_function('document.querySelectorAll("[data-rm-preview-body] iframe").length===2')
+        for frame in self.page.locator('[data-rm-preview-body] iframe').all():
+            self.assertEqual(frame.get_attribute('sandbox'),'')
+            self.assertIn('Fixture Meta preview',frame.get_attribute('srcdoc'))
+        self.page.locator('#message').fill('Updated copy')
+        self.assertEqual(self.page.locator('[data-rm-preview-body] iframe').count(),0)
+
+    def test_launch_estimate_error_preserves_budget_and_targeting(self):
+        self.estimate_failure=True;self.page.evaluate('fixtureLaunch.geo()')
+        self.page.locator('[data-rm-estimate]').click()
+        self.page.wait_for_function('document.querySelector("[data-rm-estimates]").textContent.includes("Сессия недоступна")')
+        self.assertEqual(self.page.evaluate('fixtureLaunch.payload().adset.targeting.geo_locations.countries'),['US'])
+
+    def test_live_placements_can_be_read_before_geo_or_profile_is_selected(self):
+        self.page.locator('[data-rm-placements]').click()
+        self.page.wait_for_function('document.querySelector("[data-rm-placement-status]").textContent.includes("Meta вернула")')
+        path,request=self.estimate_requests[-1]
+        self.assertEqual(path,'ajax/metaTemplateAdvertisingHelper.php')
+        self.assertEqual(request['helper'],['placements'])
+        self.assertNotIn('profile',request);self.assertNotIn('targeting_spec',request)
 
     def test_all_module_choices_enter_launch_payload_and_bundle_round_trip(self):
         self.page.locator('[data-launch-meta-group="targeting"] > summary').click()

@@ -4,6 +4,8 @@ $root = '/var/www/html';
 foreach (['railway-private-form-schema.php'=>'classes/RemaskPrivateFormSchema.php',
           'railway-private-inventory-identity.php'=>'classes/RemaskPrivateInventoryIdentity.php',
           'railway-template-targeting-context.php'=>'classes/RemaskTemplateTargetingContext.php',
+          'railway-advertising-helper-client.php'=>'classes/RemaskAdvertisingHelperClient.php',
+          'railway-template-advertising-helper.php'=>'ajax/metaTemplateAdvertisingHelper.php',
           'railway-template-targeting-search.php'=>'ajax/metaTemplateTargetingSearch.php',
           'railway-private-creative-capabilities.php'=>'ajax/metaCreativeCapabilities.php'] as $source=>$target) {
     if (!copy('/tmp/'.$source, $root.'/'.$target)) throw new RuntimeException('PRIVATE_COMPLETION_COPY_FAILED');
@@ -141,6 +143,7 @@ completionReplace($launch, "    if (!Object.keys(geoLocations).length) throw new
     "    if (!Object.keys(geoLocations).length) throw new Error('Select at least one GEO result.');", 'complete-geo');
 $launch .= "\n".file_get_contents('/tmp/railway-private-launch-completion.js');
 $launch .= "\n".file_get_contents('/tmp/railway-targeting-pickers.js');
+$launch .= "\n".file_get_contents('/tmp/railway-advertising-tools.js');
 $launch = str_replace("addEventListener('change', applyCreativeLibrarySelection)",
     "addEventListener('change', () => applyCreativeLibrarySelection())", $launch);
 $launch = str_replace("addEventListener('click', clearCreativeLibrarySelection)",
@@ -155,6 +158,7 @@ $creatives = str_replace("name:'Язык #' + id", "name:remaskModuleLanguageNam
 $creatives = str_replace(['SDK-схема загружена','SDK-схема недоступна','Official Meta SDK placements',
     'Нет в текущей Meta SDK schema'], ['Приватная схема Ads Manager загружена','Приватная схема недоступна',
     'Места показа из приватных модулей Ads Manager','Нет в проверенной приватной схеме'], $creatives);
+$creatives .= "\n".file_get_contents('/tmp/railway-advertising-tools.js');
 file_put_contents($root.'/scripts/creatives.js', $creatives);
 foreach (['launch.php','creatives.php'] as $name) {
     $page = file_get_contents($root.'/'.$name);

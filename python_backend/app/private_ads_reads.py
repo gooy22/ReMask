@@ -29,9 +29,12 @@ class _ReadClient:
                 business_id=self.business, actor_id=self.actor)
         return await self.http.get(path.removeprefix("/" + self.catalog.data["api_version"]), params or {})
 
-    async def account_record(self, *, require_active=True):
+    async def account_record(self, *, require_active=True, currency=False):
+        fields = ["id", "account_status", "business", "ad_account_promotable_objects"]
+        if currency:
+            fields.append("currency")
         row = await self.request("ACCOUNT_READ", params={"fields":
-            ["id", "account_status", "business", "ad_account_promotable_objects"]})
+            fields})
         business = row.get("business")
         if (not isinstance(row.get("id"), str) or row["id"].removeprefix("act_") != self.account
                 or not isinstance(business, dict) or business.get("id") != self.business):
