@@ -162,6 +162,10 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn('education_statuses',saved['targeting'])
         self.assertNotIn('degrees_of_freedom_spec',saved['creative'])
         self.assertEqual(saved['campaign']['daily_budget'],500)
+        self.page.get_by_role('button',name='Кампания',exact=True).click()
+        self.page.locator('#mbCampaignDailyBudget').fill('')
+        saved=self.page.evaluate('testCreative.build()')
+        self.assertNotIn('daily_budget',saved['campaign'])
         self.page.evaluate('(builder)=>testCreative.open({id:"fixture",name:"Cleared",meta_builder:builder})',saved)
         self.assertEqual(self.page.evaluate('testCreative.build()'),saved)
 

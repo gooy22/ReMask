@@ -418,14 +418,14 @@ require_once __DIR__ . '/checkpassword.php';
         <div id="metaSdkFields" class="cr-sdk-groups"></div>
 
         <details class="cr-raw-json">
-          <summary>Raw JSON override</summary>
-          <div class="cr-muted mb-2">Нужен только если удобнее вставить готовый объект целиком. Значения из обычных контролов имеют приоритет.</div>
+          <summary>Дополнительные настройки разделов</summary>
+          <div class="cr-muted mb-2">Редкие параметры разделов можно добавить через «Настроить». Основные поля и списки выше имеют приоритет.</div>
           <div class="cr-form-grid">
-            <div class="span-6 cr-field"><label>Campaign params (JSON)</label><textarea id="mbAdvancedCampaign" class="form-control cr-json" placeholder="{}"></textarea></div>
-            <div class="span-6 cr-field"><label>Ad Set params (JSON)</label><textarea id="mbAdvancedAdset" class="form-control cr-json" placeholder="{}"></textarea></div>
-            <div class="span-6 cr-field"><label>Targeting params (JSON)</label><textarea id="mbAdvancedTargeting" class="form-control cr-json" placeholder="{}"></textarea></div>
-            <div class="span-6 cr-field"><label>Creative params (JSON)</label><textarea id="mbAdvancedCreative" class="form-control cr-json" placeholder="{}"></textarea></div>
-            <div class="span-6 cr-field"><label>Ad params (JSON)</label><textarea id="mbAdvancedAd" class="form-control cr-json" placeholder="{}"></textarea></div>
+            <div class="span-6 cr-field"><label>Параметры кампании</label><textarea id="mbAdvancedCampaign" class="form-control cr-json" placeholder="{}"></textarea></div>
+            <div class="span-6 cr-field"><label>Параметры группы объявлений</label><textarea id="mbAdvancedAdset" class="form-control cr-json" placeholder="{}"></textarea></div>
+            <div class="span-6 cr-field"><label>Параметры аудитории</label><textarea id="mbAdvancedTargeting" class="form-control cr-json" placeholder="{}"></textarea></div>
+            <div class="span-6 cr-field"><label>Параметры креатива</label><textarea id="mbAdvancedCreative" class="form-control cr-json" placeholder="{}"></textarea></div>
+            <div class="span-6 cr-field"><label>Параметры объявления</label><textarea id="mbAdvancedAd" class="form-control cr-json" placeholder="{}"></textarea></div>
           </div>
         </details>
       </section>

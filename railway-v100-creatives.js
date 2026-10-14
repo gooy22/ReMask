@@ -1157,10 +1157,17 @@ document.addEventListener('remask-module-edit',event=>{
     if(!retained||typeof retained!=='object'||Array.isArray(retained))return;
     delete retained[field];source.value=stringify(retained);
 });
+function remaskCreativeRetainedSection(group,id) {
+    const retained={...parseJsonField(id,{})};
+    // Primary controls own these values, including explicit empty/default
+    // selections. Retained sections preserve only settings handled elsewhere.
+    for(const field of coveredMetaFields[group]||[])delete retained[field];
+    return retained;
+}
 function buildMetaBuilder() {
     const special = $('mbSpecialCategory').value;
     const sdkFields = readMetaSdkFields();
-    let campaign = deepMerge(parseJsonField('mbAdvancedCampaign', {}), sdkFields.campaign);
+    let campaign = deepMerge(remaskCreativeRetainedSection('campaign','mbAdvancedCampaign'), sdkFields.campaign);
     campaign = deepMerge(campaign, compactObject({
         name: $('mbCampaignName').value.trim(),
         objective: $('mbObjective').value,
@@ -1179,7 +1186,7 @@ function buildMetaBuilder() {
     const promotedObject = deepMerge(promotedExtra, compactObject({
         custom_event_type: $('mbConversionEvent').value.trim(),
     }));
-    let adset = deepMerge(parseJsonField('mbAdvancedAdset', {}), sdkFields.adset);
+    let adset = deepMerge(remaskCreativeRetainedSection('adset','mbAdvancedAdset'), sdkFields.adset);
     adset = deepMerge(adset, compactObject({
         name: $('mbAdsetName').value.trim(),
         optimization_goal: $('mbOptimizationGoal').value,
@@ -1198,7 +1205,7 @@ function buildMetaBuilder() {
         status: $('mbAdsetStatus').value,
     }));
 
-    let targeting = deepMerge(parseJsonField('mbAdvancedTargeting', {}), sdkFields.targeting);
+    let targeting = deepMerge(remaskCreativeRetainedSection('targeting','mbAdvancedTargeting'), sdkFields.targeting);
     const manualPlacements = placementMode() === 'manual';
     const publisherPlatforms = manualPlacements ? selectedValues('[data-publisher]', 'data-publisher') : [];
     const devicePlatforms = manualPlacements ? selectedValues('[data-device-platform]', 'data-device-platform') : [];
@@ -1258,14 +1265,14 @@ function buildMetaBuilder() {
         user_device: csvStrings($('mbUserDevice').value),
     }));
 
-    let creative = deepMerge(parseJsonField('mbAdvancedCreative', {}), sdkFields.creative);
+    let creative = deepMerge(remaskCreativeRetainedSection('creative','mbAdvancedCreative'), sdkFields.creative);
     creative = deepMerge(creative, compactObject({
         degrees_of_freedom_spec: parseJsonField('mbDegreesOfFreedom', undefined),
         asset_feed_spec: parseJsonField('mbAssetFeedSpec', undefined),
         platform_customizations: parseJsonField('mbPlatformCustomizations', undefined),
     }));
     const existing_media = {};
-    let ad = deepMerge(parseJsonField('mbAdvancedAd', {}), sdkFields.ad);
+    let ad = deepMerge(remaskCreativeRetainedSection('ad','mbAdvancedAd'), sdkFields.ad);
     ad = deepMerge(ad, compactObject({
         status: $('mbAdStatus').value,
         conversion_domain: $('mbConversionDomain').value.trim(),
