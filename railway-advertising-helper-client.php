@@ -7,7 +7,7 @@ final class RemaskAdvertisingHelperClient {
         $request = [];
         $structured = ['targeting_spec','promoted_object','attribution_spec','special_ad_categories','creative'];
         foreach (array_merge($structured, ['optimization_goal','bid_strategy','campaign_destination_type',
-            'ad_format','daily_budget','bid_amount','prediction_duration','is_cbo_enabled']) as $key) {
+            'ad_format','daily_budget','bid_amount','prediction_duration','is_cbo_enabled','include_forecast']) as $key) {
             if (!array_key_exists($key,$input)) continue;
             $value = $input[$key];
             if (in_array($key,$structured,true) && is_string($value))
@@ -18,7 +18,7 @@ final class RemaskAdvertisingHelperClient {
                     throw new InvalidArgumentException('INVALID_ESTIMATE_BUDGET');
                 $value = (int)$value;
             }
-            if ($key==='is_cbo_enabled') {
+            if (in_array($key,['is_cbo_enabled','include_forecast'],true)) {
                 $value = filter_var($value,FILTER_VALIDATE_BOOLEAN,FILTER_NULL_ON_FAILURE);
                 if ($value===null) throw new InvalidArgumentException('INVALID_ESTIMATE_INPUT');
             }

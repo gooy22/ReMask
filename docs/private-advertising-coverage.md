@@ -12,10 +12,8 @@ sender or establishes live account permissions.
 | Device models, OS versions, manual and automatic placements | Source enum choices | Same choices | Captured private field definitions |
 | Potential audience | Live calculation using a server-selected read context | Generic or separate per selected RK | `ACCOUNT_READ`, `DELIVERY_ESTIMATE`; potential-reach selectors |
 | Advantage+ and relaxed targeting audience sizes | Display when returned by Meta | Same, per RK | Actual `estimate_mau_advantage_audience_enabled` / `estimate_mau_relaxation_aware` |
-| Daily reach, actions and impressions | Actual daily curve and daily budget | Effective targeting, budget, optimization and RK bindings | `AdsBisonUtils`; `daily_outcomes_curve` |
-| Bid cap, target cost and cost cap forecast | Source curve interpolation | Same | `AdsBisonUtils`; unknown metrics remain unavailable |
-| Campaign budget forecast | Actual campaign group curve required | Same | `campaign_group_curve`; no substitution of an ad-set curve |
-| Live placement inventory | Optional read, no template binding | Separate per RK | `TARGETING_BROWSE`; incomplete pagination is rejected |
+| Daily/bid/campaign forecasts | Removed from the audience panel | Removed from the audience panel | Legacy worker contract retained; editors send `include_forecast=false`, so no curve interpolation runs |
+| Placement choices | Automatically installed from reviewed module metadata | Same, before selecting a profile | Captured private placement schema; diagnostic read buttons removed |
 | Local creative/media preview | Existing template preview | Existing local preview | Workspace media, no Meta write |
 | Meta placement-format preview | Resource identities belong to Launch | Separate, scoped, sandboxed previews of existing Meta media / Instagram posts | Reviewed native `CREATIVE_PREVIEW`; Page, image/video/IG ownership rechecked |
 | Pages, pixels, custom audiences, conversions, Instagram accounts and posts | Deliberately not stored as template identities | Scoped selectors and bindings | Account scope checks + reviewed resource reads |
@@ -45,3 +43,10 @@ sender or establishes live account permissions.
 Estimate module factories and wrapper hashes are retained in
 `python_backend/app/contracts/ads_delivery_estimate_20261014.json` as source
 evidence. Only genuine sender responses feed the UI.
+
+Potential audience loads automatically on opening/restoring a template and on
+changes to its effective settings. Not-ready Meta responses are polled twice;
+failed reads receive two bounded retries. Changed targeting and a closed editor
+cancel pending work. There are no audience calculation or placement verification
+buttons. Only returned Meta counts/bounds are displayed, not locally derived
+daily outcomes. Read failures remain independent of template editing/saving.

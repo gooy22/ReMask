@@ -14,8 +14,8 @@
     `;
     document.head.appendChild(style);
     const panel=document.createElement('section');panel.className='rm-ad-estimate';panel.id='remaskAdvertisingEstimate';
-    panel.setAttribute('aria-label','Возможная аудитория и прогноз');
-    panel.innerHTML='<h4>Потенциальная аудитория</h4><div data-rm-estimates></div><p data-rm-estimate-status role="status" aria-live="polite">Задайте географию аудитории. Оценка обновляется при изменении настроек.</p><button type="button" class="btn btn-secondary" data-rm-estimate>Рассчитать аудиторию</button><button type="button" class="btn btn-outline-light" data-rm-placements>Проверить места показа</button><p data-rm-placement-status role="status" aria-live="polite"></p><p>Прогноз зависит от настроек и бюджета. Он не гарантирует результат рекламы.</p>';
+    panel.setAttribute('aria-label','Потенциальная аудитория');
+    panel.innerHTML='<h4>Потенциальная аудитория</h4><div data-rm-estimates></div><p data-rm-estimate-status role="status" aria-live="polite">Добавьте географию. Размер аудитории загрузится автоматически.</p>';
     if(creative) {
         // workflow-ui may execute before or after this compiled editor module.
         // Its setup moves this same node, preserving readers and event handlers.
@@ -33,13 +33,11 @@
     }
     const results=panel.querySelector('[data-rm-estimates]');
     const status=panel.querySelector('[data-rm-estimate-status]');
-    const placementStatus=panel.querySelector('[data-rm-placement-status]');
     function emptyMetrics() {
-        results.innerHTML='<dl data-rm-placeholder><div><dt>Возможная аудитория</dt><dd>—</dd></div><div><dt>Охват за день</dt><dd>—</dd></div><div><dt>Результаты за день</dt><dd>—</dd></div></dl>';
+        results.innerHTML='<dl data-rm-placeholder><div><dt>Возможная аудитория</dt><dd>—</dd></div></dl>';
     }
     emptyMetrics();
-    let timer=null, generation=0, controller=null, lastFingerprint='', placementGeneration=0, placementController=null;
-    const reasons={META_FORECAST_NOT_READY:'Meta ещё не подготовила прогноз.',DAILY_BUDGET_REQUIRED:'Для дневного прогноза задайте дневной бюджет. Бюджет на весь срок не пересчитывается в дневной автоматически.',META_CURVE_UNAVAILABLE:'Meta не вернула дневной прогноз.',CBO_CURVE_UNAVAILABLE:'Meta не вернула прогноз распределения бюджета кампании.',CBO_BUDGET_OUTSIDE_CURVE:'Бюджет кампании находится вне доступного диапазона прогноза.',CBO_BID_FORECAST_UNAVAILABLE:'Прогноз кампании для этой стратегии ставок недоступен.',BID_STRATEGY_FORECAST_UNAVAILABLE:'Для этой стратегии ставок Meta не вернула подтверждённый прогноз.',BID_AMOUNT_REQUIRED:'Укажите ограничение ставки или цены результата.',META_CURVE_INVALID:'Meta вернула некорректные данные прогноза.',META_BID_CURVE_UNAVAILABLE:'Meta не вернула кривую ставок.',META_ACTION_CURVE_UNAVAILABLE:'Meta не вернула кривую результатов.'};
+    let timer=null, generation=0, controller=null, lastFingerprint='', needsRefresh=true, lastReadAt=0;
     const valid=n=>typeof n==='number'&&Number.isFinite(n)&&n>=0;
     const fmt=n=>new Intl.NumberFormat('ru-RU',{maximumFractionDigits:0}).format(n);
     function range(low,high,value) {
@@ -63,7 +61,7 @@
     function requestSpec(spec,destination={}) {
         const campaign=spec.campaign,adset=spec.adset;
         const cbo=Boolean(campaign.daily_budget||campaign.lifetime_budget);
-        const request={targeting_spec:JSON.parse(JSON.stringify(spec.targeting)),optimization_goal:adset.optimization_goal,
+        const request={include_forecast:false,targeting_spec:JSON.parse(JSON.stringify(spec.targeting)),optimization_goal:adset.optimization_goal,
             bid_strategy:(cbo?campaign.bid_strategy:adset.bid_strategy)||adset.bid_strategy||campaign.bid_strategy||'LOWEST_COST_WITHOUT_CAP',
             special_ad_categories:campaign.special_ad_categories||[],is_cbo_enabled:cbo};
         for(const key of ['promoted_object','attribution_spec','bid_amount'])if(adset[key]!==undefined)request[key]=adset[key];
@@ -104,72 +102,46 @@
         metric('Возможная аудитория',data.estimate_ready?range(data.lower_bound,data.upper_bound,data.estimate_mau):'Ещё не готова');
         if(data.estimate_ready&&valid(data.estimate_mau_advantage_audience_enabled))metric('С расширением Advantage+',fmt(data.estimate_mau_advantage_audience_enabled));
         if(data.estimate_ready&&valid(data.estimate_mau_relaxation_aware))metric('С расширением таргетинга',fmt(data.estimate_mau_relaxation_aware));
-        const forecast=data.forecast||{};
-        metric('Охват за день',forecast.available?range(forecast.reach_lower_bound,forecast.reach_upper_bound,forecast.reach):'Нет прогноза');
-        metric('Результаты за день',forecast.available?range(forecast.actions_lower_bound,forecast.actions_upper_bound,forecast.actions):'Нет прогноза');
-        if(forecast.available&&valid(forecast.impressions))metric('Показы за день','≈ '+fmt(forecast.impressions));
-        box.appendChild(dl);
-        const note=document.createElement('p');
-        note.textContent=(forecast.available?'Дневной прогноз по текущему бюджету.':reasons[forecast.reason]||'Meta не вернула дневной прогноз.')+
-            (data.currency?' Валюта источника расчёта: '+data.currency+'. Бюджет указан в минимальных единицах этой валюты.':' Валюта источника расчёта не подтверждена.')+
-            (forecast.curve_budget_clamped?' Бюджет выше диапазона Meta; показан последний доступный прогноз.':'')+
-            (!destination.account_id?' Шаблон остаётся общим для всех профилей.':'');
-        box.appendChild(note);results.appendChild(box);
+        box.appendChild(dl);results.appendChild(box);
     }
     function invalidate(message='Настройки изменились. Оценка обновляется…') {
         generation++;controller?.abort();clearTimeout(timer);lastFingerprint='';emptyMetrics();status.textContent=message;
-        placementGeneration++;placementController?.abort();placementStatus.textContent='';
     }
-    async function estimate(force=false) {
-        if(creative&&!byId('creativeModal')?.classList.contains('open'))return;
+    async function estimate(force=false,attempt=0) {
+        if(document.hidden||(creative&&!byId('creativeModal')?.classList.contains('open')))return;
         let current;
         try{current=snapshot();if(!current.spec.targeting.geo_locations||!Object.keys(current.spec.targeting.geo_locations).length)throw new Error('Выберите географию аудитории.');}
         catch(error){invalidate(error.message);lastFingerprint='';return;}
         if(!force&&current.fingerprint===lastFingerprint)return;
         invalidate('Получаем оценку Meta…');lastFingerprint=current.fingerprint;
         const seq=generation;controller=new AbortController();const signal=controller.signal;
-        let success=0;
+        let success=0, pending=false, failed=false;lastReadAt=Date.now();
         // Bound concurrent profile reads; never reuse one account's numbers for another.
         for(const target of current.targets.slice(0,20)) {
             if(seq!==generation)return;
             try {
                 const data=await read('audience_estimate',requestSpec(current.spec,target),target,signal);
                 if(seq!==generation||snapshot().fingerprint!==current.fingerprint)return;
-                results.querySelector('[data-rm-placeholder]')?.remove();render(data,target);success++;
+                results.querySelector('[data-rm-placeholder]')?.remove();render(data,target);success++;pending ||= data.estimate_ready!==true;
             } catch(error) {
                 if(seq!==generation||signal.aborted)return;
-                const p=document.createElement('p');p.textContent=(target.account_id?'РК '+target.account_id+': ':'')+error.message;results.appendChild(p);
+                failed=true;const p=document.createElement('p');p.textContent=(target.account_id?'РК '+target.account_id+': ':'')+'Размер аудитории временно недоступен.';p.title=error.message;results.appendChild(p);
             }
         }
-        if(seq===generation)status.textContent=(success?'Оценка получена из Meta.':'Оценка недоступна. Настройки можно сохранить.')+
-            (current.targets.length>20?' Рассчитаны первые 20 выбранных РК.':'');
+        if(seq!==generation)return;
+        needsRefresh=pending||failed;
+        status.textContent=pending?'Meta готовит размер аудитории…':failed?'Данные Meta временно недоступны. Шаблон можно сохранить.':'Размер аудитории получен из Meta.';
+        if(current.targets.length>20)status.textContent+=' Показаны первые 20 выбранных РК.';
+        // Bounded read-only polling. No browser, route switch or template binding.
+        if(needsRefresh&&attempt<2)timer=setTimeout(()=>{
+            try{if(seq===generation&&snapshot().fingerprint===current.fingerprint)estimate(true,attempt+1);}catch{}
+        },failed?[15000,45000][attempt]:[2000,5000][attempt]);
     }
-    async function placements() {
-        const seq=++placementGeneration;placementController?.abort();placementController=new AbortController();
-        placementStatus.textContent='Получаем места показа Meta…';
-        try {
-            const placementSnapshot=()=>{
-                const targets=destinations(),goal=byId(creative?'mbOptimizationGoal':'optimizationGoal')?.value||'';
-                return {targets,goal,fingerprint:JSON.stringify([goal,targets.map(t=>[t.profile,t.account_id])])};
-            };
-            const current=placementSnapshot(),lines=[];
-            for(const target of current.targets.slice(0,20)) {
-                const data=await read('placements',{optimization_goal:current.goal},target,placementController.signal);
-                if(seq!==placementGeneration||placementSnapshot().fingerprint!==current.fingerprint)return;
-                const names=Object.values(data.options||{}).flat().map(value=>{
-                    const label=Array.from(document.querySelectorAll('[data-position],option')).find(e=>(e.dataset.position||e.value)===value);
-                    return label?.closest('label')?.textContent?.trim()||label?.textContent?.trim()||value;
-                });
-                lines.push((target.account_id?'РК '+target.account_id+': ':'')+(names.length?'Meta вернула: '+names.join(', '):data.warning||'Meta не вернула доступные места показа.'));
-            }
-            if(seq===placementGeneration)placementStatus.textContent=lines.join('\n');
-        } catch(error){if(seq===placementGeneration)placementStatus.textContent=error.message;}
-    }
-    function changed() {
+    function changed(force=false) {
         if(creative&&!byId('creativeModal')?.classList.contains('open'))return;
         let same=false;try{same=snapshot().fingerprint===lastFingerprint;}catch{}
-        if(same)return;
-        invalidate();timer=setTimeout(()=>estimate(),900);
+        if(same&&!force)return;
+        needsRefresh=true;invalidate();timer=setTimeout(()=>estimate(),900);
     }
     if(!creative) {
         const preview=document.createElement('section');preview.className='rm-ad-estimate';
@@ -234,11 +206,9 @@
         }).catch(()=>{});
         root.addEventListener('click',e=>{if(e.target.closest('#bundleLoad,#creativeLibraryLaunch,#clearExistingMedia'))clear();});
     }
-    panel.querySelector('[data-rm-estimate]').addEventListener('click',()=>estimate(true));
-    panel.querySelector('[data-rm-placements]').addEventListener('click',placements);
     root.addEventListener('input',e=>{if(!panel.contains(e.target))changed();});
     root.addEventListener('change',e=>{if(!panel.contains(e.target))changed();});
-    root.addEventListener('click',e=>{if(e.target.closest('[data-rm-estimate],[data-rm-placements]'))return;setTimeout(changed,0);});
+    root.addEventListener('click',()=>setTimeout(()=>changed(),0));
     if(creative) {
         const originalOpen=openEditor;
         openEditor=function(...args){const value=originalOpen(...args);lastFingerprint='';changed();return value;};
@@ -247,5 +217,10 @@
     } else {
         const originalRestore=applyBundleData;
         applyBundleData=async function(...args){invalidate('Загрузка настроек…');lastFingerprint='';try{return await originalRestore(...args);}finally{changed();}};
+        const originalPreset=applyCreativeLibrarySelection;
+        applyCreativeLibrarySelection=function(...args){const value=originalPreset(...args);changed();return value;};
+        changed();
     }
+    const resume=()=>{if(needsRefresh&&!document.hidden&&Date.now()-lastReadAt>=15000)changed(true);};
+    window.addEventListener('focus',resume);window.addEventListener('online',resume);document.addEventListener('visibilitychange',resume);
 })();

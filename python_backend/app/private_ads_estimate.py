@@ -124,5 +124,8 @@ def audience(row, inputs):
     counts = {key: (number(row.get(key)) if ready else None) for key in (
         'estimate_mau', 'estimate_dau', 'estimate_mau_lower_bound', 'estimate_mau_upper_bound',
         'estimate_mau_relaxation_aware', 'estimate_mau_advantage_audience_enabled')}
-    return {'estimate_ready': ready, 'lower_bound': counts['estimate_mau_lower_bound'],
-            'upper_bound': counts['estimate_mau_upper_bound'], **counts, 'forecast': forecast(row, inputs)}
+    result = {'estimate_ready': ready, 'lower_bound': counts['estimate_mau_lower_bound'],
+              'upper_bound': counts['estimate_mau_upper_bound'], **counts}
+    if inputs.get('include_forecast') is not False:
+        result['forecast'] = forecast(row, inputs)
+    return result
