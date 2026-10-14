@@ -73,7 +73,7 @@ class WorkflowTests(unittest.TestCase):
                         window.fixtureEstimateData||{estimate_ready:true,lower_bound:1000,upper_bound:5000,currency:'USD',
                             forecast:{available:true,reach:1200,actions:15,budget_minor_units:200}};
                     const response={ok:!window.fixtureEstimateError,status:window.fixtureEstimateError?409:200,text:async()=>JSON.stringify({ok:!window.fixtureEstimateError,
-                        error:{message:'Сессия недоступна. Настройки можно сохранить.'},data:{checked_live:true,account_scope_verified:true,transport:'private_http_h2',template_account_bound:false,...data}})};
+                        error:{message:'Сессия недоступна. Настройки можно сохранить. · code=TEMPLATE_LOOKUP_SOURCE_UNAVAILABLE'},data:{checked_live:true,account_scope_verified:true,transport:'private_http_h2',template_account_bound:false,...data}})};
                     if(window.fixtureDelayEstimate)return await new Promise(resolve=>window.fixtureEstimateWaits.push(()=>resolve(response)));
                     return response;
                 }
@@ -161,6 +161,7 @@ class WorkflowTests(unittest.TestCase):
         self.page.evaluate('window.fixtureEstimateError=true')
         self.page.get_by_role('button',name='Рассчитать аудиторию',exact=True).click()
         self.page.wait_for_function('document.querySelector("[data-rm-estimates]").textContent.includes("Сессия недоступна")')
+        self.assertTrue(self.page.locator('.wf-summary').evaluate('(el)=>el.scrollWidth<=el.clientWidth'))
         self.assertEqual(self.page.evaluate('testCreative.build().targeting.age_min'),21)
         self.assertEqual(self.page.evaluate('testCreative.build().adset.daily_budget'),200)
 
