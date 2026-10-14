@@ -94,7 +94,7 @@ class WorkflowTests(unittest.TestCase):
         self.creative(context=True,modules=True)
         self.page.get_by_role('button',name='Места показа',exact=True).click()
         for details in self.page.locator('#wf-panel-placements details:not([open])').all():details.locator(':scope > summary').click()
-        self.page.locator('#mbUserDevice_choices').fill('iphone 17')
+        self.page.get_by_label('Модели устройств',exact=True).fill('iphone 17')
         self.page.locator('#mbUserDevice_choices').press('Enter')
         self.page.get_by_role('button',name='iphone 17',exact=True).click()
         self.page.locator('#mbUserOs_choices').fill('iOS 26.0')

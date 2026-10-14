@@ -358,7 +358,7 @@ require_once __DIR__ . '/checkpassword.php';
         </div>
 
         <details class="cr-raw-targeting" style="margin-top:12px">
-          <summary>Дополнительное device targeting</summary>
+          <summary>Операционные системы и устройства</summary>
           <div class="cr-form-grid">
             <div class="span-6 cr-field"><label>User OS</label><input id="mbUserOs" class="form-control" placeholder="Android,iOS"></div>
             <div class="span-6 cr-field"><label>User devices</label><input id="mbUserDevice" class="form-control" placeholder="Galaxy S24,iPhone"></div>
