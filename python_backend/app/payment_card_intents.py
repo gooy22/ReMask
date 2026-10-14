@@ -12,6 +12,27 @@ from pathlib import Path
 _SCHEMA_LOCK = threading.Lock()
 
 
+def _enable_wal(con):
+    # PRAGMA journal_mode can return SQLITE_BUSY immediately during the first
+    # connection in another process, even with SQLite's busy timeout enabled.
+    # Only schema setup is retried here; no intent or financial POST is replayed.
+    deadline = time.monotonic() + 15
+    while True:
+        try:
+            con.execute('PRAGMA journal_mode=WAL')
+            return
+        except sqlite3.OperationalError as error:
+            code = getattr(error, 'sqlite_errorcode', None)
+            if code is None or (code & 0xff) not in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
+                con.close()
+                raise
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                con.close()
+                raise
+            time.sleep(min(0.025, remaining))
+
+
 class CardIntentLedger:
     def __init__(self, path):
         self.path = Path(path)
@@ -24,7 +45,7 @@ class CardIntentLedger:
         with _SCHEMA_LOCK:
             con = sqlite3.connect(self.path, timeout=15)
             con.row_factory = sqlite3.Row
-            con.execute('PRAGMA journal_mode=WAL')
+            _enable_wal(con)
             con.execute('''CREATE TABLE IF NOT EXISTS card_http_intents (
                 attempt_id TEXT PRIMARY KEY, profile TEXT NOT NULL, account TEXT NOT NULL,
                 card_id TEXT NOT NULL, phase TEXT NOT NULL, result TEXT NOT NULL DEFAULT '{}',

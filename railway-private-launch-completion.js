@@ -1,4 +1,61 @@
 /* REMASK_PRIVATE_CREATIVE_LAUNCH_COMPLETION_V1 */
+// Audience templates use the same private, server-scoped lookup as Creative.
+// Never carry the service's lookup identity into the publishing configuration.
+const remaskPrivateOriginalTargetingApiJson = apiJson;
+apiJson = async function(url, options = {}) {
+    if (String(url).split('?')[0].endsWith('ajax/metaTargetingSearch.php')
+            && (typeof options.body === 'string' || typeof options.body?.get === 'function')) {
+        const input = typeof options.body === 'string' ? new URLSearchParams(options.body) : options.body;
+        const body = new URLSearchParams();
+        for (const key of ['type','q','limit']) {
+            const value = input.get(key);
+            if (value !== null) body.set(key, value);
+        }
+        return remaskPrivateOriginalTargetingApiJson('ajax/metaTemplateTargetingSearch.php', {...options, body:body.toString()});
+    }
+    return remaskPrivateOriginalTargetingApiJson(url, options);
+};
+
+const remaskUnsupportedObjectiveMessage = 'Сохранённая цель недоступна для автозалива. Выберите доступную цель; остальные настройки сохранены.';
+function remaskRestoreLaunchObjective(value) {
+    const select = $('objective');
+    if (!select) return;
+    const saved = String(value || select.value || '');
+    for (const option of Array.from(select.options)) {
+        if (option.dataset.remaskLegacyObjective && option.value !== saved) option.remove();
+    }
+    if (saved && !hasOptionValue(select, saved)) {
+        const legacy = new Option('Сохранённая цель недоступна — выберите новую', saved);
+        legacy.disabled = true;
+        legacy.dataset.remaskLegacyObjective = 'true';
+        select.appendChild(legacy);
+    }
+    if (saved) select.value = saved;
+    let warning = $('remaskUnsupportedObjective');
+    if (!warning) {
+        warning = document.createElement('div');
+        warning.id = 'remaskUnsupportedObjective';
+        warning.className = 'alert alert-warning';
+        warning.setAttribute('role', 'alert');
+        select.after(warning);
+    }
+    const supported = state.launchConfig?.objectives?.[select.value]?.enabled === true;
+    warning.hidden = supported;
+    warning.textContent = supported ? '' : remaskUnsupportedObjectiveMessage;
+}
+
+const remaskPrivateOriginalLoadConfig = loadLaunchConfig;
+loadLaunchConfig = async function() {
+    const saved = $('objective')?.value;
+    await remaskPrivateOriginalLoadConfig();
+    remaskRestoreLaunchObjective(saved);
+    invalidateLaunchReview(); validateReady();
+};
+$('objective')?.addEventListener('change', () => {
+    remaskRestoreLaunchObjective($('objective').value);
+    invalidateLaunchReview(); validateReady();
+});
+
 let remaskBundleMedia = null;
 let remaskBundleRestoreGeneration = 0;
 const remaskPrivateOriginalClearPreset = clearCreativeLibrarySelection;
@@ -73,6 +130,7 @@ async function applyBundleData(data) {
     // Loading old bundles must clear advanced values from the previous form.
     remaskPopulateLaunchMetaSdkFields(data?.meta_builder || {});
     remaskLegacyApplyBundleData(data);
+    remaskRestoreLaunchObjective(data?.fields?.objective || data?.meta_builder?.campaign?.objective);
     remaskPrivateBudgetLabel();
     const snapshot = data?.media;
     if (snapshot) {
@@ -133,6 +191,7 @@ remaskPrivateInstallBudgetPeriod();
 
 const remaskPrivateOriginalBuildPayload = buildPayload;
 buildPayload = function() {
+    if (!currentObjectiveSpec()?.enabled) throw new Error(remaskUnsupportedObjectiveMessage);
     const payload = remaskPrivateOriginalBuildPayload();
     if ($('budgetPeriod')?.value === 'LIFETIME') {
         for (const section of ['campaign','adset']) {
@@ -148,6 +207,7 @@ buildPayload = function() {
 const remaskPrivateOriginalApplyPreset = applyCreativeLibrarySelection;
 const remaskPrivateOriginalValidatePayload = validatePayloadClient;
 validatePayloadClient = function(payload, accountIds) {
+    if (!currentObjectiveSpec()?.enabled) throw new Error(remaskUnsupportedObjectiveMessage);
     remaskPrivateOriginalValidatePayload(payload, accountIds);
     if ((payload.campaign?.lifetime_budget || payload.adset?.lifetime_budget) && !payload.adset?.end_time)
         throw new Error('Для бюджета на весь срок укажите окончание показа.');
@@ -157,6 +217,7 @@ applyCreativeLibrarySelection = function() {
     remaskBundleRestoreGeneration++;
     remaskPrivateOriginalApplyPreset();
     const builder = remaskSelectedCreativePreset?.meta_builder || {};
+    remaskRestoreLaunchObjective(builder.campaign?.objective);
     const lifetime = builder.campaign?.lifetime_budget || builder.adset?.lifetime_budget;
     if ($('budgetPeriod')) $('budgetPeriod').value = lifetime ? 'LIFETIME' : 'DAILY';
     if (lifetime) {

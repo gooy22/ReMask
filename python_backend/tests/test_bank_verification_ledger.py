@@ -6,8 +6,9 @@ import multiprocessing
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 import unittest
+from unittest.mock import MagicMock, patch
 
-from app.payment_card_intents import BankVerificationLedger, CardIntentLedger
+from app.payment_card_intents import BankVerificationLedger, CardIntentLedger, _enable_wal
 
 
 def reserve_in_worker(path, scope):
@@ -56,6 +57,31 @@ class BankVerificationLedgerTests(unittest.IsolatedAsyncioTestCase):
         for flow in ('SDC', 'THREEDS'):
             value = await BankVerificationLedger(self.db).reserve(**{**self.kwargs, 'flow': flow})
             self.assertFalse(value['reserved'])
+
+    def test_first_use_wal_busy_retries_only_the_schema_statement(self):
+        con = MagicMock()
+        busy = sqlite3.OperationalError('database is locked')
+        busy.sqlite_errorcode = sqlite3.SQLITE_BUSY
+        con.execute.side_effect = [busy, busy, None]
+        with patch('app.payment_card_intents.time.sleep') as sleep:
+            _enable_wal(con)
+        self.assertEqual(con.execute.call_count, 3)
+        self.assertTrue(all(call.args == ('PRAGMA journal_mode=WAL',) for call in con.execute.call_args_list))
+        self.assertEqual(sleep.call_count, 2)
+        con.close.assert_not_called()
+
+    def test_wal_unavailable_or_invalid_database_stays_closed(self):
+        for code in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_CORRUPT):
+            con = MagicMock()
+            error = sqlite3.OperationalError('schema unavailable')
+            error.sqlite_errorcode = code
+            con.execute.side_effect = error
+            with patch('app.payment_card_intents.time.monotonic', side_effect=[0,16]), \
+                 patch('app.payment_card_intents.time.sleep') as sleep, \
+                 self.assertRaises(sqlite3.OperationalError):
+                _enable_wal(con)
+            con.close.assert_called_once()
+            sleep.assert_not_called()
 
     async def test_every_prior_stage_blocks_switching_flow(self):
         for index, stage in enumerate(('RESERVED', 'REQUEST_SENT', 'RESULT_UNKNOWN', 'CHALLENGE_READY',

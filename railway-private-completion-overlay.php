@@ -100,6 +100,26 @@ JS;
 completionReplace($launch, $old, $new, 'bundle-handler');
 completionReplace($launch, '    const savedBuilder = remaskSelectedCreativePreset?.meta_builder || {};',
     '    const savedBuilder = {};', 'effective-budget-validation');
+// Common audience suggestions are template data. Publishing identities stay
+// explicit in Launch Review; the server selects the private lookup context.
+completionReplace($launch, <<<'JS'
+    if (!state.profile) {
+        if (resultsEl) resultsEl.textContent = 'Run preflight first.';
+        return;
+    }
+JS, '', 'template-audience-profile-guard');
+completionReplace($launch, <<<'JS'
+    if (isBehavior && !behaviorAccountId) {
+        if (resultsEl) resultsEl.textContent = 'Select at least one RK first.';
+        return;
+    }
+JS, '', 'template-behavior-account-guard');
+completionReplace($launch, <<<'JS'
+    if(!state.profile){
+        if(results) results.textContent='Сначала выбери FB-профиль / RK.';
+        return;
+    }
+JS, '', 'template-language-profile-guard');
 // ZIP and market selections already restored by the preset editor must survive
 // the final serializer, including a GEO consisting solely of a ZIP selection.
 completionReplace($launch, "    if (!Object.keys(geoLocations).length) throw new Error('Select at least one GEO result.');",

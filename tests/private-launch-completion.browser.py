@@ -34,6 +34,9 @@ class InstalledLaunchTests(unittest.TestCase):
         self.bundles = []
         self.missing = False
         self.errors = []
+        self.preset_objective = 'OUTCOME_TRAFFIC'
+        self.lookup_requests = []
+        self.lookup_failure = False
         self.page = self.browser.new_page()
         self.page.set_default_timeout(5000)
         self.page.on('pageerror', lambda e: self.errors.append(str(e)))
@@ -62,7 +65,7 @@ class InstalledLaunchTests(unittest.TestCase):
         if file.is_file() and not path.endswith('.php'):
             body = file.read_bytes()
             if path == 'scripts/launch.js':
-                body += b'\nwindow.fixtureLaunch={payload:()=>buildPayload(),capture:()=>bundleFormState(),restore:applyBundleData,geo:()=>{state.geo=[{type:"country",key:"US",country_code:"US",name:"United States"}];}};'
+                body += b'\nwindow.fixtureLaunch={payload:()=>buildPayload(),capture:()=>bundleFormState(),restore:applyBundleData,config:loadLaunchConfig,geo:()=>{state.geo=[{type:"country",key:"US",country_code:"US",name:"United States"}];}};'
             route.fulfill(body=body, content_type='application/javascript' if path.endswith('.js') else 'text/css'); return
         data = {}
         status = 200
@@ -72,7 +75,18 @@ class InstalledLaunchTests(unittest.TestCase):
         elif path == 'ajax/creativeLibrary.php':
             data = {'items': [{'id':'preset','name':'Fixture','format':'SINGLE','media_library_id':MEDIA_ID,
                 'media':MEDIA,'message':'Fixture message','headline':'Fixture headline','destination_url':'https://example.com/',
-                'meta_builder':{'campaign':{'daily_budget':500}}}]}
+                'meta_builder':{'campaign':{'daily_budget':500,'objective':self.preset_objective}}}]}
+        elif path == 'ajax/metaTemplateTargetingSearch.php':
+            fields = parse_qs(request.post_data or '')
+            self.lookup_requests.append(fields)
+            if self.lookup_failure:
+                route.fulfill(status=409,json={'ok':False,'error':{'code':'PRIVATE_HTTP_PROXY_UNAVAILABLE',
+                    'message':'Прокси недоступен. Уже введённые настройки можно сохранить.'}})
+                return
+            kind = fields['type'][0]
+            item = {'key':'US','name':'Fixture locations','type':'country','country_code':'US'} if kind == 'locations' else {
+                'id':{'interests':'123456','behaviors':'654321','languages':'1000'}[kind], 'name':'Fixture '+kind}
+            data = {'data':[item], 'checked_live':True,'source':'private_meta_template_lookup','template_account_bound':False}
         elif path == 'ajax/metaBundles.php':
             fields = parse_qs(request.post_data or '')
             if fields.get('action') == ['save']:
@@ -143,5 +157,82 @@ class InstalledLaunchTests(unittest.TestCase):
         media = self.page.evaluate('fixtureLaunch.capture().media')
         self.assertEqual([x['media_library_id'] for x in media['carousel']], [MEDIA_ID,second])
         self.assertEqual([x['headline'] for x in media['carousel']], ['First','Second'])
+
+    def test_legacy_preset_goal_survives_bundle_reload_until_user_selects_supported_goal(self):
+        self.preset_objective = 'LEGACY_TEST_OBJECTIVE'
+        self.page.reload()
+        self.page.wait_for_function('document.querySelector("#creativeLibrarySelect option[value=preset]") !== null')
+        self.page.locator('#creativeLibrarySelect').select_option('preset')
+        self.assertEqual(self.page.locator('#objective').input_value(), self.preset_objective)
+        self.assertTrue(self.page.locator('#remaskUnsupportedObjective').is_visible())
+        self.assertFalse(self.page.locator('#launchButton').is_enabled())
+        self.assertFalse(self.page.locator('#reviewLaunch').is_enabled())
+        self.page.evaluate('fixtureLaunch.geo()')
+        with self.assertRaisesRegex(Exception, 'Сохранённая цель недоступна'):
+            self.page.evaluate('fixtureLaunch.payload()')
+        self.page.locator('#dailyBudget').fill('700')
+        self.save_and_reload()
+        self.assertEqual(self.page.locator('#objective').input_value(), self.preset_objective)
+        self.assertEqual(self.page.locator('#dailyBudget').input_value(), '700')
+        self.assertEqual(self.page.evaluate('fixtureLaunch.capture().fields.objective'), self.preset_objective)
+        self.page.evaluate('fixtureLaunch.config()')
+        self.assertEqual(self.page.locator('#objective').input_value(), self.preset_objective)
+        self.page.locator('#objective').select_option('OUTCOME_TRAFFIC')
+        self.assertFalse(self.page.locator('#remaskUnsupportedObjective').is_visible())
+        self.page.evaluate('fixtureLaunch.geo()')
+        self.assertEqual(self.page.evaluate('fixtureLaunch.payload().campaign.objective'), 'OUTCOME_TRAFFIC')
+        self.assertEqual(self.page.locator('#dailyBudget').input_value(), '700')
+
+    def test_disabled_configured_goal_is_retained_in_restored_bundle(self):
+        disabled = next((key for key,spec in self.config['objectives'].items() if not spec.get('enabled')), None)
+        self.assertIsNotNone(disabled)
+        self.page.evaluate('(data)=>fixtureLaunch.restore(data)',
+            {'fields':{'objective':disabled,'dailyBudget':'800','campaignName':'Keep name'}})
+        self.assertEqual(self.page.locator('#objective').input_value(), disabled)
+        self.assertFalse(self.page.locator('#dryRunPlan').is_enabled())
+        self.assertTrue(self.page.locator('#remaskUnsupportedObjective').is_visible())
+        self.assertEqual(self.page.locator('#campaignName').input_value(), 'Keep name')
+        self.assertEqual(self.page.locator('#dailyBudget').input_value(), '800')
+
+    def test_all_common_audience_searches_work_without_publishing_profile_or_account(self):
+        self.page.locator('#creativeLibrarySelect').select_option('preset')
+        for field, results in (('geoQuery','geoResults'), ('interestQuery','interestResults'),
+                               ('behaviorQuery','behaviorResults'), ('languageQuery','languageResults')):
+            self.page.locator('#'+field).fill('Fixture')
+            self.page.locator('#'+field).press('Enter')
+            self.page.locator('#'+results+' .search-item').first.click()
+        self.assertEqual({row['type'][0] for row in self.lookup_requests},
+                         {'locations','interests','behaviors','languages'})
+        for row in self.lookup_requests:
+            self.assertEqual(set(row), {'type','q','limit'})
+        self.assertEqual(self.page.locator('#profile option:checked').count(), 0)
+        self.save_and_reload()
+        saved = self.page.evaluate('fixtureLaunch.capture()')
+        self.assertEqual(saved['geo'][0]['country_code'], 'US')
+        self.assertEqual(saved['interests'][0]['id'], '123456')
+        self.assertEqual(saved['behaviors'][0]['id'], '654321')
+        self.assertEqual(int(saved['languages'][0]['id']), 1000)
+        payload = self.page.evaluate('fixtureLaunch.payload()')
+        self.assertEqual(payload['adset']['targeting']['geo_locations']['countries'], ['US'])
+        self.assertEqual(payload['adset']['targeting']['locales'], [1000])
+        self.assertNotIn('account_id', payload['adset']['targeting'])
+        self.assertEqual(self.page.locator('#profile option:checked').count(), 0)
+
+    def test_audience_connection_error_keeps_media_budget_and_saved_selections(self):
+        self.page.locator('#creativeLibrarySelect').select_option('preset')
+        self.page.locator('#dailyBudget').fill('700')
+        self.page.locator('#geoQuery').fill('Fixture')
+        self.page.locator('#geoQuery').press('Enter')
+        self.page.locator('#geoResults .search-item').first.click()
+        self.lookup_failure = True
+        self.page.locator('#interestQuery').fill('Fixture')
+        self.page.locator('#interestQuery').press('Enter')
+        self.page.wait_for_function('document.querySelector("#interestResults").textContent.includes("Прокси недоступен")')
+        self.assertEqual(self.page.locator('#dailyBudget').input_value(), '700')
+        self.assertEqual(self.page.evaluate('fixtureLaunch.capture().media.media_library_id'), MEDIA_ID)
+        self.assertEqual(self.page.evaluate('fixtureLaunch.capture().geo[0].country_code'), 'US')
+        self.save_and_reload()
+        self.assertEqual(self.page.locator('#dailyBudget').input_value(), '700')
+        self.assertEqual(self.page.evaluate('fixtureLaunch.capture().geo[0].country_code'), 'US')
 
 if __name__ == '__main__': unittest.main()
