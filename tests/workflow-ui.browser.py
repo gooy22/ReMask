@@ -94,7 +94,7 @@ class WorkflowTests(unittest.TestCase):
         self.creative(context=True,modules=True)
         self.page.get_by_role('button',name='Места показа',exact=True).click()
         for details in self.page.locator('#wf-panel-placements details:not([open])').all():details.locator(':scope > summary').click()
-        self.page.locator('#mbUserDevice_choices').fill('iphone 17')
+        self.page.get_by_label('Модели устройств',exact=True).fill('iphone 17')
         self.page.locator('#mbUserDevice_choices').press('Enter')
         self.page.get_by_role('button',name='iphone 17',exact=True).click()
         self.page.locator('#mbUserOs_choices').fill('iOS 26.0')
@@ -102,7 +102,7 @@ class WorkflowTests(unittest.TestCase):
         self.page.get_by_role('button',name='iOS 26.0 и новее',exact=True).click()
         self.page.get_by_role('button',name='Дополнительно',exact=True).click()
         self.page.locator('.cr-sdk-group[data-sdk-group="targeting"] > summary').click()
-        self.page.locator('#sdk_targeting_education_statuses_choices').press('Enter')
+        self.page.get_by_role('combobox',name='Уровень образования',exact=True).press('Enter')
         self.page.get_by_role('button',name='High School',exact=True).click()
         self.page.locator('#sdk_targeting_work_employers_choices').fill('Fixture')
         self.page.locator('#sdk_targeting_work_employers_choices').press('Enter')
@@ -142,6 +142,35 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(builder['ad']['tracking_specs'],[{'action_type':'offsite_conversion','amount':2.5,'enabled':False,'extra':None}])
         self.page.evaluate('(builder)=>testCreative.open({id:"fixture",name:"Structured",meta_builder:builder})',builder)
         self.assertEqual(self.page.evaluate('testCreative.build()'),builder)
+
+    def test_saved_module_choices_and_structures_can_be_removed(self):
+        self.creative(context=True,modules=True)
+        builder={'campaign':{'daily_budget':500,'objective':'OUTCOME_TRAFFIC'},'adset':{'optimization_sub_event':'NONE'},
+            'targeting':{'user_device':['iphone 17'],'education_statuses':[1]},
+            'creative':{'degrees_of_freedom_spec':{'creative_features_spec':{'standard_enhancements':{'enroll_status':'OPT_IN'}}}}}
+        self.page.evaluate('(builder)=>testCreative.open({id:"fixture",name:"Saved",meta_builder:builder})',builder)
+        self.page.get_by_role('button',name='Места показа',exact=True).click()
+        for details in self.page.locator('#wf-panel-placements details:not([open])').all():details.locator(':scope > summary').click()
+        self.page.get_by_role('button',name='Удалить iphone 17',exact=True).click()
+        self.page.get_by_role('button',name='Дополнительно',exact=True).click()
+        self.page.locator('.cr-sdk-group[data-sdk-group="targeting"] > summary').click()
+        self.page.get_by_role('button',name='Удалить High School',exact=True).click()
+        self.page.locator('.cr-sdk-group[data-sdk-group="adset"] > summary').click()
+        self.page.locator('#sdk_adset_optimization_sub_event').select_option('')
+        self.page.get_by_role('button',name='Отслеживание',exact=True).click()
+        self.page.locator('#mbDegreesOfFreedom').locator('..').locator('.rm-module-structure').get_by_role('button',name='Очистить',exact=True).click()
+        saved=self.page.evaluate('testCreative.build()')
+        self.assertNotIn('user_device',saved['targeting'])
+        self.assertNotIn('education_statuses',saved['targeting'])
+        self.assertNotIn('degrees_of_freedom_spec',saved['creative'])
+        self.assertNotIn('optimization_sub_event',saved['adset'])
+        self.assertEqual(saved['campaign']['daily_budget'],500)
+        self.page.get_by_role('button',name='Кампания',exact=True).click()
+        self.page.locator('#mbCampaignDailyBudget').fill('')
+        saved=self.page.evaluate('testCreative.build()')
+        self.assertNotIn('daily_budget',saved['campaign'])
+        self.page.evaluate('(builder)=>testCreative.open({id:"fixture",name:"Cleared",meta_builder:builder})',saved)
+        self.assertEqual(self.page.evaluate('testCreative.build()'),saved)
 
     def test_instagram_template_saves_without_profile_account_or_owned_post(self):
         self.creative(context=True)
