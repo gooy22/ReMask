@@ -160,6 +160,7 @@ foreach (['launch.php','creatives.php'] as $name) {
     $page = preg_replace('~(scripts/'.$module.'\.js)\?v=[^"\s]+~', '$1?v=private-'.$revision, $page);
     $page = str_replace('20261013-2', '20261013-3', $page);
     $page = str_replace('accept="image/*"', 'accept="image/*,video/*"', $page);
+    $page = str_replace('Расширенный Targeting JSON (официальные Meta-поля)', 'Расширенные настройки аудитории', $page);
     $page = str_replace(['ВЫБРАТЬ 2–10 ИЗОБРАЖЕНИЙ','Carousel images'],
         ['ВЫБРАТЬ 2–10 ФОТО / ВИДЕО','Фото и видео карусели'], $page);
     $page = str_replace('Каждая картинка будет загружена отдельно в каждый выбранный RK. Hash каждого upload сохраняется в Job, поэтому Retry не повторяет уже успешные карточки.',

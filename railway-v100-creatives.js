@@ -833,7 +833,12 @@ function installCreativeTargetSearch(kind) {
     const cfg = creativeTargetSearchConfig(kind);
     const input = cfg ? $(cfg.input) : null;
     if (!input) return;
-    input.addEventListener('focus', () => searchCreativeTargeting(kind));
+    input.placeholder = 'Выберите из списка или введите название';
+    input.addEventListener('focus', () => {
+        clearTimeout(creativeTargetingTimers[kind]);
+        creativeTargetingTimers[kind] = setTimeout(() => searchCreativeTargeting(kind), 240);
+    });
+    input.addEventListener('blur', () => clearTimeout(creativeTargetingTimers[kind]));
     input.addEventListener('input', () => {
         clearTimeout(creativeTargetingTimers[kind]);
         creativeTargetingTimers[kind] = setTimeout(() => searchCreativeTargeting(kind), 240);

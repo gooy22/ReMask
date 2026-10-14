@@ -55,8 +55,14 @@ if (typeof creativeTargetSearchConfig !== 'function') {
     for(const [type,cfg] of Object.entries(pickerConfig)){
         const input=$(cfg.input);if(!input)continue;
         input.placeholder='Выберите из списка или введите название';
-        input.addEventListener('focus',()=>runPicker(type));
+        let focusTimer=0;
+        input.addEventListener('focus',()=>{
+            clearTimeout(focusTimer);focusTimer=setTimeout(()=>runPicker(type),240);
+        });
+        input.addEventListener('input',()=>clearTimeout(focusTimer));
+        input.addEventListener('blur',()=>clearTimeout(focusTimer));
         input.addEventListener('keydown',event=>{
+            if(event.key==='Enter')clearTimeout(focusTimer);
             if(event.key==='ArrowDown'){
                 const first=$(cfg.results)?.querySelector('button');
                 if(first){event.preventDefault();first.focus();}
