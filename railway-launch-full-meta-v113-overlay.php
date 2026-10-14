@@ -70,25 +70,22 @@ let remaskLaunchMetaPendingBuilder = null;
 
 const remaskLaunchCoveredFields = {
     campaign:new Set([
-        'name','objective','buying_type','special_ad_categories','bid_strategy',
-        'daily_budget','lifetime_budget','spend_cap','start_time','stop_time','status'
+        'name','objective','special_ad_categories','daily_budget','lifetime_budget'
     ]),
     adset:new Set([
         'name','optimization_goal','billing_event','bid_strategy','bid_amount','destination_type',
-        'daily_budget','lifetime_budget','start_time','end_time','attribution_spec','promoted_object',
-        'is_dynamic_creative','is_incremental_attribution_enabled','status'
+        'daily_budget','lifetime_budget','start_time','end_time','promoted_object'
     ]),
     targeting:new Set([
-        'age_min','age_max','genders','locales','geo_locations','excluded_geo_locations',
-        'interests','behaviors','flexible_spec','exclusions','publisher_platforms',
+        'age_min','age_max','locales','geo_locations',
+        'interests','behaviors','custom_audiences','excluded_custom_audiences','publisher_platforms',
         'facebook_positions','instagram_positions','messenger_positions','audience_network_positions',
         'threads_positions','whatsapp_positions','device_platforms'
     ]),
     creative:new Set([
-        'name','degrees_of_freedom_spec','asset_feed_spec','platform_customizations',
-        'url_tags','image_hash','video_id','source_instagram_media_id'
+        'name','url_tags','image_hash','video_id','source_instagram_media_id'
     ]),
-    ad:new Set(['name','status','conversion_domain','priority','tracking_specs'])
+    ad:new Set(['name'])
 };
 
 function remaskLaunchMetaFieldId(group, field) {

@@ -179,6 +179,15 @@ class InstalledLaunchTests(unittest.TestCase):
         self.assertEqual(data['meta_builder']['campaign']['daily_budget'],500)
         self.assertEqual(data['media']['media_library_id'],MEDIA_ID)
 
+    def test_module_parameters_without_native_controls_are_rendered(self):
+        for group,fields in {'campaign':['buying_type','spend_cap','bid_strategy'],
+                'adset':['attribution_spec','is_dynamic_creative'],
+                'targeting':['excluded_geo_locations','flexible_spec','exclusions','genders'],
+                'creative':['degrees_of_freedom_spec','asset_feed_spec','platform_customizations'],
+                'ad':['conversion_domain','priority','tracking_specs']}.items():
+            for field in fields:
+                self.assertEqual(self.page.locator('#launchMeta_'+group+'_'+field).count(),1,(group,field))
+
     def test_instagram_posts_selected_per_rk_and_foreign_actor_filtered(self):
         self.page.evaluate('fixtureLaunch.instagramTargets()')
         self.page.get_by_role('button',name='Загрузить публикации Instagram').first.click()

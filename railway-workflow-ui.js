@@ -125,7 +125,7 @@
     }
     function translate(el, name, tip) {
         const label = labelFor(el);
-        if (label && !label.contains(el)) { setText(label,name); label.htmlFor = el.id; }
+        if (label && !label.contains(el)) { setText(label,name); label.htmlFor = $(el.id+'_choices')?.id || el.id; }
         else if(label){const text=Array.from(label.childNodes).find(n=>n.nodeType===3 && n.textContent.trim());if(text && text.textContent.trim()!==name)text.textContent=' '+name+' ';}
         if (el.placeholder && /^(Campaign name|Ad Set name|Creative name|Ad name|Primary text|My betting launch bundle)/.test(el.placeholder)) el.placeholder=name;
         if (tip && !el.parentElement.querySelector('[data-wf-help]')) {
