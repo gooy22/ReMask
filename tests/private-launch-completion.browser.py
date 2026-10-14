@@ -216,6 +216,7 @@ class InstalledLaunchTests(unittest.TestCase):
         self.page.locator('#launchMeta_targeting_instagram_positions_choices_results').get_by_role('button',name='Story',exact=True).click()
         self.assertEqual(self.page.locator('#placementMode').input_value(),'MANUAL')
         self.assertTrue(self.page.locator('.publisher-platform[value="instagram"]').is_checked())
+        self.page.evaluate('fixtureLaunch.geo()')
         self.assertEqual(self.page.evaluate('fixtureLaunch.payload().adset.targeting.instagram_positions'),['story'])
         self.save_and_reload()
         self.assertEqual(self.page.evaluate('fixtureLaunch.payload().adset.targeting.instagram_positions'),['story'])
