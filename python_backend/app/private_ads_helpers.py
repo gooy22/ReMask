@@ -13,7 +13,7 @@ async def read_form_helper(web, catalog, values, helper, inputs):
     if len(json.dumps(inputs, allow_nan=False)) > 65536:
         raise fail('INVALID_INPUT', 'Advertising helper input exceeds its budget')
     client = _ReadClient(web, catalog, values)
-    account = await client.account_record(require_active=helper != 'audience_estimate',
+    account = await client.account_record(require_active=helper == 'preview',
                                           currency=helper == 'audience_estimate')
     common = {'profile': values['profile_id'], 'account_id': client.account,
               'business_id': client.business, 'account_scope_verified': True,

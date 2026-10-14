@@ -34,6 +34,8 @@ def at_budget(curve, budget, bid=None):
     left = origin(curve[0])
     for right in curve:
         if right['spend'] > budget or (bid is not None and right['bid'] > bid):
+            if right['spend'] == left['spend']:
+                return dict(left)
             fraction = (budget-left['spend'])/(right['spend']-left['spend'])
             if bid is not None and right['bid'] != left['bid']:
                 fraction = min(fraction, (bid-left['bid'])/(right['bid']-left['bid']))

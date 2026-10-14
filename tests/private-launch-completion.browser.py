@@ -180,6 +180,14 @@ class InstalledLaunchTests(unittest.TestCase):
         self.page.wait_for_function('document.querySelector("[data-rm-estimates]").textContent.includes("Сессия недоступна")')
         self.assertEqual(self.page.evaluate('fixtureLaunch.payload().adset.targeting.geo_locations.countries'),['US'])
 
+    def test_live_placements_can_be_read_before_geo_or_profile_is_selected(self):
+        self.page.locator('[data-rm-placements]').click()
+        self.page.wait_for_function('document.querySelector("[data-rm-placement-status]").textContent.includes("Meta вернула")')
+        path,request=self.estimate_requests[-1]
+        self.assertEqual(path,'ajax/metaTemplateAdvertisingHelper.php')
+        self.assertEqual(request['helper'],['placements'])
+        self.assertNotIn('profile',request);self.assertNotIn('targeting_spec',request)
+
     def test_all_module_choices_enter_launch_payload_and_bundle_round_trip(self):
         self.page.locator('[data-launch-meta-group="targeting"] > summary').click()
         self.page.locator('#launchMeta_targeting_user_device_choices').fill('iphone 17')

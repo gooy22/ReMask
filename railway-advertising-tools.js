@@ -128,10 +128,14 @@
         const seq=++placementGeneration;placementController?.abort();placementController=new AbortController();
         placementStatus.textContent='Получаем места показа Meta…';
         try {
-            const current=snapshot(),lines=[];
+            const placementSnapshot=()=>{
+                const targets=destinations(),goal=byId(creative?'mbOptimizationGoal':'optimizationGoal')?.value||'';
+                return {targets,goal,fingerprint:JSON.stringify([goal,targets.map(t=>[t.profile,t.account_id])])};
+            };
+            const current=placementSnapshot(),lines=[];
             for(const target of current.targets.slice(0,20)) {
-                const data=await read('placements',{optimization_goal:current.spec.adset.optimization_goal},target,placementController.signal);
-                if(seq!==placementGeneration||snapshot().fingerprint!==current.fingerprint)return;
+                const data=await read('placements',{optimization_goal:current.goal},target,placementController.signal);
+                if(seq!==placementGeneration||placementSnapshot().fingerprint!==current.fingerprint)return;
                 const names=Object.values(data.options||{}).flat().map(value=>{
                     const label=Array.from(document.querySelectorAll('[data-position],option')).find(e=>(e.dataset.position||e.value)===value);
                     return label?.closest('label')?.textContent?.trim()||label?.textContent?.trim()||value;

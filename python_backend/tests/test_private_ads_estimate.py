@@ -25,6 +25,9 @@ class EstimateTests(unittest.TestCase):
         self.assertEqual((result['reach'],result['spend']),(1500,150))
         result=forecast(self.row,{**self.input,'daily_budget':500})
         self.assertTrue(result['curve_budget_clamped']);self.assertEqual(result['spend'],300)
+        row={'estimate_ready':True,'daily_outcomes_curve':[{'spend':0,'bid':20,'reach':0}]}
+        result=forecast(row,{**self.input,'bid_strategy':'LOWEST_COST_WITH_BID_CAP','bid_amount':10})
+        self.assertEqual(result['spend'],0)
 
     def test_target_cost_scales_to_daily_budget_and_cost_cap_preserves_source_semantics(self):
         result=forecast(self.row,{**self.input,'daily_budget':100,'bid_strategy':'TARGET_COST','bid_amount':15})

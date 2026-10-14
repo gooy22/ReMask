@@ -52,6 +52,7 @@ class HelperTests(unittest.IsolatedAsyncioTestCase):
             {'type':'instagram_positions','id':'story'}]}
         result = await read_form_helper(None,self.catalog,self.values,'placements',{})
         self.assertEqual(result['options'], {'facebook_positions':['facebook_reels'],'instagram_positions':['story']})
+        self.client.account_record.assert_awaited_once_with(require_active=False,currency=False)
         self.assertEqual(self.client.request.await_args.args[0], 'TARGETING_BROWSE')
         self.client.request.return_value = {'data':[]}
         result = await read_form_helper(None,self.catalog,self.values,'placements',{})
