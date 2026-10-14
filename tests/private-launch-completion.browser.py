@@ -176,7 +176,12 @@ class InstalledLaunchTests(unittest.TestCase):
         self.assertEqual(self.page.locator('#remaskAdvertisingEstimate').count(),1)
         self.page.set_viewport_size({'width':390,'height':844})
         self.assertTrue(self.page.locator('#remaskAdvertisingEstimate').is_visible())
-        self.assertLessEqual(self.page.evaluate('document.documentElement.scrollWidth'),390)
+        # The installed theme rounds a fractional border to one CSS pixel.
+        # Check the panel itself as well, so this allowance cannot hide overflow.
+        panel=self.page.locator('#remaskAdvertisingEstimate').bounding_box()
+        self.assertGreaterEqual(panel['x'],0)
+        self.assertLessEqual(panel['x']+panel['width'],391)
+        self.assertLessEqual(self.page.evaluate('document.documentElement.scrollWidth'),391)
 
     def test_launch_estimates_and_previews_each_selected_account_in_its_own_scope(self):
         self.page.evaluate('fixtureLaunch.geo();fixtureLaunch.instagramTargets()')
