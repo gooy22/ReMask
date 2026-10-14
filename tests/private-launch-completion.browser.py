@@ -39,6 +39,8 @@ class InstalledLaunchTests(unittest.TestCase):
         self.waiting_config = []
         self.lookup_requests = []
         self.lookup_failure = False
+        self.instagram_requests = []
+        self.instagram_wrong_scope = False
         self.page = self.browser.new_page()
         self.page.set_default_timeout(5000)
         self.page.on('pageerror', lambda e: self.errors.append(str(e)))
@@ -67,7 +69,7 @@ class InstalledLaunchTests(unittest.TestCase):
         if file.is_file() and not path.endswith('.php'):
             body = file.read_bytes()
             if path == 'scripts/launch.js':
-                body += b'\nwindow.fixtureLaunch={payload:()=>buildPayload(),capture:()=>bundleFormState(),restore:applyBundleData,config:loadLaunchConfig,ready:()=>Boolean(state.launchConfig),geo:()=>{state.geo=[{type:"country",key:"US",country_code:"US",name:"United States"}];}};'
+                body += b'\nwindow.fixtureLaunch={payload:()=>buildPayload(),capture:()=>bundleFormState(),restore:applyBundleData,config:loadLaunchConfig,ready:()=>Boolean(state.launchConfig),geo:()=>{state.geo=[{type:"country",key:"US",country_code:"US",name:"United States"}];},instagramTargets:()=>{state.targets=[{profile:"20",account_id:"act_123456",business_id:"654321"},{profile:"21",account_id:"act_234567",business_id:"765432"}];state.profile="20";state.targetBindingAssets.pages={"20":[{id:"345678",instagram_business_account:{id:"456789"}}],"21":[{id:"567890",instagram_business_account:{id:"678901"}}]};$("adAccount").innerHTML=state.targets.map(t=>`<option value="${t.account_id}" selected>${t.account_id}</option>`).join("");$("creativeFormat").value="INSTAGRAM_POST";renderTargetBindings();},binding:account=>({...bindingFor(account)})};'
             route.fulfill(body=body, content_type='application/javascript' if path.endswith('.js') else 'text/css'); return
         data = {}
         status = 200
@@ -77,6 +79,13 @@ class InstalledLaunchTests(unittest.TestCase):
                 return
             data = self.config
         elif path == 'ajax/metaPrivateSchema.php': data = self.schema
+        elif path == 'ajax/metaAssetManager.php':
+            fields=parse_qs(request.post_data or '');self.instagram_requests.append(fields)
+            account=fields['account_id'][0];actor='456789' if account=='123456' else '678901'
+            data={'profile':fields['profile'][0],'account_id':'999999' if self.instagram_wrong_scope else account,
+                'resource':'instagram_media','checked_live':True,'account_scope_verified':True,'data':[
+                    {'id':'789012','caption':'Fixture owned post','instagram_actor_id':actor},
+                    {'id':'890123','caption':'Foreign actor post','instagram_actor_id':'999999'}]}
         elif path == 'ajax/metaJobsList.php': data = {'jobs': []}
         elif path == 'ajax/creativeLibrary.php':
             data = {'items': [{'id':'preset','name':'Fixture','format':'SINGLE','media_library_id':MEDIA_ID,
@@ -117,6 +126,37 @@ class InstalledLaunchTests(unittest.TestCase):
         self.page.locator('#bundleSelect').select_option('fixture')
         self.page.locator('#bundleLoad').click()
         self.page.wait_for_function('document.querySelector("#launchResult").classList.contains("ready")')
+
+    def test_generic_instagram_template_bundle_saves_without_destination_or_post(self):
+        self.page.locator('#creativeFormat').select_option('INSTAGRAM_POST')
+        self.page.locator('#dailyBudget').fill('500')
+        self.save_and_reload()
+        self.assertEqual(self.page.locator('#creativeFormat').input_value(),'INSTAGRAM_POST')
+        self.assertEqual(self.page.locator('#instagramMediaId').input_value(),'')
+        self.assertEqual(self.instagram_requests,[])
+        self.assertNotIn('profile',self.bundles[0]['data'])
+
+    def test_instagram_posts_selected_per_rk_and_foreign_actor_filtered(self):
+        self.page.evaluate('fixtureLaunch.instagramTargets()')
+        self.page.get_by_role('button',name='Загрузить публикации Instagram').first.click()
+        select=self.page.get_by_role('combobox',name='Публикация Instagram для РК 123456')
+        select.locator('option[value="789012"]').wait_for(state='attached')
+        self.assertEqual(select.locator('option[value="890123"]').count(),0)
+        select.select_option('789012')
+        self.assertEqual(self.page.evaluate('fixtureLaunch.binding("123456").source_instagram_media_id'),'789012')
+        self.assertEqual(self.page.evaluate('fixtureLaunch.binding("234567").source_instagram_media_id'),'')
+        self.assertEqual(self.instagram_requests[0]['profile'],['20'])
+        self.assertEqual(self.instagram_requests[0]['account_id'],['123456'])
+        self.assertEqual(self.instagram_requests[0]['force'],['1'])
+
+    def test_instagram_wrong_rk_response_never_supplies_choices(self):
+        self.instagram_wrong_scope=True
+        self.page.evaluate('fixtureLaunch.instagramTargets()')
+        self.page.get_by_role('button',name='Загрузить публикации Instagram').first.click()
+        self.page.get_by_text('Не удалось загрузить публикации этого РК.',exact=False).wait_for()
+        self.assertEqual(self.page.get_by_role('combobox',name='Публикация Instagram для РК 123456').locator('option').count(),1)
+        self.assertEqual(self.instagram_requests[0]['account_id'],['123456'])
+        self.assertEqual(self.page.evaluate('fixtureLaunch.binding("123456").source_instagram_media_id'),'')
 
     def test_preset_media_and_edited_budget_survive_save_reload(self):
         self.page.locator('#creativeLibrarySelect').select_option('preset')

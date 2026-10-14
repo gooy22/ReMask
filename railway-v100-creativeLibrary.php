@@ -65,6 +65,11 @@ function cl100_public_items(CreativePresetStore $store, $library): array {
         $format = strtoupper((string)($row['format'] ?? 'SINGLE'));
         if (!in_array($format, ['SINGLE','CAROUSEL','INSTAGRAM_POST'], true)) $format = 'SINGLE';
         $row['format'] = $format;
+        $row['meta_builder'] = RemaskPrivateFormSchema::unbindTemplate((array)($row['meta_builder'] ?? []));
+        $row['instagram_media_id'] = '';
+        $row['meta_asset'] = [];
+        unset($row['profile'], $row['account_id'], $row['business_id']);
+        $row['template_account_bound'] = false;
         $row['media'] = null;
         $row['missing_media'] = false;
         $row['preview_url'] = '';
@@ -183,25 +188,6 @@ try {
             'meta_builder' => $metaBuilder,
             'meta_asset' => [],
         ];
-        $metaAssetRaw = trim((string)($_POST['meta_asset'] ?? ''));
-        if ($metaAssetRaw !== '') {
-            $metaAsset = json_decode($metaAssetRaw, true, 512, JSON_THROW_ON_ERROR);
-            if (!is_array($metaAsset)) throw new InvalidArgumentException('meta_asset must be a JSON object.');
-            $metaType = strtolower(trim((string)($metaAsset['type'] ?? '')));
-            $metaValue = trim((string)($metaAsset['value'] ?? ''));
-            if (!in_array($metaType, ['image','video','creative'], true) || $metaValue === '') {
-                throw new InvalidArgumentException('meta_asset must contain image/video/creative type and value.');
-            }
-            $record['meta_asset'] = [
-                'type' => $metaType,
-                'value' => $metaValue,
-                'name' => substr(trim((string)($metaAsset['name'] ?? '')), 0, 500),
-                'preview_url' => substr(trim((string)($metaAsset['preview_url'] ?? '')), 0, 2000),
-                'preview_type' => in_array(strtolower(trim((string)($metaAsset['preview_type'] ?? ''))), ['image','video'], true)
-                    ? strtolower(trim((string)($metaAsset['preview_type'] ?? '')))
-                    : '',
-            ];
-        }
 
         if ($format === 'SINGLE') {
             $upload = isset($_FILES['media']) && is_array($_FILES['media']) ? $_FILES['media'] : null;
@@ -212,8 +198,8 @@ try {
             } elseif ($current && strtoupper((string)($current['format'] ?? 'SINGLE')) === 'SINGLE') {
                 $record['media_library_id'] = trim((string)($current['media_library_id'] ?? ''));
             }
-            if ($record['media_library_id'] === '' && cl100_meta_media_ref($record) === []) {
-                throw new InvalidArgumentException('Select uploaded media or an existing Meta image/video.');
+            if ($record['media_library_id'] === '') {
+                throw new InvalidArgumentException('Загрузите изображение или видео в общий шаблон. Ресурсы Meta выбираются в автозаливе.');
             }
         } elseif ($format === 'CAROUSEL') {
             $cardsRaw = trim((string)($_POST['carousel_cards'] ?? ''));
@@ -263,9 +249,8 @@ try {
             }
             if (count($record['carousel']) < 2 || count($record['carousel']) > 10) throw new InvalidArgumentException('Carousel requires 2 to 10 images.');
         } else {
-            $ig = cl100_string('instagram_media_id', 100);
-            if (!preg_match('/^[0-9]+$/', $ig)) throw new InvalidArgumentException('Instagram media ID must be numeric.');
-            $record['instagram_media_id'] = $ig;
+            // Publication is selected and privately verified per destination in Launch.
+            $record['instagram_media_id'] = '';
         }
 
         $saved = $store->save($id !== '' ? $id : null, $record);

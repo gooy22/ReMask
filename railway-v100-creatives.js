@@ -822,9 +822,8 @@ async function searchCreativeTargeting(kind) {
         if (error?.name === 'AbortError') return;
         if (creativeTargetingControllers[kind] !== controller) return;
         if (results) {
-            const message = error.meta?.message || 'Не удалось загрузить подсказки Meta. Проверьте подключение в «Аккаунтах». Уже введённые настройки можно сохранить.';
-            results.innerHTML = '<div class="cr-target-empty" role="status">' + esc(message) +
-                ' <a href="accounts.php" target="_blank" rel="noopener">Открыть аккаунты</a></div>';
+            const message = error.meta?.message || 'Общий справочник Meta временно недоступен. Шаблон можно редактировать и сохранить без выбора профиля.';
+            results.innerHTML = '<div class="cr-target-empty" role="status">' + esc(message) + '</div>';
             results.classList.add('open');
         }
     } finally {
@@ -944,7 +943,6 @@ function renderMetaDatalist(id, rows, valueKey = 'id', labelKeys = ['name']) {
 async function loadMetaContext() {
     const data = await api('ajax/metaCreativeCapabilities.php');
     metaCapabilities = data || {};
-    remaskPrivateInstagramProfiles(data?.profiles || []);
     if (data?.schema) metaSdkSchema = data.schema;
     renderMetaDatalist(
         'mbConversionEventOptions',
@@ -1011,7 +1009,7 @@ function renderMetaSdkFields() {
         const spec = metaSdkSchema[group] || {};
         const fields = spec.fields || {};
         const enums = spec.enums || {};
-        const names = Object.keys(fields).filter((field) => !coveredMetaFields[group]?.has(field));
+        const names = Object.keys(fields).filter((field) => !coveredMetaFields[group]?.has(field) && !remaskTemplateOwnedFields.has(field));
 
         const details = document.createElement('details');
         details.className = 'cr-sdk-group';
@@ -1127,6 +1125,20 @@ async function loadMetaSdkSchema() {
         status.className = 'cr-hint cr-placement-live';
         status.textContent = 'Official Meta SDK placements';
     }
+}
+// FB-owned assets belong to the publishing destination, never the reusable template.
+const remaskTemplateOwnedFields = new Set(['page_id','instagram_actor_id','instagram_user_id',
+    'image_hash','video_id','creative_id','source_instagram_media_id','object_story_id','object_story_spec',
+    'source_facebook_post_id','pixel_id','custom_conversion_id','product_set_id','product_catalog_id',
+    'application_id','custom_audiences','excluded_custom_audiences']);
+function remaskUnbindCreativeTemplate(builder) {
+    const clean = value => {
+        if (Array.isArray(value)) return value.map(clean);
+        if (!value || typeof value !== 'object') return value;
+        return Object.fromEntries(Object.entries(value).filter(([key]) => !remaskTemplateOwnedFields.has(key))
+            .map(([key, child]) => [key, clean(child)]));
+    };
+    return {...clean(builder), identity:{}, existing_media:{}};
 }
 function buildMetaBuilder() {
     const special = $('mbSpecialCategory').value;
@@ -1245,12 +1257,8 @@ function buildMetaBuilder() {
     }));
 
     const identity = {};
-    if ($('presetFormat').value === 'INSTAGRAM_POST') {
-        if ($('presetInstagramActor')?.value) identity.instagram_actor_id = $('presetInstagramActor').value;
-        if ($('presetInstagramId')?.value) existing_media.source_instagram_media_id = $('presetInstagramId').value;
-    }
 
-    return {campaign, adset, targeting, identity, existing_media, creative, ad};
+    return remaskUnbindCreativeTemplate({campaign, adset, targeting, identity, existing_media, creative, ad});
 }
 function setCheckboxValues(selector, attr, values) {
     const wanted = new Set((values || []).map(String));
@@ -1286,6 +1294,7 @@ function remaskCreativeObjectiveHint() {
 $('mbObjective')?.addEventListener('change', remaskCreativeObjectiveHint);
 
 function populateMetaBuilder(builder) {
+    builder = remaskUnbindCreativeTemplate(builder || {});
     builder = builder || {};
     const campaign = builder.campaign || {};
     const adset = builder.adset || {};
@@ -1458,13 +1467,8 @@ function openEditor(item = null) {
     $('presetCta').value = item?.cta || 'LEARN_MORE';
     $('presetTags').value = item?.url_tags || '';
     $('presetFormat').value = item?.format || 'SINGLE';
-    if ($('presetInstagramId')) $('presetInstagramId').value = item?.instagram_media_id || item?.meta_builder?.existing_media?.source_instagram_media_id || '';
-    if ($('presetInstagramActor')) $('presetInstagramActor').value = item?.meta_builder?.identity?.instagram_actor_id || '';
     $('presetMedia').value = '';
     $('presetCarousel').value = '';
-    remaskPrivateInstagramReset();
-    if ($('presetInstagramId')) $('presetInstagramId').value = item?.instagram_media_id || item?.meta_builder?.existing_media?.source_instagram_media_id || '';
-    if ($('presetInstagramActor')) $('presetInstagramActor').value = item?.meta_builder?.identity?.instagram_actor_id || '';
 
     populateMetaBuilder(item?.meta_builder || {});
     $('singlePreview').innerHTML = item?.format === 'SINGLE' && item.media
@@ -1502,7 +1506,7 @@ function render() {
         let fileLabel = '';
         if (item.format === 'SINGLE') fileLabel = item.media?.original_name || 'Файл отсутствует';
         else if (item.format === 'CAROUSEL') fileLabel = (item.carousel?.length || 0) + ' карточок';
-        else fileLabel = 'Instagram ' + (item.instagram_media_id || '');
+        else fileLabel = 'Публикация Instagram — выбор при заливе';
 
         const objective = item.meta_builder?.campaign?.objective || '';
         const preview = item.preview_url
@@ -1575,12 +1579,7 @@ async function save(event) {
         }
         form.append('carousel_cards', JSON.stringify(meta));
         for (const file of carouselFiles) form.append('carousel_media[]', file, file.name);
-    } else if (format === 'INSTAGRAM_POST') {
-        const mediaId = $('presetInstagramId')?.value || '';
-        if (!/^[1-9][0-9]{4,39}$/.test(mediaId)) {
-            setStatus('Выберите доступную публикацию Instagram.', 'bad'); switchTab('creative'); return;
-        }
-        form.append('instagram_media_id', mediaId);
+
     }
 
     $('saveCreative').disabled = true;
@@ -1737,62 +1736,5 @@ loadMetaSdkSchema().catch((error) => {
     if (statusEl) statusEl.textContent = 'SDK-схема недоступна: ' + error.message;
 });
 loadPlacementCapabilities(false);
-
-// Existing Instagram posts are selected from the exact-account private catalog.
-let remaskPrivateInstagramGeneration = 0;
-let remaskPrivateInstagramPosts = [];
-function remaskPrivateInstagramProfiles(profiles) {
-    const select = $('presetInstagramProfile');
-    if (!select) return;
-    select.innerHTML = '<option value="">Выберите профиль</option>';
-    for (const row of profiles) select.appendChild(new Option(String(row.name), String(row.name)));
-}
-function remaskPrivateInstagramReset() {
-    remaskPrivateInstagramGeneration++;
-    remaskPrivateInstagramPosts = [];
-    for (const [id, label] of [['presetInstagramAccount','Выберите РК'],['presetInstagramPost','Загрузите публикации']]) {
-        const select = $(id); if (select) { select.innerHTML = ''; select.appendChild(new Option(label, '')); }
-    }
-    if ($('presetInstagramId')) $('presetInstagramId').value = '';
-    if ($('presetInstagramActor')) $('presetInstagramActor').value = '';
-}
-$('presetInstagramProfile')?.addEventListener('change', async () => {
-    remaskPrivateInstagramReset();
-    const profile = $('presetInstagramProfile').value;
-    const generation = remaskPrivateInstagramGeneration;
-    if (!profile) return;
-    try {
-        const data = await api('ajax/metaPreflight.php?' + new URLSearchParams({profile}));
-        if (generation !== remaskPrivateInstagramGeneration) return;
-        for (const row of data?.ad_accounts?.data || []) {
-            const id = String(row.account_id || row.id || '').replace(/^act_/, '');
-            $('presetInstagramAccount').appendChild(new Option(String(row.name || id), id));
-        }
-        $('presetInstagramStatus').textContent = 'Выберите рекламный кабинет для загрузки публикаций.';
-    } catch (error) { if (generation === remaskPrivateInstagramGeneration) $('presetInstagramStatus').textContent = error.message; }
-});
-$('presetInstagramAccount')?.addEventListener('change', async () => {
-    const generation = ++remaskPrivateInstagramGeneration;
-    remaskPrivateInstagramPosts = [];
-    $('presetInstagramPost').innerHTML = '<option value="">Выберите публикацию</option>';
-    $('presetInstagramId').value = ''; $('presetInstagramActor').value = '';
-    const profile = $('presetInstagramProfile').value, account_id = $('presetInstagramAccount').value;
-    if (!profile || !account_id) return;
-    $('presetInstagramStatus').textContent = 'Загружаю доступные публикации…';
-    try {
-        const data = await api('ajax/metaAssetManager.php?' + new URLSearchParams({profile,account_id,resource:'instagram_media',force:'1',limit:'500'}));
-        if (generation !== remaskPrivateInstagramGeneration) return;
-        if (data.account_scope_verified !== true || data.checked_live !== true || String(data.account_id) !== account_id)
-            throw new Error('Доступ к публикациям выбранного РК не подтверждён.');
-        remaskPrivateInstagramPosts = data.data || [];
-        for (const row of remaskPrivateInstagramPosts) $('presetInstagramPost').appendChild(new Option(String(row.caption || row.id).slice(0,100), String(row.id)));
-        $('presetInstagramStatus').textContent = remaskPrivateInstagramPosts.length ? 'Публикации выбранного РК загружены.' : 'Доступных публикаций у выбранного РК нет.';
-    } catch (error) { if (generation === remaskPrivateInstagramGeneration) $('presetInstagramStatus').textContent = error.message; }
-});
-$('presetInstagramPost')?.addEventListener('change', () => {
-    const row = remaskPrivateInstagramPosts.find(item => String(item.id) === $('presetInstagramPost').value);
-    $('presetInstagramId').value = row ? String(row.id) : '';
-    $('presetInstagramActor').value = row ? String(row.instagram_actor_id || '') : '';
-});
 
 // Template targeting uses an automatic server-side read context, never a publishing RK.

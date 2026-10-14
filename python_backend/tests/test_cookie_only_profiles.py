@@ -297,3 +297,48 @@ echo json_encode(['token'=>$saved->token,'cookies'=>$saved->cookies,'proxy'=>$sa
         result=subprocess.run(['node','--input-type=module','--check'],input=workspace,
             capture_output=True,text=True,timeout=15)
         self.assertEqual(result.returncode,0,'Installed Workspace module: '+result.stderr)
+
+    def test_installed_instagram_template_save_reopen_and_duplicate_without_fb_context(self):
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        self.test_complete_runtime_overlay_order_and_installed_php_build_contracts()
+        schema=json.loads((ROOT/'python_backend/app/contracts/ads_manager_http_20261012.json').read_text())['form_schema']
+        schema.update(ok=True,source_digest='a'*64,object_fields={
+            'campaign':['daily_budget','objective'],'adset':['promoted_object'],
+            'targeting':['interests','custom_audiences'],'creative':[],'ad':[]})
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(inner):
+                inner.send_response(200); inner.send_header('Content-Type','application/json'); inner.end_headers()
+                inner.wfile.write(json.dumps(schema).encode())
+            def log_message(inner,*args): pass
+        server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
+        thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+        self.addCleanup(server.server_close);self.addCleanup(server.shutdown)
+        self.env.update(REMASK_PYTHON_WORKER_URL='http://127.0.0.1:'+str(server.server_port),REMASK_WORKER_API_KEY='offline-fixture')
+        media=self.root/'fixture-media'; presets=self.root/'fixture-presets'
+        (self.root/'settings.php').write_text('<?php define("REMASK_MEDIA_LIBRARY_DIR",'+json.dumps(str(media))+'); define("REMASK_MEDIA_LIBRARY_MAX_BYTES",1048576);')
+        (self.root/'checkpassword.php').write_text('<?php // hermetic authentication')
+        endpoint=self.root/'ajax/creativeLibrary.php'
+        endpoint.write_text(endpoint.read_text().replace("'/var/lib/remask/creative-presets'",json.dumps(str(presets))))
+        def call(payload):
+            script='$_POST=json_decode($argv[1],true);$_REQUEST=$_POST;$_SERVER["REQUEST_METHOD"]="POST";require $argv[2];'
+            run=subprocess.run(['php','-r',script,json.dumps(payload),str(endpoint)],env=self.env,capture_output=True,text=True,check=True,timeout=10)
+            return json.loads(run.stdout)
+        builder={'campaign':{'objective':'OUTCOME_TRAFFIC','daily_budget':500},
+            'identity':{'page_id':'123456','instagram_actor_id':'654321'},
+            'existing_media':{'source_instagram_media_id':'777777'},
+            'adset':{'promoted_object':{'pixel_id':'888888','custom_event_type':'PURCHASE'}},
+            'targeting':{'interests':[{'id':'999999','name':'Fixture'}],'custom_audiences':[{'id':'444444'}]}}
+        saved=call({'action':'save','name':'Universal Instagram','format':'INSTAGRAM_POST','cta':'LEARN_MORE','meta_builder':json.dumps(builder)})
+        self.assertTrue(saved['ok'],saved)
+        item=saved['data']['item'];self.assertEqual(item['instagram_media_id'],'')
+        self.assertEqual(item['meta_builder']['identity'],[])
+        self.assertEqual(item['meta_builder']['existing_media'],[])
+        self.assertNotIn('custom_audiences',item['meta_builder']['targeting'])
+        self.assertEqual(item['meta_builder']['adset']['promoted_object'],{'custom_event_type':'PURCHASE'})
+        reopened=call({'action':'get','id':item['id']})
+        self.assertTrue(reopened['ok'],reopened)
+        self.assertEqual(reopened['data']['instagram_media_id'],'')
+        duplicate=call({'action':'duplicate','id':item['id']})
+        self.assertTrue(duplicate['ok'],duplicate)
+        self.assertEqual(duplicate['data']['items'][0]['template_account_bound'],False)

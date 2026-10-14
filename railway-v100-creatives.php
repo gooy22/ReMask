@@ -392,14 +392,7 @@ require_once __DIR__ . '/checkpassword.php';
         </div>
         <div id="carouselSection" class="cr-media-box" style="display:none"><label class="cr-file-btn" style="max-width:300px">ВЫБРАТЬ 2–10 ФОТО / ВИДЕО<input id="presetCarousel" type="file" accept="image/*,video/*" multiple></label><div id="carouselHint" class="cr-hint"></div><div id="carouselRows" class="cr-carousel-list"></div></div>
         <div id="instagramSection" class="cr-media-box" style="display:none">
-          <div class="cr-grid">
-            <div class="span-4 cr-field"><label for="presetInstagramProfile">Профиль</label><select id="presetInstagramProfile" class="form-control"><option value="">Выберите профиль</option></select></div>
-            <div class="span-4 cr-field"><label for="presetInstagramAccount">РК</label><select id="presetInstagramAccount" class="form-control"><option value="">Выберите РК</option></select></div>
-            <div class="span-4 cr-field"><label for="presetInstagramPost">Публикация</label><select id="presetInstagramPost" class="form-control"><option value="">Загрузите публикации</option></select></div>
-            <div class="span-6 cr-field"><label for="presetInstagramId">ID публикации</label><input id="presetInstagramId" class="form-control" readonly></div>
-            <div class="span-6 cr-field"><label for="presetInstagramActor">ID Instagram</label><input id="presetInstagramActor" class="form-control" readonly></div>
-          </div>
-          <div id="presetInstagramStatus" class="cr-hint">Выберите публикацию выбранного рекламного кабинета.</div>
+          <div class="cr-hint">Это общий шаблон для публикации Instagram. Публикация и аккаунт Instagram выбираются отдельно для каждого РК в автозаливе.</div>
         </div>
       </section>
 
