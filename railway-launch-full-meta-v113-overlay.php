@@ -185,11 +185,9 @@ function remaskRenderLaunchMetaFields() {
                 if(group==='targeting' && field.endsWith('_positions')) {
                     const positions=remaskLaunchMetaParse(input.value,type,field);
                     if(Array.isArray(positions) && positions.length) {
-                        $('placementMode').value='MANUAL';
                         const platform=field.slice(0,-'_positions'.length);
-                        for(const checkbox of document.querySelectorAll('.publisher-platform'))
-                            if(checkbox.value===platform)checkbox.checked=true;
-                        updatePlacementControls();
+                        const checkbox=Array.from(document.querySelectorAll('.publisher-platform')).find(el=>el.value===platform);
+                        if(checkbox){$('placementMode').value='MANUAL';checkbox.checked=true;updatePlacementControls();}
                     }
                 }
                 invalidateLaunchReview();
