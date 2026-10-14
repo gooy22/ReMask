@@ -102,7 +102,7 @@ class WorkflowTests(unittest.TestCase):
         self.page.get_by_role('button',name='iOS 26.0 и новее',exact=True).click()
         self.page.get_by_role('button',name='Дополнительно',exact=True).click()
         self.page.locator('.cr-sdk-group[data-sdk-group="targeting"] > summary').click()
-        self.page.locator('#sdk_targeting_education_statuses_choices').press('Enter')
+        self.page.get_by_label('Уровень образования',exact=True).press('Enter')
         self.page.get_by_role('button',name='High School',exact=True).click()
         self.page.locator('#sdk_targeting_work_employers_choices').fill('Fixture')
         self.page.locator('#sdk_targeting_work_employers_choices').press('Enter')

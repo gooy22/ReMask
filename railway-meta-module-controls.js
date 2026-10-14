@@ -7,6 +7,7 @@ const remaskModuleControls = (() => {
     style.textContent = '.rm-module-source,.cr-editor .form-control.rm-module-source,.wf-launch .form-control.rm-module-source{display:none!important}.rm-module-field .rm-meta-visual-actions{display:none!important}.rm-module-pills{display:flex;gap:6px;flex-wrap:wrap;margin:7px 0}.rm-module-choice{display:block;width:100%;text-align:left;padding:8px;border:0;background:transparent;color:inherit;cursor:pointer}.rm-module-results{max-height:240px;overflow:auto;border-radius:8px}.rm-module-results:not(:empty){border:1px solid #384455;padding:4px}.rm-module-pill{border:1px solid #465366;border-radius:14px;background:#263346;color:inherit;padding:5px 10px;cursor:pointer}.rm-module-hint{font-size:12px;opacity:.72;padding:6px}';
     document.head.appendChild(style);
     const key = row => String(typeof row === 'object' ? row?.id ?? row?.key : row);
+    const fieldLabels=source=>[...new Set([...Array.from(source.labels||[]),source.closest('.cr-field,.cr-sdk-field,.rm-meta-field')?.querySelector('label')].filter(Boolean))];
     function edited(source) {
         const binding=primary[source.id]||primaryComplex[source.id];
         const group=source.dataset.metaGroup||source.dataset.launchMetaGroup||binding?.[0];
@@ -30,7 +31,7 @@ const remaskModuleControls = (() => {
         results.setAttribute('role','group');search.setAttribute('aria-controls',results.id);
         const status=document.createElement('div');status.className='rm-module-hint';status.setAttribute('role','status');
         root.append(search,pills,results,status);source.after(root);
-        for(const label of Array.from(source.labels||[]))label.htmlFor=search.id;
+        for(const label of fieldLabels(source))label.htmlFor=search.id;
         // Original serializers and bundle hydration keep writing this exact
         // element. Observe its native value setter rather than duplicating state.
         const proto=source instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
@@ -132,7 +133,7 @@ const remaskModuleControls = (() => {
             let draft;try{draft=structuredClone(read());}catch{summary.textContent='Сохранённое значение не удалось разобрать.';return;}
             const overlay=document.createElement('div');overlay.style.cssText='position:fixed;inset:0;z-index:14000;background:#020617bf;display:flex;justify-content:center;align-items:center;padding:12px';
             const dialog=document.createElement('section');dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','true');
-            const title=(document.querySelector('label[for="'+source.id+'"]')?.textContent||field).trim();dialog.setAttribute('aria-label',title);
+            const title=(fieldLabels(source)[0]?.textContent||field).trim();dialog.setAttribute('aria-label',title);
             dialog.style.cssText='width:min(900px,100%);max-height:90vh;overflow:auto;background:#111827;border:1px solid #465366;border-radius:14px;padding:18px;color:#e2e8f0';
             const heading=document.createElement('h3');heading.textContent=title;dialog.appendChild(heading);
             const body=document.createElement('div');dialog.appendChild(body);
@@ -192,7 +193,7 @@ const remaskModuleControls = (() => {
         }
     }
 
-    function choiceLabels(source){const search=document.getElementById(source.id+'_choices');if(search)for(const label of Array.from(source.labels||[]))label.htmlFor=search.id;}
+    function choiceLabels(source){const search=document.getElementById(source.id+'_choices');if(search)for(const label of fieldLabels(source))label.htmlFor=search.id;}
     function scan() {
         for(const source of document.querySelectorAll('[data-meta-group][data-meta-field],[data-launch-meta-group][data-launch-meta-field]')){
             const group=source.dataset.metaGroup||source.dataset.launchMetaGroup;
