@@ -143,6 +143,28 @@ class WorkflowTests(unittest.TestCase):
         self.page.evaluate('(builder)=>testCreative.open({id:"fixture",name:"Structured",meta_builder:builder})',builder)
         self.assertEqual(self.page.evaluate('testCreative.build()'),builder)
 
+    def test_saved_module_choices_and_structures_can_be_removed(self):
+        self.creative(context=True,modules=True)
+        builder={'campaign':{'daily_budget':500,'objective':'OUTCOME_TRAFFIC'},
+            'targeting':{'user_device':['iphone 17'],'education_statuses':[1]},
+            'creative':{'degrees_of_freedom_spec':{'creative_features_spec':{'standard_enhancements':{'enroll_status':'OPT_IN'}}}}}
+        self.page.evaluate('(builder)=>testCreative.open({id:"fixture",name:"Saved",meta_builder:builder})',builder)
+        self.page.get_by_role('button',name='Места показа',exact=True).click()
+        for details in self.page.locator('#wf-panel-placements details:not([open])').all():details.locator(':scope > summary').click()
+        self.page.get_by_role('button',name='Удалить iphone 17',exact=True).click()
+        self.page.get_by_role('button',name='Дополнительно',exact=True).click()
+        self.page.locator('.cr-sdk-group[data-sdk-group="targeting"] > summary').click()
+        self.page.get_by_role('button',name='Удалить High School',exact=True).click()
+        self.page.get_by_role('button',name='Отслеживание',exact=True).click()
+        self.page.locator('#mbDegreesOfFreedom').locator('..').locator('.rm-module-structure').get_by_role('button',name='Очистить',exact=True).click()
+        saved=self.page.evaluate('testCreative.build()')
+        self.assertNotIn('user_device',saved['targeting'])
+        self.assertNotIn('education_statuses',saved['targeting'])
+        self.assertNotIn('degrees_of_freedom_spec',saved['creative'])
+        self.assertEqual(saved['campaign']['daily_budget'],500)
+        self.page.evaluate('(builder)=>testCreative.open({id:"fixture",name:"Cleared",meta_builder:builder})',saved)
+        self.assertEqual(self.page.evaluate('testCreative.build()'),saved)
+
     def test_instagram_template_saves_without_profile_account_or_owned_post(self):
         self.creative(context=True)
         self.page.locator('#presetName').fill('Universal Instagram')

@@ -246,6 +246,12 @@ async function remaskLoadLaunchMetaSdkSchema() {
     if(typeof remaskModuleControls!=="undefined")remaskModuleControls.configure(data);
     remaskRenderLaunchMetaFields();
 }
+document.addEventListener('remask-module-edit',event=>{
+    const {group,field}=event.detail||{};
+    if(!event.target?.dataset?.launchMetaGroup||!group||!field)return;
+    const retained=remaskSelectedCreativePreset?.meta_builder?.[group];
+    if(retained)delete retained[field];
+});
 function remaskCurrentMetaBuilderForJob() {
     const preset=remaskSelectedCreativePreset?.meta_builder||{};
     const extra=remaskReadLaunchMetaSdkFields();

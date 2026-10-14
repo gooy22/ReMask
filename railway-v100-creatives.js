@@ -1146,6 +1146,17 @@ function remaskUnbindCreativeTemplate(builder) {
     };
     return {...clean(builder), identity:{}, existing_media:{}};
 }
+// An explicit module edit replaces that whole value, including an empty list
+// or deleted nested key. Retained template sections only preserve other fields.
+document.addEventListener('remask-module-edit',event=>{
+    const {group,field}=event.detail||{};
+    const suffix={campaign:'Campaign',adset:'Adset',targeting:'Targeting',creative:'Creative',ad:'Ad'}[group];
+    if(!suffix||!field)return;
+    const source=$('mbAdvanced'+suffix);
+    let retained;try{retained=parseJsonField(source.id,{});}catch{return;}
+    if(!retained||typeof retained!=='object'||Array.isArray(retained))return;
+    delete retained[field];source.value=stringify(retained);
+});
 function buildMetaBuilder() {
     const special = $('mbSpecialCategory').value;
     const sdkFields = readMetaSdkFields();

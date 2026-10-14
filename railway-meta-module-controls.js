@@ -7,6 +7,12 @@ const remaskModuleControls = (() => {
     style.textContent = '.rm-module-source,.cr-editor .form-control.rm-module-source,.wf-launch .form-control.rm-module-source{display:none!important}.rm-module-field .rm-meta-visual-actions{display:none!important}.rm-module-pills{display:flex;gap:6px;flex-wrap:wrap;margin:7px 0}.rm-module-choice{display:block;width:100%;text-align:left;padding:8px;border:0;background:transparent;color:inherit;cursor:pointer}.rm-module-results{max-height:240px;overflow:auto;border-radius:8px}.rm-module-results:not(:empty){border:1px solid #384455;padding:4px}.rm-module-pill{border:1px solid #465366;border-radius:14px;background:#263346;color:inherit;padding:5px 10px;cursor:pointer}.rm-module-hint{font-size:12px;opacity:.72;padding:6px}';
     document.head.appendChild(style);
     const key = row => String(typeof row === 'object' ? row?.id ?? row?.key : row);
+    function edited(source) {
+        const binding=primary[source.id]||primaryComplex[source.id];
+        const group=source.dataset.metaGroup||source.dataset.launchMetaGroup||binding?.[0];
+        const field=source.dataset.metaField||source.dataset.launchMetaField||binding?.[1];
+        if(group&&field&&group!==field)source.dispatchEvent(new CustomEvent('remask-module-edit',{bubbles:true,detail:{group,field}}));
+    }
     function button(text, className, action) {
         const node=document.createElement('button');node.type='button';node.className=className;
         node.dataset.remaskTargetChoice='1';node.textContent=text;node.addEventListener('click',action);return node;
@@ -48,6 +54,7 @@ const remaskModuleControls = (() => {
         Object.defineProperty(source,'value',{configurable:true,get(){return descriptor.get.call(this);},set(value){descriptor.set.call(this,value);paint();}});
         function commit(rows) {
             source.value=rows.length?(csv?rows.join(','):JSON.stringify(rows)):'';
+            edited(source);
             source.dispatchEvent(new Event('input',{bubbles:true}));source.dispatchEvent(new Event('change',{bubbles:true}));
         }
         function choose(row) {
@@ -113,7 +120,7 @@ const remaskModuleControls = (() => {
         const root=document.createElement('div');root.className='rm-module-structure';
         const summary=document.createElement('span');summary.className='rm-module-hint';
         const configure=button('Настроить','btn btn-secondary',open);
-        const clear=button('Очистить','btn btn-secondary',()=>{source.value='';source.dispatchEvent(new Event('change',{bubbles:true}));});
+        const clear=button('Очистить','btn btn-secondary',()=>{source.value='';edited(source);source.dispatchEvent(new Event('change',{bubbles:true}));});
         root.append(configure,clear,summary);source.after(root);
         const descriptor=Object.getOwnPropertyDescriptor(source instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,'value');
         const empty=()=>type.startsWith('list<')||listFields.has(field)?[]:{};
@@ -133,7 +140,7 @@ const remaskModuleControls = (() => {
             const close=()=>{overlay.remove();configure.focus();};
             const cancel=button('Отмена','btn btn-secondary',close);
             const save=button('Сохранить','btn btn-primary',()=>{
-                try{source.value=JSON.stringify(draft);source.dispatchEvent(new Event('input',{bubbles:true}));source.dispatchEvent(new Event('change',{bubbles:true}));close();}catch{error.textContent='Не удалось сохранить настройки.';}
+                try{source.value=JSON.stringify(draft);edited(source);source.dispatchEvent(new Event('input',{bubbles:true}));source.dispatchEvent(new Event('change',{bubbles:true}));close();}catch{error.textContent='Не удалось сохранить настройки.';}
             });dialog.append(cancel,save);overlay.appendChild(dialog);document.body.appendChild(overlay);
             let count=0;
             const kind=value=>value===null?'null':Array.isArray(value)?'array':typeof value==='object'?'object':typeof value==='boolean'?'boolean':typeof value==='number'?'number':'string';

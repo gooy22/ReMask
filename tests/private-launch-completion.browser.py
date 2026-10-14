@@ -93,6 +93,9 @@ class InstalledLaunchTests(unittest.TestCase):
             data = {'items': [{'id':'preset','name':'Fixture','format':'SINGLE','media_library_id':MEDIA_ID,
                 'media':MEDIA,'message':'Fixture message','headline':'Fixture headline','destination_url':'https://example.com/',
                 'meta_builder':{'campaign':{'daily_budget':500,'objective':self.preset_objective}}}]}
+            if self._testMethodName=='test_saved_preset_module_values_stay_removed_after_bundle_reload':
+                data['items'][0]['meta_builder'].update(targeting={'user_device':['iphone 17'],'education_statuses':[1]},
+                    creative={'degrees_of_freedom_spec':{'creative_features_spec':{'standard_enhancements':{'enroll_status':'OPT_IN'}}}})
         elif path == 'ajax/metaTemplateTargetingSearch.php':
             fields = parse_qs(request.post_data or '', keep_blank_values=True)
             self.lookup_requests.append(fields)
@@ -160,6 +163,21 @@ class InstalledLaunchTests(unittest.TestCase):
         self.assertEqual(self.page.locator('#instagramMediaId').input_value(),'')
         self.assertEqual(self.instagram_requests,[])
         self.assertNotIn('profile',self.bundles[0]['data'])
+
+    def test_saved_preset_module_values_stay_removed_after_bundle_reload(self):
+        self.page.locator('#creativeLibrarySelect').select_option('preset')
+        self.page.locator('[data-launch-meta-group="targeting"] > summary').click()
+        self.page.get_by_role('button',name='Удалить iphone 17',exact=True).click()
+        self.page.get_by_role('button',name='Удалить High School',exact=True).click()
+        self.page.locator('[data-launch-meta-group="creative"] > summary').click()
+        self.page.locator('#launchMeta_creative_degrees_of_freedom_spec').locator('..').locator('.rm-module-structure').get_by_role('button',name='Очистить',exact=True).click()
+        self.save_and_reload()
+        data=self.page.evaluate('fixtureLaunch.capture()')
+        self.assertNotIn('user_device',data['meta_builder']['targeting'])
+        self.assertNotIn('education_statuses',data['meta_builder']['targeting'])
+        self.assertNotIn('degrees_of_freedom_spec',data['meta_builder']['creative'])
+        self.assertEqual(data['meta_builder']['campaign']['daily_budget'],500)
+        self.assertEqual(data['media']['media_library_id'],MEDIA_ID)
 
     def test_instagram_posts_selected_per_rk_and_foreign_actor_filtered(self):
         self.page.evaluate('fixtureLaunch.instagramTargets()')
