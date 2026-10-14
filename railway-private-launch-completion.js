@@ -288,3 +288,56 @@ $('carouselCards')?.addEventListener('input', () => { invalidateLaunchReview(); 
 $('creativeFormat')?.addEventListener('change', () => {
     remaskBundleMedia = null; remaskBundleRestoreGeneration++;
 });
+
+// Owned Instagram posts are chosen in Launch, separately for each selected RK.
+const remaskPrivateInstagramChoices = new Map();
+const remaskPrivateOriginalRenderBindings = renderTargetBindings;
+renderTargetBindings = function() {
+    remaskPrivateOriginalRenderBindings();
+    if (!targetMode() || creativeFormat() !== 'INSTAGRAM_POST') return;
+    const rows = Array.from($('targetBindingRows')?.querySelectorAll('tr') || []);
+    selectedTargets().forEach((target,index) => {
+        const row = rows[index];
+        const input = row?.querySelector('input[placeholder="Instagram media ID"]');
+        if (!input) return;
+        const binding = bindingFor(target.account_id);
+        const actor = String(binding.instagram_actor_id || '');
+        const key = JSON.stringify([String(target.profile),normalizeAccountIdClient(target.account_id),actor]);
+        const select = document.createElement('select'); select.className='form-control';
+        select.setAttribute('aria-label','Публикация Instagram для РК '+target.account_id);
+        select.appendChild(new Option('Выберите публикацию Instagram',''));
+        const fill = () => {
+            select.length=1;
+            for (const post of remaskPrivateInstagramChoices.get(key) || [])
+                select.appendChild(new Option(String(post.caption || post.id).slice(0,100),String(post.id)));
+            if (hasOptionValue(select,binding.source_instagram_media_id)) select.value=binding.source_instagram_media_id;
+        };
+        fill();
+        select.addEventListener('change',()=>{
+            binding.source_instagram_media_id=select.value; input.value=select.value;
+            invalidateLaunchReview(); validateReady();
+        });
+        const load = document.createElement('button'); load.type='button'; load.className='btn btn-secondary';
+        load.textContent='Загрузить публикации Instagram'; load.disabled=!actor;
+        const status = document.createElement('div'); status.className='muted'; status.setAttribute('role','status');
+        if (!actor) status.textContent='Сначала выберите страницу с подключённым Instagram для этого РК.';
+        load.addEventListener('click',async()=>{
+            load.disabled=true; status.textContent='Загружаю публикации этого РК…';
+            try {
+                const account=normalizeAccountIdClient(target.account_id);
+                const result=await apiJson('ajax/metaAssetManager.php',post({profile:target.profile,
+                    account_id:account,resource:'instagram_media',force:'1',limit:'500'}));
+                if (!row.isConnected || String(binding.instagram_actor_id || '')!==actor) return;
+                if (result.profile!==target.profile || normalizeAccountIdClient(result.account_id)!==account
+                    || result.resource!=='instagram_media' || result.checked_live!==true || result.account_scope_verified!==true)
+                    throw new Error('Доступ к публикациям этого РК не подтверждён.');
+                const posts=(Array.isArray(result.data)?result.data:[]).filter(post=>
+                    /^[1-9][0-9]{4,39}$/.test(String(post.id || '')) && String(post.instagram_actor_id || '')===actor);
+                remaskPrivateInstagramChoices.set(key,posts); fill();
+                status.textContent=posts.length?'Выберите публикацию для этого РК.':'Доступных публикаций для выбранного Instagram нет.';
+            } catch (error) { if(row.isConnected) status.textContent='Не удалось загрузить публикации этого РК. Проверьте подключение выбранного профиля в автозаливе.'; }
+            finally { load.disabled=false; }
+        });
+        input.before(select,load,status);
+    });
+};

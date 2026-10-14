@@ -67,10 +67,12 @@ $creativeEndpoint = file_get_contents($root.'/ajax/creativeLibrary.php');
 completionReplace($creativeEndpoint, "require_once __DIR__ . '/../classes/MetaOfficialFields.php';",
     "require_once __DIR__ . '/../classes/RemaskPrivateFormSchema.php';", 'creative-validator');
 completionReplace($creativeEndpoint, 'MetaOfficialFields::sanitizeBuilder($metaBuilder)',
-    'RemaskPrivateFormSchema::sanitizeBuilder($metaBuilder)', 'creative-builder');
+    'RemaskPrivateFormSchema::unbindTemplate(RemaskPrivateFormSchema::sanitizeBuilder($metaBuilder))', 'creative-builder');
 file_put_contents($root.'/ajax/creativeLibrary.php', $creativeEndpoint);
 
 $launch = file_get_contents($root.'/scripts/launch.js');
+completionReplace($launch, "            binding.instagram_actor_id = String(page?.instagram_business_account?.id || '');",
+    "            binding.instagram_actor_id = String(page?.instagram_business_account?.id || '');\n            binding.source_instagram_media_id = '';", 'instagram-destination-reset');
 completionReplace($launch, 'function bundleFormState() {', 'function remaskLegacyBundleFormState() {', 'bundle-save');
 completionReplace($launch, 'function applyBundleData(data) {', 'function remaskLegacyApplyBundleData(data) {', 'bundle-restore');
 completionReplace($launch, 'data: JSON.stringify(bundleFormState()),',

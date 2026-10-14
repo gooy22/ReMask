@@ -16,6 +16,9 @@ try {
     if (!in_array($type, ['locations','interests','behaviors','locales'], true)) throw new InvalidArgumentException('UNKNOWN_TARGETING_TYPE');
     $query = trim((string)($input['q'] ?? ''));
     if (strlen($query) < 2 || strlen($query) > 200) throw new InvalidArgumentException('INVALID_TARGETING_QUERY');
+    $reference = new RemaskTemplateTargetingReference(dirname(ACCOUNTSFILENAME).'/template-targeting-'.hash('sha256',ACCOUNTSFILENAME).'.json');
+    $cached = $reference->get($type, $query, time());
+    if ($cached !== null) { MetaEndpoint::ok($cached); exit; }
     $profiles = [];
     foreach ((array)AccountStoreFactory::create(ACCOUNTSFILENAME)->deserialize() as $row) {
         if (!$row instanceof FbAccount) continue;
@@ -25,15 +28,30 @@ try {
     }
     $until = (int)(getenv('REMASK_DIRECT_TEST_UNTIL') ?: 0);
     $preferred = $until > time() && $until <= time()+7200 ? trim((string)(getenv('REMASK_DIRECT_TEST_PROFILE') ?: '')) : '';
-    $context = RemaskTemplateTargetingContext::resolve($profiles, [RemaskPrivateLaunchCatalog::class,'load'], $preferred);
+    $excluded = array_values(array_filter(array_map('trim', explode(',', (string)(getenv('REMASK_TEMPLATE_LOOKUP_EXCLUDED_PROFILES') ?: '')))));
+    $excluded = array_unique(array_merge($excluded, $reference->blocked(time())));
+    $candidates = RemaskTemplateTargetingContext::candidates($profiles, [RemaskPrivateLaunchCatalog::class,'load'], $preferred, $excluded);
     // Ignore all client profile/account selectors. Launch keeps its own explicit scope.
-    $result = RemaskAdvertisingAssetBridge::read([
-        'profile'=>$context['profile'], 'account_id'=>$context['account_id'], 'q'=>$query,
-        'limit'=>max(1,min(25,(int)($input['limit'] ?? 25)))], $context['catalog'], $type, true);
-    if (($result['checked_live'] ?? null) !== true || ($result['account_scope_verified'] ?? null) !== true)
-        throw new RuntimeException('TEMPLATE_LOOKUP_ACCESS_UNVERIFIED');
-    MetaEndpoint::ok(['data'=>$result['data'] ?? [], 'checked_live'=>true,
-        'source'=>'private_meta_template_lookup', 'template_account_bound'=>false]);
+    $attempted = []; $lastError = new RuntimeException('TEMPLATE_LOOKUP_SOURCE_UNAVAILABLE');
+    foreach ($candidates as $context) {
+        if (isset($attempted[$context['profile']])) continue;
+        if (count($attempted) >= 2) break; // bounded read fallback, never mutation retry
+        $attempted[$context['profile']] = true;
+        try {
+            $result = RemaskAdvertisingAssetBridge::read([
+                'profile'=>$context['profile'], 'account_id'=>$context['account_id'], 'q'=>$query,
+                'limit'=>25], $context['catalog'], $type, true);
+            if (($result['checked_live'] ?? null) !== true || ($result['account_scope_verified'] ?? null) !== true)
+                throw new RuntimeException('TEMPLATE_LOOKUP_ACCESS_UNVERIFIED');
+            $reference->put($type, $query, $result, time());
+            MetaEndpoint::ok(['data'=>$result['data'] ?? [], 'checked_live'=>true,
+                'source'=>'private_meta_template_lookup', 'template_account_bound'=>false]);
+            exit;
+        } catch (Throwable $error) {
+            $lastError = $error; $reference->block($context['profile'], time());
+        }
+    }
+    throw $lastError;
 } catch (Throwable $error) {
     http_response_code($error instanceof InvalidArgumentException ? 400 : 409);
     header('Content-Type: application/json; charset=utf-8');

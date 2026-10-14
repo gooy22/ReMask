@@ -52,6 +52,25 @@ final class RemaskPrivateFormSchema
         return $out;
     }
 
+    /** Normalize legacy and new templates without exposing destination-owned IDs. */
+    public static function unbindTemplate(array $builder): array {
+        $owned = ['page_id','instagram_actor_id','instagram_user_id','image_hash','video_id','creative_id',
+            'source_instagram_media_id','object_story_id','object_story_spec','source_facebook_post_id',
+            'pixel_id','custom_conversion_id','product_set_id','product_catalog_id','application_id',
+            'custom_audiences','excluded_custom_audiences'];
+        $clean = static function(array $value, int $depth = 0) use (&$clean, $owned): array {
+            if ($depth > 24) throw new InvalidArgumentException('PRIVATE_BUILDER_TOO_DEEP');
+            foreach ($value as $key => $child) {
+                if (in_array((string)$key, $owned, true)) { unset($value[$key]); continue; }
+                if (is_array($child)) $value[$key] = $clean($child, $depth+1);
+            }
+            return $value;
+        };
+        $out = $clean($builder);
+        $out['identity'] = []; $out['existing_media'] = [];
+        return $out;
+    }
+
     private static function rejectSecrets(mixed $value, int $depth = 0): void {
         if ($depth > 24) throw new InvalidArgumentException('PRIVATE_BUILDER_TOO_DEEP');
         if (!is_array($value)) return;

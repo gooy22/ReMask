@@ -54,7 +54,12 @@ class WorkflowTests(unittest.TestCase):
         self.page.set_content(html)
         if context:
             metadata = {'schema':SCHEMA,'items':[],'profiles':[{'name':'19'},{'name':'20'}],'preferred_profile':preferred}
-            self.page.add_script_tag(content='''window.fixtureRequests=[];window.fetch=async (url,options={})=>{
+            self.page.add_script_tag(content='''window.fixtureRequests=[];window.fixtureUrls=[];window.fixtureSaves=[];window.fetch=async (url,options={})=>{
+                window.fixtureUrls.push(String(url));
+                if(options.body instanceof FormData && options.body.get('action')==='save') {
+                    window.fixtureSaves.push(Object.fromEntries(options.body));
+                    return {ok:true,status:200,text:async()=>JSON.stringify({ok:true,data:{items:[]}})};
+                }
                 let data='''+json.dumps(metadata)+''';
                 if(String(url).includes('metaPreflight.php')) data={ad_accounts:{data:[{account_id:'123456',name:'Fixture RK'}]}};
                 if(String(url).includes('metaTemplateTargetingSearch.php')){
@@ -74,6 +79,38 @@ class WorkflowTests(unittest.TestCase):
         if enhanced:
             self.page.add_script_tag(content=ASSET)
         self.page.locator('#newCreative').click()
+
+    def test_instagram_template_saves_without_profile_account_or_owned_post(self):
+        self.creative(context=True)
+        self.page.locator('#presetName').fill('Universal Instagram')
+        self.page.get_by_role('button',name='Объявление',exact=True).click()
+        self.page.locator('#presetFormat').select_option('INSTAGRAM_POST')
+        self.assertEqual(self.page.locator('#presetInstagramProfile,#presetInstagramAccount,#presetInstagramPost').count(),0)
+        self.assertIn('для каждого РК в автозаливе',self.page.locator('#instagramSection').inner_text())
+        self.page.locator('#saveCreative').click()
+        self.page.wait_for_function('fixtureSaves.length===1')
+        saved=self.page.evaluate('fixtureSaves[0]')
+        self.assertEqual(saved['format'],'INSTAGRAM_POST')
+        self.assertNotIn('instagram_media_id',saved)
+        builder=json.loads(saved['meta_builder'])
+        self.assertEqual(builder['identity'],{})
+        self.assertEqual(builder['existing_media'],{})
+        self.assertFalse(any('metaPreflight' in url or 'metaAssetManager' in url for url in self.page.evaluate('fixtureUrls')))
+
+    def test_legacy_template_owned_assets_do_not_bind_editor(self):
+        self.creative(context=True)
+        builder=self.page.evaluate('testCreative.build()')
+        builder.update(identity={'page_id':'123456','instagram_actor_id':'654321'},existing_media={'source_instagram_media_id':'999999'})
+        builder['adset']['promoted_object']={'pixel_id':'555555','custom_event_type':'PURCHASE'}
+        builder['targeting']['custom_audiences']=[{'id':'777777'}]
+        builder['targeting']['interests']=[{'id':'888888','name':'Fixture interest'}]
+        self.page.evaluate('(builder)=>testCreative.open({id:"legacy",name:"Universal",format:"INSTAGRAM_POST",instagram_media_id:"999999",meta_builder:builder})',builder)
+        saved=self.page.evaluate('testCreative.build()')
+        self.assertEqual(saved['identity'],{})
+        self.assertEqual(saved['existing_media'],{})
+        self.assertNotIn('custom_audiences',saved['targeting'])
+        self.assertEqual(saved['targeting']['interests'],builder['targeting']['interests'])
+        self.assertEqual(saved['adset']['promoted_object'],{'custom_event_type':'PURCHASE'})
 
     def test_template_search_needs_no_profile_or_publishing_account(self):
         self.creative(context=True)
@@ -131,15 +168,13 @@ class WorkflowTests(unittest.TestCase):
         self.page.locator('#mbInterestSearch').press('Enter')
         self.page.locator('#mbInterestResults .cr-target-result').click()
         before=self.page.evaluate('testCreative.build()')
-        self.page.evaluate("window.fixtureTargetingError={code:'PRIVATE_ADS_DRAFT_CHECKPOINT_REQUIRED',message:'Meta требует подтверждения входа в профиле «19». Уже введённые настройки можно сохранить.',settings_preserved:true}")
+        self.page.evaluate("window.fixtureTargetingError={code:'PRIVATE_ADS_DRAFT_CHECKPOINT_REQUIRED',message:'Общий справочник Meta временно недоступен. Шаблон можно редактировать и сохранить без выбора профиля.',settings_preserved:true}")
         count=self.page.evaluate('fixtureRequests.length')
         self.page.locator('#mbLanguageSearch').fill('russia')
         self.page.locator('#mbLanguageSearch').press('Enter')
         self.page.locator('#mbLanguageResults [role=status]').wait_for()
-        self.assertIn('подтверждения входа',self.page.locator('#mbLanguageResults').inner_text())
-        link=self.page.locator('#mbLanguageResults').get_by_role('link',name='Открыть аккаунты')
-        self.assertEqual(link.get_attribute('href'),'accounts.php')
-        self.assertEqual(link.get_attribute('target'),'_blank')
+        self.assertIn('без выбора профиля',self.page.locator('#mbLanguageResults').inner_text())
+        self.assertEqual(self.page.locator('#mbLanguageResults a').count(),0)
         self.assertEqual(self.page.evaluate('testCreative.build()'),before)
         self.assertEqual(self.page.evaluate('fixtureRequests.length'),count+1)
         self.assertEqual(self.page.locator('#mbLanguageResults .cr-target-result').count(),0)
