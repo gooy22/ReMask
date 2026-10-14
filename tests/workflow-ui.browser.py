@@ -42,7 +42,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(self.errors, [])
         self.page.close()
 
-    def creative(self, enhanced=True, context=False, preferred="", modules=False):
+    def creative(self, enhanced=True, context=False, preferred="", modules=False, tools_first=False):
         html = re.sub(r'<\?php.*?\?>', '', (ROOT / 'railway-v100-creatives.php').read_text(), flags=re.S)
         html = re.sub(r'<script\b.*?</script>', '', html, flags=re.S)
         html = re.sub(r'<link\b[^>]*>', '', html)
@@ -99,8 +99,9 @@ class WorkflowTests(unittest.TestCase):
         self.page.add_script_tag(content=source+'\nwindow.testCreative={build:buildMetaBuilder,populate:populateMetaBuilder,open:openEditor,primary:populatePrimaryMetaControls};')
         self.page.wait_for_function("document.getElementById('mbObjective').options.length===2", timeout=5000)
         if enhanced:
+            if tools_first:self.page.add_script_tag(content=(ROOT/'railway-advertising-tools.js').read_text())
             self.page.add_script_tag(content=ASSET)
-            self.page.add_script_tag(content=(ROOT/'railway-advertising-tools.js').read_text())
+            if not tools_first:self.page.add_script_tag(content=(ROOT/'railway-advertising-tools.js').read_text())
         self.page.locator('#newCreative').click()
 
     def prepare_estimate(self):
@@ -108,8 +109,37 @@ class WorkflowTests(unittest.TestCase):
         self.page.evaluate('testCreative.open({id:"fixture",name:"Estimate",meta_builder:{campaign:{objective:"OUTCOME_TRAFFIC"},adset:{daily_budget:200},targeting:{geo_locations:{countries:["US"]},age_min:21,age_max:55}}})')
         self.page.get_by_role('button',name='Аудитория',exact=True).click()
 
+    def test_audience_sidebar_is_visible_from_every_tab_when_workflow_loads_last(self):
+        self.creative(context=True,tools_first=True)
+        self.assertEqual(self.page.locator('#creativeForm>.wf-summary>#remaskAdvertisingEstimate').count(),1)
+        self.assertEqual(self.page.locator('.cr-panel #remaskAdvertisingEstimate').count(),0)
+        for tab in self.page.locator('.cr-tab').all():
+            tab.click()
+            self.assertTrue(self.page.locator('#remaskAdvertisingEstimate').is_visible())
+            editor=self.page.locator('.cr-editor').bounding_box()
+            panel=self.page.locator('#remaskAdvertisingEstimate').bounding_box()
+            self.assertGreaterEqual(panel['x'],editor['x']+editor['width'])
+            self.assertLessEqual(panel['y']+panel['height'],1000)
+        self.assertEqual(self.page.locator('#remaskAdvertisingEstimate').count(),1)
+
+    def test_audience_recalculates_from_campaign_tab_and_uses_current_budget_level(self):
+        self.prepare_estimate()
+        self.page.get_by_role('button',name='Кампания',exact=True).click()
+        self.page.locator('#mbCampaignDailyBudget').fill('750')
+        self.page.wait_for_function('fixtureEstimates.some(r=>r.daily_budget==="750")')
+        request=self.page.evaluate('fixtureEstimates.at(-1)')
+        self.assertEqual(request['is_cbo_enabled'],'true')
+        self.assertEqual(json.loads(request['targeting_spec'])['age_min'],21)
+        self.page.locator('#mbCampaignDailyBudget').fill('')
+        self.page.locator('#mbCampaignLifetimeBudget').fill('3000')
+        self.page.get_by_role('button',name='Рассчитать аудиторию',exact=True).click()
+        request=self.page.evaluate('fixtureEstimates.at(-1)')
+        self.assertEqual(request['is_cbo_enabled'],'true')
+        self.assertNotIn('daily_budget',request)
+
     def test_potential_audience_and_forecast_use_private_template_context_without_binding(self):
         self.prepare_estimate()
+        self.assertEqual(self.page.locator('#creativeForm>.wf-summary>#remaskAdvertisingEstimate').count(),1)
         self.page.get_by_role('button',name='Рассчитать аудиторию',exact=True).click()
         self.page.wait_for_function('document.querySelector("[data-rm-estimates]").textContent.includes("1 000")')
         request=self.page.evaluate('fixtureEstimates.at(-1)')
@@ -399,9 +429,11 @@ class WorkflowTests(unittest.TestCase):
         self.page.set_viewport_size({'width':390,'height':844})
         self.creative()
         self.assertTrue(self.page.locator('#saveCreative').is_visible())
+        self.assertTrue(self.page.locator('#remaskAdvertisingEstimate').is_visible())
         self.assertLessEqual(self.page.evaluate('document.documentElement.scrollWidth'), 390)
         self.page.get_by_role('button', name='Объявление', exact=True).click()
         self.assertTrue(self.page.locator('#presetMessage').is_visible())
+        self.assertTrue(self.page.locator('#remaskAdvertisingEstimate').is_visible())
 
     def test_editor_navigation_is_above_real_runtime_sidebar(self):
         self.creative()

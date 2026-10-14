@@ -159,6 +159,25 @@ class InstalledLaunchTests(unittest.TestCase):
         self.save_and_reload()
         self.assertNotIn('forecast',self.bundles[0]['data'])
 
+    def test_launch_audience_sidebar_tracks_budget_and_survives_saved_bundle_reload(self):
+        self.page.set_viewport_size({'width':1600,'height':1000})
+        self.page.evaluate('fixtureLaunch.geo()')
+        self.page.locator('#dailyBudget').fill('875')
+        self.page.wait_for_function('document.querySelector("[data-rm-estimates]").textContent.includes("1 000")')
+        request=self.estimate_requests[-1][1]
+        self.assertEqual(request['daily_budget'],['875'])
+        self.assertEqual(json.loads(request['targeting_spec'][0])['geo_locations']['countries'],['US'])
+        self.assertEqual(self.page.locator('.launch-wrap>.rm-estimate-rail>#remaskAdvertisingEstimate').count(),1)
+        rail=self.page.locator('.rm-estimate-rail').bounding_box()
+        card=self.page.locator('#dailyBudget').locator('xpath=ancestor::*[contains(@class,"launch-card")]').bounding_box()
+        self.assertGreaterEqual(rail['x'],card['x']+card['width'])
+        self.save_and_reload()
+        self.assertEqual(self.page.locator('#dailyBudget').input_value(),'875')
+        self.assertEqual(self.page.locator('#remaskAdvertisingEstimate').count(),1)
+        self.page.set_viewport_size({'width':390,'height':844})
+        self.assertTrue(self.page.locator('#remaskAdvertisingEstimate').is_visible())
+        self.assertLessEqual(self.page.evaluate('document.documentElement.scrollWidth'),390)
+
     def test_launch_estimates_and_previews_each_selected_account_in_its_own_scope(self):
         self.page.evaluate('fixtureLaunch.geo();fixtureLaunch.instagramTargets()')
         for button in self.page.get_by_role('button',name='Загрузить публикации Instagram',exact=True).all():

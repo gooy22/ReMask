@@ -72,7 +72,7 @@
     #creativeModal.cr-backdrop{z-index:2000}
     #creativeModal .cr-modal{width:min(1180px,calc(100vw - 32px));max-height:calc(100dvh - 32px);border-radius:16px}
     #creativeModal .cr-modal-head{padding:20px 24px}#creativeModal .cr-modal-head h3{font-size:20px}
-    #creativeForm{display:grid;grid-template-columns:190px minmax(0,1fr) 235px;grid-template-rows:minmax(0,1fr) auto;flex:1;min-height:0;overflow:hidden}
+    #creativeForm{display:grid;grid-template-columns:190px minmax(0,1fr) 280px;grid-template-rows:minmax(0,1fr) auto;flex:1;min-height:0;overflow:hidden}
     #creativeForm>.cr-tabs{grid-column:1;grid-row:1;display:flex;flex-direction:column;padding:16px 12px;overflow:auto;gap:5px;border-right:1px solid var(--wf-line);border-bottom:0;background:#181e28}
     #creativeForm .cr-tab{white-space:normal;text-align:left;padding:12px 14px;font-size:13px;color:#a5b4c8}
     #creativeForm .cr-tab.active{background:#263d61;color:#e9f2ff;box-shadow:inset 3px 0 #7daeff}
@@ -112,9 +112,11 @@
     #launchMetaAllFields .rm-meta-field label,.cr-sdk-field label{align-items:center!important}.rm-meta-type,.cr-sdk-type{display:none!important}
     .wf-code{font-size:10px;color:#778aa6;margin-top:6px;overflow-wrap:anywhere}.wf-launch .rm-meta-search{max-width:420px}
     .wf-launch .btn,.cr-foot-actions .btn{border-radius:8px;padding:10px 16px;font-weight:600}
-    @media(max-width:1050px){#creativeForm{grid-template-columns:170px minmax(0,1fr)}.wf-summary{display:none}}
+    @media(max-width:1050px){#creativeForm{grid-template-columns:150px minmax(0,1fr) 250px}.wf-summary{padding:18px 12px}}
+    @media(max-width:900px){#creativeForm{grid-template-columns:150px minmax(0,1fr);grid-template-rows:170px minmax(0,1fr) auto}#creativeForm>.wf-summary{grid-column:1/-1;grid-row:1;border-left:0;border-bottom:1px solid var(--wf-line);padding:12px 16px;min-height:0}#creativeForm>.wf-summary>:not(.rm-ad-estimate){display:none}#creativeForm>.cr-tabs,#creativeForm>.cr-editor{grid-row:2}#creativeForm>.cr-modal-foot{grid-row:3}}
     @media(max-width:1000px){.wf-launch .row{grid-template-columns:repeat(2,minmax(0,1fr))}.wf-launch .row>.wf-account-selector{grid-column:1/-1}}
     @media(max-width:700px){#creativeModal .cr-modal{width:calc(100vw - 12px);max-height:calc(100dvh - 12px)}#creativeForm{display:flex;flex-direction:column}#creativeForm>.cr-tabs{flex-direction:row;flex-shrink:0;border-right:0;border-bottom:1px solid var(--wf-line);padding:8px}.cr-tab{white-space:nowrap!important}#creativeForm>.cr-editor{padding:16px}.wf-fields{grid-template-columns:1fr}.wf-fields>.wf-wide{grid-column:auto}.cr-form-grid>.cr-field,.cr-form-grid>.cr-target-box{grid-column:span 12}.wf-launch>.launch-card{padding:18px}.wf-launch .row{grid-template-columns:1fr}.wf-launch .row>*{grid-column:1/-1!important}.wf-step-nav a{padding:9px}.cr-modal-foot{flex-wrap:wrap}#launchMetaAllFields .rm-meta-search{min-width:0;width:100%}.cr-carousel-row{grid-template-columns:48px minmax(0,1fr)}}
+    @media(max-width:700px){#creativeForm{display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:auto 155px minmax(0,1fr) auto}#creativeForm>.cr-tabs{grid-column:1;grid-row:1}#creativeForm>.wf-summary{grid-column:1;grid-row:2}#creativeForm>.cr-editor{grid-column:1;grid-row:3;min-height:0}#creativeForm>.cr-modal-foot{grid-column:1;grid-row:4}}
     @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
     `;
     document.head.appendChild(style);
@@ -176,6 +178,7 @@
         // Empty original grids retain non-field controls such as dynamic-creative checkboxes.
         [campaign,adset].forEach(panel=>{const grid=panel.querySelector(':scope > .cr-form-grid');if(grid){if(!grid.children.length)grid.remove();else panel.appendChild(grid);}});
         const aside=document.createElement('aside');aside.className='wf-summary';aside.innerHTML='<h4>Ваша связка</h4><dl><dt>Цель</dt><dd data-wf-summary="objective"></dd><dt>Бюджет</dt><dd data-wf-summary="budget"></dd><dt>Аудитория</dt><dd data-wf-summary="audience"></dd><dt>Формат</dt><dd data-wf-summary="format"></dd></dl><div class="wf-ad-copy"><p data-wf-summary="message"></p><strong data-wf-summary="headline"></strong><span data-wf-summary="cta"></span></div><div class="wf-note">Сохранение связки не публикует рекламу. РК, страницу и пиксель выбирают в автозаливе.</div>';
+        const estimate=$('remaskAdvertisingEstimate');if(estimate)aside.prepend(estimate);
         form.appendChild(aside);
         form.addEventListener('input',updateCreativeSummary);form.addEventListener('change',updateCreativeSummary);
         form.addEventListener('click',event=>{if(event.target.closest('.cr-tab'))requestAnimationFrame(updateCreativeSummary);});

@@ -6,16 +6,38 @@
     const root=creative?byId('creativeForm'):document.querySelector('.launch-wrap');
     if(!root)return;
     const style=document.createElement('style');
-    style.textContent='.rm-ad-estimate{border:1px solid #37404c;background:#191e25;border-radius:9px;padding:14px;margin:14px 0;color:#e3e8f1}.rm-ad-estimate h4{font-size:14px;margin:0 0 10px}.rm-ad-estimate p{font-size:12px;color:#9da7b7;margin:8px 0;line-height:1.5}.rm-ad-estimate dl{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:12px;margin:12px 0}.rm-ad-estimate dt{font-size:11px;color:#9da7b7}.rm-ad-estimate dd{font-size:21px;margin:3px 0}.rm-ad-estimate button{margin:4px 8px 4px 0}.rm-ad-estimate iframe{width:100%;height:500px;border:0;background:white}.rm-ad-estimate [role=status]{white-space:pre-line;overflow-wrap:anywhere}';
+    style.textContent=`.rm-ad-estimate{border:1px solid #37404c;background:#191e25;border-radius:9px;padding:14px;margin:14px 0;color:#e3e8f1;min-width:0}.rm-ad-estimate h4{font-size:14px;margin:0 0 10px}.rm-ad-estimate p{font-size:12px;color:#9da7b7;margin:8px 0;line-height:1.5}.rm-ad-estimate dl{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:12px;margin:12px 0}.rm-ad-estimate dt{font-size:11px;color:#9da7b7}.rm-ad-estimate dd{font-size:21px;margin:3px 0}.rm-ad-estimate button{margin:4px 8px 4px 0}.rm-ad-estimate iframe{width:100%;height:500px;border:0;background:white}.rm-ad-estimate [role=status]{white-space:pre-line;overflow-wrap:anywhere}
+    .wf-summary .rm-ad-estimate{margin:0 0 24px}.wf-summary .rm-ad-estimate h4{text-transform:none;letter-spacing:0;color:#e3e8f1;font-size:14px;margin:0 0 10px}.wf-summary .rm-ad-estimate dl{grid-template-columns:1fr;gap:12px;margin:12px 0}.wf-summary .rm-ad-estimate dt{margin:0}.wf-summary .rm-ad-estimate dd{font-size:21px;line-height:1.3;margin:3px 0}.wf-summary .rm-ad-estimate button{display:block;width:100%;white-space:normal;margin:8px 0 0;font-size:12px;padding:8px}
+    .launch-wrap.rm-estimate-layout{display:grid;grid-template-columns:minmax(0,1fr) 280px;column-gap:18px;max-width:1460px;align-items:start}.launch-wrap.rm-estimate-layout>*{grid-column:1;min-width:0}.launch-wrap.rm-estimate-layout>.rm-estimate-rail{grid-column:2;position:sticky;top:140px;max-height:calc(100dvh - 160px);overflow:auto;margin:20px 0}.rm-estimate-rail .rm-ad-estimate{margin:0}.rm-estimate-rail .rm-ad-estimate dl{grid-template-columns:1fr}.rm-estimate-rail button{width:100%;white-space:normal}
+    @media(max-width:1000px){.launch-wrap.rm-estimate-layout{display:block}.launch-wrap.rm-estimate-layout>.rm-estimate-rail{position:static;max-height:none;margin:16px 0}.rm-estimate-rail .rm-ad-estimate dl{grid-template-columns:repeat(auto-fit,minmax(130px,1fr))}.rm-estimate-rail button{width:auto}}
+    @media(max-width:900px){.wf-summary .rm-ad-estimate{border:0;padding:0;margin:0}.wf-summary .rm-ad-estimate dl{grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:8px 0}.wf-summary .rm-ad-estimate dd{font-size:17px}.wf-summary .rm-ad-estimate button{display:inline-block;width:auto;margin:4px 6px 0 0}.wf-summary .rm-ad-estimate p{font-size:11px;margin:4px 0}}
+    `;
     document.head.appendChild(style);
     const panel=document.createElement('section');panel.className='rm-ad-estimate';panel.id='remaskAdvertisingEstimate';
     panel.setAttribute('aria-label','Возможная аудитория и прогноз');
-    panel.innerHTML='<h4>Возможная аудитория и прогноз</h4><div data-rm-estimates></div><p data-rm-estimate-status role="status" aria-live="polite">Задайте географию аудитории. Оценка обновляется при изменении настроек.</p><button type="button" class="btn btn-secondary" data-rm-estimate>Рассчитать аудиторию</button><button type="button" class="btn btn-outline-light" data-rm-placements>Проверить места показа</button><p data-rm-placement-status role="status" aria-live="polite"></p><p>Прогноз зависит от настроек и бюджета. Он не гарантирует результат рекламы.</p>';
-    const host=creative?root.querySelector('[data-panel="audience"]'):byId('ageMin')?.closest('.launch-card');
-    (host||root).appendChild(panel);
+    panel.innerHTML='<h4>Потенциальная аудитория</h4><div data-rm-estimates></div><p data-rm-estimate-status role="status" aria-live="polite">Задайте географию аудитории. Оценка обновляется при изменении настроек.</p><button type="button" class="btn btn-secondary" data-rm-estimate>Рассчитать аудиторию</button><button type="button" class="btn btn-outline-light" data-rm-placements>Проверить места показа</button><p data-rm-placement-status role="status" aria-live="polite"></p><p>Прогноз зависит от настроек и бюджета. Он не гарантирует результат рекламы.</p>';
+    if(creative) {
+        // workflow-ui may execute before or after this compiled editor module.
+        // Its setup moves this same node, preserving readers and event handlers.
+        const sidebar=root.querySelector('.wf-summary');
+        if(sidebar)sidebar.prepend(panel);else root.appendChild(panel);
+    } else {
+        const rail=document.createElement('aside');rail.className='rm-estimate-rail';rail.setAttribute('aria-label','Оценка аудитории');
+        rail.appendChild(panel);root.prepend(rail);root.classList.add('rm-estimate-layout');
+        const span=()=>{
+            // Include anonymous grid items, but never manufacture empty rows.
+            const rows=Array.from(root.childNodes).filter(n=>n.nodeType===1||(n.nodeType===3&&n.textContent.trim())).length;
+            rail.style.gridRow='1 / span '+Math.max(1,rows-1);
+        };
+        span();new MutationObserver(span).observe(root,{childList:true});
+    }
     const results=panel.querySelector('[data-rm-estimates]');
     const status=panel.querySelector('[data-rm-estimate-status]');
     const placementStatus=panel.querySelector('[data-rm-placement-status]');
+    function emptyMetrics() {
+        results.innerHTML='<dl data-rm-placeholder><div><dt>Возможная аудитория</dt><dd>—</dd></div><div><dt>Охват за день</dt><dd>—</dd></div><div><dt>Результаты за день</dt><dd>—</dd></div></dl>';
+    }
+    emptyMetrics();
     let timer=null, generation=0, controller=null, lastFingerprint='', placementGeneration=0, placementController=null;
     const reasons={META_FORECAST_NOT_READY:'Meta ещё не подготовила прогноз.',DAILY_BUDGET_REQUIRED:'Для дневного прогноза задайте дневной бюджет. Бюджет на весь срок не пересчитывается в дневной автоматически.',META_CURVE_UNAVAILABLE:'Meta не вернула дневной прогноз.',CBO_CURVE_UNAVAILABLE:'Meta не вернула прогноз распределения бюджета кампании.',CBO_BUDGET_OUTSIDE_CURVE:'Бюджет кампании находится вне доступного диапазона прогноза.',CBO_BID_FORECAST_UNAVAILABLE:'Прогноз кампании для этой стратегии ставок недоступен.',BID_STRATEGY_FORECAST_UNAVAILABLE:'Для этой стратегии ставок Meta не вернула подтверждённый прогноз.',BID_AMOUNT_REQUIRED:'Укажите ограничение ставки или цены результата.',META_CURVE_INVALID:'Meta вернула некорректные данные прогноза.',META_BID_CURVE_UNAVAILABLE:'Meta не вернула кривую ставок.',META_ACTION_CURVE_UNAVAILABLE:'Meta не вернула кривую результатов.'};
     const valid=n=>typeof n==='number'&&Number.isFinite(n)&&n>=0;
@@ -40,12 +62,13 @@
     }
     function requestSpec(spec,destination={}) {
         const campaign=spec.campaign,adset=spec.adset;
+        const cbo=Boolean(campaign.daily_budget||campaign.lifetime_budget);
         const request={targeting_spec:JSON.parse(JSON.stringify(spec.targeting)),optimization_goal:adset.optimization_goal,
-            bid_strategy:adset.bid_strategy||campaign.bid_strategy||'LOWEST_COST_WITHOUT_CAP',
-            special_ad_categories:campaign.special_ad_categories||[],is_cbo_enabled:Boolean(campaign.daily_budget||campaign.lifetime_budget)};
+            bid_strategy:(cbo?campaign.bid_strategy:adset.bid_strategy)||adset.bid_strategy||campaign.bid_strategy||'LOWEST_COST_WITHOUT_CAP',
+            special_ad_categories:campaign.special_ad_categories||[],is_cbo_enabled:cbo};
         for(const key of ['promoted_object','attribution_spec','bid_amount'])if(adset[key]!==undefined)request[key]=adset[key];
         if(adset.destination_type)request.campaign_destination_type=adset.destination_type;
-        const budget=campaign.daily_budget||adset.daily_budget;
+        const budget=cbo?campaign.daily_budget:adset.daily_budget;
         if(budget!==undefined)request.daily_budget=budget;
         if(destination.account_id) {
             const binding=destination.binding||{};
@@ -94,7 +117,7 @@
         box.appendChild(note);results.appendChild(box);
     }
     function invalidate(message='Настройки изменились. Оценка обновляется…') {
-        generation++;controller?.abort();clearTimeout(timer);lastFingerprint='';results.replaceChildren();status.textContent=message;
+        generation++;controller?.abort();clearTimeout(timer);lastFingerprint='';emptyMetrics();status.textContent=message;
         placementGeneration++;placementController?.abort();placementStatus.textContent='';
     }
     async function estimate(force=false) {
@@ -112,7 +135,7 @@
             try {
                 const data=await read('audience_estimate',requestSpec(current.spec,target),target,signal);
                 if(seq!==generation||snapshot().fingerprint!==current.fingerprint)return;
-                render(data,target);success++;
+                results.querySelector('[data-rm-placeholder]')?.remove();render(data,target);success++;
             } catch(error) {
                 if(seq!==generation||signal.aborted)return;
                 const p=document.createElement('p');p.textContent=(target.account_id?'РК '+target.account_id+': ':'')+error.message;results.appendChild(p);
