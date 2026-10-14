@@ -34,7 +34,9 @@ class InstalledLaunchTests(unittest.TestCase):
         self.bundles = []
         self.missing = False
         self.errors = []
-        self.preset_objective = 'OUTCOME_TRAFFIC'
+        self.preset_objective = 'LEGACY_TEST_OBJECTIVE' if self._testMethodName == 'test_initial_config_keeps_legacy_goal' else 'OUTCOME_TRAFFIC'
+        self.delay_config = self._testMethodName.startswith('test_initial_config')
+        self.waiting_config = []
         self.lookup_requests = []
         self.lookup_failure = False
         self.page = self.browser.new_page()
@@ -65,11 +67,15 @@ class InstalledLaunchTests(unittest.TestCase):
         if file.is_file() and not path.endswith('.php'):
             body = file.read_bytes()
             if path == 'scripts/launch.js':
-                body += b'\nwindow.fixtureLaunch={payload:()=>buildPayload(),capture:()=>bundleFormState(),restore:applyBundleData,config:loadLaunchConfig,geo:()=>{state.geo=[{type:"country",key:"US",country_code:"US",name:"United States"}];}};'
+                body += b'\nwindow.fixtureLaunch={payload:()=>buildPayload(),capture:()=>bundleFormState(),restore:applyBundleData,config:loadLaunchConfig,ready:()=>Boolean(state.launchConfig),geo:()=>{state.geo=[{type:"country",key:"US",country_code:"US",name:"United States"}];}};'
             route.fulfill(body=body, content_type='application/javascript' if path.endswith('.js') else 'text/css'); return
         data = {}
         status = 200
-        if path == 'ajax/metaLaunchConfig.php': data = self.config
+        if path == 'ajax/metaLaunchConfig.php':
+            if self.delay_config:
+                self.waiting_config.append(route)
+                return
+            data = self.config
         elif path == 'ajax/metaPrivateSchema.php': data = self.schema
         elif path == 'ajax/metaJobsList.php': data = {'jobs': []}
         elif path == 'ajax/creativeLibrary.php':
@@ -234,5 +240,36 @@ class InstalledLaunchTests(unittest.TestCase):
         self.save_and_reload()
         self.assertEqual(self.page.locator('#dailyBudget').input_value(), '700')
         self.assertEqual(self.page.evaluate('fixtureLaunch.capture().geo[0].country_code'), 'US')
+
+    def release_config(self):
+        self.assertTrue(self.waiting_config)
+        self.delay_config = False
+        for route in self.waiting_config:
+            route.fulfill(json={'ok':True,'data':self.config})
+        self.waiting_config = []
+        self.page.wait_for_function('fixtureLaunch.ready()')
+
+    def test_initial_config_arriving_after_preset_has_no_false_warning(self):
+        self.page.locator('#creativeLibrarySelect').select_option('preset')
+        self.assertFalse(self.page.evaluate('fixtureLaunch.ready()'))
+        self.assertEqual(self.page.locator('#objective').input_value(), 'OUTCOME_TRAFFIC')
+        self.assertFalse(self.page.locator('#remaskUnsupportedObjective').is_visible())
+        self.release_config()
+        self.assertEqual(self.page.locator('#objective').input_value(), 'OUTCOME_TRAFFIC')
+        self.assertFalse(self.page.locator('#remaskUnsupportedObjective').is_visible())
+        self.assertEqual(self.page.locator('#dailyBudget').input_value(), '500')
+        self.page.evaluate('fixtureLaunch.geo()')
+        self.assertEqual(self.page.evaluate('fixtureLaunch.payload().campaign.objective'), 'OUTCOME_TRAFFIC')
+
+    def test_initial_config_keeps_legacy_goal(self):
+        self.page.locator('#creativeLibrarySelect').select_option('preset')
+        self.assertEqual(self.page.locator('#objective').input_value(), self.preset_objective)
+        self.assertFalse(self.page.locator('#remaskUnsupportedObjective').is_visible())
+        self.release_config()
+        self.assertEqual(self.page.locator('#objective').input_value(), self.preset_objective)
+        self.assertTrue(self.page.locator('#remaskUnsupportedObjective').is_visible())
+        self.assertEqual(self.page.locator('#dailyBudget').input_value(), '500')
+        with self.assertRaisesRegex(Exception, 'Сохранённая цель недоступна'):
+            self.page.evaluate('fixtureLaunch.payload()')
 
 if __name__ == '__main__': unittest.main()

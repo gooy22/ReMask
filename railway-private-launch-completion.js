@@ -17,10 +17,12 @@ apiJson = async function(url, options = {}) {
 };
 
 const remaskUnsupportedObjectiveMessage = 'Сохранённая цель недоступна для автозалива. Выберите доступную цель; остальные настройки сохранены.';
+let remaskRestoredLaunchObjective = '';
 function remaskRestoreLaunchObjective(value) {
     const select = $('objective');
     if (!select) return;
     const saved = String(value || select.value || '');
+    remaskRestoredLaunchObjective = saved;
     for (const option of Array.from(select.options)) {
         if (option.dataset.remaskLegacyObjective && option.value !== saved) option.remove();
     }
@@ -39,16 +41,25 @@ function remaskRestoreLaunchObjective(value) {
         warning.setAttribute('role', 'alert');
         select.after(warning);
     }
+    // A preset can load before initializeLaunch's original config request
+    // resolves. Missing configuration is not proof of an unsupported goal.
+    const loaded = Boolean(state.launchConfig);
     const supported = state.launchConfig?.objectives?.[select.value]?.enabled === true;
-    warning.hidden = supported;
-    warning.textContent = supported ? '' : remaskUnsupportedObjectiveMessage;
+    warning.hidden = !loaded || supported;
+    warning.textContent = !loaded || supported ? '' : remaskUnsupportedObjectiveMessage;
 }
+
+// The first config request starts before this overlay is installed. Observe
+// its option replacement as well as later explicit configuration reloads.
+if ($('objective')) new MutationObserver(() => {
+    remaskRestoreLaunchObjective(remaskRestoredLaunchObjective || $('objective').value);
+}).observe($('objective'), {childList:true});
 
 const remaskPrivateOriginalLoadConfig = loadLaunchConfig;
 loadLaunchConfig = async function() {
     const saved = $('objective')?.value;
     await remaskPrivateOriginalLoadConfig();
-    remaskRestoreLaunchObjective(saved);
+    remaskRestoreLaunchObjective(remaskRestoredLaunchObjective || saved);
     invalidateLaunchReview(); validateReady();
 };
 $('objective')?.addEventListener('change', () => {
