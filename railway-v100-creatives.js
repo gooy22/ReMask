@@ -1148,15 +1148,16 @@ function remaskUnbindCreativeTemplate(builder) {
 }
 // An explicit module edit replaces that whole value, including an empty list
 // or deleted nested key. Retained template sections only preserve other fields.
-document.addEventListener('remask-module-edit',event=>{
-    const {group,field}=event.detail||{};
+function remaskCreativeReplaceRetainedField(event) {
+    const {group,field}=event.detail||{group:event.target?.dataset?.metaGroup,field:event.target?.dataset?.metaField};
     const suffix={campaign:'Campaign',adset:'Adset',targeting:'Targeting',creative:'Creative',ad:'Ad'}[group];
     if(!suffix||!field)return;
     const source=$('mbAdvanced'+suffix);
     let retained;try{retained=parseJsonField(source.id,{});}catch{return;}
     if(!retained||typeof retained!=='object'||Array.isArray(retained))return;
     delete retained[field];source.value=stringify(retained);
-});
+}
+for(const type of ['remask-module-edit','input','change'])document.addEventListener(type,remaskCreativeReplaceRetainedField);
 function remaskCreativeRetainedSection(group,id) {
     const retained={...parseJsonField(id,{})};
     // Primary controls own these values, including explicit empty/default

@@ -102,7 +102,7 @@ class WorkflowTests(unittest.TestCase):
         self.page.get_by_role('button',name='iOS 26.0 и новее',exact=True).click()
         self.page.get_by_role('button',name='Дополнительно',exact=True).click()
         self.page.locator('.cr-sdk-group[data-sdk-group="targeting"] > summary').click()
-        self.page.get_by_label('Уровень образования',exact=True).press('Enter')
+        self.page.get_by_role('combobox',name='Уровень образования',exact=True).press('Enter')
         self.page.get_by_role('button',name='High School',exact=True).click()
         self.page.locator('#sdk_targeting_work_employers_choices').fill('Fixture')
         self.page.locator('#sdk_targeting_work_employers_choices').press('Enter')
@@ -145,7 +145,7 @@ class WorkflowTests(unittest.TestCase):
 
     def test_saved_module_choices_and_structures_can_be_removed(self):
         self.creative(context=True,modules=True)
-        builder={'campaign':{'daily_budget':500,'objective':'OUTCOME_TRAFFIC'},
+        builder={'campaign':{'daily_budget':500,'objective':'OUTCOME_TRAFFIC'},'adset':{'optimization_sub_event':'NONE'},
             'targeting':{'user_device':['iphone 17'],'education_statuses':[1]},
             'creative':{'degrees_of_freedom_spec':{'creative_features_spec':{'standard_enhancements':{'enroll_status':'OPT_IN'}}}}}
         self.page.evaluate('(builder)=>testCreative.open({id:"fixture",name:"Saved",meta_builder:builder})',builder)
@@ -155,12 +155,15 @@ class WorkflowTests(unittest.TestCase):
         self.page.get_by_role('button',name='Дополнительно',exact=True).click()
         self.page.locator('.cr-sdk-group[data-sdk-group="targeting"] > summary').click()
         self.page.get_by_role('button',name='Удалить High School',exact=True).click()
+        self.page.locator('.cr-sdk-group[data-sdk-group="adset"] > summary').click()
+        self.page.locator('#sdk_adset_optimization_sub_event').select_option('')
         self.page.get_by_role('button',name='Отслеживание',exact=True).click()
         self.page.locator('#mbDegreesOfFreedom').locator('..').locator('.rm-module-structure').get_by_role('button',name='Очистить',exact=True).click()
         saved=self.page.evaluate('testCreative.build()')
         self.assertNotIn('user_device',saved['targeting'])
         self.assertNotIn('education_statuses',saved['targeting'])
         self.assertNotIn('degrees_of_freedom_spec',saved['creative'])
+        self.assertNotIn('optimization_sub_event',saved['adset'])
         self.assertEqual(saved['campaign']['daily_budget'],500)
         self.page.get_by_role('button',name='Кампания',exact=True).click()
         self.page.locator('#mbCampaignDailyBudget').fill('')

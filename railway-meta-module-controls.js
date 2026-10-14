@@ -133,7 +133,8 @@ const remaskModuleControls = (() => {
             let draft;try{draft=structuredClone(read());}catch{summary.textContent='Сохранённое значение не удалось разобрать.';return;}
             const overlay=document.createElement('div');overlay.style.cssText='position:fixed;inset:0;z-index:14000;background:#020617bf;display:flex;justify-content:center;align-items:center;padding:12px';
             const dialog=document.createElement('section');dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','true');
-            const title=(fieldLabels(source)[0]?.textContent||field).trim();dialog.setAttribute('aria-label',title);
+            const fieldLabel=fieldLabels(source)[0];
+            const title=(fieldLabel?.querySelector('span')?.textContent||fieldLabel?.textContent||field).trim();dialog.setAttribute('aria-label',title);
             dialog.style.cssText='width:min(900px,100%);max-height:90vh;overflow:auto;background:#111827;border:1px solid #465366;border-radius:14px;padding:18px;color:#e2e8f0';
             const heading=document.createElement('h3');heading.textContent=title;dialog.appendChild(heading);
             const body=document.createElement('div');dialog.appendChild(body);

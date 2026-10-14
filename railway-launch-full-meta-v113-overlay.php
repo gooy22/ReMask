@@ -243,12 +243,13 @@ async function remaskLoadLaunchMetaSdkSchema() {
     if(typeof remaskModuleControls!=="undefined")remaskModuleControls.configure(data);
     remaskRenderLaunchMetaFields();
 }
-document.addEventListener('remask-module-edit',event=>{
-    const {group,field}=event.detail||{};
+function remaskReplaceRetainedLaunchField(event) {
+    const {group,field}=event.detail||{group:event.target?.dataset?.launchMetaGroup,field:event.target?.dataset?.launchMetaField};
     if(!event.target?.dataset?.launchMetaGroup||!group||!field)return;
     const retained=remaskSelectedCreativePreset?.meta_builder?.[group];
     if(retained)delete retained[field];
-});
+}
+for(const type of ['remask-module-edit','input','change'])document.addEventListener(type,remaskReplaceRetainedLaunchField);
 function remaskCurrentMetaBuilderForJob() {
     const preset=remaskSelectedCreativePreset?.meta_builder||{};
     const extra=remaskReadLaunchMetaSdkFields();
