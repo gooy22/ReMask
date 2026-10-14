@@ -103,7 +103,7 @@ const remaskModuleControls = (() => {
         bid_constraints:'AdsAPIAdCampaignGroupBidConstraintsFields',creative_features_spec:'AdCreativeFeatureCustomizationsSpecFields'};
     const primaryComplex = {mbAttributionSpec:['adset','attribution_spec'],mbPromotedObject:['adset','promoted_object'],
         mbFlexibleSpec:['targeting','flexible_spec'],mbExclusions:['targeting','exclusions'],mbDegreesOfFreedom:['creative','degrees_of_freedom_spec'],
-        mbAssetFeedSpec:['creative','asset_feed_spec'],mbPlatformCustomizations:['creative','platform_customizations'],
+        mbAssetFeedSpec:['creative','asset_feed_spec'],mbPlatformCustomizations:['creative','platform_customizations'],mbTrackingSpecs:['ad','tracking_specs'],
         mbAdvancedCampaign:['campaign','campaign'],mbAdvancedAdset:['adset','adset'],mbAdvancedTargeting:['targeting','targeting'],mbAdvancedCreative:['creative','creative'],mbAdvancedAd:['ad','ad']};
     const listFields = new Set(['attribution_spec','flexible_spec','adlabels','execution_options','frequency_control_specs','adset_schedule','tracking_specs','ad_schedule','budget_schedule_specs']);
     function attachStructure(source, field, type) {

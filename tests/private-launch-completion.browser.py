@@ -139,6 +139,8 @@ class InstalledLaunchTests(unittest.TestCase):
         self.page.locator('#launchMeta_targeting_work_positions_choices').fill('Fixture')
         self.page.locator('#launchMeta_targeting_work_positions_choices').press('Enter')
         self.page.get_by_role('button',name='Fixture work_positions',exact=True).click()
+        for field in ('user_device','education_statuses','work_positions'):
+            self.assertFalse(self.page.locator('#launchMeta_targeting_'+field).is_visible())
         data=self.page.evaluate('fixtureLaunch.capture()')
         target=data['meta_builder']['targeting']
         self.assertEqual(target['user_device'],['iphone 17'])

@@ -92,7 +92,7 @@
     main:has(.wf-launch){overflow:visible}
     .wf-launch label{display:block!important;margin:0 0 7px!important;font-size:12px!important;font-weight:600;color:#bccbdd;line-height:1.5}
     .wf-launch label:has(input[type=checkbox],input[type=radio]){display:flex!important;align-items:center;gap:8px}
-    .wf-launch .form-control:not(.rm-meta-visual-source):not(.wf-profile-native):not([type=hidden]):not([hidden]){display:block!important;width:100%!important;box-sizing:border-box;min-width:0;min-height:42px;border-radius:8px!important;margin:0!important}
+    .wf-launch .form-control:not(.rm-meta-visual-source):not(.rm-module-source):not(.wf-profile-native):not([type=hidden]):not([hidden]){display:block!important;width:100%!important;box-sizing:border-box;min-width:0;min-height:42px;border-radius:8px!important;margin:0!important}
     .wf-launch .row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px;margin-left:0;margin-right:0}
     .wf-launch .row>[class*="col-"]{width:auto;max-width:none;min-width:0;flex:none;padding:0;grid-column:auto}
     .wf-launch .row>.col-md-12,.wf-launch .row>.col-12{grid-column:1/-1}

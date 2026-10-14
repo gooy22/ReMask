@@ -116,11 +116,12 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn('profile',self.page.evaluate('fixtureRequests.at(-1)'))
         self.page.evaluate('(builder)=>testCreative.open({id:"fixture",name:"Choices",meta_builder:builder})',builder)
         self.assertEqual(self.page.evaluate('testCreative.build()'),builder)
+        self.page.get_by_role('button',name='Места показа',exact=True).click()
         self.assertEqual(self.page.get_by_role('button',name='Удалить iphone 17').count(),1)
 
     def test_nested_module_fields_edit_without_json_and_keep_value_types(self):
         self.creative(context=True,modules=True)
-        self.page.get_by_role('button',name='Объявление',exact=True).click()
+        self.page.get_by_role('button',name='Отслеживание',exact=True).click()
         self.page.locator('#mbDegreesOfFreedom').evaluate('(source)=>{source.value=JSON.stringify({creative_features_spec:{standard_enhancements:{enroll_status:"OPT_OUT"}}});}')
         self.page.locator('#mbDegreesOfFreedom').locator('..').locator('.rm-module-structure').get_by_role('button',name='Настроить',exact=True).click()
         dialog=self.page.get_by_role('dialog',name='Улучшения креатива',exact=False)
@@ -131,6 +132,16 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate('testCreative.build().creative.degrees_of_freedom_spec'),{'creative_features_spec':{'standard_enhancements':{'enroll_status':'OPT_IN'}}})
         self.assertFalse(self.page.locator('#mbDegreesOfFreedom').is_visible())
         self.assertEqual(self.page.locator('.rm-module-structure').count()>1,True)
+        self.page.locator('#mbTrackingSpecs').evaluate('(source)=>{source.value=JSON.stringify([{action_type:"offsite_conversion",amount:1,enabled:true,extra:null}]);}')
+        self.page.locator('#mbTrackingSpecs').locator('..').locator('.rm-module-structure').get_by_role('button',name='Настроить',exact=True).click()
+        dialog=self.page.get_by_role('dialog',name='Правила отслеживания',exact=True)
+        dialog.get_by_role('spinbutton',name='Значение amount',exact=True).fill('2.5')
+        dialog.get_by_role('combobox',name='Значение enabled',exact=True).select_option('false')
+        dialog.get_by_role('button',name='Сохранить',exact=True).click()
+        builder=self.page.evaluate('testCreative.build()')
+        self.assertEqual(builder['ad']['tracking_specs'],[{'action_type':'offsite_conversion','amount':2.5,'enabled':False,'extra':None}])
+        self.page.evaluate('(builder)=>testCreative.open({id:"fixture",name:"Structured",meta_builder:builder})',builder)
+        self.assertEqual(self.page.evaluate('testCreative.build()'),builder)
 
     def test_instagram_template_saves_without_profile_account_or_owned_post(self):
         self.creative(context=True)

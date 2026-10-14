@@ -409,8 +409,8 @@ require_once __DIR__ . '/checkpassword.php';
       </section>
 
       <section class="cr-panel" data-panel="advanced">
-        <div class="cr-section-title">Все официальные поля Meta API</div>
-        <div class="cr-muted mb-3">Поля ниже строятся из актуальной SDK-схемы ReMask. Простые значения вводятся напрямую, сложные Object / map / list — JSON.</div>
+        <div class="cr-section-title">Дополнительные параметры Meta</div>
+        <div class="cr-muted mb-3">Настройки загружаются из модулей Ads Manager. Выбирайте значения из списков; вложенные параметры открываются кнопкой «Настроить».</div>
         <div class="cr-toolbar" style="margin:0 0 12px">
           <input id="metaFieldSearch" class="cr-search" placeholder="Поиск поля Meta..." style="max-width:420px">
           <span id="metaSchemaStatus" class="cr-count">Загрузка SDK-схемы…</span>
