@@ -758,8 +758,10 @@ function renderCreativeTargetResults(kind, items) {
         box.classList.add('open');
         return;
     }
-    for (const item of items) {
-        const row = document.createElement('div');
+    for (const item of items.slice(0,100)) {
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.style.cssText='display:block;width:100%;text-align:left;border:0;background:transparent;color:inherit';
         row.className = 'cr-target-result';
         const label = creativeTargetLabel(kind === 'excludedGeo' ? 'geo' : kind, item);
         row.innerHTML = '<div>' + esc(label.main) + '</div>' + (label.meta ? '<small>' + esc(label.meta) + '</small>' : '');
@@ -770,6 +772,10 @@ function renderCreativeTargetResults(kind, items) {
             closeCreativeTargetResults(kind);
         });
         box.appendChild(row);
+    }
+    if(items.length>100){
+        const hint=document.createElement('div');hint.className='cr-target-empty';
+        hint.textContent='Введите название, чтобы сузить список.';box.appendChild(hint);
     }
     box.classList.add('open');
 }
@@ -784,14 +790,6 @@ async function searchCreativeTargeting(kind) {
     clearTimeout(creativeTargetingTimers[kind]);
     creativeTargetingControllers[kind]?.abort();
     creativeTargetingControllers[kind] = null;
-
-    if (query.length < 2) {
-        if (results) {
-            results.classList.remove('open');
-            results.innerHTML = '';
-        }
-        return;
-    }
 
     const controller = new AbortController();
     creativeTargetingControllers[kind] = controller;
@@ -835,6 +833,7 @@ function installCreativeTargetSearch(kind) {
     const cfg = creativeTargetSearchConfig(kind);
     const input = cfg ? $(cfg.input) : null;
     if (!input) return;
+    input.addEventListener('focus', () => searchCreativeTargeting(kind));
     input.addEventListener('input', () => {
         clearTimeout(creativeTargetingTimers[kind]);
         creativeTargetingTimers[kind] = setTimeout(() => searchCreativeTargeting(kind), 240);

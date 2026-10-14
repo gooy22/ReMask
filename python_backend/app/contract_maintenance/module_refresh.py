@@ -22,6 +22,7 @@ from .ads_sources import deferred_script_urls, module_records, public_script_url
 from ..private_contract_discovery import _script_urls
 from ..private_inventory import _auth_gate
 from ..provisioning.models import ProvisioningError
+from ..targeting_reference import MODULES as TARGETING_MODULES, refresh_reference
 
 log = logging.getLogger('remask.module_refresh')
 BASELINES = Path(__file__).parent.parent / 'contracts' / 'meta_module_refresh_20261013.json'
@@ -106,7 +107,8 @@ async def refresh_from_document(web, document, final_url):
             or _auth_gate(final_url, document) or len(document.encode()) > 5_000_000):
         return
     references = baselines()
-    wanted = sorted({name for spec in references.values() for name in (*spec['artifact_modules'], *spec['senders'])})
+    wanted = sorted({name for spec in references.values() for name in (*spec['artifact_modules'], *spec['senders'])}
+                    | set(TARGETING_MODULES))
     urls = list(dict.fromkeys(deferred_script_urls(document, preferred=wanted) +
         [url for url in _script_urls(document, final_url, limit=24) if public_script_url(url)]))[:SCRIPT_LIMIT]
     if not urls:
@@ -141,6 +143,12 @@ async def refresh_from_document(web, document, final_url):
                     # Each parser is local; no JavaScript is executed.
                     parsed = await asyncio.to_thread(lambda: [row for row in
                         module_records(source, selected=wanted) if row['name'] in wanted])
+                    for row in parsed:
+                        if row['name'] in TARGETING_MODULES:
+                            row['_targeting_evidence'] = {'module':row['name'],
+                                'module_sha256':hashlib.sha256(row['module_source'].encode()).hexdigest(),
+                                'script_sha256':hashlib.sha256(source.encode()).hexdigest(),
+                                'observed_public_url':url}
                     rows.extend(parsed)
                 except asyncio.CancelledError:
                     raise
@@ -151,6 +159,11 @@ async def refresh_from_document(web, document, final_url):
     except TimeoutError:
         failures += 1
     snapshot = select_updates(rows, references)
+    try:
+        await asyncio.to_thread(refresh_reference, rows)
+    except (ValueError, KeyError, TypeError, OSError):
+        # An incomplete or changed reference table cannot erase usable IDs.
+        log.info('targeting_reference refresh rejected; installed reference preserved')
     _apply_snapshot(web, snapshot)
     _cache[key] = {'until': now + (60 if failures else TTL), 'snapshot': snapshot}
     _cache.move_to_end(key)

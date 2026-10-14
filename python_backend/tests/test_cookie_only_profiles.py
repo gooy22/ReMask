@@ -65,7 +65,8 @@ class CookieOnlyProfileTests(unittest.TestCase):
         self.data = self.root / 'fixture-accounts.json'
         (self.root/'settings.php').write_text('<?php define("ACCOUNTSFILENAME",' + json.dumps(str(self.data)) + '); define("REMASK_PROFILE_STORE","json");')
         (self.root/'checkpassword.php').write_text('<?php // isolated fixture authentication')
-        self.env = {**os.environ, 'REMASK_PROFILE_STORE':'json'}
+        self.env = {**os.environ, 'REMASK_PROFILE_STORE':'json',
+                    'REMASK_TEST_TARGETING_REFERENCE':str(ROOT/'python_backend/app/contracts/meta_targeting_reference_20261014.json')}
         overlay = (ROOT/'railway-cookie-only-overlay.php').read_text().replace("'/var/www/html'", json.dumps(str(self.root)))
         for file in ['railway-cookie-profile-ui.js','railway-cookie-accounts.js','railway-cookie-txt-parser.php','railway-cookie-txt-import.js']:
             overlay = overlay.replace("'/tmp/" + file + "'", json.dumps(str(ROOT/file)))
@@ -265,7 +266,7 @@ echo json_encode(['token'=>$saved->token,'cookies'=>$saved->cookies,'proxy'=>$sa
                 shutil.copyfile(ROOT/source,destination)
         for source in ROOT.glob('railway-*'):
             if source.is_file():
-                body=source.read_text().replace('/tmp/',str(stage)+'/').replace('/var/www/html',str(self.root))
+                body=source.read_text().replace('/tmp/',str(stage)+'/').replace('/var/www/html',str(self.root)).replace('/opt/remask-python',str(ROOT/'python_backend'))
                 (stage/source.name).write_text(body)
         shutil.copyfile(ROOT/'docker-start.sh',stage/'docker-start.sh')
         failures=[]
