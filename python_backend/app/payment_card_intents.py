@@ -40,6 +40,27 @@ class CardIntentLedger:
                 stage TEXT NOT NULL, created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
                 UNIQUE(profile, account, payment_account, credential_id, flow))''')
+            # Keep historical SDC/3DS rows intact, including old duplicates.
+            # Enforce the shared fence in SQLite as well as in the dispatcher.
+            con.execute('''CREATE INDEX IF NOT EXISTS card_bank_scope
+                ON card_bank_verification_intents(profile,account,payment_account)''')
+            con.execute('''CREATE TRIGGER IF NOT EXISTS card_bank_no_second_authorization
+                BEFORE INSERT ON card_bank_verification_intents
+                WHEN NEW.stage != 'META_CONFIRMED' AND EXISTS (
+                    SELECT 1 FROM card_bank_verification_intents
+                    WHERE profile=NEW.profile AND account=NEW.account
+                      AND payment_account=NEW.payment_account
+                      AND (credential_id=NEW.credential_id OR card_id=NEW.card_id))
+                BEGIN SELECT RAISE(ABORT,'BANK_AUTH_ALREADY_ATTEMPTED'); END''')
+            con.execute('''CREATE TRIGGER IF NOT EXISTS card_bank_no_conflicting_submit
+                BEFORE UPDATE OF stage ON card_bank_verification_intents
+                WHEN NEW.stage='REQUEST_SENT' AND EXISTS (
+                    SELECT 1 FROM card_bank_verification_intents
+                    WHERE attempt_id != NEW.attempt_id
+                      AND profile=NEW.profile AND account=NEW.account
+                      AND payment_account=NEW.payment_account
+                      AND (credential_id=NEW.credential_id OR card_id=NEW.card_id))
+                BEGIN SELECT RAISE(ABORT,'BANK_AUTH_HISTORY_CONFLICT'); END''')
             con.commit()
             return con
 
@@ -174,7 +195,8 @@ class BankVerificationLedger(CardIntentLedger):
 
     A request with an ambiguous outcome remains reserved. Neither timeout nor
     a repeated button click can start another authorization for the same
-    credential/RK/flow. No card data, CVC, bank URL or code is persisted.
+    credential or vault card in the exact payment scope, across SDC and 3DS.
+    No card data, CVC, bank URL or code is persisted.
     """
 
     @staticmethod
@@ -202,16 +224,26 @@ class BankVerificationLedger(CardIntentLedger):
     def _read_existing(self, profile, account, payment_account, credential, card_id, flow):
         con = self.connect()
         try:
-            row = con.execute('''SELECT stage,card_id
-                FROM card_bank_verification_intents
-                WHERE profile=? AND account=? AND payment_account=?
-                  AND credential_id=? AND flow=?''',
-                (profile, account, payment_account, credential, flow)).fetchone()
-            if row is None:
-                return None
-            return {'stage': row['stage'], 'same_card': row['card_id'] == card_id}
+            return self._existing(con, profile, account, payment_account, credential, card_id, flow)
         finally:
             con.close()
+
+    @staticmethod
+    def _existing(con, profile, account, payment_account, credential, card_id, flow):
+        rows = con.execute('''SELECT attempt_id,stage,card_id,credential_id,flow
+            FROM card_bank_verification_intents
+            WHERE profile=? AND account=? AND payment_account=?
+              AND (credential_id=? OR card_id=?)
+            ORDER BY created_at,attempt_id''',
+            (profile,account,payment_account,credential,card_id)).fetchall()
+        if not rows:
+            return None
+        return {'attempt_id': rows[0]['attempt_id'],
+                'stage': rows[0]['stage'] if len(rows) == 1 else 'HISTORY_CONFLICT',
+                'same_card': all(row['card_id'] == card_id for row in rows),
+                'same_credential': all(row['credential_id'] == credential for row in rows),
+                'same_flow': all(row['flow'] == flow for row in rows),
+                'history_count': len(rows)}
 
     async def reserve(self, *, profile, account, payment_account, credential,
                       card_id, flow):
@@ -224,24 +256,22 @@ class BankVerificationLedger(CardIntentLedger):
         con = self.connect()
         try:
             con.execute('BEGIN IMMEDIATE')
+            previous = self._existing(con, profile, account, payment_account, credential, card_id, flow)
+            if previous is not None:
+                con.commit()
+                return {**previous, 'reserved': False}
             attempt_id = secrets.token_hex(12)
             now = int(time.time())
-            inserted = con.execute('''INSERT OR IGNORE INTO card_bank_verification_intents
+            con.execute('''INSERT INTO card_bank_verification_intents
                 (attempt_id,profile,account,payment_account,credential_id,card_id,flow,stage,created_at,updated_at)
                 VALUES(?,?,?,?,?,?,?,?,?,?)''',
                 (attempt_id,profile,account,payment_account,credential,card_id,flow,
-                 'RESERVED',now,now)).rowcount
-            row = con.execute('''SELECT attempt_id,stage,card_id
-                FROM card_bank_verification_intents
-                WHERE profile=? AND account=? AND payment_account=?
-                  AND credential_id=? AND flow=?''',
-                (profile,account,payment_account,credential,flow)).fetchone()
+                 'RESERVED',now,now))
+            row = self._existing(con, profile, account, payment_account, credential, card_id, flow)
             con.commit()
             if row is None:
                 raise RuntimeError('VERIFY_RESERVATION_NOT_FOUND')
-            return {'attempt_id': row['attempt_id'],
-                    'stage': row['stage'], 'reserved': inserted == 1,
-                    'same_card': row['card_id'] == card_id}
+            return {**row, 'reserved': True}
         except BaseException:
             con.rollback()
             raise
@@ -266,6 +296,10 @@ class BankVerificationLedger(CardIntentLedger):
         try:
             con.execute('BEGIN IMMEDIATE')
             now = int(time.time())
+            history = self._existing(con, profile, account, payment_account, credential, card_id, flow)
+            if history and (not history['same_card'] or not history['same_credential']):
+                con.commit()
+                return False
             row = con.execute('''SELECT attempt_id,card_id,stage
                 FROM card_bank_verification_intents
                 WHERE profile=? AND account=? AND payment_account=?
@@ -310,10 +344,20 @@ class BankVerificationLedger(CardIntentLedger):
                 ('REQUEST_SENT',) if stage in ('RESULT_UNKNOWN', 'CHALLENGE_READY',
                                              'SERVER_REJECTED') else
                 ('CHALLENGE_READY', 'RESULT_UNKNOWN'))
+            # Old versions could leave two RESERVED rows. Neither may cross
+            # the submission boundary after the shared fence is installed.
+            fence = ''' AND NOT EXISTS (
+                SELECT 1 FROM card_bank_verification_intents other
+                WHERE other.attempt_id != card_bank_verification_intents.attempt_id
+                  AND other.profile=card_bank_verification_intents.profile
+                  AND other.account=card_bank_verification_intents.account
+                  AND other.payment_account=card_bank_verification_intents.payment_account
+                  AND (other.credential_id=card_bank_verification_intents.credential_id
+                       OR other.card_id=card_bank_verification_intents.card_id))''' if stage == 'REQUEST_SENT' else ''
             changed = con.execute('''UPDATE card_bank_verification_intents
                 SET stage=?,updated_at=?
                 WHERE attempt_id=? AND stage IN (''' +
-                ','.join('?' for _ in previous) + ')',
+                ','.join('?' for _ in previous) + ')' + fence,
                 (stage,int(time.time()),attempt_id,*previous)).rowcount
             con.commit()
             return changed == 1

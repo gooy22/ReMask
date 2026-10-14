@@ -42,6 +42,8 @@ final class RemaskTemplateTargetingContext {
             $code === 'BUSINESS_LOGIN_GATE', $code === 'META_AUTH_TOKEN_UNAVAILABLE' => 'Сессия Meta в '.$source.' недоступна. Обновите cookies этого профиля в «Аккаунтах».',
             $code === 'TEMPLATE_LOOKUP_SOURCE_UNAVAILABLE' => 'Нет подключённого профиля с cookies, доступным кабинетом и настроенным соединением. Проверьте подключение в «Аккаунтах».',
             str_contains($code, 'TIMEOUT') => 'Meta не ответила вовремя. Проверьте соединение и прокси подключённого профиля.',
+            $code === 'PRIVATE_HTTP_PROXY_UNAVAILABLE' => 'Прокси в '.$source.' недоступен. Проверьте его настройки и срок действия в «Аккаунтах».',
+            $code === 'PRIVATE_HTTP_CONNECTION_UNAVAILABLE', $code === 'PRIVATE_HTTP_PROTOCOL_ERROR' => 'Не удалось установить соединение с Meta в '.$source.'. Проверьте подключение в «Аккаунтах».',
             $code === 'UNKNOWN_TARGETING_TYPE', $code === 'INVALID_TARGETING_QUERY' => 'Для поиска аудитории введите от 2 до 200 символов.',
             default => 'Не удалось загрузить подсказки Meta. Проверьте сессию и соединение подключённого профиля в «Аккаунтах».',
         };

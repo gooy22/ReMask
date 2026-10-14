@@ -465,6 +465,14 @@ async def verify_payment_card_http(resolver, profile, payload, *, state=None):
                             business=business, credential=action_credential,
                             common=common, state=state, profile=profile,
                             card_id=card_id)
+                    if previous and (previous.get('same_flow') is False
+                                     or previous.get('same_credential') is False
+                                     or previous_stage == 'HISTORY_CONFLICT'):
+                        return {**common, 'status': 'ACTION_REQUIRED',
+                                'code': 'SDC_AUTH_ALREADY_ATTEMPTED',
+                                'verification_stage': previous_stage,
+                                'bank_request_evidence': 'REMASK_LOCAL_REQUEST',
+                                'previous_request_stage': previous_stage}
                     if history_checked and previous is None:
                         if not _sdc_task_proven(common):
                             return _unresolved_verification_flow(common)
@@ -489,6 +497,22 @@ async def verify_payment_card_http(resolver, profile, payload, *, state=None):
                         return {**common, 'code': 'SDC_AUTH_NOT_STARTED'}
                     if not _sdc_task_proven(common):
                         return _unresolved_verification_flow(common)
+                    # Read readiness must use the same cross-flow fence as the
+                    # final submit, so the UI cannot offer a second operation.
+                    if state is None or not getattr(state, 'path', None):
+                        return {**common, 'code': 'SDC_AUTH_PRECHECK_UNAVAILABLE'}
+                    try:
+                        previous = await BankVerificationLedger(state.path).read_existing(
+                            profile=profile, account=target,
+                            payment_account=evidence['payment_account_id'],
+                            credential=action_credential, card_id=card_id)
+                    except Exception:
+                        return {**common, 'code': 'SDC_AUTH_PRECHECK_UNAVAILABLE'}
+                    if previous is not None:
+                        return {**common, 'status': 'ACTION_REQUIRED',
+                                'code': 'SDC_AUTH_ALREADY_ATTEMPTED' if previous['same_card']
+                                        else 'SDC_DIFFERENT_CARD_ATTEMPT_BLOCKED',
+                                'verification_stage': previous['stage']}
                     if operation == 'authorize':
                         return await _send_sdc_once(web, state=state,
                             profile=profile, account=target,

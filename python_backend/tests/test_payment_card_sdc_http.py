@@ -320,10 +320,26 @@ class CardSDCHttpTests(IsolatedAsyncioTestCase):
         self.assertTrue(attempt['reserved'])
         self.assertTrue(await ledger.mark(attempt['attempt_id'], 'REQUEST_SENT'))
         self.assertTrue(await ledger.mark(attempt['attempt_id'], 'CHALLENGE_READY'))
-        self.assertEqual(await ledger.read_existing(**scope),
-                         {'stage':'CHALLENGE_READY', 'same_card':True})
-        self.assertEqual(await ledger.read_existing(
-            **{**scope, 'card_id':'card_'+'a'*24}),
-            {'stage':'CHALLENGE_READY', 'same_card':False})
+        existing = await ledger.read_existing(**scope)
+        self.assertEqual(existing['stage'], 'CHALLENGE_READY')
+        self.assertTrue(existing['same_card'])
+        self.assertTrue(existing['same_flow'])
+        conflicting = await ledger.read_existing(**{**scope, 'card_id':'card_'+'a'*24})
+        self.assertEqual(conflicting['stage'], 'CHALLENGE_READY')
+        self.assertFalse(conflicting['same_card'])
         self.assertIsNone(await ledger.read_existing(
             **{**scope, 'account':'99999999'}))
+
+    async def test_three_ds_history_never_offers_sdc_ready_or_descriptor_prompt(self):
+        scope = {name:self.scope[name] for name in
+                 ('profile','account','payment_account','credential','card_id')}
+        await BankVerificationLedger(self.state.path).reserve(
+            **{**scope, 'credential':'meta_sdc_credential_123'}, flow='THREEDS')
+        HttpFixture.graphql = AsyncMock()
+        for usability in ('PENDING_VERIFICATION','UNVERIFIED_OR_PENDING_AUTH'):
+            for operation in ('verify','authorize'):
+                result = await self.pending_result(operation, usability=usability)
+                self.assertEqual(result['code'], 'SDC_AUTH_ALREADY_ATTEMPTED')
+                self.assertFalse(result['submitted'])
+                self.assertFalse(result['verification_triggered'])
+        HttpFixture.graphql.assert_not_awaited()

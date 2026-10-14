@@ -87,6 +87,24 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status, 307)
         self.assertEqual(len(calls), 1)
 
+    async def test_document_transport_failure_keeps_safe_kind_without_retry_or_url(self):
+        for failure in (httpx.ProxyError, httpx.ReadTimeout, httpx.RemoteProtocolError):
+            web = FacebookWebSession(WebProfile('fixture', {'c_user':'123'}, 'http://127.0.0.1:1', 'fixture-UA'))
+            self.addAsyncCleanup(web.close)
+            client = await web._ensure_session()
+            calls = []
+            def handler(request):
+                calls.append(request)
+                raise failure('SECRET proxy credentials and cookies', request=request)
+            await self.mock(client, handler)
+            with self.assertRaises(RemoteRequestError) as caught:
+                await web.fetch_text('https://www.facebook.com/?session=SECRET')
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(caught.exception.meta_payload,
+                             {'transport_failure':{'kind':failure.__name__}})
+            self.assertNotIn('SECRET', str(caught.exception))
+            self.assertNotIn('facebook.com', str(caught.exception))
+
     async def test_graphql_multipart_stream_keeps_auth_and_claim_before_one_post(self):
         import io
         web = FacebookWebSession(WebProfile('fixture', {'c_user':'123'}, 'http://127.0.0.1:1', 'fixture-UA'))

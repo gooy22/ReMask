@@ -11,6 +11,7 @@ from app.payment_card_bank import (
     _response_diagnostic, _client_success,
 )
 from app.payment_card_intents import BankVerificationLedger
+from app.payment_card_verification import _send_sdc_once
 
 
 class BankCardTests(IsolatedAsyncioTestCase):
@@ -41,6 +42,33 @@ class BankCardTests(IsolatedAsyncioTestCase):
                 await kw['before_submit']()
             return await mock(*args, **kw)
         return SimpleNamespace(graphql=graphql, _bootstrap=SimpleNamespace(fb_dtsg='fixture_secret')), mock
+
+    async def test_sdc_then_three_ds_never_dispatches_second_authorization(self):
+        web, mock = self.web({'data':{'send_dynamic_descriptor_auth':{'sent':True}}})
+        sdc_common = {**self.common, 'verification_tasks_observed':True, 'verification_tasks':['statement_code']}
+        first = await _send_sdc_once(web, **self.scope, common=sdc_common)
+        self.assertEqual(first['code'], 'SDC_AUTH_SENT_WAIT_CODE')
+        result = await start_bank_once(web, **self.scope, currency='EUR', common=self.common)
+        self.assertEqual(result['code'], 'BANK_AUTH_ALREADY_ATTEMPTED')
+        self.assertEqual(mock.await_count, 1)
+
+    async def test_three_ds_unknown_then_sdc_never_dispatches_second_authorization(self):
+        web, mock = self.web({})
+        first = await start_bank_once(web, **self.scope, currency='EUR', common=self.common)
+        self.assertEqual(first['code'], 'BANK_AUTH_RESULT_UNKNOWN')
+        result = await _send_sdc_once(web, **self.scope, common={**self.common,
+            'verification_tasks_observed':True, 'verification_tasks':['statement_code']})
+        self.assertEqual(result['code'], 'SDC_AUTH_ALREADY_ATTEMPTED')
+        self.assertEqual(mock.await_count, 1)
+
+    async def test_simultaneous_sdc_three_ds_submit_only_one_post(self):
+        web, mock = self.web({})
+        results = await asyncio.gather(
+            start_bank_once(web, **self.scope, currency='EUR', common=self.common),
+            _send_sdc_once(web, **self.scope, common={**self.common,
+                'verification_tasks_observed':True, 'verification_tasks':['statement_code']}))
+        self.assertEqual(mock.await_count, 1)
+        self.assertEqual(sum(r['code'].endswith('ALREADY_ATTEMPTED') for r in results), 1)
 
     async def test_scope_and_currency_must_be_fresh_before_any_bank_mutation(self):
         good = {'data':{'payment_account':{'payment_legacy_account_id':'555666777',
