@@ -1,4 +1,21 @@
 /* REMASK_PRIVATE_CREATIVE_LAUNCH_COMPLETION_V1 */
+// Audience templates use the same private, server-scoped lookup as Creative.
+// Never carry the service's lookup identity into the publishing configuration.
+const remaskPrivateOriginalTargetingApiJson = apiJson;
+apiJson = async function(url, options = {}) {
+    if (String(url).split('?')[0].endsWith('ajax/metaTargetingSearch.php')
+            && typeof options.body?.get === 'function') {
+        const input = options.body;
+        const body = new URLSearchParams();
+        for (const key of ['type','q','limit']) {
+            const value = input.get(key);
+            if (value !== null) body.set(key, value);
+        }
+        return remaskPrivateOriginalTargetingApiJson('ajax/metaTemplateTargetingSearch.php', {...options, body});
+    }
+    return remaskPrivateOriginalTargetingApiJson(url, options);
+};
+
 const remaskUnsupportedObjectiveMessage = 'Сохранённая цель недоступна для автозалива. Выберите доступную цель; остальные настройки сохранены.';
 function remaskRestoreLaunchObjective(value) {
     const select = $('objective');
