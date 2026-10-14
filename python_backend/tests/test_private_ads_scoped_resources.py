@@ -49,6 +49,36 @@ class ResourceCases(unittest.IsolatedAsyncioTestCase):
             return copy.deepcopy(self.account)
         return copy.deepcopy(self.responses[path])
 
+    async def test_all_source_targeting_families_use_the_same_exact_sender(self):
+        from app.private_advertising_reads import TARGETING_TYPES
+        for kind in TARGETING_TYPES:
+            self.calls.clear()
+            self.responses['/act_111111/targetingbrowse']={'data':[
+                {'key':'root','name':'Root','parent':'root'},
+                {'id':2020 if kind=='college_years' else 777777,'key':'leaf','name':'Fixture '+kind,'type':kind,'parent':'root'},
+                {'id':'999999','key':'foreign','name':'Wrong type','type':'unrequested_type','parent':'root'}]}
+            result=await self.catalog.read(self.web,kind,self.values)
+            self.assertEqual(result['data'][0]['id'],'2020' if kind=='college_years' else '777777')
+            self.assertEqual(len(result['data']),1)
+            self.assertEqual(self.calls[-1][0],'/act_111111/targetingbrowse')
+            self.assertEqual(self.calls[-1][1]['whitelisted_types'],[kind])
+            self.assertTrue(result['account_scope_verified'])
+        self.responses['/act_111111/targetingsearch']={'data':[
+            {'id':777777,'name':'Exact employer','type':'work_employers'},
+            {'id':'999999','name':'Wrong type','type':'interests'}]}
+        result=await self.catalog.read(self.web,'work_employers',{**self.values,'query':'Exact'})
+        self.assertEqual(result['data'],[{'id':'777777','name':'Exact employer','type':'work_employers'}])
+        self.assertEqual(self.calls[-1][1]['whitelisted_types'],['work_employers'])
+
+    async def test_readonly_references_do_not_require_publishing_readiness(self):
+        self.account['account_status']=2
+        self.responses['/act_111111/targetingbrowse']={'data':[{'id':'777777','name':'Exact interest','type':'interests'}]}
+        result=await self.catalog.read(self.web,'interests',self.values)
+        self.assertTrue(result['checked_live']);self.assertEqual(result['data'][0]['id'],'777777')
+        with self.assertRaises(ProvisioningError):await self.catalog.read(self.web,'images',self.values)
+        self.account['business']['id']='foreign'
+        with self.assertRaises(ProvisioningError):await self.catalog.read(self.web,'interests',self.values)
+
     async def test_exact_business_and_nested_promotable_pages_are_required(self):
         result = await self.catalog.pages(self.web, self.values)
         self.assertEqual(result['data'][0]['id'], '555555')

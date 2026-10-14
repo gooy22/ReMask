@@ -31,6 +31,13 @@ RESOURCE_FIELDS = {
     "behaviors": {"id", "name", "path", "description"},
     "locales": {"id", "name", "key"},
 }
+# Source-advertised targeting families share the reviewed unified sender.
+from .editor_modules import installed_editor
+TARGETING_TYPES = frozenset(installed_editor()['targeting_types'])
+for _target_type in TARGETING_TYPES:
+    RESOURCE_FIELDS.setdefault(_target_type, {'id','name','type','path','description',
+        'audience_size_lower_bound','audience_size_upper_bound'})
+
 _DATA_PATH = re.compile(r"data(?:\.[A-Za-z][A-Za-z0-9_]*)+")
 _ITEM_PATH = re.compile(r"[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*")
 

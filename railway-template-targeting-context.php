@@ -19,9 +19,10 @@ final class RemaskTemplateTargetingContext {
                 $business = (string)($row['business_id'] ?? '');
                 if (!preg_match('/^[0-9]{5,30}$/D', $account) || !preg_match('/^[0-9]{5,30}$/D', $business)) continue;
                 $status = $row['account_status'] ?? null;
-                if ($status !== null && (int)$status !== 1) continue;
+                // Reference reads do not require publishing readiness. The worker
+                // still confirms the exact account/Business through this profile.
                 $candidates[] = ['profile'=>$name, 'account_id'=>$account, 'catalog'=>$catalog,
-                    'priority'=>$name === $preferred ? 2 : ($status !== null ? 1 : 0),
+                    'priority'=>$name === $preferred ? 2 : ((string)$status === '1' ? 1 : ($status === null ? 0 : -1)),
                     'updated'=>(int)($catalog['_cache']['fetched_at'] ?? 0)];
             }
         }
@@ -39,7 +40,7 @@ final class RemaskTemplateTargetingContext {
         $raw = $error->getMessage();
         $code = preg_match('/^[A-Z][A-Z0-9_]{2,119}$/D', $raw) ? $raw : 'TEMPLATE_LOOKUP_UNAVAILABLE';
         $message = in_array($code, ['UNKNOWN_TARGETING_TYPE','INVALID_TARGETING_QUERY'], true)
-            ? 'Для поиска аудитории введите от 2 до 200 символов.'
+            ? 'Выберите тип справочника и введите не более 200 символов.'
             : 'Общий справочник Meta временно недоступен. Шаблон можно редактировать и сохранить без выбора профиля.';
         return ['code'=>$code,'message'=>$message,'settings_preserved'=>true,'template_account_bound'=>false];
     }

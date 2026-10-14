@@ -3575,9 +3575,9 @@ async def private_launch_form_schema():
     adapter = getattr(pool.private_launch, 'ads_manager', None)
     if adapter is None:
         raise HTTPException(status_code=409, detail='PRIVATE_FORM_SCHEMA_UNAVAILABLE')
-    return {'ok': True, **adapter.catalog.data['form_schema'],
+    from app.editor_modules import form_schema
+    return {'ok': True, **form_schema(adapter.catalog),
             'api_version': adapter.catalog.data['api_version'],
-            'source_digest': adapter.catalog.digest,
             'object_fields': adapter.catalog.data['object_fields']}
 
 @app.post('/api/v1/private-launch/plan',dependencies=[Depends(require_key)])

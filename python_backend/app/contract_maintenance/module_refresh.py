@@ -23,6 +23,8 @@ from ..private_contract_discovery import _script_urls
 from ..private_inventory import _auth_gate
 from ..provisioning.models import ProvisioningError
 from ..targeting_reference import MODULES as TARGETING_MODULES, refresh_reference
+from ..editor_modules import MODULES as EDITOR_MODULES, refresh_editor
+from .module_registry import refresh_registry
 
 log = logging.getLogger('remask.module_refresh')
 BASELINES = Path(__file__).parent.parent / 'contracts' / 'meta_module_refresh_20261013.json'
@@ -55,7 +57,7 @@ def select_updates(rows, references, *, now=None):
     now = time.monotonic() if now is None else now
     versions = {}
     for row in rows:
-        versions.setdefault(row['name'], {})[hashlib.sha256(json.dumps(row, sort_keys=True).encode()).hexdigest()] = row
+        versions.setdefault(row['name'], {})[hashlib.sha256(json.dumps({key:row[key] for key in ('name','dependencies','source')}, sort_keys=True).encode()).hexdigest()] = row
     accepted, blocked = {}, []
     for friendly, spec in references.items():
         artifact_name = friendly + '.graphql'
@@ -108,9 +110,9 @@ async def refresh_from_document(web, document, final_url):
         return
     references = baselines()
     wanted = sorted({name for spec in references.values() for name in (*spec['artifact_modules'], *spec['senders'])}
-                    | set(TARGETING_MODULES))
+                    | set(TARGETING_MODULES) | set(EDITOR_MODULES))
     urls = list(dict.fromkeys(deferred_script_urls(document, preferred=wanted) +
-        [url for url in _script_urls(document, final_url, limit=24) if public_script_url(url)]))[:SCRIPT_LIMIT]
+        [url for url in _script_urls(document, final_url, limit=256) if public_script_url(url)]))[:256]
     if not urls:
         return
     profile = web.profile
@@ -122,16 +124,20 @@ async def refresh_from_document(web, document, final_url):
     if previous and previous['until'] > now:
         _apply_snapshot(web, previous['snapshot'])
         return
+    cursor = int(previous.get('cursor', 0)) if previous else 0
+    window = urls[cursor:cursor + SCRIPT_LIMIT]
+    attempted = 0
     rows, bytes_read = [], 0
     failures = 0
     # Sequential reads keep a strict aggregate budget and the same cookie jar.
     # The wall clock cap includes parsing and cancellation of the final read.
     try:
         async with asyncio.timeout(12):
-            for url in urls:
+            for url in window:
                 budget = min(SCRIPT_BYTES, TOTAL_BYTES - bytes_read)
                 if budget <= 0:
                     break
+                attempted += 1
                 try:
                     status, source, final = await web.fetch_text(url, max_bytes=budget + 1, referer=final_url)
                     size = len(source.encode())
@@ -142,8 +148,11 @@ async def refresh_from_document(web, document, final_url):
                     # Parse bounded public code away from the worker event loop.
                     # Each parser is local; no JavaScript is executed.
                     parsed = await asyncio.to_thread(lambda: [row for row in
-                        module_records(source, selected=wanted) if row['name'] in wanted])
+                        module_records(source, selected=wanted, all_modules=True)])
                     for row in parsed:
+                        row['_module_evidence'] = {'module':row['name'],
+                            'module_sha256':hashlib.sha256(row['module_source'].encode()).hexdigest(),
+                            'script_sha256':hashlib.sha256(source.encode()).hexdigest(),'observed_public_url':url}
                         if row['name'] in TARGETING_MODULES:
                             row['_targeting_evidence'] = {'module':row['name'],
                                 'module_sha256':hashlib.sha256(row['module_source'].encode()).hexdigest(),
@@ -164,8 +173,17 @@ async def refresh_from_document(web, document, final_url):
     except (ValueError, KeyError, TypeError, OSError):
         # An incomplete or changed reference table cannot erase usable IDs.
         log.info('targeting_reference refresh rejected; installed reference preserved')
+    try:
+        object_fields=json.loads((BASELINES.parent/'ads_manager_http_20261012.json').read_text())['object_fields']
+        await asyncio.to_thread(refresh_editor, rows, object_fields)
+        await asyncio.to_thread(refresh_registry, rows)
+    except (ValueError, KeyError, TypeError, OSError):
+        log.info('module_metadata refresh rejected; installed adapters preserved')
     _apply_snapshot(web, snapshot)
-    _cache[key] = {'until': now + (60 if failures else TTL), 'snapshot': snapshot}
+    cursor += attempted
+    complete = cursor >= len(urls)
+    _cache[key] = {'until': now + (60 if failures or not complete else TTL),
+                   'cursor': 0 if complete else cursor, 'snapshot': snapshot}
     _cache.move_to_end(key)
     while len(_cache) > 64:
         _cache.popitem(last=False)

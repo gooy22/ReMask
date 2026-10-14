@@ -127,6 +127,29 @@ class AutomaticReadsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.web.fetch_text.call_args.args, (self.cdn,))
         self.assertEqual(self.web.fetch_text.call_args.kwargs['referer'], self.url)
 
+    async def test_all_modules_and_later_script_windows_are_collected(self):
+        import os,tempfile
+        cdns=['https://static.xx.fbcdn.net/fixture-%d.js'%i for i in range(29)]
+        doc=''.join('<script src="'+url+'"></script>' for url in cdns)
+        async def fetch(url,**kwargs):
+            index=cdns.index(url)
+            return 200,'__d("GeneralMetaModule%d",["MetaDependency"],function(){return {};});'%index,url
+        self.web.fetch_text.side_effect=fetch
+        with tempfile.TemporaryDirectory() as folder,patch.dict(os.environ,{'REMASK_DATA_DIR':folder}):
+            with patch.object(refresh.time,'monotonic',return_value=1000):
+                await refresh.refresh_from_document(self.web,doc,self.url)
+            self.assertEqual(self.web.fetch_text.await_count,24)
+            with patch.object(refresh.time,'monotonic',return_value=1030):
+                await refresh.refresh_from_document(self.web,doc,self.url)
+            self.assertEqual(self.web.fetch_text.await_count,24)
+            with patch.object(refresh.time,'monotonic',return_value=1061):
+                await refresh.refresh_from_document(self.web,doc,self.url)
+            self.assertEqual(self.web.fetch_text.await_count,29)
+            saved=json.loads((Path(folder)/'private-module-catalog.json').read_text())
+            self.assertTrue(all('GeneralMetaModule%d'%i in saved['modules'] for i in range(29)))
+            self.assertNotIn('source',saved['modules']['GeneralMetaModule28'])
+            self.assertFalse(saved['checked_live'])
+
     async def test_checkpoint_and_foreign_urls_never_start_collection(self):
         for url in ['https://business.facebook.com/checkpoint/', 'https://example.com/latest/settings']:
             await refresh.refresh_from_document(self.web, self.document, url)

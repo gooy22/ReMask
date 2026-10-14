@@ -948,6 +948,7 @@ function renderMetaDatalist(id, rows, valueKey = 'id', labelKeys = ['name']) {
 async function loadMetaContext() {
     const data = await api('ajax/metaCreativeCapabilities.php');
     metaCapabilities = data || {};
+    if (typeof remaskModuleControls !== "undefined") remaskModuleControls.configure(data);
     if (data?.schema) metaSdkSchema = data.schema;
     renderMetaDatalist(
         'mbConversionEventOptions',
@@ -1073,7 +1074,7 @@ function renderMetaSdkFields() {
         details.appendChild(grid);
         root.appendChild(details);
     }
-    $('metaSchemaStatus').textContent = 'SDK-схема загружена';
+    $('metaSchemaStatus').textContent = 'Параметры Ads Manager загружены';
     if (pendingMetaBuilder) {
         const saved = pendingMetaBuilder;
         pendingMetaBuilder = null;
@@ -1738,7 +1739,7 @@ load().catch((error) => {
 });
 loadMetaSdkSchema().catch((error) => {
     const statusEl = $('metaSchemaStatus');
-    if (statusEl) statusEl.textContent = 'SDK-схема недоступна: ' + error.message;
+    if (statusEl) statusEl.textContent = 'Параметры Ads Manager недоступны: ' + error.message;
 });
 loadPlacementCapabilities(false);
 

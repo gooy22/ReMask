@@ -22,7 +22,9 @@ class InstalledLaunchTests(unittest.TestCase):
         cls.config = json.loads(subprocess.check_output(['php', '-r',
             'require $argv[1]; echo json_encode(MetaLaunchValidator::schema());',
             str(cls.root/'classes/MetaLaunchValidator.php')], text=True))
-        cls.schema = json.loads((ROOT/'python_backend/app/contracts/ads_manager_http_20261012.json').read_text())['form_schema']
+        from app.editor_modules import form_schema
+        from app.private_ads_catalog import AdsManagerRouteCatalog
+        cls.schema = form_schema(AdsManagerRouteCatalog())
         cls.runtime = sync_playwright().start()
         cls.browser = cls.runtime.chromium.launch(headless=True)
 
@@ -100,7 +102,7 @@ class InstalledLaunchTests(unittest.TestCase):
                 return
             kind = fields['type'][0]
             item = {'key':'US','name':'Fixture locations','type':'country','country_code':'US'} if kind == 'locations' else {
-                'id':{'interests':'123456','behaviors':'654321','languages':'1000'}[kind], 'name':'Fixture '+kind}
+                'id':{'interests':'123456','behaviors':'654321','languages':'1000'}.get(kind,'345678'), 'name':'Fixture '+kind}
             data = {'data':[item], 'checked_live':True,'source':'private_meta_template_lookup','template_account_bound':False}
         elif path == 'ajax/metaBundles.php':
             fields = parse_qs(request.post_data or '')
@@ -126,6 +128,29 @@ class InstalledLaunchTests(unittest.TestCase):
         self.page.locator('#bundleSelect').select_option('fixture')
         self.page.locator('#bundleLoad').click()
         self.page.wait_for_function('document.querySelector("#launchResult").classList.contains("ready")')
+
+    def test_all_module_choices_enter_launch_payload_and_bundle_round_trip(self):
+        self.page.locator('[data-launch-meta-group="targeting"] > summary').click()
+        self.page.locator('#launchMeta_targeting_user_device_choices').fill('iphone 17')
+        self.page.locator('#launchMeta_targeting_user_device_choices').press('Enter')
+        self.page.get_by_role('button',name='iphone 17',exact=True).click()
+        self.page.locator('#launchMeta_targeting_education_statuses_choices').press('Enter')
+        self.page.get_by_role('button',name='High School',exact=True).click()
+        self.page.locator('#launchMeta_targeting_work_positions_choices').fill('Fixture')
+        self.page.locator('#launchMeta_targeting_work_positions_choices').press('Enter')
+        self.page.get_by_role('button',name='Fixture work_positions',exact=True).click()
+        for field in ('user_device','education_statuses','work_positions'):
+            self.assertFalse(self.page.locator('#launchMeta_targeting_'+field).is_visible())
+        data=self.page.evaluate('fixtureLaunch.capture()')
+        target=data['meta_builder']['targeting']
+        self.assertEqual(target['user_device'],['iphone 17'])
+        self.assertEqual(target['education_statuses'],[1])
+        self.assertEqual(target['work_positions'],[{'id':'345678','name':'Fixture work_positions'}])
+        self.assertEqual(self.lookup_requests[-1]['type'],['work_positions'])
+        self.assertNotIn('profile',self.lookup_requests[-1])
+        self.page.evaluate('(data)=>fixtureLaunch.restore(data)',data)
+        self.assertEqual(self.page.evaluate('fixtureLaunch.capture().meta_builder.targeting'),target)
+        self.assertEqual(self.page.get_by_role('button',name='Удалить iphone 17').count(),1)
 
     def test_generic_instagram_template_bundle_saves_without_destination_or_post(self):
         self.page.locator('#creativeFormat').select_option('INSTAGRAM_POST')
