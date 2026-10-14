@@ -209,7 +209,13 @@ class InstalledLaunchTests(unittest.TestCase):
         self.assertEqual(self.page.locator('#remaskAdvertisingEstimate button').count(),0)
         self.page.locator('#placementMode').select_option('MANUAL')
         self.assertTrue(self.page.locator('#manualPlacements').is_visible())
-        self.assertEqual(self.page.locator('[data-launch-meta-field="instagram_positions"]').count(),1)
+        self.page.locator('[data-launch-meta-group="targeting"] > summary').click()
+        self.page.locator('#launchMeta_targeting_instagram_positions_choices').fill('story')
+        self.page.locator('#launchMeta_targeting_instagram_positions_choices').press('Enter')
+        self.page.locator('#launchMeta_targeting_instagram_positions_choices_results').get_by_role('button',name='story',exact=True).click()
+        self.assertEqual(self.page.evaluate('fixtureLaunch.payload().adset.targeting.instagram_positions'),['story'])
+        self.save_and_reload()
+        self.assertEqual(self.page.evaluate('fixtureLaunch.payload().adset.targeting.instagram_positions'),['story'])
         self.assertFalse(any(fields.get('helper')==['placements'] for _,fields in self.estimate_requests))
 
     def test_all_module_choices_enter_launch_payload_and_bundle_round_trip(self):
