@@ -26,6 +26,9 @@ expect(str_contains($failure['message'],'подтверждения входа')
 expect($failure['settings_preserved']===true && !str_contains($failure['message'],'РК'),'auth repair is not destination binding');
 $secret=RemaskTemplateTargetingContext::failure(new RuntimeException('proxy http://secret:password@example.com cookie=xs-sensitive'),'19');
 expect(!str_contains(json_encode($secret),'password') && !str_contains(json_encode($secret),'xs-sensitive'),'transport secrets never reach UI');
+$proxyFailure=RemaskTemplateTargetingContext::failure(new RuntimeException('PRIVATE_HTTP_PROXY_UNAVAILABLE'),'19');
+expect(str_contains($proxyFailure['message'],'Прокси') && str_contains($proxyFailure['message'],'срок действия'),'proxy diagnosis gives connection guidance');
+expect(!str_contains($proxyFailure['message'],'cookies') && $proxyFailure['settings_preserved']===true,'proxy failure cannot falsely diagnose expired cookies');
 $endpoint=file_get_contents(dirname(__DIR__).'/railway-template-targeting-search.php');
 expect(!str_contains($endpoint,"\$input['profile']") && !str_contains($endpoint,"\$input['account_id']"),'client cannot choose destination through template lookup');
 expect(str_contains($endpoint,"'checked_live'") && str_contains($endpoint,"'account_scope_verified'"),'actual Meta read proof remains required');

@@ -890,12 +890,16 @@ class FacebookWebSession:
 
         except asyncio.TimeoutError as exc:
             raise RemoteRequestError(
-                f"Facebook fetch timeout: {target}"
+                "Facebook fetch timeout",
+                meta_payload={"transport_failure":{"kind":type(exc).__name__}},
+                request_may_have_been_sent=False, transport_stage="fetch",
             ) from exc
         except (aiohttp.ClientError, httpx.HTTPError) as exc:
             raise RemoteRequestError(
                 "Facebook fetch network failure: "
-                f"{exc.__class__.__name__}"
+                f"{exc.__class__.__name__}",
+                meta_payload={"transport_failure":{"kind":type(exc).__name__}},
+                request_may_have_been_sent=False, transport_stage="fetch",
             ) from exc
 
     async def fetch_text(

@@ -3592,7 +3592,8 @@ async def private_advertising_resources(profile_id: str, resource: str, account_
                                         force: bool = False, query: str = '', limit: int = 100):
     from app.private_advertising_reads import RESOURCE_FIELDS
     from app.private_auth import private_auth_error
-    from fb_worker import AuthenticationError
+    from fb_worker import AuthenticationError, RemoteRequestError, ProxyError
+    from app.private_transport_error import private_transport_error
     profile = str(profile_id or '').strip()
     if not profile or len(profile) > 160 or resource not in RESOURCE_FIELDS or len(query) > 200:
         raise HTTPException(status_code=400,detail='INVALID_ADVERTISING_RESOURCE_REQUEST')
@@ -3620,6 +3621,9 @@ async def private_advertising_resources(profile_id: str, resource: str, account_
     except AuthenticationError as exc:
         error = private_auth_error(exc)
         raise HTTPException(status_code=409,detail={'code':error.code,'message':str(error)}) from exc
+    except (RemoteRequestError, ProxyError) as exc:
+        status, detail = private_transport_error(exc)
+        raise HTTPException(status_code=status,detail=detail) from None
     except (ProvisioningError,ProfileContextError) as exc:
         raise HTTPException(status_code=409,detail={'code':getattr(exc,'code','PROFILE_CONTEXT_ERROR'),'message':str(exc)}) from exc
     except asyncio.TimeoutError as exc:
@@ -3629,7 +3633,8 @@ async def private_advertising_resources(profile_id: str, resource: str, account_
 async def private_advertising_helper(profile_id: str, helper: str, payload: dict = Body(...)):
     from app.private_ads_helpers import read_form_helper
     from app.private_auth import private_auth_error
-    from fb_worker import AuthenticationError
+    from fb_worker import AuthenticationError, RemoteRequestError, ProxyError
+    from app.private_transport_error import private_transport_error
     adapter = getattr(pool.private_launch, 'ads_manager', None)
     if not adapter or helper not in {'placements','audience_estimate','preview'}:
         raise HTTPException(status_code=409, detail='PRIVATE_HELPER_SOURCE_REQUIRED')
@@ -3657,6 +3662,9 @@ async def private_advertising_helper(profile_id: str, helper: str, payload: dict
         normalized = private_auth_error(error)
         raise HTTPException(status_code=409, detail={'code':normalized.code,
             'message':str(normalized)}) from None
+    except (RemoteRequestError, ProxyError) as error:
+        status, detail = private_transport_error(error)
+        raise HTTPException(status_code=status,detail=detail) from None
     except (ProvisioningError, ProfileContextError) as error:
         raise HTTPException(status_code=409, detail={'code':getattr(error,'code','PROFILE_CONTEXT_ERROR'),
             'message':str(error)}) from None
