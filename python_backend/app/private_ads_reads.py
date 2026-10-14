@@ -73,6 +73,8 @@ class AdsManagerReadCatalog:
         account = await client.account_record()
         if account.get("account_status") != 1:
             raise fail("ACCOUNT_INACTIVE", "The selected advertising account is not active")
+        if name in {"interests", "behaviors"} and not str(values.get("query") or "").strip():
+            return await self.browse_targeting(client, name, values)
         if name == "instagram_media":
             actors = await self.read(web,"instagram_accounts",{**values,"query":""})
             records, seen = [], set()
@@ -195,6 +197,51 @@ class AdsManagerReadCatalog:
             records = [r for r in records if any(query in str(r.get(k,"")).casefold() for k in ("id","hash","name","title"))]
         return {"data":records, "account_id":client.account, "account_scope_verified":True,
                 "checked_live":True, "checked_at":int(time.time()), "source":"ads_manager_private_http"}
+
+    async def browse_targeting(self, client, name, values):
+        """The recovered sender returns a flat tree; headings have no selectable ID."""
+        response = await client.request("TARGETING_BROWSE", params={
+            "fields":["raw_name","id","name","type","path","key","parent","description",
+                      "audience_size_lower_bound","audience_size_upper_bound"],
+            "include_nodes":True, "whitelisted_types":[name], "is_exclusion":False,
+            "is_reserved":False, "regulated_categories":[], "regulated_countries":[]})
+        rows = response.get("data")
+        paging = response.get("paging", {})
+        if (not isinstance(rows, list) or len(rows) > 20000
+                or any(not isinstance(row, dict) for row in rows)
+                or not isinstance(paging, dict) or paging.get("next")):
+            raise fail("RESOURCE_READ_INCOMPLETE", "Targeting browse tree is incomplete", True)
+        nodes = {}
+        for row in rows:
+            key = row.get("key")
+            if isinstance(key, str):
+                if key in nodes and nodes[key] != row:
+                    raise fail("RESOURCE_READ_INCOMPLETE", "Conflicting targeting tree nodes")
+                nodes[key] = row
+        records, seen = [], set()
+        for row in rows:
+            if row.get("type") != name or row.get("valid") is False:
+                continue
+            key = str(row.get("id") or "")
+            if not re.fullmatch(r"[0-9]{5,40}", key) or not isinstance(row.get("name"), str):
+                continue
+            clean = {k:v for k,v in row.items() if k in RESOURCE_FIELDS[name]}
+            clean["id"] = key
+            if not isinstance(clean.get("path"), list):
+                path, visited, parent = [], set(), row.get("parent")
+                while isinstance(parent, str) and parent in nodes and parent not in visited and len(visited) < 32:
+                    visited.add(parent)
+                    node = nodes[parent]
+                    if node.get("name") not in {None, "", "__ROOT__"}: path.insert(0, str(node["name"]))
+                    parent = node.get("parent")
+                clean["path"] = path
+            if key in seen:
+                continue
+            seen.add(key); records.append(clean)
+        limit = max(1, min(500, int(values.get("limit", 100))))
+        return {"data":records[:limit], "account_id":client.account, "account_scope_verified":True,
+                "checked_live":True, "checked_at":int(time.time()), "source":"private_meta_targetingbrowse",
+                "catalog_count":len(records), "truncated":len(records)>limit}
 
     async def pages(self, web, values):
         return {**await self.read(web, "pages", values), "ad_account_page_access_verified":True}

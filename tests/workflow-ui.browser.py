@@ -160,6 +160,23 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(targeting['interests'][0]['id'],'34567')
         self.assertEqual(targeting['behaviors'][0]['id'],'34567')
 
+    def test_empty_focus_browses_choices_without_destination_and_preserves_ids(self):
+        self.creative(context=True)
+        self.page.get_by_role('button',name='Аудитория',exact=True).click()
+        for input_id,result_id,kind in [('mbInterestSearch','mbInterestResults','interests'),
+                                     ('mbLanguageSearch','mbLanguageResults','languages')]:
+            self.page.locator('#'+input_id).focus()
+            self.page.locator('#'+result_id+' .cr-target-result').wait_for()
+            request=self.page.evaluate('fixtureRequests.at(-1)')
+            self.assertEqual(request['q'],'')
+            self.assertNotIn('profile',request)
+            self.assertNotIn('account_id',request)
+            self.assertEqual(request['type'],kind)
+            self.page.locator('#'+result_id+' .cr-target-result').press('Enter')
+        targeting=self.page.evaluate('testCreative.build().targeting')
+        self.assertEqual(targeting['locales'],[34567])
+        self.assertEqual(targeting['interests'][0]['id'],'34567')
+
     def test_connection_error_explains_repair_without_losing_settings_or_retry(self):
         self.creative(context=True)
         self.page.locator('#mbCampaignDailyBudget').fill('500')

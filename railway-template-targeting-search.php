@@ -15,10 +15,16 @@ try {
     $type = ['language'=>'locales','languages'=>'locales','locale'=>'locales'][$type] ?? $type;
     if (!in_array($type, ['locations','interests','behaviors','locales'], true)) throw new InvalidArgumentException('UNKNOWN_TARGETING_TYPE');
     $query = trim((string)($input['q'] ?? ''));
-    if (strlen($query) < 2 || strlen($query) > 200) throw new InvalidArgumentException('INVALID_TARGETING_QUERY');
+    if (strlen($query) > 200) throw new InvalidArgumentException('INVALID_TARGETING_QUERY');
+    $module = RemaskModuleTargetingReference::search($type,$query,
+        __DIR__.'/../classes/meta-targeting-reference.json');
+    if ($module !== null) { MetaEndpoint::ok($module); exit; }
     $reference = new RemaskTemplateTargetingReference(dirname(ACCOUNTSFILENAME).'/template-targeting-'.hash('sha256',ACCOUNTSFILENAME).'.json');
     $cached = $reference->get($type, $query, time());
     if ($cached !== null) { MetaEndpoint::ok($cached); exit; }
+    if ($query !== '' && ($cached=$reference->search($type,$query,time())) !== null) {
+        MetaEndpoint::ok($cached); exit;
+    }
     $profiles = [];
     foreach ((array)AccountStoreFactory::create(ACCOUNTSFILENAME)->deserialize() as $row) {
         if (!$row instanceof FbAccount) continue;
@@ -40,7 +46,7 @@ try {
         try {
             $result = RemaskAdvertisingAssetBridge::read([
                 'profile'=>$context['profile'], 'account_id'=>$context['account_id'], 'q'=>$query,
-                'limit'=>25], $context['catalog'], $type, true);
+                'limit'=>$query==='' ? 500 : 50], $context['catalog'], $type, true);
             if (($result['checked_live'] ?? null) !== true || ($result['account_scope_verified'] ?? null) !== true)
                 throw new RuntimeException('TEMPLATE_LOOKUP_ACCESS_UNVERIFIED');
             $reference->put($type, $query, $result, time());
@@ -48,7 +54,10 @@ try {
                 'source'=>'private_meta_template_lookup', 'template_account_bound'=>false]);
             exit;
         } catch (Throwable $error) {
-            $lastError = $error; $reference->block($context['profile'], time());
+            $lastError = $error;
+            // A query/schema failure says nothing about unrelated resources.
+            if (preg_match('/SESSION|CHECKPOINT|AUTH|PROXY|TIMEOUT|ACCOUNT_INACTIVE/', $error->getMessage()))
+                $reference->block($context['profile'], time());
         }
     }
     throw $lastError;

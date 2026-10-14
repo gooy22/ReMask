@@ -10,7 +10,8 @@ final class RemaskTemplateTargetingContext {
             if ($name === '' || in_array($name, $excluded, true) || ($profile['disabled'] ?? false) === true
                 || ($profile['banned'] ?? false) === true || ($profile['cookies_ready'] ?? false) !== true
                 || (($profile['proxy_configured'] ?? false) !== true && $name !== $preferred)) continue;
-            $catalog = $loadCatalog($name);
+            try { $catalog = $loadCatalog($name); }
+            catch (Throwable $error) { continue; }
             if (($catalog['profile'] ?? '') !== $name) throw new RuntimeException('TEMPLATE_LOOKUP_PROFILE_MISMATCH');
             foreach ((array)($catalog['ad_accounts']['data'] ?? []) as $row) {
                 if (!is_array($row) || (isset($row['profile']) && (string)$row['profile'] !== $name)) continue;
@@ -82,10 +83,10 @@ final class RemaskTemplateTargetingReference {
         if (($proof['checked_live'] ?? null)!==true || ($proof['account_scope_verified'] ?? null)!==true)
             throw new RuntimeException('TEMPLATE_LOOKUP_ACCESS_UNVERIFIED');
         $rows = [];
-        foreach (array_slice((array)($proof['data'] ?? []),0,25) as $row) {
+        foreach (array_slice((array)($proof['data'] ?? []),0,500) as $row) {
             if (!is_array($row)) continue;
             $safe = array_intersect_key($row,array_flip(['id','key','name','type','country_code','country_name',
-                'region','region_id','radius','distance_unit','description']));
+                'region','region_id','radius','distance_unit','description','path']));
             if (!isset($safe['id']) && !isset($safe['key'])) continue;
             if (strlen(json_encode($safe,JSON_THROW_ON_ERROR))<=8192) $rows[]=$safe;
         }
@@ -103,5 +104,49 @@ final class RemaskTemplateTargetingReference {
     }
     public function block(string $profile, int $now): void {
         $this->update(static function(array &$state) use ($profile,$now) { $state['blocked'][$profile]=$now+600; });
+    }
+    public function search(string $type, string $query, int $now): ?array {
+        return $this->update(static function(array &$state) use ($type,$query,$now) {
+            $row = $state['queries'][self::key($type,'')] ?? null;
+            if (!is_array($row) || $now-(int)($row['checked_at'] ?? 0)>86400) return null;
+            $rows = array_values(array_filter((array)$row['data'], static fn($item)=>
+                preg_match('~'.preg_quote($query,'~').'~iu', (string)($item['name'] ?? '').' '.
+                    implode(' ',(array)($item['path'] ?? [])).' '.(string)($item['id'] ?? ''))===1));
+            if (!$rows) return null;
+            return ['data'=>array_slice($rows,0,50),'checked_live'=>false,
+                'source'=>'private_meta_template_reference','template_account_bound'=>false,
+                'reference_checked_at'=>$row['checked_at']];
+        });
+    }
+}
+
+final class RemaskModuleTargetingReference {
+    public static function search(string $type, string $query, string $file): ?array {
+        if (!in_array($type,['locales','locations'],true)) return null;
+        $freshFile=rtrim((string)(getenv('REMASK_DATA_DIR') ?: '/var/lib/remask'),'/').'/private-targeting-reference.json';
+        $fresh=json_decode((string)@file_get_contents($freshFile),true);
+        if (is_array($fresh) && ($fresh['version'] ?? 0)===1 && !empty($fresh['source_evidence'])
+            && time()-(int)($fresh['refreshed_at'] ?? 0)<=1800) $file=$freshFile;
+        $data=json_decode((string)@file_get_contents($file),true);
+        if (!is_array($data) || ($data['version'] ?? 0)!==1 || empty($data['source_evidence']))
+            throw new RuntimeException('TARGETING_MODULE_REFERENCE_UNAVAILABLE');
+        $rows=array_values(array_filter((array)($data[$type] ?? []), static function($row) use ($query) {
+            $haystack=implode(' ',array_merge([(string)($row['name'] ?? ''),(string)($row['id'] ?? ''),
+                (string)($row['country_code'] ?? '')],(array)($row['aliases'] ?? [])));
+            return $query==='' || preg_match('~'.preg_quote($query,'~').'~iu',$haystack)===1;
+        }));
+        if (!$rows && $query!=='') return null;
+        if ($query!=='') usort($rows, static function($a,$b) use ($query) {
+            $score=static function($row) use ($query) {
+                foreach (array_merge([(string)($row['name'] ?? '')],(array)($row['aliases'] ?? [])) as $name)
+                    if (preg_match('~^'.preg_quote($query,'~').'~iu',$name)===1) return 1;
+                return 0;
+            };
+            return $score($b)<=>$score($a);
+        });
+        foreach ($rows as &$row) unset($row['aliases']); unset($row);
+        return ['data'=>array_slice($rows,0,100),'checked_live'=>false,'source'=>'private_meta_module_reference',
+            'template_account_bound'=>false,'reference_captured_at'=>$data['captured_at'],
+            'truncated'=>count($rows)>100];
     }
 }

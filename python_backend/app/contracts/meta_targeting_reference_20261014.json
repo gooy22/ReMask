@@ -1,0 +1,4948 @@
+{
+  "version": 1,
+  "source": "private_meta_module_reference",
+  "captured_at": "2026-10-14",
+  "checked_live": false,
+  "source_evidence": [
+    {
+      "module": "AdsCountryGroupConfig.dbcigar",
+      "module_sha256": "5b305c83559d50363a9844f0e535d6d28ba2edc5d7314d032b6774c9e0fbb193",
+      "script_sha256": "7a06217f05ff63510dd5aee8cad75cbed2ec5ba584c80fc1240d5243333d4881",
+      "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4i2V74/y4/l/en_US-j/LDUsMHrnl_w.js"
+    },
+    {
+      "module": "AdsCountryRegionsConfig.dbcigar",
+      "module_sha256": "ef890dd9d80394792510a7296d0dd86c3e6fe185a815c53ddf8744ec1ba2fd9d",
+      "script_sha256": "7a06217f05ff63510dd5aee8cad75cbed2ec5ba584c80fc1240d5243333d4881",
+      "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4i2V74/y4/l/en_US-j/LDUsMHrnl_w.js"
+    },
+    {
+      "module": "AdsAssetFeedLanguageMappingsStatic",
+      "module_sha256": "50b11ff78170bc642afc7899b19078d0c9ee0a7b9c4f0121a0d1d0b89bc106e2",
+      "script_sha256": "eafc1e09a42412df4d0a62433c53aba2f98102420df1eac953289a457f36ebf1",
+      "observed_public_url": "https://static.xx.fbcdn.net/rsrc.php/v4inDV4/yD/l/en_US-j/CgHJ0ko0XyD.js"
+    }
+  ],
+  "locales": [
+    {
+      "id": "36",
+      "key": "36",
+      "name": "африкаанс",
+      "language_code": "af_ZA",
+      "type": "locales",
+      "aliases": [
+        "Afrikaans"
+      ]
+    },
+    {
+      "id": "87",
+      "key": "87",
+      "name": "албанский",
+      "language_code": "sq_AL",
+      "type": "locales",
+      "aliases": [
+        "Albanian"
+      ]
+    },
+    {
+      "id": "28",
+      "key": "28",
+      "name": "арабский",
+      "language_code": "ar_AR",
+      "type": "locales",
+      "aliases": [
+        "Arabic"
+      ]
+    },
+    {
+      "id": "68",
+      "key": "68",
+      "name": "армянский",
+      "language_code": "hy_AM",
+      "type": "locales",
+      "aliases": [
+        "Armenian"
+      ]
+    },
+    {
+      "id": "53",
+      "key": "53",
+      "name": "азербайджанский",
+      "language_code": "az_AZ",
+      "type": "locales",
+      "aliases": [
+        "Azerbaijani"
+      ]
+    },
+    {
+      "id": "59",
+      "key": "59",
+      "name": "баскский",
+      "language_code": "eu_ES",
+      "type": "locales",
+      "aliases": [
+        "Basque"
+      ]
+    },
+    {
+      "id": "54",
+      "key": "54",
+      "name": "белорусский",
+      "language_code": "be_BY",
+      "type": "locales",
+      "aliases": [
+        "Belarusian"
+      ]
+    },
+    {
+      "id": "55",
+      "key": "55",
+      "name": "боснийский",
+      "language_code": "bs_BA",
+      "type": "locales",
+      "aliases": [
+        "Bosnian"
+      ]
+    },
+    {
+      "id": "37",
+      "key": "37",
+      "name": "болгарский",
+      "language_code": "bg_BG",
+      "type": "locales",
+      "aliases": [
+        "Bulgarian"
+      ]
+    },
+    {
+      "id": "1",
+      "key": "1",
+      "name": "каталанский",
+      "language_code": "ca_ES",
+      "type": "locales",
+      "aliases": [
+        "Catalan"
+      ]
+    },
+    {
+      "id": "20",
+      "key": "20",
+      "name": "китайский",
+      "language_code": "zh_CN",
+      "type": "locales",
+      "aliases": [
+        "Chinese (Simplified)"
+      ]
+    },
+    {
+      "id": "22",
+      "key": "22",
+      "name": "китайский",
+      "language_code": "zh_TW",
+      "type": "locales",
+      "aliases": [
+        "Traditional Chinese (Taiwan)"
+      ]
+    },
+    {
+      "id": "38",
+      "key": "38",
+      "name": "хорватский",
+      "language_code": "hr_HR",
+      "type": "locales",
+      "aliases": [
+        "Croatian"
+      ]
+    },
+    {
+      "id": "2",
+      "key": "2",
+      "name": "чешский",
+      "language_code": "cs_CZ",
+      "type": "locales",
+      "aliases": [
+        "Czech"
+      ]
+    },
+    {
+      "id": "4",
+      "key": "4",
+      "name": "датский",
+      "language_code": "da_DK",
+      "type": "locales",
+      "aliases": [
+        "Danish"
+      ]
+    },
+    {
+      "id": "14",
+      "key": "14",
+      "name": "нидерландский",
+      "language_code": "nl_XX",
+      "type": "locales",
+      "aliases": [
+        "Dutch"
+      ]
+    },
+    {
+      "id": "83",
+      "key": "83",
+      "name": "нидерландский",
+      "language_code": "nl_XX",
+      "type": "locales",
+      "aliases": [
+        "Dutch"
+      ]
+    },
+    {
+      "id": "6",
+      "key": "6",
+      "name": "английский",
+      "language_code": "en_XX",
+      "type": "locales",
+      "aliases": [
+        "English"
+      ]
+    },
+    {
+      "id": "24",
+      "key": "24",
+      "name": "английский",
+      "language_code": "en_XX",
+      "type": "locales",
+      "aliases": [
+        "English"
+      ]
+    },
+    {
+      "id": "57",
+      "key": "57",
+      "name": "эсперанто",
+      "language_code": "eo_EO",
+      "type": "locales",
+      "aliases": [
+        "Esperanto"
+      ]
+    },
+    {
+      "id": "58",
+      "key": "58",
+      "name": "эстонский",
+      "language_code": "et_EE",
+      "type": "locales",
+      "aliases": [
+        "Estonian"
+      ]
+    },
+    {
+      "id": "8",
+      "key": "8",
+      "name": "финский",
+      "language_code": "fi_FI",
+      "type": "locales",
+      "aliases": [
+        "Finnish"
+      ]
+    },
+    {
+      "id": "9",
+      "key": "9",
+      "name": "французский",
+      "language_code": "fr_XX",
+      "type": "locales",
+      "aliases": [
+        "French"
+      ]
+    },
+    {
+      "id": "44",
+      "key": "44",
+      "name": "французский",
+      "language_code": "fr_XX",
+      "type": "locales",
+      "aliases": [
+        "French"
+      ]
+    },
+    {
+      "id": "63",
+      "key": "63",
+      "name": "западнофризский",
+      "language_code": "fy_NL",
+      "type": "locales",
+      "aliases": [
+        "Frisian"
+      ]
+    },
+    {
+      "id": "72",
+      "key": "72",
+      "name": "грузинский",
+      "language_code": "ka_GE",
+      "type": "locales",
+      "aliases": [
+        "Georgian"
+      ]
+    },
+    {
+      "id": "5",
+      "key": "5",
+      "name": "немецкий",
+      "language_code": "de_DE",
+      "type": "locales",
+      "aliases": [
+        "German"
+      ]
+    },
+    {
+      "id": "39",
+      "key": "39",
+      "name": "греческий",
+      "language_code": "el_GR",
+      "type": "locales",
+      "aliases": [
+        "Greek"
+      ]
+    },
+    {
+      "id": "29",
+      "key": "29",
+      "name": "иврит",
+      "language_code": "he_IL",
+      "type": "locales",
+      "aliases": [
+        "Hebrew"
+      ]
+    },
+    {
+      "id": "46",
+      "key": "46",
+      "name": "хинди",
+      "language_code": "hi_IN",
+      "type": "locales",
+      "aliases": [
+        "Hindi"
+      ]
+    },
+    {
+      "id": "30",
+      "key": "30",
+      "name": "венгерский",
+      "language_code": "hu_HU",
+      "type": "locales",
+      "aliases": [
+        "Hungarian"
+      ]
+    },
+    {
+      "id": "69",
+      "key": "69",
+      "name": "исландский",
+      "language_code": "is_IS",
+      "type": "locales",
+      "aliases": [
+        "Icelandic"
+      ]
+    },
+    {
+      "id": "25",
+      "key": "25",
+      "name": "индонезийский",
+      "language_code": "id_ID",
+      "type": "locales",
+      "aliases": [
+        "Indonesian"
+      ]
+    },
+    {
+      "id": "64",
+      "key": "64",
+      "name": "ирландский",
+      "language_code": "ga_IE",
+      "type": "locales",
+      "aliases": [
+        "Irish"
+      ]
+    },
+    {
+      "id": "10",
+      "key": "10",
+      "name": "итальянский",
+      "language_code": "it_IT",
+      "type": "locales",
+      "aliases": [
+        "Italian"
+      ]
+    },
+    {
+      "id": "11",
+      "key": "11",
+      "name": "японский",
+      "language_code": "ja_XX",
+      "type": "locales",
+      "aliases": [
+        "Japanese"
+      ]
+    },
+    {
+      "id": "70",
+      "key": "70",
+      "name": "японский",
+      "language_code": "ja_XX",
+      "type": "locales",
+      "aliases": [
+        "Japanese"
+      ]
+    },
+    {
+      "id": "73",
+      "key": "73",
+      "name": "казахский",
+      "language_code": "kk_KZ",
+      "type": "locales",
+      "aliases": [
+        "Kazakh"
+      ]
+    },
+    {
+      "id": "12",
+      "key": "12",
+      "name": "корейский",
+      "language_code": "ko_KR",
+      "type": "locales",
+      "aliases": [
+        "Korean"
+      ]
+    },
+    {
+      "id": "76",
+      "key": "76",
+      "name": "курдский",
+      "language_code": "ku_TR",
+      "type": "locales",
+      "aliases": [
+        "Kurdish (Kurmanji)"
+      ]
+    },
+    {
+      "id": "77",
+      "key": "77",
+      "name": "латинский",
+      "language_code": "la_VA",
+      "type": "locales",
+      "aliases": [
+        "Latin"
+      ]
+    },
+    {
+      "id": "78",
+      "key": "78",
+      "name": "латышский",
+      "language_code": "lv_LV",
+      "type": "locales",
+      "aliases": [
+        "Latvian"
+      ]
+    },
+    {
+      "id": "40",
+      "key": "40",
+      "name": "литовский",
+      "language_code": "lt_LT",
+      "type": "locales",
+      "aliases": [
+        "Lithuanian"
+      ]
+    },
+    {
+      "id": "79",
+      "key": "79",
+      "name": "македонский",
+      "language_code": "mk_MK",
+      "type": "locales",
+      "aliases": [
+        "Macedonian"
+      ]
+    },
+    {
+      "id": "50",
+      "key": "50",
+      "name": "малаялам",
+      "language_code": "ml_IN",
+      "type": "locales",
+      "aliases": [
+        "Malayalam"
+      ]
+    },
+    {
+      "id": "41",
+      "key": "41",
+      "name": "малайский",
+      "language_code": "ms_MY",
+      "type": "locales",
+      "aliases": [
+        "Malay"
+      ]
+    },
+    {
+      "id": "81",
+      "key": "81",
+      "name": "маратхи",
+      "language_code": "mr_IN",
+      "type": "locales",
+      "aliases": [
+        "Marathi"
+      ]
+    },
+    {
+      "id": "82",
+      "key": "82",
+      "name": "непальский",
+      "language_code": "ne_NP",
+      "type": "locales",
+      "aliases": [
+        "Nepali"
+      ]
+    },
+    {
+      "id": "13",
+      "key": "13",
+      "name": "норвежский",
+      "language_code": "no_XX",
+      "type": "locales",
+      "aliases": [
+        "Norwegian"
+      ]
+    },
+    {
+      "id": "84",
+      "key": "84",
+      "name": "норвежский",
+      "language_code": "no_XX",
+      "type": "locales",
+      "aliases": [
+        "Norwegian"
+      ]
+    },
+    {
+      "id": "60",
+      "key": "60",
+      "name": "персидский",
+      "language_code": "fa_IR",
+      "type": "locales",
+      "aliases": [
+        "Persian"
+      ]
+    },
+    {
+      "id": "15",
+      "key": "15",
+      "name": "польский",
+      "language_code": "pl_PL",
+      "type": "locales",
+      "aliases": [
+        "Polish"
+      ]
+    },
+    {
+      "id": "16",
+      "key": "16",
+      "name": "португальский",
+      "language_code": "pt_XX",
+      "type": "locales",
+      "aliases": [
+        "Portuguese"
+      ]
+    },
+    {
+      "id": "31",
+      "key": "31",
+      "name": "португальский",
+      "language_code": "pt_XX",
+      "type": "locales",
+      "aliases": [
+        "Portuguese"
+      ]
+    },
+    {
+      "id": "32",
+      "key": "32",
+      "name": "румынский",
+      "language_code": "ro_RO",
+      "type": "locales",
+      "aliases": [
+        "Romanian"
+      ]
+    },
+    {
+      "id": "17",
+      "key": "17",
+      "name": "русский",
+      "language_code": "ru_RU",
+      "type": "locales",
+      "aliases": [
+        "Russian"
+      ]
+    },
+    {
+      "id": "42",
+      "key": "42",
+      "name": "сербский",
+      "language_code": "sr_RS",
+      "type": "locales",
+      "aliases": [
+        "Serbian"
+      ]
+    },
+    {
+      "id": "33",
+      "key": "33",
+      "name": "словацкий",
+      "language_code": "sk_SK",
+      "type": "locales",
+      "aliases": [
+        "Slovak"
+      ]
+    },
+    {
+      "id": "34",
+      "key": "34",
+      "name": "словенский",
+      "language_code": "sl_SI",
+      "type": "locales",
+      "aliases": [
+        "Slovenian"
+      ]
+    },
+    {
+      "id": "7",
+      "key": "7",
+      "name": "испанский",
+      "language_code": "es_XX",
+      "type": "locales",
+      "aliases": [
+        "Spanish"
+      ]
+    },
+    {
+      "id": "23",
+      "key": "23",
+      "name": "испанский",
+      "language_code": "es_XX",
+      "type": "locales",
+      "aliases": [
+        "Spanish"
+      ]
+    },
+    {
+      "id": "88",
+      "key": "88",
+      "name": "суахили",
+      "language_code": "sw_KE",
+      "type": "locales",
+      "aliases": [
+        "Swahili"
+      ]
+    },
+    {
+      "id": "18",
+      "key": "18",
+      "name": "шведский",
+      "language_code": "sv_SE",
+      "type": "locales",
+      "aliases": [
+        "Swedish"
+      ]
+    },
+    {
+      "id": "26",
+      "key": "26",
+      "name": "филиппинский",
+      "language_code": "tl_XX",
+      "type": "locales",
+      "aliases": [
+        "Filipino"
+      ]
+    },
+    {
+      "id": "48",
+      "key": "48",
+      "name": "тамильский",
+      "language_code": "ta_IN",
+      "type": "locales",
+      "aliases": [
+        "Tamil"
+      ]
+    },
+    {
+      "id": "35",
+      "key": "35",
+      "name": "тайский",
+      "language_code": "th_TH",
+      "type": "locales",
+      "aliases": [
+        "Thai"
+      ]
+    },
+    {
+      "id": "19",
+      "key": "19",
+      "name": "турецкий",
+      "language_code": "tr_TR",
+      "type": "locales",
+      "aliases": [
+        "Turkish"
+      ]
+    },
+    {
+      "id": "52",
+      "key": "52",
+      "name": "украинский",
+      "language_code": "uk_UA",
+      "type": "locales",
+      "aliases": [
+        "Ukrainian"
+      ]
+    },
+    {
+      "id": "90",
+      "key": "90",
+      "name": "урду",
+      "language_code": "ur_PK",
+      "type": "locales",
+      "aliases": [
+        "Urdu"
+      ]
+    },
+    {
+      "id": "27",
+      "key": "27",
+      "name": "вьетнамский",
+      "language_code": "vi_VN",
+      "type": "locales",
+      "aliases": [
+        "Vietnamese"
+      ]
+    },
+    {
+      "id": "3",
+      "key": "3",
+      "name": "валлийский",
+      "language_code": "cy_GB",
+      "type": "locales",
+      "aliases": [
+        "Welsh"
+      ]
+    },
+    {
+      "id": "21",
+      "key": "21",
+      "name": "китайский",
+      "language_code": "zh_HK",
+      "type": "locales",
+      "aliases": [
+        "Traditional Chinese (Hong Kong)"
+      ]
+    }
+  ],
+  "locations": [
+    {
+      "id": "AD",
+      "key": "AD",
+      "name": "Андорра",
+      "type": "country",
+      "country_code": "AD",
+      "country_name": "Андорра",
+      "aliases": [
+        "Andorra"
+      ]
+    },
+    {
+      "id": "AE",
+      "key": "AE",
+      "name": "ОАЭ",
+      "type": "country",
+      "country_code": "AE",
+      "country_name": "ОАЭ",
+      "aliases": [
+        "United Arab Emirates"
+      ]
+    },
+    {
+      "id": "AF",
+      "key": "AF",
+      "name": "Афганистан",
+      "type": "country",
+      "country_code": "AF",
+      "country_name": "Афганистан",
+      "aliases": [
+        "Afghanistan"
+      ]
+    },
+    {
+      "id": "AG",
+      "key": "AG",
+      "name": "Антигуа и Барбуда",
+      "type": "country",
+      "country_code": "AG",
+      "country_name": "Антигуа и Барбуда",
+      "aliases": [
+        "Antigua & Barbuda"
+      ]
+    },
+    {
+      "id": "AI",
+      "key": "AI",
+      "name": "Ангилья",
+      "type": "country",
+      "country_code": "AI",
+      "country_name": "Ангилья",
+      "aliases": [
+        "Anguilla"
+      ]
+    },
+    {
+      "id": "AL",
+      "key": "AL",
+      "name": "Албания",
+      "type": "country",
+      "country_code": "AL",
+      "country_name": "Албания",
+      "aliases": [
+        "Albania"
+      ]
+    },
+    {
+      "id": "AM",
+      "key": "AM",
+      "name": "Армения",
+      "type": "country",
+      "country_code": "AM",
+      "country_name": "Армения",
+      "aliases": [
+        "Armenia"
+      ]
+    },
+    {
+      "id": "AO",
+      "key": "AO",
+      "name": "Ангола",
+      "type": "country",
+      "country_code": "AO",
+      "country_name": "Ангола",
+      "aliases": [
+        "Angola"
+      ]
+    },
+    {
+      "id": "AQ",
+      "key": "AQ",
+      "name": "Антарктида",
+      "type": "country",
+      "country_code": "AQ",
+      "country_name": "Антарктида",
+      "aliases": [
+        "Antarctica"
+      ]
+    },
+    {
+      "id": "AR",
+      "key": "AR",
+      "name": "Аргентина",
+      "type": "country",
+      "country_code": "AR",
+      "country_name": "Аргентина",
+      "aliases": [
+        "Argentina"
+      ]
+    },
+    {
+      "id": "AS",
+      "key": "AS",
+      "name": "Американское Самоа",
+      "type": "country",
+      "country_code": "AS",
+      "country_name": "Американское Самоа",
+      "aliases": [
+        "American Samoa"
+      ]
+    },
+    {
+      "id": "AT",
+      "key": "AT",
+      "name": "Австрия",
+      "type": "country",
+      "country_code": "AT",
+      "country_name": "Австрия",
+      "aliases": [
+        "Austria"
+      ]
+    },
+    {
+      "id": "AU",
+      "key": "AU",
+      "name": "Австралия",
+      "type": "country",
+      "country_code": "AU",
+      "country_name": "Австралия",
+      "aliases": [
+        "Australia"
+      ]
+    },
+    {
+      "id": "AW",
+      "key": "AW",
+      "name": "Аруба",
+      "type": "country",
+      "country_code": "AW",
+      "country_name": "Аруба",
+      "aliases": [
+        "Aruba"
+      ]
+    },
+    {
+      "id": "AX",
+      "key": "AX",
+      "name": "Аландские о-ва",
+      "type": "country",
+      "country_code": "AX",
+      "country_name": "Аландские о-ва",
+      "aliases": [
+        "Åland Islands"
+      ]
+    },
+    {
+      "id": "AZ",
+      "key": "AZ",
+      "name": "Азербайджан",
+      "type": "country",
+      "country_code": "AZ",
+      "country_name": "Азербайджан",
+      "aliases": [
+        "Azerbaijan"
+      ]
+    },
+    {
+      "id": "BA",
+      "key": "BA",
+      "name": "Босния и Герцеговина",
+      "type": "country",
+      "country_code": "BA",
+      "country_name": "Босния и Герцеговина",
+      "aliases": [
+        "Bosnia & Herzegovina"
+      ]
+    },
+    {
+      "id": "BB",
+      "key": "BB",
+      "name": "Барбадос",
+      "type": "country",
+      "country_code": "BB",
+      "country_name": "Барбадос",
+      "aliases": [
+        "Barbados"
+      ]
+    },
+    {
+      "id": "BD",
+      "key": "BD",
+      "name": "Бангладеш",
+      "type": "country",
+      "country_code": "BD",
+      "country_name": "Бангладеш",
+      "aliases": [
+        "Bangladesh"
+      ]
+    },
+    {
+      "id": "BE",
+      "key": "BE",
+      "name": "Бельгия",
+      "type": "country",
+      "country_code": "BE",
+      "country_name": "Бельгия",
+      "aliases": [
+        "Belgium"
+      ]
+    },
+    {
+      "id": "BF",
+      "key": "BF",
+      "name": "Буркина-Фасо",
+      "type": "country",
+      "country_code": "BF",
+      "country_name": "Буркина-Фасо",
+      "aliases": [
+        "Burkina Faso"
+      ]
+    },
+    {
+      "id": "BG",
+      "key": "BG",
+      "name": "Болгария",
+      "type": "country",
+      "country_code": "BG",
+      "country_name": "Болгария",
+      "aliases": [
+        "Bulgaria"
+      ]
+    },
+    {
+      "id": "BH",
+      "key": "BH",
+      "name": "Бахрейн",
+      "type": "country",
+      "country_code": "BH",
+      "country_name": "Бахрейн",
+      "aliases": [
+        "Bahrain"
+      ]
+    },
+    {
+      "id": "BI",
+      "key": "BI",
+      "name": "Бурунди",
+      "type": "country",
+      "country_code": "BI",
+      "country_name": "Бурунди",
+      "aliases": [
+        "Burundi"
+      ]
+    },
+    {
+      "id": "BJ",
+      "key": "BJ",
+      "name": "Бенин",
+      "type": "country",
+      "country_code": "BJ",
+      "country_name": "Бенин",
+      "aliases": [
+        "Benin"
+      ]
+    },
+    {
+      "id": "BL",
+      "key": "BL",
+      "name": "Сен-Бартелеми",
+      "type": "country",
+      "country_code": "BL",
+      "country_name": "Сен-Бартелеми",
+      "aliases": [
+        "St. Barthélemy"
+      ]
+    },
+    {
+      "id": "BM",
+      "key": "BM",
+      "name": "Бермудские о-ва",
+      "type": "country",
+      "country_code": "BM",
+      "country_name": "Бермудские о-ва",
+      "aliases": [
+        "Bermuda"
+      ]
+    },
+    {
+      "id": "BN",
+      "key": "BN",
+      "name": "Бруней",
+      "type": "country",
+      "country_code": "BN",
+      "country_name": "Бруней",
+      "aliases": [
+        "Brunei"
+      ]
+    },
+    {
+      "id": "BO",
+      "key": "BO",
+      "name": "Боливия",
+      "type": "country",
+      "country_code": "BO",
+      "country_name": "Боливия",
+      "aliases": [
+        "Bolivia"
+      ]
+    },
+    {
+      "id": "BQ",
+      "key": "BQ",
+      "name": "Бонэйр, Синт-Эстатиус и Саба",
+      "type": "country",
+      "country_code": "BQ",
+      "country_name": "Бонэйр, Синт-Эстатиус и Саба",
+      "aliases": [
+        "Caribbean Netherlands"
+      ]
+    },
+    {
+      "id": "BR",
+      "key": "BR",
+      "name": "Бразилия",
+      "type": "country",
+      "country_code": "BR",
+      "country_name": "Бразилия",
+      "aliases": [
+        "Brazil"
+      ]
+    },
+    {
+      "id": "BS",
+      "key": "BS",
+      "name": "Багамы",
+      "type": "country",
+      "country_code": "BS",
+      "country_name": "Багамы",
+      "aliases": [
+        "Bahamas"
+      ]
+    },
+    {
+      "id": "BT",
+      "key": "BT",
+      "name": "Бутан",
+      "type": "country",
+      "country_code": "BT",
+      "country_name": "Бутан",
+      "aliases": [
+        "Bhutan"
+      ]
+    },
+    {
+      "id": "BW",
+      "key": "BW",
+      "name": "Ботсвана",
+      "type": "country",
+      "country_code": "BW",
+      "country_name": "Ботсвана",
+      "aliases": [
+        "Botswana"
+      ]
+    },
+    {
+      "id": "BY",
+      "key": "BY",
+      "name": "Беларусь",
+      "type": "country",
+      "country_code": "BY",
+      "country_name": "Беларусь",
+      "aliases": [
+        "Belarus"
+      ]
+    },
+    {
+      "id": "BZ",
+      "key": "BZ",
+      "name": "Белиз",
+      "type": "country",
+      "country_code": "BZ",
+      "country_name": "Белиз",
+      "aliases": [
+        "Belize"
+      ]
+    },
+    {
+      "id": "CA",
+      "key": "CA",
+      "name": "Канада",
+      "type": "country",
+      "country_code": "CA",
+      "country_name": "Канада",
+      "aliases": [
+        "Canada"
+      ]
+    },
+    {
+      "id": "CC",
+      "key": "CC",
+      "name": "Кокосовые о-ва",
+      "type": "country",
+      "country_code": "CC",
+      "country_name": "Кокосовые о-ва",
+      "aliases": [
+        "Cocos (Keeling) Islands"
+      ]
+    },
+    {
+      "id": "CD",
+      "key": "CD",
+      "name": "Конго - Киншаса",
+      "type": "country",
+      "country_code": "CD",
+      "country_name": "Конго - Киншаса",
+      "aliases": [
+        "Congo - Kinshasa"
+      ]
+    },
+    {
+      "id": "CF",
+      "key": "CF",
+      "name": "Центрально-Африканская Республика",
+      "type": "country",
+      "country_code": "CF",
+      "country_name": "Центрально-Африканская Республика",
+      "aliases": [
+        "Central African Republic"
+      ]
+    },
+    {
+      "id": "CG",
+      "key": "CG",
+      "name": "Конго - Браззавиль",
+      "type": "country",
+      "country_code": "CG",
+      "country_name": "Конго - Браззавиль",
+      "aliases": [
+        "Congo - Brazzaville"
+      ]
+    },
+    {
+      "id": "CH",
+      "key": "CH",
+      "name": "Швейцария",
+      "type": "country",
+      "country_code": "CH",
+      "country_name": "Швейцария",
+      "aliases": [
+        "Switzerland"
+      ]
+    },
+    {
+      "id": "CI",
+      "key": "CI",
+      "name": "Кот-д’Ивуар",
+      "type": "country",
+      "country_code": "CI",
+      "country_name": "Кот-д’Ивуар",
+      "aliases": [
+        "Côte d’Ivoire"
+      ]
+    },
+    {
+      "id": "CK",
+      "key": "CK",
+      "name": "о-ва Кука",
+      "type": "country",
+      "country_code": "CK",
+      "country_name": "о-ва Кука",
+      "aliases": [
+        "Cook Islands"
+      ]
+    },
+    {
+      "id": "CL",
+      "key": "CL",
+      "name": "Чили",
+      "type": "country",
+      "country_code": "CL",
+      "country_name": "Чили",
+      "aliases": [
+        "Chile"
+      ]
+    },
+    {
+      "id": "CM",
+      "key": "CM",
+      "name": "Камерун",
+      "type": "country",
+      "country_code": "CM",
+      "country_name": "Камерун",
+      "aliases": [
+        "Cameroon"
+      ]
+    },
+    {
+      "id": "CN",
+      "key": "CN",
+      "name": "Китай",
+      "type": "country",
+      "country_code": "CN",
+      "country_name": "Китай",
+      "aliases": [
+        "China"
+      ]
+    },
+    {
+      "id": "CO",
+      "key": "CO",
+      "name": "Колумбия",
+      "type": "country",
+      "country_code": "CO",
+      "country_name": "Колумбия",
+      "aliases": [
+        "Colombia"
+      ]
+    },
+    {
+      "id": "CR",
+      "key": "CR",
+      "name": "Коста-Рика",
+      "type": "country",
+      "country_code": "CR",
+      "country_name": "Коста-Рика",
+      "aliases": [
+        "Costa Rica"
+      ]
+    },
+    {
+      "id": "CV",
+      "key": "CV",
+      "name": "Кабо-Верде",
+      "type": "country",
+      "country_code": "CV",
+      "country_name": "Кабо-Верде",
+      "aliases": [
+        "Cape Verde"
+      ]
+    },
+    {
+      "id": "CW",
+      "key": "CW",
+      "name": "Кюрасао",
+      "type": "country",
+      "country_code": "CW",
+      "country_name": "Кюрасао",
+      "aliases": [
+        "Curaçao"
+      ]
+    },
+    {
+      "id": "CX",
+      "key": "CX",
+      "name": "о-в Рождества",
+      "type": "country",
+      "country_code": "CX",
+      "country_name": "о-в Рождества",
+      "aliases": [
+        "Christmas Island"
+      ]
+    },
+    {
+      "id": "CY",
+      "key": "CY",
+      "name": "Кипр",
+      "type": "country",
+      "country_code": "CY",
+      "country_name": "Кипр",
+      "aliases": [
+        "Cyprus"
+      ]
+    },
+    {
+      "id": "CZ",
+      "key": "CZ",
+      "name": "Чехия",
+      "type": "country",
+      "country_code": "CZ",
+      "country_name": "Чехия",
+      "aliases": [
+        "Czechia"
+      ]
+    },
+    {
+      "id": "DE",
+      "key": "DE",
+      "name": "Германия",
+      "type": "country",
+      "country_code": "DE",
+      "country_name": "Германия",
+      "aliases": [
+        "Germany"
+      ]
+    },
+    {
+      "id": "DJ",
+      "key": "DJ",
+      "name": "Джибути",
+      "type": "country",
+      "country_code": "DJ",
+      "country_name": "Джибути",
+      "aliases": [
+        "Djibouti"
+      ]
+    },
+    {
+      "id": "DK",
+      "key": "DK",
+      "name": "Дания",
+      "type": "country",
+      "country_code": "DK",
+      "country_name": "Дания",
+      "aliases": [
+        "Denmark"
+      ]
+    },
+    {
+      "id": "DM",
+      "key": "DM",
+      "name": "Доминика",
+      "type": "country",
+      "country_code": "DM",
+      "country_name": "Доминика",
+      "aliases": [
+        "Dominica"
+      ]
+    },
+    {
+      "id": "DO",
+      "key": "DO",
+      "name": "Доминиканская Республика",
+      "type": "country",
+      "country_code": "DO",
+      "country_name": "Доминиканская Республика",
+      "aliases": [
+        "Dominican Republic"
+      ]
+    },
+    {
+      "id": "DZ",
+      "key": "DZ",
+      "name": "Алжир",
+      "type": "country",
+      "country_code": "DZ",
+      "country_name": "Алжир",
+      "aliases": [
+        "Algeria"
+      ]
+    },
+    {
+      "id": "EC",
+      "key": "EC",
+      "name": "Эквадор",
+      "type": "country",
+      "country_code": "EC",
+      "country_name": "Эквадор",
+      "aliases": [
+        "Ecuador"
+      ]
+    },
+    {
+      "id": "EE",
+      "key": "EE",
+      "name": "Эстония",
+      "type": "country",
+      "country_code": "EE",
+      "country_name": "Эстония",
+      "aliases": [
+        "Estonia"
+      ]
+    },
+    {
+      "id": "EG",
+      "key": "EG",
+      "name": "Египет",
+      "type": "country",
+      "country_code": "EG",
+      "country_name": "Египет",
+      "aliases": [
+        "Egypt"
+      ]
+    },
+    {
+      "id": "EH",
+      "key": "EH",
+      "name": "Западная Сахара",
+      "type": "country",
+      "country_code": "EH",
+      "country_name": "Западная Сахара",
+      "aliases": [
+        "Western Sahara"
+      ]
+    },
+    {
+      "id": "ER",
+      "key": "ER",
+      "name": "Эритрея",
+      "type": "country",
+      "country_code": "ER",
+      "country_name": "Эритрея",
+      "aliases": [
+        "Eritrea"
+      ]
+    },
+    {
+      "id": "ES",
+      "key": "ES",
+      "name": "Испания",
+      "type": "country",
+      "country_code": "ES",
+      "country_name": "Испания",
+      "aliases": [
+        "Spain"
+      ]
+    },
+    {
+      "id": "ET",
+      "key": "ET",
+      "name": "Эфиопия",
+      "type": "country",
+      "country_code": "ET",
+      "country_name": "Эфиопия",
+      "aliases": [
+        "Ethiopia"
+      ]
+    },
+    {
+      "id": "MD",
+      "key": "MD",
+      "name": "Молдова",
+      "type": "country",
+      "country_code": "MD",
+      "country_name": "Молдова",
+      "aliases": [
+        "Moldova"
+      ]
+    },
+    {
+      "id": "ME",
+      "key": "ME",
+      "name": "Черногория",
+      "type": "country",
+      "country_code": "ME",
+      "country_name": "Черногория",
+      "aliases": [
+        "Montenegro"
+      ]
+    },
+    {
+      "id": "MF",
+      "key": "MF",
+      "name": "Сен-Мартен",
+      "type": "country",
+      "country_code": "MF",
+      "country_name": "Сен-Мартен",
+      "aliases": [
+        "St. Martin"
+      ]
+    },
+    {
+      "id": "MG",
+      "key": "MG",
+      "name": "Мадагаскар",
+      "type": "country",
+      "country_code": "MG",
+      "country_name": "Мадагаскар",
+      "aliases": [
+        "Madagascar"
+      ]
+    },
+    {
+      "id": "MH",
+      "key": "MH",
+      "name": "Маршалловы о-ва",
+      "type": "country",
+      "country_code": "MH",
+      "country_name": "Маршалловы о-ва",
+      "aliases": [
+        "Marshall Islands"
+      ]
+    },
+    {
+      "id": "MK",
+      "key": "MK",
+      "name": "Северная Македония",
+      "type": "country",
+      "country_code": "MK",
+      "country_name": "Северная Македония",
+      "aliases": [
+        "North Macedonia"
+      ]
+    },
+    {
+      "id": "ML",
+      "key": "ML",
+      "name": "Мали",
+      "type": "country",
+      "country_code": "ML",
+      "country_name": "Мали",
+      "aliases": [
+        "Mali"
+      ]
+    },
+    {
+      "id": "MM",
+      "key": "MM",
+      "name": "Мьянма (Бирма)",
+      "type": "country",
+      "country_code": "MM",
+      "country_name": "Мьянма (Бирма)",
+      "aliases": [
+        "Myanmar (Burma)"
+      ]
+    },
+    {
+      "id": "MN",
+      "key": "MN",
+      "name": "Монголия",
+      "type": "country",
+      "country_code": "MN",
+      "country_name": "Монголия",
+      "aliases": [
+        "Mongolia"
+      ]
+    },
+    {
+      "id": "MO",
+      "key": "MO",
+      "name": "Макао (САР)",
+      "type": "country",
+      "country_code": "MO",
+      "country_name": "Макао (САР)",
+      "aliases": [
+        "Macao SAR China"
+      ]
+    },
+    {
+      "id": "MP",
+      "key": "MP",
+      "name": "Северные Марианские о-ва",
+      "type": "country",
+      "country_code": "MP",
+      "country_name": "Северные Марианские о-ва",
+      "aliases": [
+        "Northern Mariana Islands"
+      ]
+    },
+    {
+      "id": "MQ",
+      "key": "MQ",
+      "name": "Мартиника",
+      "type": "country",
+      "country_code": "MQ",
+      "country_name": "Мартиника",
+      "aliases": [
+        "Martinique"
+      ]
+    },
+    {
+      "id": "MR",
+      "key": "MR",
+      "name": "Мавритания",
+      "type": "country",
+      "country_code": "MR",
+      "country_name": "Мавритания",
+      "aliases": [
+        "Mauritania"
+      ]
+    },
+    {
+      "id": "MS",
+      "key": "MS",
+      "name": "Монтсеррат",
+      "type": "country",
+      "country_code": "MS",
+      "country_name": "Монтсеррат",
+      "aliases": [
+        "Montserrat"
+      ]
+    },
+    {
+      "id": "MT",
+      "key": "MT",
+      "name": "Мальта",
+      "type": "country",
+      "country_code": "MT",
+      "country_name": "Мальта",
+      "aliases": [
+        "Malta"
+      ]
+    },
+    {
+      "id": "MU",
+      "key": "MU",
+      "name": "Маврикий",
+      "type": "country",
+      "country_code": "MU",
+      "country_name": "Маврикий",
+      "aliases": [
+        "Mauritius"
+      ]
+    },
+    {
+      "id": "MV",
+      "key": "MV",
+      "name": "Мальдивы",
+      "type": "country",
+      "country_code": "MV",
+      "country_name": "Мальдивы",
+      "aliases": [
+        "Maldives"
+      ]
+    },
+    {
+      "id": "MW",
+      "key": "MW",
+      "name": "Малави",
+      "type": "country",
+      "country_code": "MW",
+      "country_name": "Малави",
+      "aliases": [
+        "Malawi"
+      ]
+    },
+    {
+      "id": "MX",
+      "key": "MX",
+      "name": "Мексика",
+      "type": "country",
+      "country_code": "MX",
+      "country_name": "Мексика",
+      "aliases": [
+        "Mexico"
+      ]
+    },
+    {
+      "id": "MY",
+      "key": "MY",
+      "name": "Малайзия",
+      "type": "country",
+      "country_code": "MY",
+      "country_name": "Малайзия",
+      "aliases": [
+        "Malaysia"
+      ]
+    },
+    {
+      "id": "MZ",
+      "key": "MZ",
+      "name": "Мозамбик",
+      "type": "country",
+      "country_code": "MZ",
+      "country_name": "Мозамбик",
+      "aliases": [
+        "Mozambique"
+      ]
+    },
+    {
+      "id": "NA",
+      "key": "NA",
+      "name": "Намибия",
+      "type": "country",
+      "country_code": "NA",
+      "country_name": "Намибия",
+      "aliases": [
+        "Namibia"
+      ]
+    },
+    {
+      "id": "NC",
+      "key": "NC",
+      "name": "Новая Каледония",
+      "type": "country",
+      "country_code": "NC",
+      "country_name": "Новая Каледония",
+      "aliases": [
+        "New Caledonia"
+      ]
+    },
+    {
+      "id": "NE",
+      "key": "NE",
+      "name": "Нигер",
+      "type": "country",
+      "country_code": "NE",
+      "country_name": "Нигер",
+      "aliases": [
+        "Niger"
+      ]
+    },
+    {
+      "id": "NF",
+      "key": "NF",
+      "name": "о-в Норфолк",
+      "type": "country",
+      "country_code": "NF",
+      "country_name": "о-в Норфолк",
+      "aliases": [
+        "Norfolk Island"
+      ]
+    },
+    {
+      "id": "NG",
+      "key": "NG",
+      "name": "Нигерия",
+      "type": "country",
+      "country_code": "NG",
+      "country_name": "Нигерия",
+      "aliases": [
+        "Nigeria"
+      ]
+    },
+    {
+      "id": "NI",
+      "key": "NI",
+      "name": "Никарагуа",
+      "type": "country",
+      "country_code": "NI",
+      "country_name": "Никарагуа",
+      "aliases": [
+        "Nicaragua"
+      ]
+    },
+    {
+      "id": "NL",
+      "key": "NL",
+      "name": "Нидерланды",
+      "type": "country",
+      "country_code": "NL",
+      "country_name": "Нидерланды",
+      "aliases": [
+        "Netherlands"
+      ]
+    },
+    {
+      "id": "NO",
+      "key": "NO",
+      "name": "Норвегия",
+      "type": "country",
+      "country_code": "NO",
+      "country_name": "Норвегия",
+      "aliases": [
+        "Norway"
+      ]
+    },
+    {
+      "id": "NP",
+      "key": "NP",
+      "name": "Непал",
+      "type": "country",
+      "country_code": "NP",
+      "country_name": "Непал",
+      "aliases": [
+        "Nepal"
+      ]
+    },
+    {
+      "id": "NR",
+      "key": "NR",
+      "name": "Науру",
+      "type": "country",
+      "country_code": "NR",
+      "country_name": "Науру",
+      "aliases": [
+        "Nauru"
+      ]
+    },
+    {
+      "id": "NU",
+      "key": "NU",
+      "name": "Ниуэ",
+      "type": "country",
+      "country_code": "NU",
+      "country_name": "Ниуэ",
+      "aliases": [
+        "Niue"
+      ]
+    },
+    {
+      "id": "NZ",
+      "key": "NZ",
+      "name": "Новая Зеландия",
+      "type": "country",
+      "country_code": "NZ",
+      "country_name": "Новая Зеландия",
+      "aliases": [
+        "New Zealand"
+      ]
+    },
+    {
+      "id": "OM",
+      "key": "OM",
+      "name": "Оман",
+      "type": "country",
+      "country_code": "OM",
+      "country_name": "Оман",
+      "aliases": [
+        "Oman"
+      ]
+    },
+    {
+      "id": "PA",
+      "key": "PA",
+      "name": "Панама",
+      "type": "country",
+      "country_code": "PA",
+      "country_name": "Панама",
+      "aliases": [
+        "Panama"
+      ]
+    },
+    {
+      "id": "PE",
+      "key": "PE",
+      "name": "Перу",
+      "type": "country",
+      "country_code": "PE",
+      "country_name": "Перу",
+      "aliases": [
+        "Peru"
+      ]
+    },
+    {
+      "id": "PF",
+      "key": "PF",
+      "name": "Французская Полинезия",
+      "type": "country",
+      "country_code": "PF",
+      "country_name": "Французская Полинезия",
+      "aliases": [
+        "French Polynesia"
+      ]
+    },
+    {
+      "id": "PG",
+      "key": "PG",
+      "name": "Папуа — Новая Гвинея",
+      "type": "country",
+      "country_code": "PG",
+      "country_name": "Папуа — Новая Гвинея",
+      "aliases": [
+        "Papua New Guinea"
+      ]
+    },
+    {
+      "id": "PH",
+      "key": "PH",
+      "name": "Филиппины",
+      "type": "country",
+      "country_code": "PH",
+      "country_name": "Филиппины",
+      "aliases": [
+        "Philippines"
+      ]
+    },
+    {
+      "id": "PK",
+      "key": "PK",
+      "name": "Пакистан",
+      "type": "country",
+      "country_code": "PK",
+      "country_name": "Пакистан",
+      "aliases": [
+        "Pakistan"
+      ]
+    },
+    {
+      "id": "PL",
+      "key": "PL",
+      "name": "Польша",
+      "type": "country",
+      "country_code": "PL",
+      "country_name": "Польша",
+      "aliases": [
+        "Poland"
+      ]
+    },
+    {
+      "id": "PM",
+      "key": "PM",
+      "name": "Сен-Пьер и Микелон",
+      "type": "country",
+      "country_code": "PM",
+      "country_name": "Сен-Пьер и Микелон",
+      "aliases": [
+        "St. Pierre & Miquelon"
+      ]
+    },
+    {
+      "id": "PN",
+      "key": "PN",
+      "name": "о-ва Питкэрн",
+      "type": "country",
+      "country_code": "PN",
+      "country_name": "о-ва Питкэрн",
+      "aliases": [
+        "Pitcairn Islands"
+      ]
+    },
+    {
+      "id": "PR",
+      "key": "PR",
+      "name": "Пуэрто-Рико",
+      "type": "country",
+      "country_code": "PR",
+      "country_name": "Пуэрто-Рико",
+      "aliases": [
+        "Puerto Rico"
+      ]
+    },
+    {
+      "id": "PS",
+      "key": "PS",
+      "name": "Палестинские территории",
+      "type": "country",
+      "country_code": "PS",
+      "country_name": "Палестинские территории",
+      "aliases": [
+        "Palestinian Territories"
+      ]
+    },
+    {
+      "id": "PT",
+      "key": "PT",
+      "name": "Португалия",
+      "type": "country",
+      "country_code": "PT",
+      "country_name": "Португалия",
+      "aliases": [
+        "Portugal"
+      ]
+    },
+    {
+      "id": "PW",
+      "key": "PW",
+      "name": "Палау",
+      "type": "country",
+      "country_code": "PW",
+      "country_name": "Палау",
+      "aliases": [
+        "Palau"
+      ]
+    },
+    {
+      "id": "PY",
+      "key": "PY",
+      "name": "Парагвай",
+      "type": "country",
+      "country_code": "PY",
+      "country_name": "Парагвай",
+      "aliases": [
+        "Paraguay"
+      ]
+    },
+    {
+      "id": "QA",
+      "key": "QA",
+      "name": "Катар",
+      "type": "country",
+      "country_code": "QA",
+      "country_name": "Катар",
+      "aliases": [
+        "Qatar"
+      ]
+    },
+    {
+      "id": "RE",
+      "key": "RE",
+      "name": "Реюньон",
+      "type": "country",
+      "country_code": "RE",
+      "country_name": "Реюньон",
+      "aliases": [
+        "Réunion"
+      ]
+    },
+    {
+      "id": "RO",
+      "key": "RO",
+      "name": "Румыния",
+      "type": "country",
+      "country_code": "RO",
+      "country_name": "Румыния",
+      "aliases": [
+        "Romania"
+      ]
+    },
+    {
+      "id": "RS",
+      "key": "RS",
+      "name": "Сербия",
+      "type": "country",
+      "country_code": "RS",
+      "country_name": "Сербия",
+      "aliases": [
+        "Serbia"
+      ]
+    },
+    {
+      "id": "RU",
+      "key": "RU",
+      "name": "Россия",
+      "type": "country",
+      "country_code": "RU",
+      "country_name": "Россия",
+      "aliases": [
+        "Russia"
+      ]
+    },
+    {
+      "id": "RW",
+      "key": "RW",
+      "name": "Руанда",
+      "type": "country",
+      "country_code": "RW",
+      "country_name": "Руанда",
+      "aliases": [
+        "Rwanda"
+      ]
+    },
+    {
+      "id": "SA",
+      "key": "SA",
+      "name": "Саудовская Аравия",
+      "type": "country",
+      "country_code": "SA",
+      "country_name": "Саудовская Аравия",
+      "aliases": [
+        "Saudi Arabia"
+      ]
+    },
+    {
+      "id": "SB",
+      "key": "SB",
+      "name": "Соломоновы о-ва",
+      "type": "country",
+      "country_code": "SB",
+      "country_name": "Соломоновы о-ва",
+      "aliases": [
+        "Solomon Islands"
+      ]
+    },
+    {
+      "id": "SC",
+      "key": "SC",
+      "name": "Сейшельские о-ва",
+      "type": "country",
+      "country_code": "SC",
+      "country_name": "Сейшельские о-ва",
+      "aliases": [
+        "Seychelles"
+      ]
+    },
+    {
+      "id": "SE",
+      "key": "SE",
+      "name": "Швеция",
+      "type": "country",
+      "country_code": "SE",
+      "country_name": "Швеция",
+      "aliases": [
+        "Sweden"
+      ]
+    },
+    {
+      "id": "SG",
+      "key": "SG",
+      "name": "Сингапур",
+      "type": "country",
+      "country_code": "SG",
+      "country_name": "Сингапур",
+      "aliases": [
+        "Singapore"
+      ]
+    },
+    {
+      "id": "SH",
+      "key": "SH",
+      "name": "о-в Св. Елены",
+      "type": "country",
+      "country_code": "SH",
+      "country_name": "о-в Св. Елены",
+      "aliases": [
+        "St. Helena"
+      ]
+    },
+    {
+      "id": "SI",
+      "key": "SI",
+      "name": "Словения",
+      "type": "country",
+      "country_code": "SI",
+      "country_name": "Словения",
+      "aliases": [
+        "Slovenia"
+      ]
+    },
+    {
+      "id": "SJ",
+      "key": "SJ",
+      "name": "Шпицберген и Ян-Майен",
+      "type": "country",
+      "country_code": "SJ",
+      "country_name": "Шпицберген и Ян-Майен",
+      "aliases": [
+        "Svalbard & Jan Mayen"
+      ]
+    },
+    {
+      "id": "SK",
+      "key": "SK",
+      "name": "Словакия",
+      "type": "country",
+      "country_code": "SK",
+      "country_name": "Словакия",
+      "aliases": [
+        "Slovakia"
+      ]
+    },
+    {
+      "id": "SL",
+      "key": "SL",
+      "name": "Сьерра-Леоне",
+      "type": "country",
+      "country_code": "SL",
+      "country_name": "Сьерра-Леоне",
+      "aliases": [
+        "Sierra Leone"
+      ]
+    },
+    {
+      "id": "SM",
+      "key": "SM",
+      "name": "Сан-Марино",
+      "type": "country",
+      "country_code": "SM",
+      "country_name": "Сан-Марино",
+      "aliases": [
+        "San Marino"
+      ]
+    },
+    {
+      "id": "SN",
+      "key": "SN",
+      "name": "Сенегал",
+      "type": "country",
+      "country_code": "SN",
+      "country_name": "Сенегал",
+      "aliases": [
+        "Senegal"
+      ]
+    },
+    {
+      "id": "SO",
+      "key": "SO",
+      "name": "Сомали",
+      "type": "country",
+      "country_code": "SO",
+      "country_name": "Сомали",
+      "aliases": [
+        "Somalia"
+      ]
+    },
+    {
+      "id": "SR",
+      "key": "SR",
+      "name": "Суринам",
+      "type": "country",
+      "country_code": "SR",
+      "country_name": "Суринам",
+      "aliases": [
+        "Suriname"
+      ]
+    },
+    {
+      "id": "SS",
+      "key": "SS",
+      "name": "Южный Судан",
+      "type": "country",
+      "country_code": "SS",
+      "country_name": "Южный Судан",
+      "aliases": [
+        "South Sudan"
+      ]
+    },
+    {
+      "id": "ST",
+      "key": "ST",
+      "name": "Сан-Томе и Принсипи",
+      "type": "country",
+      "country_code": "ST",
+      "country_name": "Сан-Томе и Принсипи",
+      "aliases": [
+        "São Tomé & Príncipe"
+      ]
+    },
+    {
+      "id": "SV",
+      "key": "SV",
+      "name": "Сальвадор",
+      "type": "country",
+      "country_code": "SV",
+      "country_name": "Сальвадор",
+      "aliases": [
+        "El Salvador"
+      ]
+    },
+    {
+      "id": "SX",
+      "key": "SX",
+      "name": "Синт-Мартен",
+      "type": "country",
+      "country_code": "SX",
+      "country_name": "Синт-Мартен",
+      "aliases": [
+        "Sint Maarten"
+      ]
+    },
+    {
+      "id": "SY",
+      "key": "SY",
+      "name": "Сирия",
+      "type": "country",
+      "country_code": "SY",
+      "country_name": "Сирия",
+      "aliases": [
+        "Syria"
+      ]
+    },
+    {
+      "id": "SZ",
+      "key": "SZ",
+      "name": "Эсватини",
+      "type": "country",
+      "country_code": "SZ",
+      "country_name": "Эсватини",
+      "aliases": [
+        "Eswatini"
+      ]
+    },
+    {
+      "id": "TC",
+      "key": "TC",
+      "name": "Тёркс и Кайкос",
+      "type": "country",
+      "country_code": "TC",
+      "country_name": "Тёркс и Кайкос",
+      "aliases": [
+        "Turks & Caicos Islands"
+      ]
+    },
+    {
+      "id": "TD",
+      "key": "TD",
+      "name": "Чад",
+      "type": "country",
+      "country_code": "TD",
+      "country_name": "Чад",
+      "aliases": [
+        "Chad"
+      ]
+    },
+    {
+      "id": "TF",
+      "key": "TF",
+      "name": "Французские Южные территории",
+      "type": "country",
+      "country_code": "TF",
+      "country_name": "Французские Южные территории",
+      "aliases": [
+        "French Southern Territories"
+      ]
+    },
+    {
+      "id": "TG",
+      "key": "TG",
+      "name": "Того",
+      "type": "country",
+      "country_code": "TG",
+      "country_name": "Того",
+      "aliases": [
+        "Togo"
+      ]
+    },
+    {
+      "id": "TH",
+      "key": "TH",
+      "name": "Таиланд",
+      "type": "country",
+      "country_code": "TH",
+      "country_name": "Таиланд",
+      "aliases": [
+        "Thailand"
+      ]
+    },
+    {
+      "id": "TJ",
+      "key": "TJ",
+      "name": "Таджикистан",
+      "type": "country",
+      "country_code": "TJ",
+      "country_name": "Таджикистан",
+      "aliases": [
+        "Tajikistan"
+      ]
+    },
+    {
+      "id": "TK",
+      "key": "TK",
+      "name": "Токелау",
+      "type": "country",
+      "country_code": "TK",
+      "country_name": "Токелау",
+      "aliases": [
+        "Tokelau"
+      ]
+    },
+    {
+      "id": "TL",
+      "key": "TL",
+      "name": "Восточный Тимор",
+      "type": "country",
+      "country_code": "TL",
+      "country_name": "Восточный Тимор",
+      "aliases": [
+        "Timor-Leste"
+      ]
+    },
+    {
+      "id": "TM",
+      "key": "TM",
+      "name": "Туркменистан",
+      "type": "country",
+      "country_code": "TM",
+      "country_name": "Туркменистан",
+      "aliases": [
+        "Turkmenistan"
+      ]
+    },
+    {
+      "id": "TN",
+      "key": "TN",
+      "name": "Тунис",
+      "type": "country",
+      "country_code": "TN",
+      "country_name": "Тунис",
+      "aliases": [
+        "Tunisia"
+      ]
+    },
+    {
+      "id": "TO",
+      "key": "TO",
+      "name": "Тонга",
+      "type": "country",
+      "country_code": "TO",
+      "country_name": "Тонга",
+      "aliases": [
+        "Tonga"
+      ]
+    },
+    {
+      "id": "TR",
+      "key": "TR",
+      "name": "Турция",
+      "type": "country",
+      "country_code": "TR",
+      "country_name": "Турция",
+      "aliases": [
+        "Türkiye"
+      ]
+    },
+    {
+      "id": "TT",
+      "key": "TT",
+      "name": "Тринидад и Тобаго",
+      "type": "country",
+      "country_code": "TT",
+      "country_name": "Тринидад и Тобаго",
+      "aliases": [
+        "Trinidad & Tobago"
+      ]
+    },
+    {
+      "id": "TV",
+      "key": "TV",
+      "name": "Тувалу",
+      "type": "country",
+      "country_code": "TV",
+      "country_name": "Тувалу",
+      "aliases": [
+        "Tuvalu"
+      ]
+    },
+    {
+      "id": "TW",
+      "key": "TW",
+      "name": "Тайвань",
+      "type": "country",
+      "country_code": "TW",
+      "country_name": "Тайвань",
+      "aliases": [
+        "Taiwan"
+      ]
+    },
+    {
+      "id": "TZ",
+      "key": "TZ",
+      "name": "Танзания",
+      "type": "country",
+      "country_code": "TZ",
+      "country_name": "Танзания",
+      "aliases": [
+        "Tanzania"
+      ]
+    },
+    {
+      "id": "UA",
+      "key": "UA",
+      "name": "Украина",
+      "type": "country",
+      "country_code": "UA",
+      "country_name": "Украина",
+      "aliases": [
+        "Ukraine"
+      ]
+    },
+    {
+      "id": "UG",
+      "key": "UG",
+      "name": "Уганда",
+      "type": "country",
+      "country_code": "UG",
+      "country_name": "Уганда",
+      "aliases": [
+        "Uganda"
+      ]
+    },
+    {
+      "id": "UM",
+      "key": "UM",
+      "name": "Внешние малые о-ва (США)",
+      "type": "country",
+      "country_code": "UM",
+      "country_name": "Внешние малые о-ва (США)",
+      "aliases": [
+        "U.S. Outlying Islands"
+      ]
+    },
+    {
+      "id": "US",
+      "key": "US",
+      "name": "Соединенные Штаты",
+      "type": "country",
+      "country_code": "US",
+      "country_name": "Соединенные Штаты",
+      "aliases": [
+        "United States"
+      ]
+    },
+    {
+      "id": "UY",
+      "key": "UY",
+      "name": "Уругвай",
+      "type": "country",
+      "country_code": "UY",
+      "country_name": "Уругвай",
+      "aliases": [
+        "Uruguay"
+      ]
+    },
+    {
+      "id": "UZ",
+      "key": "UZ",
+      "name": "Узбекистан",
+      "type": "country",
+      "country_code": "UZ",
+      "country_name": "Узбекистан",
+      "aliases": [
+        "Uzbekistan"
+      ]
+    },
+    {
+      "id": "VA",
+      "key": "VA",
+      "name": "Ватикан",
+      "type": "country",
+      "country_code": "VA",
+      "country_name": "Ватикан",
+      "aliases": [
+        "Vatican City"
+      ]
+    },
+    {
+      "id": "VC",
+      "key": "VC",
+      "name": "Сент-Винсент и Гренадины",
+      "type": "country",
+      "country_code": "VC",
+      "country_name": "Сент-Винсент и Гренадины",
+      "aliases": [
+        "St. Vincent & Grenadines"
+      ]
+    },
+    {
+      "id": "VE",
+      "key": "VE",
+      "name": "Венесуэла",
+      "type": "country",
+      "country_code": "VE",
+      "country_name": "Венесуэла",
+      "aliases": [
+        "Venezuela"
+      ]
+    },
+    {
+      "id": "VG",
+      "key": "VG",
+      "name": "Виргинские о-ва (Великобритания)",
+      "type": "country",
+      "country_code": "VG",
+      "country_name": "Виргинские о-ва (Великобритания)",
+      "aliases": [
+        "British Virgin Islands"
+      ]
+    },
+    {
+      "id": "VI",
+      "key": "VI",
+      "name": "Виргинские о-ва (США)",
+      "type": "country",
+      "country_code": "VI",
+      "country_name": "Виргинские о-ва (США)",
+      "aliases": [
+        "U.S. Virgin Islands"
+      ]
+    },
+    {
+      "id": "VN",
+      "key": "VN",
+      "name": "Вьетнам",
+      "type": "country",
+      "country_code": "VN",
+      "country_name": "Вьетнам",
+      "aliases": [
+        "Vietnam"
+      ]
+    },
+    {
+      "id": "VU",
+      "key": "VU",
+      "name": "Вануату",
+      "type": "country",
+      "country_code": "VU",
+      "country_name": "Вануату",
+      "aliases": [
+        "Vanuatu"
+      ]
+    },
+    {
+      "id": "WF",
+      "key": "WF",
+      "name": "Уоллис и Футуна",
+      "type": "country",
+      "country_code": "WF",
+      "country_name": "Уоллис и Футуна",
+      "aliases": [
+        "Wallis & Futuna"
+      ]
+    },
+    {
+      "id": "WS",
+      "key": "WS",
+      "name": "Самоа",
+      "type": "country",
+      "country_code": "WS",
+      "country_name": "Самоа",
+      "aliases": [
+        "Samoa"
+      ]
+    },
+    {
+      "id": "XK",
+      "key": "XK",
+      "name": "Косово",
+      "type": "country",
+      "country_code": "XK",
+      "country_name": "Косово",
+      "aliases": [
+        "Kosovo"
+      ]
+    },
+    {
+      "id": "YE",
+      "key": "YE",
+      "name": "Йемен",
+      "type": "country",
+      "country_code": "YE",
+      "country_name": "Йемен",
+      "aliases": [
+        "Yemen"
+      ]
+    },
+    {
+      "id": "YT",
+      "key": "YT",
+      "name": "Майотта",
+      "type": "country",
+      "country_code": "YT",
+      "country_name": "Майотта",
+      "aliases": [
+        "Mayotte"
+      ]
+    },
+    {
+      "id": "ZA",
+      "key": "ZA",
+      "name": "Южно-Африканская Республика",
+      "type": "country",
+      "country_code": "ZA",
+      "country_name": "Южно-Африканская Республика",
+      "aliases": [
+        "South Africa"
+      ]
+    },
+    {
+      "id": "ZM",
+      "key": "ZM",
+      "name": "Замбия",
+      "type": "country",
+      "country_code": "ZM",
+      "country_name": "Замбия",
+      "aliases": [
+        "Zambia"
+      ]
+    },
+    {
+      "id": "ZW",
+      "key": "ZW",
+      "name": "Зимбабве",
+      "type": "country",
+      "country_code": "ZW",
+      "country_name": "Зимбабве",
+      "aliases": [
+        "Zimbabwe"
+      ]
+    },
+    {
+      "id": "MC",
+      "key": "MC",
+      "name": "Монако",
+      "type": "country",
+      "country_code": "MC",
+      "country_name": "Монако",
+      "aliases": [
+        "Monaco"
+      ]
+    },
+    {
+      "id": "FI",
+      "key": "FI",
+      "name": "Финляндия",
+      "type": "country",
+      "country_code": "FI",
+      "country_name": "Финляндия",
+      "aliases": [
+        "Finland"
+      ]
+    },
+    {
+      "id": "FJ",
+      "key": "FJ",
+      "name": "Фиджи",
+      "type": "country",
+      "country_code": "FJ",
+      "country_name": "Фиджи",
+      "aliases": [
+        "Fiji"
+      ]
+    },
+    {
+      "id": "FK",
+      "key": "FK",
+      "name": "Фолклендские о-ва",
+      "type": "country",
+      "country_code": "FK",
+      "country_name": "Фолклендские о-ва",
+      "aliases": [
+        "Falkland Islands"
+      ]
+    },
+    {
+      "id": "FM",
+      "key": "FM",
+      "name": "Федеративные Штаты Микронезии",
+      "type": "country",
+      "country_code": "FM",
+      "country_name": "Федеративные Штаты Микронезии",
+      "aliases": [
+        "Micronesia"
+      ]
+    },
+    {
+      "id": "FO",
+      "key": "FO",
+      "name": "Фарерские о-ва",
+      "type": "country",
+      "country_code": "FO",
+      "country_name": "Фарерские о-ва",
+      "aliases": [
+        "Faroe Islands"
+      ]
+    },
+    {
+      "id": "FR",
+      "key": "FR",
+      "name": "Франция",
+      "type": "country",
+      "country_code": "FR",
+      "country_name": "Франция",
+      "aliases": [
+        "France"
+      ]
+    },
+    {
+      "id": "GA",
+      "key": "GA",
+      "name": "Габон",
+      "type": "country",
+      "country_code": "GA",
+      "country_name": "Габон",
+      "aliases": [
+        "Gabon"
+      ]
+    },
+    {
+      "id": "GB",
+      "key": "GB",
+      "name": "Великобритания",
+      "type": "country",
+      "country_code": "GB",
+      "country_name": "Великобритания",
+      "aliases": [
+        "United Kingdom"
+      ]
+    },
+    {
+      "id": "GD",
+      "key": "GD",
+      "name": "Гренада",
+      "type": "country",
+      "country_code": "GD",
+      "country_name": "Гренада",
+      "aliases": [
+        "Grenada"
+      ]
+    },
+    {
+      "id": "GE",
+      "key": "GE",
+      "name": "Грузия",
+      "type": "country",
+      "country_code": "GE",
+      "country_name": "Грузия",
+      "aliases": [
+        "Georgia"
+      ]
+    },
+    {
+      "id": "GF",
+      "key": "GF",
+      "name": "Французская Гвиана",
+      "type": "country",
+      "country_code": "GF",
+      "country_name": "Французская Гвиана",
+      "aliases": [
+        "French Guiana"
+      ]
+    },
+    {
+      "id": "GG",
+      "key": "GG",
+      "name": "Гернси",
+      "type": "country",
+      "country_code": "GG",
+      "country_name": "Гернси",
+      "aliases": [
+        "Guernsey"
+      ]
+    },
+    {
+      "id": "GH",
+      "key": "GH",
+      "name": "Гана",
+      "type": "country",
+      "country_code": "GH",
+      "country_name": "Гана",
+      "aliases": [
+        "Ghana"
+      ]
+    },
+    {
+      "id": "GI",
+      "key": "GI",
+      "name": "Гибралтар",
+      "type": "country",
+      "country_code": "GI",
+      "country_name": "Гибралтар",
+      "aliases": [
+        "Gibraltar"
+      ]
+    },
+    {
+      "id": "GL",
+      "key": "GL",
+      "name": "Гренландия",
+      "type": "country",
+      "country_code": "GL",
+      "country_name": "Гренландия",
+      "aliases": [
+        "Greenland"
+      ]
+    },
+    {
+      "id": "GM",
+      "key": "GM",
+      "name": "Гамбия",
+      "type": "country",
+      "country_code": "GM",
+      "country_name": "Гамбия",
+      "aliases": [
+        "Gambia"
+      ]
+    },
+    {
+      "id": "GN",
+      "key": "GN",
+      "name": "Гвинея",
+      "type": "country",
+      "country_code": "GN",
+      "country_name": "Гвинея",
+      "aliases": [
+        "Guinea"
+      ]
+    },
+    {
+      "id": "GP",
+      "key": "GP",
+      "name": "Гваделупа",
+      "type": "country",
+      "country_code": "GP",
+      "country_name": "Гваделупа",
+      "aliases": [
+        "Guadeloupe"
+      ]
+    },
+    {
+      "id": "GQ",
+      "key": "GQ",
+      "name": "Экваториальная Гвинея",
+      "type": "country",
+      "country_code": "GQ",
+      "country_name": "Экваториальная Гвинея",
+      "aliases": [
+        "Equatorial Guinea"
+      ]
+    },
+    {
+      "id": "GR",
+      "key": "GR",
+      "name": "Греция",
+      "type": "country",
+      "country_code": "GR",
+      "country_name": "Греция",
+      "aliases": [
+        "Greece"
+      ]
+    },
+    {
+      "id": "GS",
+      "key": "GS",
+      "name": "Южная Георгия и Южные Сандвичевы о-ва",
+      "type": "country",
+      "country_code": "GS",
+      "country_name": "Южная Георгия и Южные Сандвичевы о-ва",
+      "aliases": [
+        "South Georgia & South Sandwich Islands"
+      ]
+    },
+    {
+      "id": "GT",
+      "key": "GT",
+      "name": "Гватемала",
+      "type": "country",
+      "country_code": "GT",
+      "country_name": "Гватемала",
+      "aliases": [
+        "Guatemala"
+      ]
+    },
+    {
+      "id": "GU",
+      "key": "GU",
+      "name": "Гуам",
+      "type": "country",
+      "country_code": "GU",
+      "country_name": "Гуам",
+      "aliases": [
+        "Guam"
+      ]
+    },
+    {
+      "id": "GW",
+      "key": "GW",
+      "name": "Гвинея-Бисау",
+      "type": "country",
+      "country_code": "GW",
+      "country_name": "Гвинея-Бисау",
+      "aliases": [
+        "Guinea-Bissau"
+      ]
+    },
+    {
+      "id": "GY",
+      "key": "GY",
+      "name": "Гайана",
+      "type": "country",
+      "country_code": "GY",
+      "country_name": "Гайана",
+      "aliases": [
+        "Guyana"
+      ]
+    },
+    {
+      "id": "HK",
+      "key": "HK",
+      "name": "Гонконг (САР)",
+      "type": "country",
+      "country_code": "HK",
+      "country_name": "Гонконг (САР)",
+      "aliases": [
+        "Hong Kong SAR China"
+      ]
+    },
+    {
+      "id": "HN",
+      "key": "HN",
+      "name": "Гондурас",
+      "type": "country",
+      "country_code": "HN",
+      "country_name": "Гондурас",
+      "aliases": [
+        "Honduras"
+      ]
+    },
+    {
+      "id": "HR",
+      "key": "HR",
+      "name": "Хорватия",
+      "type": "country",
+      "country_code": "HR",
+      "country_name": "Хорватия",
+      "aliases": [
+        "Croatia"
+      ]
+    },
+    {
+      "id": "HT",
+      "key": "HT",
+      "name": "Гаити",
+      "type": "country",
+      "country_code": "HT",
+      "country_name": "Гаити",
+      "aliases": [
+        "Haiti"
+      ]
+    },
+    {
+      "id": "HU",
+      "key": "HU",
+      "name": "Венгрия",
+      "type": "country",
+      "country_code": "HU",
+      "country_name": "Венгрия",
+      "aliases": [
+        "Hungary"
+      ]
+    },
+    {
+      "id": "ID",
+      "key": "ID",
+      "name": "Индонезия",
+      "type": "country",
+      "country_code": "ID",
+      "country_name": "Индонезия",
+      "aliases": [
+        "Indonesia"
+      ]
+    },
+    {
+      "id": "IE",
+      "key": "IE",
+      "name": "Ирландия",
+      "type": "country",
+      "country_code": "IE",
+      "country_name": "Ирландия",
+      "aliases": [
+        "Ireland"
+      ]
+    },
+    {
+      "id": "IL",
+      "key": "IL",
+      "name": "Израиль",
+      "type": "country",
+      "country_code": "IL",
+      "country_name": "Израиль",
+      "aliases": [
+        "Israel"
+      ]
+    },
+    {
+      "id": "IM",
+      "key": "IM",
+      "name": "о-в Мэн",
+      "type": "country",
+      "country_code": "IM",
+      "country_name": "о-в Мэн",
+      "aliases": [
+        "Isle of Man"
+      ]
+    },
+    {
+      "id": "IN",
+      "key": "IN",
+      "name": "Индия",
+      "type": "country",
+      "country_code": "IN",
+      "country_name": "Индия",
+      "aliases": [
+        "India"
+      ]
+    },
+    {
+      "id": "IO",
+      "key": "IO",
+      "name": "Британская территория в Индийском океане",
+      "type": "country",
+      "country_code": "IO",
+      "country_name": "Британская территория в Индийском океане",
+      "aliases": [
+        "British Indian Ocean Territory"
+      ]
+    },
+    {
+      "id": "IQ",
+      "key": "IQ",
+      "name": "Ирак",
+      "type": "country",
+      "country_code": "IQ",
+      "country_name": "Ирак",
+      "aliases": [
+        "Iraq"
+      ]
+    },
+    {
+      "id": "IS",
+      "key": "IS",
+      "name": "Исландия",
+      "type": "country",
+      "country_code": "IS",
+      "country_name": "Исландия",
+      "aliases": [
+        "Iceland"
+      ]
+    },
+    {
+      "id": "IT",
+      "key": "IT",
+      "name": "Италия",
+      "type": "country",
+      "country_code": "IT",
+      "country_name": "Италия",
+      "aliases": [
+        "Italy"
+      ]
+    },
+    {
+      "id": "JE",
+      "key": "JE",
+      "name": "Джерси",
+      "type": "country",
+      "country_code": "JE",
+      "country_name": "Джерси",
+      "aliases": [
+        "Jersey"
+      ]
+    },
+    {
+      "id": "JM",
+      "key": "JM",
+      "name": "Ямайка",
+      "type": "country",
+      "country_code": "JM",
+      "country_name": "Ямайка",
+      "aliases": [
+        "Jamaica"
+      ]
+    },
+    {
+      "id": "JO",
+      "key": "JO",
+      "name": "Иордания",
+      "type": "country",
+      "country_code": "JO",
+      "country_name": "Иордания",
+      "aliases": [
+        "Jordan"
+      ]
+    },
+    {
+      "id": "JP",
+      "key": "JP",
+      "name": "Япония",
+      "type": "country",
+      "country_code": "JP",
+      "country_name": "Япония",
+      "aliases": [
+        "Japan"
+      ]
+    },
+    {
+      "id": "KE",
+      "key": "KE",
+      "name": "Кения",
+      "type": "country",
+      "country_code": "KE",
+      "country_name": "Кения",
+      "aliases": [
+        "Kenya"
+      ]
+    },
+    {
+      "id": "KG",
+      "key": "KG",
+      "name": "Киргизия",
+      "type": "country",
+      "country_code": "KG",
+      "country_name": "Киргизия",
+      "aliases": [
+        "Kyrgyzstan"
+      ]
+    },
+    {
+      "id": "KH",
+      "key": "KH",
+      "name": "Камбоджа",
+      "type": "country",
+      "country_code": "KH",
+      "country_name": "Камбоджа",
+      "aliases": [
+        "Cambodia"
+      ]
+    },
+    {
+      "id": "KI",
+      "key": "KI",
+      "name": "Кирибати",
+      "type": "country",
+      "country_code": "KI",
+      "country_name": "Кирибати",
+      "aliases": [
+        "Kiribati"
+      ]
+    },
+    {
+      "id": "KM",
+      "key": "KM",
+      "name": "Коморы",
+      "type": "country",
+      "country_code": "KM",
+      "country_name": "Коморы",
+      "aliases": [
+        "Comoros"
+      ]
+    },
+    {
+      "id": "KN",
+      "key": "KN",
+      "name": "Сент-Китс и Невис",
+      "type": "country",
+      "country_code": "KN",
+      "country_name": "Сент-Китс и Невис",
+      "aliases": [
+        "St. Kitts & Nevis"
+      ]
+    },
+    {
+      "id": "MA",
+      "key": "MA",
+      "name": "Марокко",
+      "type": "country",
+      "country_code": "MA",
+      "country_name": "Марокко",
+      "aliases": [
+        "Morocco"
+      ]
+    },
+    {
+      "id": "KR",
+      "key": "KR",
+      "name": "Республика Корея",
+      "type": "country",
+      "country_code": "KR",
+      "country_name": "Республика Корея",
+      "aliases": [
+        "South Korea"
+      ]
+    },
+    {
+      "id": "KW",
+      "key": "KW",
+      "name": "Кувейт",
+      "type": "country",
+      "country_code": "KW",
+      "country_name": "Кувейт",
+      "aliases": [
+        "Kuwait"
+      ]
+    },
+    {
+      "id": "KY",
+      "key": "KY",
+      "name": "о-ва Кайман",
+      "type": "country",
+      "country_code": "KY",
+      "country_name": "о-ва Кайман",
+      "aliases": [
+        "Cayman Islands"
+      ]
+    },
+    {
+      "id": "KZ",
+      "key": "KZ",
+      "name": "Казахстан",
+      "type": "country",
+      "country_code": "KZ",
+      "country_name": "Казахстан",
+      "aliases": [
+        "Kazakhstan"
+      ]
+    },
+    {
+      "id": "LA",
+      "key": "LA",
+      "name": "Лаос",
+      "type": "country",
+      "country_code": "LA",
+      "country_name": "Лаос",
+      "aliases": [
+        "Laos"
+      ]
+    },
+    {
+      "id": "LB",
+      "key": "LB",
+      "name": "Ливан",
+      "type": "country",
+      "country_code": "LB",
+      "country_name": "Ливан",
+      "aliases": [
+        "Lebanon"
+      ]
+    },
+    {
+      "id": "LC",
+      "key": "LC",
+      "name": "Сент-Люсия",
+      "type": "country",
+      "country_code": "LC",
+      "country_name": "Сент-Люсия",
+      "aliases": [
+        "St. Lucia"
+      ]
+    },
+    {
+      "id": "LI",
+      "key": "LI",
+      "name": "Лихтенштейн",
+      "type": "country",
+      "country_code": "LI",
+      "country_name": "Лихтенштейн",
+      "aliases": [
+        "Liechtenstein"
+      ]
+    },
+    {
+      "id": "LK",
+      "key": "LK",
+      "name": "Шри-Ланка",
+      "type": "country",
+      "country_code": "LK",
+      "country_name": "Шри-Ланка",
+      "aliases": [
+        "Sri Lanka"
+      ]
+    },
+    {
+      "id": "LR",
+      "key": "LR",
+      "name": "Либерия",
+      "type": "country",
+      "country_code": "LR",
+      "country_name": "Либерия",
+      "aliases": [
+        "Liberia"
+      ]
+    },
+    {
+      "id": "LS",
+      "key": "LS",
+      "name": "Лесото",
+      "type": "country",
+      "country_code": "LS",
+      "country_name": "Лесото",
+      "aliases": [
+        "Lesotho"
+      ]
+    },
+    {
+      "id": "LT",
+      "key": "LT",
+      "name": "Литва",
+      "type": "country",
+      "country_code": "LT",
+      "country_name": "Литва",
+      "aliases": [
+        "Lithuania"
+      ]
+    },
+    {
+      "id": "LU",
+      "key": "LU",
+      "name": "Люксембург",
+      "type": "country",
+      "country_code": "LU",
+      "country_name": "Люксембург",
+      "aliases": [
+        "Luxembourg"
+      ]
+    },
+    {
+      "id": "LV",
+      "key": "LV",
+      "name": "Латвия",
+      "type": "country",
+      "country_code": "LV",
+      "country_name": "Латвия",
+      "aliases": [
+        "Latvia"
+      ]
+    },
+    {
+      "id": "LY",
+      "key": "LY",
+      "name": "Ливия",
+      "type": "country",
+      "country_code": "LY",
+      "country_name": "Ливия",
+      "aliases": [
+        "Libya"
+      ]
+    },
+    {
+      "id": "527",
+      "key": "527",
+      "name": "Alberta",
+      "type": "region",
+      "country_code": "CA",
+      "country_name": "Канада"
+    },
+    {
+      "id": "528",
+      "key": "528",
+      "name": "British Columbia",
+      "type": "region",
+      "country_code": "CA",
+      "country_name": "Канада"
+    },
+    {
+      "id": "529",
+      "key": "529",
+      "name": "Manitoba",
+      "type": "region",
+      "country_code": "CA",
+      "country_name": "Канада"
+    },
+    {
+      "id": "530",
+      "key": "530",
+      "name": "New Brunswick",
+      "type": "region",
+      "country_code": "CA",
+      "country_name": "Канада"
+    },
+    {
+      "id": "531",
+      "key": "531",
+      "name": "Newfoundland and Labrador",
+      "type": "region",
+      "country_code": "CA",
+      "country_name": "Канада"
+    },
+    {
+      "id": "538",
+      "key": "538",
+      "name": "Northwest Territories",
+      "type": "region",
+      "country_code": "CA",
+      "country_name": "Канада"
+    },
+    {
+      "id": "532",
+      "key": "532",
+      "name": "Nova Scotia",
+      "type": "region",
+      "country_code": "CA",
+      "country_name": "Канада"
+    },
+    {
+      "id": "539",
+      "key": "539",
+      "name": "Nunavut",
+      "type": "region",
+      "country_code": "CA",
+      "country_name": "Канада"
+    },
+    {
+      "id": "533",
+      "key": "533",
+      "name": "Ontario",
+      "type": "region",
+      "country_code": "CA",
+      "country_name": "Канада"
+    },
+    {
+      "id": "534",
+      "key": "534",
+      "name": "Prince Edward Island",
+      "type": "region",
+      "country_code": "CA",
+      "country_name": "Канада"
+    },
+    {
+      "id": "535",
+      "key": "535",
+      "name": "Quebec",
+      "type": "region",
+      "country_code": "CA",
+      "country_name": "Канада"
+    },
+    {
+      "id": "536",
+      "key": "536",
+      "name": "Saskatchewan",
+      "type": "region",
+      "country_code": "CA",
+      "country_name": "Канада"
+    },
+    {
+      "id": "537",
+      "key": "537",
+      "name": "Yukon",
+      "type": "region",
+      "country_code": "CA",
+      "country_name": "Канада"
+    },
+    {
+      "id": "4079",
+      "key": "4079",
+      "name": "England",
+      "type": "region",
+      "country_code": "GB",
+      "country_name": "Великобритания"
+    },
+    {
+      "id": "4082",
+      "key": "4082",
+      "name": "Northern Ireland",
+      "type": "region",
+      "country_code": "GB",
+      "country_name": "Великобритания"
+    },
+    {
+      "id": "4081",
+      "key": "4081",
+      "name": "Scotland",
+      "type": "region",
+      "country_code": "GB",
+      "country_name": "Великобритания"
+    },
+    {
+      "id": "4080",
+      "key": "4080",
+      "name": "Wales",
+      "type": "region",
+      "country_code": "GB",
+      "country_name": "Великобритания"
+    },
+    {
+      "id": "1841",
+      "key": "1841",
+      "name": "Abruzzo",
+      "type": "region",
+      "country_code": "IT",
+      "country_name": "Италия"
+    },
+    {
+      "id": "1859",
+      "key": "1859",
+      "name": "Aosta Valley",
+      "type": "region",
+      "country_code": "IT",
+      "country_name": "Италия"
+    },
+    {
+      "id": "1842",
+      "key": "1842",
+      "name": "Basilicata",
+      "type": "region",
+      "country_code": "IT",
+      "country_name": "Италия"
+    },
+    {
+      "id": "1843",
+      "key": "1843",
+      "name": "Calabria",
+      "type": "region",
+      "country_code": "IT",
+      "country_name": "Италия"
+    },
+    {
+      "id": "1844",
+      "key": "1844",
+      "name": "Campania",
+      "type": "region",
+      "country_code": "IT",
+      "country_name": "Италия"
+    },
+    {
+      "id": "1845",
+      "key": "1845",
+      "name": "Emilia-Romagna",
+      "type": "region",
+      "country_code": "IT",
+      "country_name": "Италия"
+    },
+    {
+      "id": "1846",
+      "key": "1846",
+      "name": "Friuli-Venezia Giulia",
+      "type": "region",
+      "country_code": "IT",
+      "country_name": "Италия"
+    },
+    {
+      "id": "1847",
+      "key": "1847",
+      "name": "Lazio",
+      "type": "region",
+      "country_code": "IT",
+      "country_name": "Италия"
+    },
+    {
+      "id": "1848",
+      "key": "1848",
+      "name": "Liguria",
+      "type": "region",
+      "country_code": "IT",
+      "country_name": "Италия"
+    },
+    {
+      "id": "1849",
+      "key": "1849",
+      "name": "Lombardia",
+      "type": "region",
+      "country_code": "IT",
+      "country_name": "Италия"
+    },
+    {
+      "id": "1850",
+      "key": "1850",
+      "name": "Marche",
+      "type": "region",
+      "country_code": "IT",
+      "country_name": "Италия"
+    },
+    {
+      "id": "1851",
+      "key": "1851",
+      "name": "Molise",
+      "type": "region",
+      "country_code": "IT",
+      "country_name": "Италия"
+    },
+    {
+      "id": "1852",
+      "key": "1852",
+      "name": "Piedmont",
+      "type": "region",
+      "country_code": "IT",
+      "country_name": "Италия"
+    },
+    {
+      "id": "1853",
+      "key": "1853",
+      "name": "Puglia",
+      "type": "region",
+      "country_code": "IT",
+      "country_name": "Италия"
+    },
+    {
+      "id": "1854",
+      "key": "1854",
+      "name": "Sardinia",
+      "type": "region",
+      "country_code": "IT",
+      "country_name": "Италия"
+    },
+    {
+      "id": "1855",
+      "key": "1855",
+      "name": "Sicilia",
+      "type": "region",
+      "country_code": "IT",
+      "country_name": "Италия"
+    },
+    {
+      "id": "1857",
+      "key": "1857",
+      "name": "Trentino-Alto Adige",
+      "type": "region",
+      "country_code": "IT",
+      "country_name": "Италия"
+    },
+    {
+      "id": "1856",
+      "key": "1856",
+      "name": "Tuscany",
+      "type": "region",
+      "country_code": "IT",
+      "country_name": "Италия"
+    },
+    {
+      "id": "1858",
+      "key": "1858",
+      "name": "Umbria",
+      "type": "region",
+      "country_code": "IT",
+      "country_name": "Италия"
+    },
+    {
+      "id": "1860",
+      "key": "1860",
+      "name": "Veneto",
+      "type": "region",
+      "country_code": "IT",
+      "country_name": "Италия"
+    },
+    {
+      "id": "2660",
+      "key": "2660",
+      "name": "Drenthe",
+      "type": "region",
+      "country_code": "NL",
+      "country_name": "Нидерланды"
+    },
+    {
+      "id": "2675",
+      "key": "2675",
+      "name": "Flevoland",
+      "type": "region",
+      "country_code": "NL",
+      "country_name": "Нидерланды"
+    },
+    {
+      "id": "2661",
+      "key": "2661",
+      "name": "Friesland",
+      "type": "region",
+      "country_code": "NL",
+      "country_name": "Нидерланды"
+    },
+    {
+      "id": "2662",
+      "key": "2662",
+      "name": "Gelderland",
+      "type": "region",
+      "country_code": "NL",
+      "country_name": "Нидерланды"
+    },
+    {
+      "id": "2663",
+      "key": "2663",
+      "name": "Groningen",
+      "type": "region",
+      "country_code": "NL",
+      "country_name": "Нидерланды"
+    },
+    {
+      "id": "2664",
+      "key": "2664",
+      "name": "Limburg",
+      "type": "region",
+      "country_code": "NL",
+      "country_name": "Нидерланды"
+    },
+    {
+      "id": "2666",
+      "key": "2666",
+      "name": "Noord-Holland",
+      "type": "region",
+      "country_code": "NL",
+      "country_name": "Нидерланды"
+    },
+    {
+      "id": "2665",
+      "key": "2665",
+      "name": "North Brabant",
+      "type": "region",
+      "country_code": "NL",
+      "country_name": "Нидерланды"
+    },
+    {
+      "id": "2674",
+      "key": "2674",
+      "name": "Overijssel",
+      "type": "region",
+      "country_code": "NL",
+      "country_name": "Нидерланды"
+    },
+    {
+      "id": "2668",
+      "key": "2668",
+      "name": "Utrecht",
+      "type": "region",
+      "country_code": "NL",
+      "country_name": "Нидерланды"
+    },
+    {
+      "id": "2669",
+      "key": "2669",
+      "name": "Zeeland",
+      "type": "region",
+      "country_code": "NL",
+      "country_name": "Нидерланды"
+    },
+    {
+      "id": "2670",
+      "key": "2670",
+      "name": "Zuid-Holland",
+      "type": "region",
+      "country_code": "NL",
+      "country_name": "Нидерланды"
+    },
+    {
+      "id": "4053",
+      "key": "4053",
+      "name": "Eastern Cape",
+      "type": "region",
+      "country_code": "ZA",
+      "country_name": "Южно-Африканская Республика"
+    },
+    {
+      "id": "4052",
+      "key": "4052",
+      "name": "Free State",
+      "type": "region",
+      "country_code": "ZA",
+      "country_name": "Южно-Африканская Республика"
+    },
+    {
+      "id": "4054",
+      "key": "4054",
+      "name": "Gauteng",
+      "type": "region",
+      "country_code": "ZA",
+      "country_name": "Южно-Африканская Республика"
+    },
+    {
+      "id": "4051",
+      "key": "4051",
+      "name": "KwaZulu-Natal",
+      "type": "region",
+      "country_code": "ZA",
+      "country_name": "Южно-Африканская Республика"
+    },
+    {
+      "id": "4057",
+      "key": "4057",
+      "name": "Limpopo",
+      "type": "region",
+      "country_code": "ZA",
+      "country_name": "Южно-Африканская Республика"
+    },
+    {
+      "id": "4055",
+      "key": "4055",
+      "name": "Mpumalanga",
+      "type": "region",
+      "country_code": "ZA",
+      "country_name": "Южно-Африканская Республика"
+    },
+    {
+      "id": "4058",
+      "key": "4058",
+      "name": "North West",
+      "type": "region",
+      "country_code": "ZA",
+      "country_name": "Южно-Африканская Республика"
+    },
+    {
+      "id": "4056",
+      "key": "4056",
+      "name": "Northern Cape",
+      "type": "region",
+      "country_code": "ZA",
+      "country_name": "Южно-Африканская Республика"
+    },
+    {
+      "id": "4059",
+      "key": "4059",
+      "name": "Western Cape",
+      "type": "region",
+      "country_code": "ZA",
+      "country_name": "Южно-Африканская Республика"
+    },
+    {
+      "id": "2003",
+      "key": "2003",
+      "name": "Busan",
+      "type": "region",
+      "country_code": "KR",
+      "country_name": "Республика Корея"
+    },
+    {
+      "id": "2001",
+      "key": "2001",
+      "name": "Chungcheongbuk-do",
+      "type": "region",
+      "country_code": "KR",
+      "country_name": "Республика Корея"
+    },
+    {
+      "id": "2010",
+      "key": "2010",
+      "name": "Chungcheongnam-do",
+      "type": "region",
+      "country_code": "KR",
+      "country_name": "Республика Корея"
+    },
+    {
+      "id": "2008",
+      "key": "2008",
+      "name": "Daegu",
+      "type": "region",
+      "country_code": "KR",
+      "country_name": "Республика Корея"
+    },
+    {
+      "id": "2012",
+      "key": "2012",
+      "name": "Daejeon",
+      "type": "region",
+      "country_code": "KR",
+      "country_name": "Республика Корея"
+    },
+    {
+      "id": "2002",
+      "key": "2002",
+      "name": "Gangwon-do",
+      "type": "region",
+      "country_code": "KR",
+      "country_name": "Республика Корея"
+    },
+    {
+      "id": "2011",
+      "key": "2011",
+      "name": "Gwangju",
+      "type": "region",
+      "country_code": "KR",
+      "country_name": "Республика Корея"
+    },
+    {
+      "id": "2006",
+      "key": "2006",
+      "name": "Gyeonggi-do",
+      "type": "region",
+      "country_code": "KR",
+      "country_name": "Республика Корея"
+    },
+    {
+      "id": "2007",
+      "key": "2007",
+      "name": "Gyeongsangbuk-do",
+      "type": "region",
+      "country_code": "KR",
+      "country_name": "Республика Корея"
+    },
+    {
+      "id": "2013",
+      "key": "2013",
+      "name": "Gyeongsangnam-do",
+      "type": "region",
+      "country_code": "KR",
+      "country_name": "Республика Корея"
+    },
+    {
+      "id": "2005",
+      "key": "2005",
+      "name": "Incheon",
+      "type": "region",
+      "country_code": "KR",
+      "country_name": "Республика Корея"
+    },
+    {
+      "id": "1999",
+      "key": "1999",
+      "name": "Jeju-do",
+      "type": "region",
+      "country_code": "KR",
+      "country_name": "Республика Корея"
+    },
+    {
+      "id": "2000",
+      "key": "2000",
+      "name": "Jeollabuk-do",
+      "type": "region",
+      "country_code": "KR",
+      "country_name": "Республика Корея"
+    },
+    {
+      "id": "2009",
+      "key": "2009",
+      "name": "Jeollanam-do",
+      "type": "region",
+      "country_code": "KR",
+      "country_name": "Республика Корея"
+    },
+    {
+      "id": "2004",
+      "key": "2004",
+      "name": "Seoul",
+      "type": "region",
+      "country_code": "KR",
+      "country_name": "Республика Корея"
+    },
+    {
+      "id": "2014",
+      "key": "2014",
+      "name": "Ulsan",
+      "type": "region",
+      "country_code": "KR",
+      "country_name": "Республика Корея"
+    },
+    {
+      "id": "121",
+      "key": "121",
+      "name": "Burgenland",
+      "type": "region",
+      "country_code": "AT",
+      "country_name": "Австрия"
+    },
+    {
+      "id": "122",
+      "key": "122",
+      "name": "Carinthia",
+      "type": "region",
+      "country_code": "AT",
+      "country_name": "Австрия"
+    },
+    {
+      "id": "123",
+      "key": "123",
+      "name": "Lower Austria",
+      "type": "region",
+      "country_code": "AT",
+      "country_name": "Австрия"
+    },
+    {
+      "id": "125",
+      "key": "125",
+      "name": "Salzburg",
+      "type": "region",
+      "country_code": "AT",
+      "country_name": "Австрия"
+    },
+    {
+      "id": "126",
+      "key": "126",
+      "name": "Styria",
+      "type": "region",
+      "country_code": "AT",
+      "country_name": "Австрия"
+    },
+    {
+      "id": "127",
+      "key": "127",
+      "name": "Tyrol",
+      "type": "region",
+      "country_code": "AT",
+      "country_name": "Австрия"
+    },
+    {
+      "id": "124",
+      "key": "124",
+      "name": "Upper Austria",
+      "type": "region",
+      "country_code": "AT",
+      "country_name": "Австрия"
+    },
+    {
+      "id": "129",
+      "key": "129",
+      "name": "Vienna",
+      "type": "region",
+      "country_code": "AT",
+      "country_name": "Австрия"
+    },
+    {
+      "id": "128",
+      "key": "128",
+      "name": "Vorarlberg",
+      "type": "region",
+      "country_code": "AT",
+      "country_name": "Австрия"
+    },
+    {
+      "id": "4437",
+      "key": "4437",
+      "name": "Central Province",
+      "type": "region",
+      "country_code": "LK",
+      "country_name": "Шри-Ланка"
+    },
+    {
+      "id": "4438",
+      "key": "4438",
+      "name": "Eastern Province",
+      "type": "region",
+      "country_code": "LK",
+      "country_name": "Шри-Ланка"
+    },
+    {
+      "id": "4439",
+      "key": "4439",
+      "name": "North Central Province",
+      "type": "region",
+      "country_code": "LK",
+      "country_name": "Шри-Ланка"
+    },
+    {
+      "id": "4441",
+      "key": "4441",
+      "name": "North Western Province",
+      "type": "region",
+      "country_code": "LK",
+      "country_name": "Шри-Ланка"
+    },
+    {
+      "id": "4440",
+      "key": "4440",
+      "name": "Northern Province",
+      "type": "region",
+      "country_code": "LK",
+      "country_name": "Шри-Ланка"
+    },
+    {
+      "id": "4442",
+      "key": "4442",
+      "name": "Sabaragamuwa Province",
+      "type": "region",
+      "country_code": "LK",
+      "country_name": "Шри-Ланка"
+    },
+    {
+      "id": "4443",
+      "key": "4443",
+      "name": "Southern Province",
+      "type": "region",
+      "country_code": "LK",
+      "country_name": "Шри-Ланка"
+    },
+    {
+      "id": "4444",
+      "key": "4444",
+      "name": "Uva Province",
+      "type": "region",
+      "country_code": "LK",
+      "country_name": "Шри-Ланка"
+    },
+    {
+      "id": "4478",
+      "key": "4478",
+      "name": "Western Province",
+      "type": "region",
+      "country_code": "LK",
+      "country_name": "Шри-Ланка"
+    },
+    {
+      "id": "209",
+      "key": "209",
+      "name": "Federation of Bosnia and Herzegovina",
+      "type": "region",
+      "country_code": "BA",
+      "country_name": "Босния и Герцеговина"
+    },
+    {
+      "id": "210",
+      "key": "210",
+      "name": "Republika Srpska",
+      "type": "region",
+      "country_code": "BA",
+      "country_name": "Босния и Герцеговина"
+    },
+    {
+      "id": "211",
+      "key": "211",
+      "name": "Christ Church",
+      "type": "region",
+      "country_code": "BB",
+      "country_name": "Барбадос"
+    },
+    {
+      "id": "212",
+      "key": "212",
+      "name": "Saint Andrew",
+      "type": "region",
+      "country_code": "BB",
+      "country_name": "Барбадос"
+    },
+    {
+      "id": "213",
+      "key": "213",
+      "name": "Saint George",
+      "type": "region",
+      "country_code": "BB",
+      "country_name": "Барбадос"
+    },
+    {
+      "id": "214",
+      "key": "214",
+      "name": "Saint James",
+      "type": "region",
+      "country_code": "BB",
+      "country_name": "Барбадос"
+    },
+    {
+      "id": "215",
+      "key": "215",
+      "name": "Saint John",
+      "type": "region",
+      "country_code": "BB",
+      "country_name": "Барбадос"
+    },
+    {
+      "id": "216",
+      "key": "216",
+      "name": "Saint Joseph",
+      "type": "region",
+      "country_code": "BB",
+      "country_name": "Барбадос"
+    },
+    {
+      "id": "217",
+      "key": "217",
+      "name": "Saint Lucy",
+      "type": "region",
+      "country_code": "BB",
+      "country_name": "Барбадос"
+    },
+    {
+      "id": "218",
+      "key": "218",
+      "name": "Saint Michael",
+      "type": "region",
+      "country_code": "BB",
+      "country_name": "Барбадос"
+    },
+    {
+      "id": "219",
+      "key": "219",
+      "name": "Saint Peter",
+      "type": "region",
+      "country_code": "BB",
+      "country_name": "Барбадос"
+    },
+    {
+      "id": "220",
+      "key": "220",
+      "name": "Saint Philip",
+      "type": "region",
+      "country_code": "BB",
+      "country_name": "Барбадос"
+    },
+    {
+      "id": "221",
+      "key": "221",
+      "name": "Saint Thomas",
+      "type": "region",
+      "country_code": "BB",
+      "country_name": "Барбадос"
+    },
+    {
+      "id": "5030",
+      "key": "5030",
+      "name": "Martinique",
+      "type": "region",
+      "country_code": "MQ",
+      "country_name": "Мартиника"
+    },
+    {
+      "id": "5010",
+      "key": "5010",
+      "name": "Aruba",
+      "type": "region",
+      "country_code": "AW",
+      "country_name": "Аруба"
+    },
+    {
+      "id": "521",
+      "key": "521",
+      "name": "Belize District",
+      "type": "region",
+      "country_code": "BZ",
+      "country_name": "Белиз"
+    },
+    {
+      "id": "522",
+      "key": "522",
+      "name": "Cayo District",
+      "type": "region",
+      "country_code": "BZ",
+      "country_name": "Белиз"
+    },
+    {
+      "id": "523",
+      "key": "523",
+      "name": "Corozal District",
+      "type": "region",
+      "country_code": "BZ",
+      "country_name": "Белиз"
+    },
+    {
+      "id": "524",
+      "key": "524",
+      "name": "Orange Walk District",
+      "type": "region",
+      "country_code": "BZ",
+      "country_name": "Белиз"
+    },
+    {
+      "id": "525",
+      "key": "525",
+      "name": "Stann Creek District",
+      "type": "region",
+      "country_code": "BZ",
+      "country_name": "Белиз"
+    },
+    {
+      "id": "526",
+      "key": "526",
+      "name": "Toledo District",
+      "type": "region",
+      "country_code": "BZ",
+      "country_name": "Белиз"
+    },
+    {
+      "id": "5020",
+      "key": "5020",
+      "name": "Gibraltar",
+      "type": "region",
+      "country_code": "GI",
+      "country_name": "Гибралтар"
+    },
+    {
+      "id": "1972",
+      "key": "1972",
+      "name": "Christ Church Nichola Town",
+      "type": "region",
+      "country_code": "KN",
+      "country_name": "Сент-Китс и Невис"
+    },
+    {
+      "id": "1973",
+      "key": "1973",
+      "name": "Saint Anne Sandy Point",
+      "type": "region",
+      "country_code": "KN",
+      "country_name": "Сент-Китс и Невис"
+    },
+    {
+      "id": "1974",
+      "key": "1974",
+      "name": "Saint George Basseterre",
+      "type": "region",
+      "country_code": "KN",
+      "country_name": "Сент-Китс и Невис"
+    },
+    {
+      "id": "1975",
+      "key": "1975",
+      "name": "Saint George Gingerland",
+      "type": "region",
+      "country_code": "KN",
+      "country_name": "Сент-Китс и Невис"
+    },
+    {
+      "id": "1976",
+      "key": "1976",
+      "name": "Saint James Windward",
+      "type": "region",
+      "country_code": "KN",
+      "country_name": "Сент-Китс и Невис"
+    },
+    {
+      "id": "1977",
+      "key": "1977",
+      "name": "Saint John Capisterre",
+      "type": "region",
+      "country_code": "KN",
+      "country_name": "Сент-Китс и Невис"
+    },
+    {
+      "id": "1978",
+      "key": "1978",
+      "name": "Saint John Figtree",
+      "type": "region",
+      "country_code": "KN",
+      "country_name": "Сент-Китс и Невис"
+    },
+    {
+      "id": "1979",
+      "key": "1979",
+      "name": "Saint Mary Cayon",
+      "type": "region",
+      "country_code": "KN",
+      "country_name": "Сент-Китс и Невис"
+    },
+    {
+      "id": "1980",
+      "key": "1980",
+      "name": "Saint Paul Capisterre",
+      "type": "region",
+      "country_code": "KN",
+      "country_name": "Сент-Китс и Невис"
+    },
+    {
+      "id": "1982",
+      "key": "1982",
+      "name": "Saint Peter Basseterre",
+      "type": "region",
+      "country_code": "KN",
+      "country_name": "Сент-Китс и Невис"
+    },
+    {
+      "id": "1983",
+      "key": "1983",
+      "name": "Saint Thomas Lowland",
+      "type": "region",
+      "country_code": "KN",
+      "country_name": "Сент-Китс и Невис"
+    },
+    {
+      "id": "1984",
+      "key": "1984",
+      "name": "Saint Thomas Middle Island",
+      "type": "region",
+      "country_code": "KN",
+      "country_name": "Сент-Китс и Невис"
+    },
+    {
+      "id": "1985",
+      "key": "1985",
+      "name": "Trinity Palmetto Point",
+      "type": "region",
+      "country_code": "KN",
+      "country_name": "Сент-Китс и Невис"
+    },
+    {
+      "id": "2074",
+      "key": "2074",
+      "name": "Balzers",
+      "type": "region",
+      "country_code": "LI",
+      "country_name": "Лихтенштейн"
+    },
+    {
+      "id": "2075",
+      "key": "2075",
+      "name": "Eschen",
+      "type": "region",
+      "country_code": "LI",
+      "country_name": "Лихтенштейн"
+    },
+    {
+      "id": "2076",
+      "key": "2076",
+      "name": "Gamprin",
+      "type": "region",
+      "country_code": "LI",
+      "country_name": "Лихтенштейн"
+    },
+    {
+      "id": "2077",
+      "key": "2077",
+      "name": "Mauren",
+      "type": "region",
+      "country_code": "LI",
+      "country_name": "Лихтенштейн"
+    },
+    {
+      "id": "2078",
+      "key": "2078",
+      "name": "Planken",
+      "type": "region",
+      "country_code": "LI",
+      "country_name": "Лихтенштейн"
+    },
+    {
+      "id": "2079",
+      "key": "2079",
+      "name": "Ruggell",
+      "type": "region",
+      "country_code": "LI",
+      "country_name": "Лихтенштейн"
+    },
+    {
+      "id": "2080",
+      "key": "2080",
+      "name": "Schaan",
+      "type": "region",
+      "country_code": "LI",
+      "country_name": "Лихтенштейн"
+    },
+    {
+      "id": "2081",
+      "key": "2081",
+      "name": "Schellenberg",
+      "type": "region",
+      "country_code": "LI",
+      "country_name": "Лихтенштейн"
+    },
+    {
+      "id": "2082",
+      "key": "2082",
+      "name": "Triesen",
+      "type": "region",
+      "country_code": "LI",
+      "country_name": "Лихтенштейн"
+    },
+    {
+      "id": "2083",
+      "key": "2083",
+      "name": "Triesenberg",
+      "type": "region",
+      "country_code": "LI",
+      "country_name": "Лихтенштейн"
+    },
+    {
+      "id": "2084",
+      "key": "2084",
+      "name": "Vaduz",
+      "type": "region",
+      "country_code": "LI",
+      "country_name": "Лихтенштейн"
+    },
+    {
+      "id": "5029",
+      "key": "5029",
+      "name": "Northern Mariana Islands",
+      "type": "region",
+      "country_code": "MP",
+      "country_name": "Северные Марианские о-ва"
+    },
+    {
+      "id": "5039",
+      "key": "5039",
+      "name": "Turks and Caicos Islands",
+      "type": "region",
+      "country_code": "TC",
+      "country_name": "Тёркс и Кайкос"
+    },
+    {
+      "id": "3429",
+      "key": "3429",
+      "name": "Eastern Province",
+      "type": "region",
+      "country_code": "SL",
+      "country_name": "Сьерра-Леоне"
+    },
+    {
+      "id": "3430",
+      "key": "3430",
+      "name": "Northern Province",
+      "type": "region",
+      "country_code": "SL",
+      "country_name": "Сьерра-Леоне"
+    },
+    {
+      "id": "3431",
+      "key": "3431",
+      "name": "Southern Province",
+      "type": "region",
+      "country_code": "SL",
+      "country_name": "Сьерра-Леоне"
+    },
+    {
+      "id": "3432",
+      "key": "3432",
+      "name": "Western Area",
+      "type": "region",
+      "country_code": "SL",
+      "country_name": "Сьерра-Леоне"
+    },
+    {
+      "id": "5043",
+      "key": "5043",
+      "name": "Vatican City",
+      "type": "region",
+      "country_code": "VA",
+      "country_name": "Ватикан"
+    },
+    {
+      "id": "5009",
+      "key": "5009",
+      "name": "Antarctica",
+      "type": "region",
+      "country_code": "AQ",
+      "country_name": "Антарктида"
+    },
+    {
+      "id": "5013",
+      "key": "5013",
+      "name": "Bouvet Island",
+      "type": "region",
+      "country_code": "BV",
+      "country_name": "о-в Буве"
+    },
+    {
+      "id": "5026",
+      "key": "5026",
+      "name": "British Indian Ocean Territory",
+      "type": "region",
+      "country_code": "IO",
+      "country_name": "Британская территория в Индийском океане"
+    },
+    {
+      "id": "5016",
+      "key": "5016",
+      "name": "Christmas Island",
+      "type": "region",
+      "country_code": "CX",
+      "country_name": "о-в Рождества"
+    },
+    {
+      "id": "5014",
+      "key": "5014",
+      "name": "Cocos (Keeling) Islands",
+      "type": "region",
+      "country_code": "CC",
+      "country_name": "Кокосовые о-ва"
+    },
+    {
+      "id": "5040",
+      "key": "5040",
+      "name": "French Southern Territories",
+      "type": "region",
+      "country_code": "TF",
+      "country_name": "Французские Южные территории"
+    },
+    {
+      "id": "5024",
+      "key": "5024",
+      "name": "Heard Island and McDonald Islands",
+      "type": "region",
+      "country_code": "HM",
+      "country_name": "о-ва Херд и Макдональд"
+    },
+    {
+      "id": "5032",
+      "key": "5032",
+      "name": "Niue",
+      "type": "region",
+      "country_code": "NU",
+      "country_name": "Ниуэ"
+    },
+    {
+      "id": "5031",
+      "key": "5031",
+      "name": "Norfolk Island",
+      "type": "region",
+      "country_code": "NF",
+      "country_name": "о-в Норфолк"
+    },
+    {
+      "id": "5034",
+      "key": "5034",
+      "name": "Pitcairn",
+      "type": "region",
+      "country_code": "PN",
+      "country_name": "о-ва Питкэрн"
+    },
+    {
+      "id": "5033",
+      "key": "5033",
+      "name": "Saint Pierre and Miquelon",
+      "type": "region",
+      "country_code": "PM",
+      "country_name": "Сен-Пьер и Микелон"
+    },
+    {
+      "id": "5022",
+      "key": "5022",
+      "name": "South Georgia and the South Sandwich Islands",
+      "type": "region",
+      "country_code": "GS",
+      "country_name": "Южная Георгия и Южные Сандвичевы о-ва"
+    },
+    {
+      "id": "5037",
+      "key": "5037",
+      "name": "Svalbard and Jan Mayen",
+      "type": "region",
+      "country_code": "SJ",
+      "country_name": "Шпицберген и Ян-Майен"
+    },
+    {
+      "id": "4950",
+      "key": "4950",
+      "name": "Atafu",
+      "type": "region",
+      "country_code": "TK",
+      "country_name": "Токелау"
+    },
+    {
+      "id": "4952",
+      "key": "4952",
+      "name": "Fakaofo",
+      "type": "region",
+      "country_code": "TK",
+      "country_name": "Токелау"
+    },
+    {
+      "id": "4954",
+      "key": "4954",
+      "name": "Nukunonu",
+      "type": "region",
+      "country_code": "TK",
+      "country_name": "Токелау"
+    },
+    {
+      "id": "5017",
+      "key": "5017",
+      "name": "Western Sahara",
+      "type": "region",
+      "country_code": "EH",
+      "country_name": "Западная Сахара"
+    }
+  ],
+  "skipped_region_countries": [
+    "US",
+    "AU",
+    "CN",
+    "CO",
+    "EG",
+    "FR",
+    "DE",
+    "IN",
+    "IE",
+    "JP",
+    "LB",
+    "MY",
+    "MX",
+    "NZ",
+    "NO",
+    "PK",
+    "SA",
+    "SG",
+    "ES",
+    "SE",
+    "CH",
+    "TR",
+    "AE",
+    "IL",
+    "DO",
+    "FI",
+    "DK",
+    "BE",
+    "PA",
+    "JO",
+    "GR",
+    "VE",
+    "AR",
+    "TH",
+    "CL",
+    "PE",
+    "ID",
+    "RU",
+    "PH",
+    "KW",
+    "HK",
+    "BR",
+    "HR",
+    "PL",
+    "TW",
+    "RS",
+    "NG",
+    "PT",
+    "LU",
+    "BG",
+    "CZ",
+    "SI",
+    "IS",
+    "SK",
+    "LT",
+    "TT",
+    "BD",
+    "KE",
+    "HU",
+    "MA",
+    "CY",
+    "JM",
+    "EC",
+    "RO",
+    "BO",
+    "GT",
+    "CR",
+    "QA",
+    "SV",
+    "HN",
+    "NI",
+    "PY",
+    "UY",
+    "PR",
+    "PS",
+    "TN",
+    "BH",
+    "VN",
+    "GH",
+    "MU",
+    "UA",
+    "MT",
+    "BS",
+    "MV",
+    "OM",
+    "MK",
+    "EE",
+    "LV",
+    "IQ",
+    "DZ",
+    "AL",
+    "NP",
+    "MO",
+    "SD",
+    "ME",
+    "SN",
+    "GE",
+    "BN",
+    "UG",
+    "GP",
+    "ZW",
+    "CI",
+    "AZ",
+    "TZ",
+    "LY",
+    "MM",
+    "CM",
+    "BW",
+    "ET",
+    "KZ",
+    "NA",
+    "MG",
+    "NC",
+    "MD",
+    "FJ",
+    "BY",
+    "JE",
+    "GU",
+    "YE",
+    "CU",
+    "ZM",
+    "IM",
+    "IR",
+    "HT",
+    "KH",
+    "PF",
+    "AF",
+    "BM",
+    "GY",
+    "AM",
+    "MW",
+    "AG",
+    "RW",
+    "GG",
+    "GM",
+    "FO",
+    "LC",
+    "KY",
+    "BJ",
+    "AD",
+    "GD",
+    "VI",
+    "VC",
+    "MN",
+    "MZ",
+    "ML",
+    "AO",
+    "GF",
+    "UZ",
+    "DJ",
+    "BF",
+    "MC",
+    "TG",
+    "GL",
+    "GA",
+    "CD",
+    "KG",
+    "PG",
+    "BT",
+    "SZ",
+    "LS",
+    "LA",
+    "SR",
+    "SC",
+    "VG",
+    "DM",
+    "MR",
+    "AX",
+    "SY",
+    "SM",
+    "NE",
+    "CG",
+    "AI",
+    "YT",
+    "LR",
+    "CV",
+    "GN",
+    "TM",
+    "BI",
+    "TJ",
+    "VU",
+    "SB",
+    "ER",
+    "WS",
+    "AS",
+    "FK",
+    "GQ",
+    "TO",
+    "KM",
+    "PW",
+    "FM",
+    "CF",
+    "SO",
+    "MH",
+    "TD",
+    "KI",
+    "ST",
+    "TV",
+    "NR",
+    "RE",
+    "AN",
+    "BQ",
+    "CK",
+    "CW",
+    "GW",
+    "XK",
+    "MS",
+    "KP",
+    "BL",
+    "SH",
+    "MF",
+    "SX",
+    "SS",
+    "TL",
+    "UM",
+    "WF"
+  ]
+}

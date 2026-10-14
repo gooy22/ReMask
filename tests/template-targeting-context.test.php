@@ -61,6 +61,19 @@ try {
     $other=new RemaskTemplateTargetingReference($file.'-other');
     expect($other->get('interests','fixture',1001)===null,'workspaces do not share private reference stores');
 } finally { foreach([$file,$file.'.lock',$file.'-other',$file.'-other.lock'] as $path) @unlink($path); }
+$manifest=getenv('REMASK_TEST_TARGETING_REFERENCE') ?: dirname(__DIR__).'/python_backend/app/contracts/meta_targeting_reference_20261014.json';
+if (!is_file($manifest)) $manifest='/var/www/html/classes/meta-targeting-reference.json';
+$ru=RemaskModuleTargetingReference::search('locales','russi',$manifest);
+expect($ru['data'][0]['id']==='17' && $ru['checked_live']===false,'source-derived Russian ID without a profile');
+expect(RemaskModuleTargetingReference::search('locales','РУСС',$manifest)['data'][0]['id']==='17','Unicode case-insensitive search');
+expect(count(RemaskModuleTargetingReference::search('locales','',$manifest)['data'])===72,'empty query lists actual languages');
+expect(RemaskModuleTargetingReference::search('locations','Ukraine',$manifest)['data'][0]['key']==='UA','country English alias preserves ISO key');
+expect(RemaskModuleTargetingReference::search('locations','unsupported city query',$manifest)===null,'unknown cities still require live source');
+$seen=[];
+$available=RemaskTemplateTargetingContext::resolve($profiles,static function($name) use (&$seen,$catalogs) {
+    $seen[]=$name; if($name==='16') throw new RuntimeException('BROKEN_SAVED_CATALOG'); return $catalogs[$name];
+});
+expect($available['profile']==='19','one unreadable saved catalog cannot break all lookup candidates');
 require dirname(__DIR__).'/railway-private-form-schema.php';
 $builder=['identity'=>['page_id'=>'123456','instagram_actor_id'=>'654321'],
     'existing_media'=>['source_instagram_media_id'=>'999999'],

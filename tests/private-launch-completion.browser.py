@@ -92,7 +92,7 @@ class InstalledLaunchTests(unittest.TestCase):
                 'media':MEDIA,'message':'Fixture message','headline':'Fixture headline','destination_url':'https://example.com/',
                 'meta_builder':{'campaign':{'daily_budget':500,'objective':self.preset_objective}}}]}
         elif path == 'ajax/metaTemplateTargetingSearch.php':
-            fields = parse_qs(request.post_data or '')
+            fields = parse_qs(request.post_data or '', keep_blank_values=True)
             self.lookup_requests.append(fields)
             if self.lookup_failure:
                 route.fulfill(status=409,json={'ok':False,'error':{'code':'PRIVATE_HTTP_PROXY_UNAVAILABLE',
@@ -263,6 +263,18 @@ class InstalledLaunchTests(unittest.TestCase):
         self.assertEqual(payload['adset']['targeting']['locales'], [1000])
         self.assertNotIn('account_id', payload['adset']['targeting'])
         self.assertEqual(self.page.locator('#profile option:checked').count(), 0)
+
+    def test_blank_focus_choices_survive_legacy_search_cleanup_and_keyboard_selection(self):
+        self.page.locator('#creativeLibrarySelect').select_option('preset')
+        for field,result in [('geoQuery','geoResults'),('languageQuery','languageResults')]:
+            self.page.locator('#'+field).focus()
+            option=self.page.locator('#'+result+' button[data-remask-target-choice]').first
+            option.wait_for(state='visible')
+            option.press('Enter')
+        self.assertTrue(all(row.get('q')==[''] for row in self.lookup_requests))
+        payload=self.page.evaluate('fixtureLaunch.payload()')
+        self.assertEqual(payload['adset']['targeting']['geo_locations']['countries'],['US'])
+        self.assertEqual(payload['adset']['targeting']['locales'],[1000])
 
     def test_audience_connection_error_keeps_media_budget_and_saved_selections(self):
         self.page.locator('#creativeLibrarySelect').select_option('preset')

@@ -80,3 +80,28 @@ class ResourceCases(unittest.IsolatedAsyncioTestCase):
             'creative': {'id': '777774', 'account_id': '999999', 'name': 'foreign'}}]}
         with self.assertRaises(ProvisioningError):
             await self.catalog.read(self.web, 'creatives', self.values)
+
+    async def test_empty_interest_query_reads_tree_skips_headings_and_preserves_path(self):
+        self.responses['/act_111111/targetingbrowse']={'data':[
+            {'key':'__ROOT__','name':'__ROOT__','parent':'__ROOT__'},
+            {'key':'fitness','name':'Fitness','parent':'__ROOT__'},
+            {'key':'weight','id':'777777','name':'Weight training','type':'interests','parent':'fitness'},
+            {'key':'device','id':'888888','name':'Device','type':'behaviors','parent':'__ROOT__'}]}
+        result=await self.catalog.read(self.web,'interests',self.values)
+        self.assertEqual(result['data'],[{'id':'777777','name':'Weight training','path':['Fitness']}])
+        self.assertTrue(result['checked_live'])
+        self.assertEqual(self.calls[-1][1]['whitelisted_types'],['interests'])
+
+    async def test_browse_rejects_partial_response_and_conflicting_nodes(self):
+        for response in ({'data':[], 'paging':{'next':'https://foreign.invalid'}},
+            {'data':[{'key':'x','name':'one'},{'key':'x','name':'two'}]}):
+            self.responses['/act_111111/targetingbrowse']=response
+            with self.assertRaises(ProvisioningError):
+                await self.catalog.read(self.web,'behaviors',self.values)
+
+    async def test_typed_interest_search_still_uses_source_sender(self):
+        self.responses['/act_111111/targetingsearch']={'data':[{'id':'777777','name':'Fitness'}]}
+        result=await self.catalog.read(self.web,'interests',{**self.values,'query':'fit'})
+        self.assertEqual(result['data'][0]['id'],'777777')
+        self.assertEqual(self.calls[-1][0],'/act_111111/targetingsearch')
+        self.assertEqual(self.calls[-1][1]['q'],'fit')

@@ -8,6 +8,8 @@ foreach (['railway-private-form-schema.php'=>'classes/RemaskPrivateFormSchema.ph
           'railway-private-creative-capabilities.php'=>'ajax/metaCreativeCapabilities.php'] as $source=>$target) {
     if (!copy('/tmp/'.$source, $root.'/'.$target)) throw new RuntimeException('PRIVATE_COMPLETION_COPY_FAILED');
 }
+if (!copy('/opt/remask-python/app/contracts/meta_targeting_reference_20261014.json',
+    $root.'/classes/meta-targeting-reference.json')) throw new RuntimeException('TARGETING_MODULE_COPY_FAILED');
 $schemaEndpoint = <<<'PHP_CODE'
 <?php
 require_once __DIR__.'/../settings.php';
@@ -70,7 +72,12 @@ completionReplace($creativeEndpoint, 'MetaOfficialFields::sanitizeBuilder($metaB
     'RemaskPrivateFormSchema::unbindTemplate(RemaskPrivateFormSchema::sanitizeBuilder($metaBuilder))', 'creative-builder');
 file_put_contents($root.'/ajax/creativeLibrary.php', $creativeEndpoint);
 
-$launch = file_get_contents($root.'/scripts/launch.js');
+$reference=json_decode(file_get_contents($root.'/classes/meta-targeting-reference.json'),true,512,JSON_THROW_ON_ERROR);
+$names=[];
+foreach ($reference['locales'] as $row) $names[$row['id']]=$row['name'];
+$languageNames='const remaskModuleLanguageNames='.json_encode($names,JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR).";\n";
+$launch = $languageNames.file_get_contents($root.'/scripts/launch.js');
+$launch = str_replace("name:'Язык #'+id", "name:remaskModuleLanguageNames[String(id)]||('Язык #'+id)", $launch);
 completionReplace($launch, "            binding.instagram_actor_id = String(page?.instagram_business_account?.id || '');",
     "            binding.instagram_actor_id = String(page?.instagram_business_account?.id || '');\n            binding.source_instagram_media_id = '';", 'instagram-destination-reset');
 completionReplace($launch, 'function bundleFormState() {', 'function remaskLegacyBundleFormState() {', 'bundle-save');
@@ -130,6 +137,7 @@ completionReplace($launch, "    if (!Object.keys(geoLocations).length) throw new
     "        if (rows.length) geoLocations[key] = rows;\n    }\n".
     "    if (!Object.keys(geoLocations).length) throw new Error('Select at least one GEO result.');", 'complete-geo');
 $launch .= "\n".file_get_contents('/tmp/railway-private-launch-completion.js');
+$launch .= "\n".file_get_contents('/tmp/railway-targeting-pickers.js');
 $launch = str_replace("addEventListener('change', applyCreativeLibrarySelection)",
     "addEventListener('change', () => applyCreativeLibrarySelection())", $launch);
 $launch = str_replace("addEventListener('click', clearCreativeLibrarySelection)",
@@ -139,7 +147,8 @@ $launch = str_replace('ajax/metaSdkSchema.php', 'ajax/metaPrivateSchema.php', $l
 $launch = str_replace('Официальная SDK-схема загружена. Поля ниже участвуют в Launch Review и создании Job.',
     'Приватная схема Ads Manager загружена. Доступ к ресурсам проверяется для выбранного РК.', $launch);
 file_put_contents($root.'/scripts/launch.js', $launch);
-$creatives = file_get_contents($root.'/scripts/creatives.js');
+$creatives = $languageNames.file_get_contents($root.'/scripts/creatives.js');
+$creatives = str_replace("name:'Язык #' + id", "name:remaskModuleLanguageNames[String(id)]||('Язык #' + id)", $creatives);
 $creatives = str_replace(['SDK-схема загружена','SDK-схема недоступна','Official Meta SDK placements',
     'Нет в текущей Meta SDK schema'], ['Приватная схема Ads Manager загружена','Приватная схема недоступна',
     'Места показа из приватных модулей Ads Manager','Нет в проверенной приватной схеме'], $creatives);
@@ -151,6 +160,7 @@ foreach (['launch.php','creatives.php'] as $name) {
     $page = preg_replace('~(scripts/'.$module.'\.js)\?v=[^"\s]+~', '$1?v=private-'.$revision, $page);
     $page = str_replace('20261013-2', '20261013-3', $page);
     $page = str_replace('accept="image/*"', 'accept="image/*,video/*"', $page);
+    $page = str_replace('Расширенный Targeting JSON (официальные Meta-поля)', 'Расширенные настройки аудитории', $page);
     $page = str_replace(['ВЫБРАТЬ 2–10 ИЗОБРАЖЕНИЙ','Carousel images'],
         ['ВЫБРАТЬ 2–10 ФОТО / ВИДЕО','Фото и видео карусели'], $page);
     $page = str_replace('Каждая картинка будет загружена отдельно в каждый выбранный RK. Hash каждого upload сохраняется в Job, поэтому Retry не повторяет уже успешные карточки.',
