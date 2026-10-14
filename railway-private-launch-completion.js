@@ -302,9 +302,9 @@ renderTargetBindings = function() {
         if (!input) return;
         const binding = bindingFor(target.account_id);
         const actor = String(binding.instagram_actor_id || '');
-        const key = JSON.stringify([String(target.profile),normalizeAccountIdClient(target.account_id),actor]);
+        const key = JSON.stringify([String(target.profile),remaskPrivateAccountId(target.account_id),actor]);
         const select = document.createElement('select'); select.className='form-control';
-        select.setAttribute('aria-label','Публикация Instagram для РК '+target.account_id);
+        select.setAttribute('aria-label','Публикация Instagram для РК '+remaskPrivateAccountId(target.account_id));
         select.appendChild(new Option('Выберите публикацию Instagram',''));
         const fill = () => {
             select.length=1;
@@ -324,11 +324,11 @@ renderTargetBindings = function() {
         load.addEventListener('click',async()=>{
             load.disabled=true; status.textContent='Загружаю публикации этого РК…';
             try {
-                const account=normalizeAccountIdClient(target.account_id);
-                const result=await apiJson('ajax/metaAssetManager.php',post({profile:target.profile,
+                const account=remaskPrivateAccountId(target.account_id);
+                const result=await apiJson('ajax/metaAssetManager.php',formPost({profile:target.profile,
                     account_id:account,resource:'instagram_media',force:'1',limit:'500'}));
                 if (!row.isConnected || String(binding.instagram_actor_id || '')!==actor) return;
-                if (result.profile!==target.profile || normalizeAccountIdClient(result.account_id)!==account
+                if (result.profile!==target.profile || remaskPrivateAccountId(result.account_id)!==account
                     || result.resource!=='instagram_media' || result.checked_live!==true || result.account_scope_verified!==true)
                     throw new Error('Доступ к публикациям этого РК не подтверждён.');
                 const posts=(Array.isArray(result.data)?result.data:[]).filter(post=>
