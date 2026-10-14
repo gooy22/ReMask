@@ -212,7 +212,7 @@ class InstalledLaunchTests(unittest.TestCase):
         self.page.locator('[data-launch-meta-group="targeting"] > summary').click()
         self.page.locator('#launchMeta_targeting_instagram_positions_choices').fill('story')
         self.page.locator('#launchMeta_targeting_instagram_positions_choices').press('Enter')
-        self.page.locator('#launchMeta_targeting_instagram_positions_choices_results').get_by_role('button',name='story',exact=True).click()
+        self.page.locator('#launchMeta_targeting_instagram_positions_choices_results').get_by_role('button',name='Story',exact=True).click()
         self.assertEqual(self.page.evaluate('fixtureLaunch.payload().adset.targeting.instagram_positions'),['story'])
         self.save_and_reload()
         self.assertEqual(self.page.evaluate('fixtureLaunch.payload().adset.targeting.instagram_positions'),['story'])
