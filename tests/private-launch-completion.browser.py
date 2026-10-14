@@ -75,7 +75,7 @@ class InstalledLaunchTests(unittest.TestCase):
         if file.is_file() and not path.endswith('.php'):
             body = file.read_bytes()
             if path == 'scripts/launch.js':
-                body += b'\nwindow.fixtureLaunch={payload:()=>buildPayload(),capture:()=>bundleFormState(),restore:applyBundleData,config:loadLaunchConfig,ready:()=>Boolean(state.launchConfig),geo:()=>{state.geo=[{type:"country",key:"US",country_code:"US",name:"United States"}];},instagramTargets:()=>{state.targets=[{profile:"20",account_id:"act_123456",business_id:"654321"},{profile:"21",account_id:"act_234567",business_id:"765432"}];state.profile="20";state.targetBindingAssets.pages={"20":[{id:"345678",instagram_business_account:{id:"456789"}}],"21":[{id:"567890",instagram_business_account:{id:"678901"}}]};$("adAccount").innerHTML=state.targets.map(t=>`<option value="${t.account_id}" selected>${t.account_id}</option>`).join("");$("creativeFormat").value="INSTAGRAM_POST";renderTargetBindings();},binding:account=>({...bindingFor(account)})};'
+                body += b'\nwindow.fixtureLaunch={payload:()=>buildPayload(),effective:()=>remaskApplySavedMetaBuilderToPayload(buildPayload()),capture:()=>bundleFormState(),restore:applyBundleData,config:loadLaunchConfig,ready:()=>Boolean(state.launchConfig),geo:()=>{state.geo=[{type:"country",key:"US",country_code:"US",name:"United States"}];$("geoQuery").dispatchEvent(new Event("change",{bubbles:true}));},instagramTargets:()=>{state.targets=[{profile:"20",account_id:"act_123456",business_id:"654321"},{profile:"21",account_id:"act_234567",business_id:"765432"}];state.profile="20";state.targetBindingAssets.pages={"20":[{id:"345678",instagram_business_account:{id:"456789"}}],"21":[{id:"567890",instagram_business_account:{id:"678901"}}]};$("adAccount").innerHTML=state.targets.map(t=>`<option value="${t.account_id}" selected>${t.account_id}</option>`).join("");$("creativeFormat").value="INSTAGRAM_POST";renderTargetBindings();},binding:account=>({...bindingFor(account)})};'
             route.fulfill(body=body, content_type='application/javascript' if path.endswith('.js') else 'text/css'); return
         data = {}
         status = 200
@@ -151,7 +151,6 @@ class InstalledLaunchTests(unittest.TestCase):
 
     def test_launch_estimate_without_profile_uses_template_source_and_keeps_bundle_generic(self):
         self.page.evaluate('fixtureLaunch.geo()')
-        self.page.locator('[data-rm-estimate]').click()
         self.page.wait_for_function('document.querySelector("[data-rm-estimates]").textContent.includes("1 000")')
         path,request=self.estimate_requests[-1]
         self.assertEqual(path,'ajax/metaTemplateAdvertisingHelper.php')
@@ -190,7 +189,6 @@ class InstalledLaunchTests(unittest.TestCase):
         for select in self.page.get_by_role('combobox',name='Публикация Instagram для РК',exact=False).all():
             select.locator('option[value="789012"]').wait_for(state='attached')
             select.select_option('789012')
-        self.page.locator('[data-rm-estimate]').click()
         self.page.wait_for_function('document.querySelectorAll("[data-rm-estimates] article").length===2')
         requests=[fields for path,fields in self.estimate_requests if path=='ajax/metaAudienceEstimate.php']
         self.assertEqual([(r['profile'][0],r['account_id'][0]) for r in requests],[('20','123456'),('21','234567')])
@@ -204,17 +202,25 @@ class InstalledLaunchTests(unittest.TestCase):
 
     def test_launch_estimate_error_preserves_budget_and_targeting(self):
         self.estimate_failure=True;self.page.evaluate('fixtureLaunch.geo()')
-        self.page.locator('[data-rm-estimate]').click()
-        self.page.wait_for_function('document.querySelector("[data-rm-estimates]").textContent.includes("Сессия недоступна")')
+        self.page.wait_for_function('document.querySelector("[data-rm-estimates]").textContent.includes("Размер аудитории временно недоступен")')
         self.assertEqual(self.page.evaluate('fixtureLaunch.payload().adset.targeting.geo_locations.countries'),['US'])
 
-    def test_live_placements_can_be_read_before_geo_or_profile_is_selected(self):
-        self.page.locator('[data-rm-placements]').click()
-        self.page.wait_for_function('document.querySelector("[data-rm-placement-status]").textContent.includes("Meta вернула")')
-        path,request=self.estimate_requests[-1]
-        self.assertEqual(path,'ajax/metaTemplateAdvertisingHelper.php')
-        self.assertEqual(request['helper'],['placements'])
-        self.assertNotIn('profile',request);self.assertNotIn('targeting_spec',request)
+    def test_template_configuration_has_no_manual_audience_or_placement_read_buttons(self):
+        self.assertEqual(self.page.locator('#remaskAdvertisingEstimate button').count(),0)
+        self.page.locator('#placementMode').select_option('MANUAL')
+        self.assertTrue(self.page.locator('#manualPlacements').is_visible())
+        self.page.locator('#placementMode').select_option('AUTO')
+        self.page.locator('[data-launch-meta-group="targeting"] > summary').click()
+        self.page.locator('#launchMeta_targeting_instagram_positions_choices').fill('story')
+        self.page.locator('#launchMeta_targeting_instagram_positions_choices').press('Enter')
+        self.page.locator('#launchMeta_targeting_instagram_positions_choices_results').get_by_role('button',name='Story',exact=True).click()
+        self.assertEqual(self.page.locator('#placementMode').input_value(),'MANUAL')
+        self.assertTrue(self.page.locator('.publisher-platform[value="instagram"]').is_checked())
+        self.page.evaluate('fixtureLaunch.geo()')
+        self.assertEqual(self.page.evaluate('fixtureLaunch.effective().adset.targeting.instagram_positions'),['story'])
+        self.save_and_reload()
+        self.assertEqual(self.page.evaluate('fixtureLaunch.effective().adset.targeting.instagram_positions'),['story'])
+        self.assertFalse(any(fields.get('helper')==['placements'] for _,fields in self.estimate_requests))
 
     def test_all_module_choices_enter_launch_payload_and_bundle_round_trip(self):
         self.page.locator('[data-launch-meta-group="targeting"] > summary').click()

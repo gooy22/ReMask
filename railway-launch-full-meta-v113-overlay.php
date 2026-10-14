@@ -79,8 +79,7 @@ const remaskLaunchCoveredFields = {
     targeting:new Set([
         'age_min','age_max','locales','geo_locations',
         'interests','behaviors','custom_audiences','excluded_custom_audiences','publisher_platforms',
-        'facebook_positions','instagram_positions','messenger_positions','audience_network_positions',
-        'threads_positions','whatsapp_positions','device_platforms'
+        'device_platforms'
     ]),
     creative:new Set([
         'name','url_tags','image_hash','video_id','source_instagram_media_id'
@@ -183,6 +182,14 @@ function remaskRenderLaunchMetaFields() {
             input.dataset.launchMetaField=field;
             input.dataset.launchMetaType=type;
             input.addEventListener('change',()=>{
+                if(group==='targeting' && field.endsWith('_positions')) {
+                    const positions=remaskLaunchMetaParse(input.value,type,field);
+                    if(Array.isArray(positions) && positions.length) {
+                        const platform=field.slice(0,-'_positions'.length);
+                        const checkbox=Array.from(document.querySelectorAll('.publisher-platform')).find(el=>el.value===platform);
+                        if(checkbox){$('placementMode').value='MANUAL';checkbox.checked=true;updatePlacementControls();}
+                    }
+                }
                 invalidateLaunchReview();
                 validateReady();
             });

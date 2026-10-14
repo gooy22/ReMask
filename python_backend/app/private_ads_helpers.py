@@ -12,6 +12,8 @@ async def read_form_helper(web, catalog, values, helper, inputs):
     PrivateLaunchContractStore._reject_auth_material(inputs)
     if len(json.dumps(inputs, allow_nan=False)) > 65536:
         raise fail('INVALID_INPUT', 'Advertising helper input exceeds its budget')
+    if 'include_forecast' in inputs and type(inputs['include_forecast']) is not bool:
+        raise fail('INVALID_INPUT', 'Advertising forecast selection must be boolean')
     client = _ReadClient(web, catalog, values)
     account = await client.account_record(require_active=helper == 'preview',
                                           currency=helper == 'audience_estimate')

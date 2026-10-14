@@ -39,6 +39,15 @@ class HelperTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(params['currency'],'JPY');self.assertTrue(params['is_cbo_enabled'])
         self.assertNotIn('daily_budget',params)
 
+    async def test_automatic_potential_audience_uses_meta_counts_without_forecast_math(self):
+        with patch('app.private_ads_estimate.forecast') as calculate:
+            result=await read_form_helper(None,self.catalog,self.values,'audience_estimate',
+                {**self.inputs,'include_forecast':False})
+        calculate.assert_not_called()
+        self.assertEqual((result['lower_bound'],result['upper_bound']),(1000,5000))
+        self.assertNotIn('forecast',result)
+        self.assertNotIn('include_forecast',self.client.request.await_args.kwargs['params'])
+
     async def test_foreign_account_scope_stops_before_estimate_dispatch(self):
         self.client.account_record.side_effect = ProvisioningError('RESOURCE_SCOPE_MISMATCH','foreign account',retryable=False)
         with self.assertRaises(ProvisioningError):
