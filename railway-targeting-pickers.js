@@ -16,7 +16,7 @@ if (typeof creativeTargetSearchConfig !== 'function') {
         box.textContent='Загружаю варианты Meta…';
         try {
             const data=await apiJson('ajax/metaTemplateTargetingSearch.php',{
-                ...formPost({type,q:input.value.trim(),limit:100}),signal:controller.signal
+                ...formPost({type:type==='locales'?'languages':type,q:input.value.trim(),limit:100}),signal:controller.signal
             });
             if(pickerControllers[type]!==controller)return;
             box.textContent='';
@@ -24,6 +24,7 @@ if (typeof creativeTargetSearchConfig !== 'function') {
             for(const item of rows.slice(0,100)){
                 const button=document.createElement('button');
                 button.type='button'; button.className='search-item';
+                button.dataset.remaskTargetChoice='1';
                 button.style.cssText='display:block;width:100%;text-align:left;border:0;background:transparent;color:inherit';
                 const detail=type==='locations'?[item.country_name,item.type==='region'? 'Регион':'' ].filter(Boolean).join(' · ')
                     :(item.path||[]).join(' › ');

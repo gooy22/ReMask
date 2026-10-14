@@ -61,6 +61,7 @@ $js = <<<'JS'
   }
 
   function looksLikeSearchButton(btn) {
+    if (btn.matches('[data-remask-target-choice]')) return false;
     const raw = textOf(btn);
     return SEARCH_BUTTON_RE.test(raw) || /\b(search|find)\b|поиск|шукати|знайти|найти/i.test(raw);
   }
@@ -380,7 +381,7 @@ $launchPhp = $root . '/launch.php';
 if (is_file($launchPhp)) {
     $php = file_get_contents($launchPhp);
     if ($php === false) { fwrite(STDERR, "[remask targeting overlay] cannot read launch.php\n"); exit(51); }
-    $tag = '<script src="scripts/targeting-autocomplete.js?v=20260917-force-remove"></script>';
+    $tag = '<script src="scripts/targeting-autocomplete.js?v=20261014-targeting-choices"></script>';
     if (strpos($php, 'targeting-autocomplete.js') === false) {
         if (stripos($php, '</body>') !== false) {
             $php = str_ireplace('</body>', $tag . "\n</body>", $php);

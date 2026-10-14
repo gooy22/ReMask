@@ -761,6 +761,7 @@ function renderCreativeTargetResults(kind, items) {
     for (const item of items.slice(0,100)) {
         const row = document.createElement('button');
         row.type = 'button';
+        row.dataset.remaskTargetChoice = '1';
         row.style.cssText='display:block;width:100%;text-align:left;border:0;background:transparent;color:inherit';
         row.className = 'cr-target-result';
         const label = creativeTargetLabel(kind === 'excludedGeo' ? 'geo' : kind, item);
