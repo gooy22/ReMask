@@ -67,10 +67,15 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_missing_initializer_renews_once_then_proves_exact_account(self):
         payload = json.loads(document());payload['require'] = []
+        payload['define'].extend([
+            ['DTSGInitialData',[],{'token':'synthetic-fresh-csrf'}],
+            ['LSD',[],{'token':'synthetic-fresh-lsd'}],
+            ['SprinkleConfig',[],{'param_name':'jazoest','version':2,'should_randomize':False}]])
         async def missing(url, **kwargs):return 200, json.dumps(payload), url
         self.web.fetch_text = missing
         async def bootstrap():return SimpleNamespace(actor_id='123456',fb_dtsg='synthetic-csrf',lsd='synthetic-lsd')
         self.web.bootstrap = bootstrap
+        self.web._extract_request_context = lambda body: {'__rev':'12345','__hs':'synthetic-page-revision'}
         calls = []
         @asynccontextmanager
         async def request(method, url, **options):
@@ -85,6 +90,10 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([row[0] for row in calls], ['POST','GET'])
         self.assertTrue(calls[0][1].endswith('/ads/manager/ajax/renew_access_token/'))
         self.assertEqual(calls[0][2]['data']['client_id'],'119211728144504')
+        self.assertEqual(calls[0][2]['data']['fb_dtsg'],'synthetic-fresh-csrf')
+        self.assertEqual(calls[0][2]['data']['lsd'],'synthetic-fresh-lsd')
+        self.assertEqual(calls[0][2]['data']['jazoest'],'2'+str(sum(map(ord,'synthetic-fresh-csrf'))))
+        self.assertEqual(calls[0][2]['data']['__rev'],'12345')
         self.assertTrue(calls[1][1].endswith('/act_111111'))
         self.assertFalse(client.read_only)
         self.assertNotIn('synthetic-renewed-session',repr(client.context))
