@@ -153,6 +153,7 @@ class AdsManagerPrivateHttp:
                f"?act={account_id}&business_id={business_id}")
         status, body, final_url = await web.fetch_text(url, max_bytes=5_000_001, document_navigation=True)
         final = urlsplit(final_url)
+        account_matches = parse_qs(final.query).get("act") == [account_id]
         gate = _auth_gate(final_url, body)
         # Only typed status and comparison results may leave this boundary.
         # Raw URLs, HTML, cookies and initialization values can contain secrets.
@@ -160,14 +161,13 @@ class AdsManagerPrivateHttp:
             getattr(web.profile, "name", ""), status, len(body.encode()),
             final.hostname in {"adsmanager.facebook.com", "business.facebook.com"},
             final.path == "/adsmanager/manage/campaigns",
-            parse_qs(final.query).get("act") == [account_id],
+            account_matches,
             parse_qs(final.query).get("business_id") == [business_id], gate or "none")
         if gate:
             raise fail(gate, "Ads Manager requires restoration of the profile session", True)
         if (status != 200 or len(body.encode()) > 5_000_000 or final.scheme != "https"
                 or final.hostname not in {"adsmanager.facebook.com", "business.facebook.com"}
                 or final.path != "/adsmanager/manage/campaigns"
-                or parse_qs(final.query).get("act") != [account_id]
                 or parse_qs(final.query).get("business_id") != [business_id]):
             raise fail("BOOTSTRAP_SCOPE_UNVERIFIED", "Ads Manager did not confirm the requested account context", True)
         try:
@@ -181,6 +181,19 @@ class AdsManagerPrivateHttp:
             await refresh(body, final_url)
         client = cls(web, context)
         client.document_origin = final.scheme + '://' + final.hostname
+        if not account_matches:
+            # Meta may select a default account during document navigation.
+            # Before returning a usable sender, prove the requested account
+            # and BM through the reviewed account READ on this same session.
+            client.read_only = True
+            account = await client.get("/act_" + account_id, {"fields": ["id", "business"]})
+            if (not isinstance(account.get("id"), str)
+                    or account["id"].removeprefix("act_") != account_id
+                    or not isinstance(account.get("business"), dict)
+                    or account["business"].get("id") != business_id):
+                raise fail("BOOTSTRAP_SCOPE_UNVERIFIED", "Ads Manager did not confirm the requested account and Business", True)
+            client.read_only = False
+            log.info("ads_bootstrap scope_confirmed profile=%s source=exact_account_read", getattr(web.profile, "name", ""))
         return client
 
     async def request(self, method, path, params, *, before_submit=None, files=None, multipart=False):
