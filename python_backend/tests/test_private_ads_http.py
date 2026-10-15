@@ -51,6 +51,20 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
 
     async def claim(self):self.claims += 1
 
+    def test_literal_serverjs_initialization_with_module_hash(self):
+        payload = json.loads(document())
+        payload['require'] = [["WebApiApplication@reviewed-hash", "init", [],
+            ["synthetic-session-value", "119211728144504"], None]]
+        body = '<script>requireLazy(["ServerJS"],function(s){s.handle(' + json.dumps(payload) + ');});</script>'
+        context = context_from_document(body, account_id="111111", business_id="222222", actor_id="123456")
+        self.assertEqual(context.application_id, "119211728144504")
+        self.assertNotIn("synthetic-session-value", repr(context))
+
+    def test_arbitrary_javascript_wrapper_cannot_initialize_credentials(self):
+        body = '<script>untrusted.handle(' + document() + ');</script>'
+        with self.assertRaises(ProvisioningError):
+            context_from_document(body, account_id="111111", business_id="222222", actor_id="123456")
+
     async def test_post_claim_and_captured_encoding_on_profile_http2(self):
         result = await self.client.post("/act_111111/addrafts", {"enabled": False, "values": [1]}, before_submit=self.claim)
         self.assertEqual(self.claims, 1)
