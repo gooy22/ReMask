@@ -8,6 +8,13 @@ $catalogs=['16'=>['profile'=>'16','ad_accounts'=>['data'=>[]]],
 $load=static fn($name)=>$catalogs[$name];
 $new=RemaskTemplateTargetingContext::candidates([$profiles[0]],$load,'',[],true);
 expect($new[0]['account_id']==='' && $new[0]['profile']==='16','empty catalogs remain eligible for read-only discovery');
+$newProfile=['name'=>'25','proxy_configured'=>false,'cookies_ready'=>true];
+$newLoad=static fn($name)=>$name==='25' ? ['profile'=>'25','ad_accounts'=>['data'=>[]]] : $load($name);
+$preferredNew=RemaskTemplateTargetingContext::candidates([...$profiles,$newProfile],$newLoad,'25',[],true);
+expect($preferredNew[0]['profile']==='25' && $preferredNew[0]['account_id']==='',
+    'new direct-test source must precede saved active and unverified accounts within the bounded attempt budget');
+$excludedNew=RemaskTemplateTargetingContext::candidates([...$profiles,$newProfile],$newLoad,'25',['25'],true);
+expect(!in_array('25',array_column($excludedNew,'profile'),true),'preference never overrides source exclusion');
 $proof=['ok'=>true,'profile'=>'20','account_id'=>'123456','business_id'=>'654321','checked_live'=>true,
     'account_scope_verified'=>true,'transport'=>'private_http_h2','source_context_discovered'=>true];
 expect(RemaskTemplateTargetingContext::referenceResponse('20',$proof)===$proof,'verified new context accepted');
