@@ -45,8 +45,9 @@ Estimate module factories and wrapper hashes are retained in
 evidence. Only genuine sender responses feed the UI.
 
 Potential audience loads automatically on opening/restoring a template and on
-changes to its effective settings. Not-ready Meta responses are polled twice;
-failed reads receive two bounded retries. Changed targeting and a closed editor
+changes to its effective settings. Not-ready Meta responses poll after 2/5 seconds
+then every 30 seconds; failed reads back off after 15/45 seconds to once a minute.
+Only visible editors poll. Changed targeting and a closed editor
 cancel pending work. There are no audience calculation or placement verification
 buttons. Only returned Meta counts/bounds are displayed, not locally derived
 daily outcomes. Read failures remain independent of template editing/saving.
