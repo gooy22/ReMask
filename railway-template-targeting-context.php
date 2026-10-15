@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 /** Read transport only. This context is never a template destination. */
 final class RemaskTemplateTargetingContext {
-    public static function candidates(array $profiles, callable $loadCatalog, string $preferred = '', array $excluded = []): array {
+    public static function candidates(array $profiles, callable $loadCatalog, string $preferred = '', array $excluded = [], bool $discover = false): array {
         $candidates = [];
         foreach ($profiles as $profile) {
             $name = (string)($profile['name'] ?? '');
@@ -13,6 +13,7 @@ final class RemaskTemplateTargetingContext {
             try { $catalog = $loadCatalog($name); }
             catch (Throwable $error) { continue; }
             if (($catalog['profile'] ?? '') !== $name) throw new RuntimeException('TEMPLATE_LOOKUP_PROFILE_MISMATCH');
+            $count = count($candidates);
             foreach ((array)($catalog['ad_accounts']['data'] ?? []) as $row) {
                 if (!is_array($row) || (isset($row['profile']) && (string)$row['profile'] !== $name)) continue;
                 $account = (string)($row['account_id'] ?? '');
@@ -25,6 +26,12 @@ final class RemaskTemplateTargetingContext {
                     'priority'=>$name === $preferred ? 2 : ((string)$status === '1' ? 1 : ($status === null ? 0 : -1)),
                     'updated'=>(int)($catalog['_cache']['fetched_at'] ?? 0)];
             }
+            if ($discover && count($candidates) === $count) {
+                // A newly imported profile has no saved RK catalog yet. The
+                // private worker may discover a READ context, never provision one.
+                $candidates[] = ['profile'=>$name, 'account_id'=>'', 'catalog'=>$catalog,
+                    'priority'=>-2, 'updated'=>0];
+            }
         }
         usort($candidates, static fn($a,$b)=>($b['priority'] <=> $a['priority']) ?: ($b['updated'] <=> $a['updated'])
             ?: strcmp($a['profile'], $b['profile']) ?: strcmp($a['account_id'], $b['account_id']));
@@ -34,6 +41,36 @@ final class RemaskTemplateTargetingContext {
 
     public static function resolve(array $profiles, callable $loadCatalog, string $preferred = '', array $excluded = []): array {
         return self::candidates($profiles, $loadCatalog, $preferred, $excluded)[0];
+    }
+
+    public static function readReference(string $profile, string $operation, array $input): array {
+        $base=rtrim((string)(getenv('REMASK_PYTHON_WORKER_URL') ?: 'http://127.0.0.1:8081'),'/');
+        $key=(string)(getenv('REMASK_WORKER_API_KEY') ?: '');
+        if ($key==='') throw new RuntimeException('ADVERTISING_WORKER_UNAVAILABLE');
+        $raw=json_encode($input,JSON_THROW_ON_ERROR);
+        if (strlen($raw)>65536) throw new InvalidArgumentException('ADVERTISING_INPUT_TOO_LARGE');
+        if (session_status()===PHP_SESSION_ACTIVE) session_write_close();
+        $context=stream_context_create(['http'=>['method'=>'POST','timeout'=>35,'ignore_errors'=>true,
+            'follow_location'=>0,'content'=>$raw,'header'=>"Content-Type: application/json\r\nAccept: application/json\r\nX-Remask-Worker-Key: ".$key."\r\n"]]);
+        $body=@file_get_contents($base.'/api/v1/profiles/'.rawurlencode($profile).'/template-reference/'.rawurlencode($operation),false,$context,0,524289);
+        $data=is_string($body) && strlen($body)<=524288 ? json_decode($body,true) : null;
+        return self::referenceResponse($profile,$data);
+    }
+
+    public static function referenceResponse(string $profile, mixed $data): array {
+        if (!is_array($data) || ($data['ok']??null)!==true) {
+            $detail=is_array($data) ? ($data['detail']??null) : null;
+            $code=is_array($detail) ? ($detail['code']??'') : $detail;
+            throw new RuntimeException(is_string($code) && preg_match('/^[A-Z][A-Z0-9_]{2,119}$/D',$code)
+                ? $code : 'TEMPLATE_LOOKUP_UNAVAILABLE');
+        }
+        if (($data['profile']??'')!==$profile || ($data['checked_live']??null)!==true
+            || ($data['account_scope_verified']??null)!==true || ($data['transport']??'')!=='private_http_h2'
+            || ($data['source_context_discovered']??null)!==true
+            || !preg_match('/^[0-9]{5,30}$/D',(string)($data['account_id']??''))
+            || !preg_match('/^[0-9]{5,30}$/D',(string)($data['business_id']??'')))
+            throw new RuntimeException('TEMPLATE_LOOKUP_ACCESS_UNVERIFIED');
+        return $data;
     }
 
     public static function failure(Throwable $error, string $profile = ''): array {

@@ -50,3 +50,13 @@ failed reads receive two bounded retries. Changed targeting and a closed editor
 cancel pending work. There are no audience calculation or placement verification
 buttons. Only returned Meta counts/bounds are displayed, not locally derived
 daily outcomes. Read failures remain independent of template editing/saving.
+
+New profiles without a saved RK catalog are also eligible as automatic reference
+sources. The worker discovers an existing BM/RK through private HTML/Relay reads
+and confirms the exact pair with a fresh account read before fetching targeting
+or audience size. Discovery has an 18-second budget and the full read has a
+32-second budget. It does not start Chromium, create assets, change transports,
+or write a publishing binding. Private process hints expire after 30 minutes;
+changed cookies, proxy or user agent require a new context. Banned/excluded
+sources are skipped before discovery. Source failures temporarily yield to the
+next eligible profile; unknown audience sizes are never fabricated.

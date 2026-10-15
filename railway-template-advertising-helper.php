@@ -23,11 +23,13 @@ try {
     $preferred=$until>time() && $until<=time()+7200 ? trim((string)(getenv('REMASK_DIRECT_TEST_PROFILE')?:'')) : '';
     $excluded=array_values(array_filter(array_map('trim',explode(',',(string)(getenv('REMASK_TEMPLATE_LOOKUP_EXCLUDED_PROFILES')?:'')))));
     $candidates=RemaskTemplateTargetingContext::candidates($profiles,[RemaskPrivateLaunchCatalog::class,'load'],
-        $preferred,array_unique(array_merge($excluded,$reference->blocked(time()))));
+        $preferred,array_unique(array_merge($excluded,$reference->blocked(time()))),true);
     $read=static function($profile,$account,$catalog,$helper,$request) use($reference) {
-        try {return RemaskAdvertisingHelperClient::read($profile,$account,$catalog,$helper,$request);}
+        try {return $account===''
+            ? RemaskTemplateTargetingContext::readReference($profile,$helper,$request)
+            : RemaskAdvertisingHelperClient::read($profile,$account,$catalog,$helper,$request);}
         catch(Throwable $error) {
-            if(preg_match('/SESSION|CHECKPOINT|AUTH|PROXY|TIMEOUT/', $error->getMessage()))$reference->block($profile,time());
+            if(preg_match('/SESSION|CHECKPOINT|AUTH|PROXY|TIMEOUT|TEMPLATE_LOOKUP_NO_ACCOUNT/', $error->getMessage()))$reference->block($profile,time());
             throw $error;
         }
     };

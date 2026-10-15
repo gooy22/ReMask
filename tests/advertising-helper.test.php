@@ -16,6 +16,10 @@ check($seen[0]==='20' && $seen[1]==='123456','Client selectors leaked into gener
 check($seen[3]['daily_budget']===500 && $seen[3]['is_cbo_enabled']===false,'Input types changed');
 check($seen[3]['include_forecast']===false,'Raw Meta audience requested a calculated forecast');
 check(!isset($result['profile'],$result['account_id'],$result['business_id']) && $result['template_account_bound']===false,'Template retained identities');
+$discovered=RemaskAdvertisingHelperClient::template($input,[['profile'=>'21','account_id'=>'','catalog'=>[]]],
+    static fn()=>['profile'=>'21','account_id'=>'234567','business_id'=>'765432','checked_live'=>true,
+        'account_scope_verified'=>true,'transport'=>'private_http_h2','source_context_discovered'=>true]);
+check(!isset($discovered['account_id'],$discovered['profile'],$discovered['business_id']), 'discovery bound template to new profile');
 foreach([['helper'=>'preview'],['targeting_spec'=>['custom_audiences'=>[['id'=>'123456']]]],
     ['promoted_object'=>['pixel_id'=>'123456']],['daily_budget'=>'NaN'],['daily_budget'=>'-1'],['is_cbo_enabled'=>'perhaps'],['include_forecast'=>'perhaps']] as $bad){
     try{RemaskAdvertisingHelperClient::template(array_replace($input,$bad),$candidates,$reader);throw new RuntimeException('Unsafe template accepted');}
