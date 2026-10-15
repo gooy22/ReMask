@@ -30,7 +30,7 @@ final class RemaskTemplateTargetingContext {
                 // A newly imported profile has no saved RK catalog yet. The
                 // private worker may discover a READ context, never provision one.
                 $candidates[] = ['profile'=>$name, 'account_id'=>'', 'catalog'=>$catalog,
-                    'priority'=>-2, 'updated'=>0];
+                    'priority'=>$name === $preferred ? 2 : -2, 'updated'=>0];
             }
         }
         usort($candidates, static fn($a,$b)=>($b['priority'] <=> $a['priority']) ?: ($b['updated'] <=> $a['updated'])

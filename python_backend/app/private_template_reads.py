@@ -2,6 +2,7 @@
 import asyncio
 import hashlib
 import json
+import logging
 import time
 
 from .private_ads_catalog import identity
@@ -9,12 +10,13 @@ from .private_ads_draft import fail
 from .private_ads_helpers import read_form_helper
 from .private_ads_reads import AdsManagerReadCatalog
 from .private_advertising_reads import TARGETING_TYPES
-from .private_inventory import private_inventory_snapshot
+from .private_inventory import private_inventory_snapshot, inventory_diagnostic_summary
 from .private_launch import PrivateLaunchContractStore
 from .provisioning.models import ProvisioningError
 
 REFERENCE_TYPES = TARGETING_TYPES | {'locations', 'locales'}
 _sources = {}  # Private process memory. Hints expire and never prove permissions.
+log = logging.getLogger(__name__)
 
 
 def _key(web):
@@ -80,6 +82,8 @@ async def read_template_reference(web, catalog, context, operation, inputs):
                 for row in business.get('ad_accounts', [])]
         pairs = _pairs(rows, actor)
         if not pairs:
+            log.info('template reference discovery profile=%s account_contexts=0 diagnostic=%s',
+                profile, json.dumps(inventory_diagnostic_summary(snapshot), ensure_ascii=True)[:12000])
             diagnostics = list(snapshot.get('diagnostics', []))
             for business in snapshot.get('businesses', []):
                 diagnostics.extend(business.get('diagnostics', []))
