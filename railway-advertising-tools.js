@@ -132,10 +132,11 @@
         needsRefresh=pending||failed;
         status.textContent=pending?'Meta готовит размер аудитории…':failed?'Данные Meta временно недоступны. Шаблон можно сохранить.':'Размер аудитории получен из Meta.';
         if(current.targets.length>20)status.textContent+=' Показаны первые 20 выбранных РК.';
-        // Bounded read-only polling. No browser, route switch or template binding.
-        if(needsRefresh&&attempt<2)timer=setTimeout(()=>{
-            try{if(seq===generation&&snapshot().fingerprint===current.fingerprint)estimate(true,attempt+1);}catch{}
-        },failed?[15000,45000][attempt]:[2000,5000][attempt]);
+        // Back off while the visible editor still needs a real Meta response.
+        // The worker bounds each read and cools down unavailable sources.
+        if(needsRefresh)timer=setTimeout(()=>{
+            try{if(seq===generation&&snapshot().fingerprint===current.fingerprint)estimate(true,Math.min(2,attempt+1));}catch{}
+        },failed?([15000,45000][attempt]||60000):([2000,5000][attempt]||30000));
     }
     function changed(force=false) {
         if(creative&&!byId('creativeModal')?.classList.contains('open'))return;

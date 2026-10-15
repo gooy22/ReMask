@@ -3629,6 +3629,42 @@ async def private_advertising_resources(profile_id: str, resource: str, account_
     except asyncio.TimeoutError as exc:
         raise HTTPException(status_code=504,detail='ADVERTISING_RESOURCE_READ_TIMEOUT') from exc
 
+@app.post('/api/v1/profiles/{profile_id}/template-reference/{operation}',dependencies=[Depends(require_key)])
+async def private_template_reference(profile_id: str, operation: str, payload: dict = Body(...)):
+    from app.private_template_reads import read_template_reference, REFERENCE_TYPES
+    from app.private_auth import private_auth_error
+    from fb_worker import AuthenticationError, RemoteRequestError, ProxyError
+    from app.private_transport_error import private_transport_error
+    adapter = getattr(pool.private_launch, 'ads_manager', None)
+    profile = str(profile_id or '').strip()
+    excluded = {value.strip() for value in os.getenv('REMASK_TEMPLATE_LOOKUP_EXCLUDED_PROFILES', '').split(',')}
+    if not adapter or not profile or len(profile) > 160 or profile in excluded:
+        raise HTTPException(status_code=409, detail={'code':'TEMPLATE_LOOKUP_SOURCE_UNAVAILABLE'})
+    if operation not in REFERENCE_TYPES | {'audience_estimate', 'placements'}:
+        raise HTTPException(status_code=400, detail={'code':'TEMPLATE_HELPER_UNAVAILABLE'})
+    try:
+        async def read():
+            context = await pool.resolver.resolve(profile)
+            async with ProfileSession(context) as session:
+                web = await session.facebook_web()
+                web.private_only = True
+                return await read_template_reference(web, adapter.catalog, context, operation, payload)
+        result = await asyncio.wait_for(read(), timeout=32)
+        return {'ok': True, **result}
+    except AuthenticationError as error:
+        normalized = private_auth_error(error)
+        raise HTTPException(status_code=409, detail={'code':normalized.code, 'message':str(normalized)}) from None
+    except (RemoteRequestError, ProxyError) as error:
+        status, detail = private_transport_error(error)
+        raise HTTPException(status_code=status, detail=detail) from None
+    except (ProvisioningError, ProfileContextError) as error:
+        raise HTTPException(status_code=409, detail={'code':getattr(error, 'code', 'PROFILE_CONTEXT_ERROR')}) from None
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail={'code':'INVALID_TEMPLATE_REFERENCE_INPUT'}) from None
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail={'code':'TEMPLATE_REFERENCE_READ_TIMEOUT'}) from None
+
+
 @app.post('/api/v1/profiles/{profile_id}/advertising-helper/{helper}',dependencies=[Depends(require_key)])
 async def private_advertising_helper(profile_id: str, helper: str, payload: dict = Body(...)):
     from app.private_ads_helpers import read_form_helper

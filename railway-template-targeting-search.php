@@ -38,7 +38,7 @@ try {
     $preferred = $until > time() && $until <= time()+7200 ? trim((string)(getenv('REMASK_DIRECT_TEST_PROFILE') ?: '')) : '';
     $excluded = array_values(array_filter(array_map('trim', explode(',', (string)(getenv('REMASK_TEMPLATE_LOOKUP_EXCLUDED_PROFILES') ?: '')))));
     $excluded = array_unique(array_merge($excluded, $reference->blocked(time())));
-    $candidates = RemaskTemplateTargetingContext::candidates($profiles, [RemaskPrivateLaunchCatalog::class,'load'], $preferred, $excluded);
+    $candidates = RemaskTemplateTargetingContext::candidates($profiles, [RemaskPrivateLaunchCatalog::class,'load'], $preferred, $excluded, true);
     // Ignore all client profile/account selectors. Launch keeps its own explicit scope.
     $attempted = []; $lastError = new RuntimeException('TEMPLATE_LOOKUP_SOURCE_UNAVAILABLE');
     foreach ($candidates as $context) {
@@ -46,7 +46,10 @@ try {
         if (count($attempted) >= 2) break; // bounded read fallback, never mutation retry
         $attempted[$context['profile']] = true;
         try {
-            $result = RemaskAdvertisingAssetBridge::read([
+            $result = $context['account_id']===''
+                ? RemaskTemplateTargetingContext::readReference($context['profile'],$type,
+                    ['q'=>$query,'limit'=>$query==='' ? 500 : 50])
+                : RemaskAdvertisingAssetBridge::read([
                 'profile'=>$context['profile'], 'account_id'=>$context['account_id'], 'q'=>$query,
                 'limit'=>$query==='' ? 500 : 50], $context['catalog'], $type, true);
             if (($result['checked_live'] ?? null) !== true || ($result['account_scope_verified'] ?? null) !== true)
@@ -58,7 +61,7 @@ try {
         } catch (Throwable $error) {
             $lastError = $error;
             // A query/schema failure says nothing about unrelated resources.
-            if (preg_match('/SESSION|CHECKPOINT|AUTH|PROXY|TIMEOUT|ACCOUNT_INACTIVE/', $error->getMessage()))
+            if (preg_match('/SESSION|CHECKPOINT|AUTH|PROXY|TIMEOUT|ACCOUNT_INACTIVE|TEMPLATE_LOOKUP_NO_ACCOUNT/', $error->getMessage()))
                 $reference->block($context['profile'], time());
         }
     }

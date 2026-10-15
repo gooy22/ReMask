@@ -192,6 +192,20 @@ class WorkflowTests(unittest.TestCase):
         self.page.wait_for_timeout(2300)
         self.assertEqual(self.page.evaluate('fixtureEstimates.length'),1)
 
+    def test_slow_meta_estimate_recovers_after_initial_polls_without_focus_or_input(self):
+        self.page.clock.install()
+        self.prepare_estimate()
+        self.page.evaluate('window.fixtureEstimateData={estimate_ready:false}')
+        self.page.wait_for_function('fixtureEstimates.length===1')
+        self.page.clock.fast_forward(2100)
+        self.page.wait_for_function('fixtureEstimates.length===2')
+        self.page.clock.fast_forward(5100)
+        self.page.wait_for_function('fixtureEstimates.length===3')
+        self.page.evaluate('window.fixtureEstimateData={estimate_ready:true,lower_bound:7000,upper_bound:9000}')
+        self.page.clock.fast_forward(30100)
+        self.page.wait_for_function('document.querySelector("[data-rm-estimates]").textContent.includes("7 000")')
+        self.assertEqual(self.page.locator('#remaskAdvertisingEstimate button').count(),0)
+
     def test_module_choices_save_and_reopen_without_manual_ids(self):
         self.creative(context=True,modules=True)
         self.page.get_by_role('button',name='Места показа',exact=True).click()

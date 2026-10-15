@@ -1,5 +1,6 @@
 """Creative/Launch private reads report transport failures without secrets or retries."""
 import unittest
+import os
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -21,23 +22,39 @@ class PrivateAdvertisingErrorTests(unittest.IsolatedAsyncioTestCase):
         launch = SimpleNamespace(_id=lambda value, name:value, resources=resources,
                                  ads_manager=SimpleNamespace(catalog=object()))
         helper = AsyncMock(side_effect=error)
+        reference = AsyncMock(side_effect=error)
         with patch.object(api.pool.resolver,'resolve',AsyncMock(return_value=context)), \
              patch.object(api.pool,'private_launch',launch), \
              patch.object(api,'ProfileSession',factory), \
-             patch('app.private_ads_helpers.read_form_helper',helper):
-            for route in ('resource','helper'):
+             patch('app.private_ads_helpers.read_form_helper',helper), \
+             patch('app.private_template_reads.read_template_reference',reference):
+            for route in ('resource','helper','reference'):
                 with self.subTest(route=route), self.assertRaises(HTTPException) as caught:
                     if route == 'resource':
                         await api.private_advertising_resources('19','interests','123456789',force=True)
-                    else:
+                    elif route == 'helper':
                         await api.private_advertising_helper('19','placements',{'account_id':'123456789'})
+                    else:
+                        await api.private_template_reference('19','placements',{})
                 self.assertEqual(caught.exception.status_code, status)
                 self.assertEqual(caught.exception.detail['code'], code)
                 self.assertNotIn('SECRET',str(caught.exception.detail))
                 self.assertNotIn('http://',str(caught.exception.detail))
         resources.get.assert_awaited_once()
         helper.assert_awaited_once()
+        reference.assert_awaited_once()
         self.assertTrue(web.private_only)
+
+    async def test_excluded_template_source_and_writer_stop_before_resolver(self):
+        with patch.dict(os.environ,{'REMASK_TEMPLATE_LOOKUP_EXCLUDED_PROFILES':'16'}), \
+             patch.object(api.pool.resolver,'resolve',AsyncMock()) as resolve:
+            with self.assertRaises(HTTPException) as excluded:
+                await api.private_template_reference('16','interests',{})
+            self.assertEqual(excluded.exception.status_code,409)
+            with self.assertRaises(HTTPException) as writer:
+                await api.private_template_reference('20','PUBLISH',{})
+            self.assertIn(writer.exception.status_code,(400,409))
+            resolve.assert_not_awaited()
 
     async def test_proxy_failure_is_not_session_expiry_or_unhandled_500(self):
         await self.check_routes(RemoteRequestError('http://SECRET:SECRET@example.test',

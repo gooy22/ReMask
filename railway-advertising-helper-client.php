@@ -72,9 +72,11 @@ final class RemaskAdvertisingHelperClient {
             $attempted[$profile]=true;
             try {
                 $data=$read($profile,$context['account_id'],$context['catalog'],$helper,$request);
+                $discovered=$context['account_id']==='' && ($data['source_context_discovered']??null)===true
+                    && preg_match('/^[0-9]{5,30}$/D',(string)($data['account_id']??''));
                 if(($data['checked_live']??null)!==true || ($data['account_scope_verified']??null)!==true
                     || ($data['transport']??'')!=='private_http_h2' || ($data['profile']??'')!==$profile
-                    || ($data['account_id']??'')!==$context['account_id'])
+                    || (!$discovered && ($data['account_id']??'')!==$context['account_id']))
                     throw new RuntimeException('TEMPLATE_LOOKUP_ACCESS_UNVERIFIED');
                 unset($data['profile'],$data['account_id'],$data['business_id']);
                 return $data+['template_account_bound'=>false];

@@ -45,8 +45,19 @@ Estimate module factories and wrapper hashes are retained in
 evidence. Only genuine sender responses feed the UI.
 
 Potential audience loads automatically on opening/restoring a template and on
-changes to its effective settings. Not-ready Meta responses are polled twice;
-failed reads receive two bounded retries. Changed targeting and a closed editor
+changes to its effective settings. Not-ready Meta responses poll after 2/5 seconds
+then every 30 seconds; failed reads back off after 15/45 seconds to once a minute.
+Only visible editors poll. Changed targeting and a closed editor
 cancel pending work. There are no audience calculation or placement verification
 buttons. Only returned Meta counts/bounds are displayed, not locally derived
 daily outcomes. Read failures remain independent of template editing/saving.
+
+New profiles without a saved RK catalog are also eligible as automatic reference
+sources. The worker discovers an existing BM/RK through private HTML/Relay reads
+and confirms the exact pair with a fresh account read before fetching targeting
+or audience size. Discovery has an 18-second budget and the full read has a
+32-second budget. It does not start Chromium, create assets, change transports,
+or write a publishing binding. Private process hints expire after 30 minutes;
+changed cookies, proxy or user agent require a new context. Banned/excluded
+sources are skipped before discovery. Source failures temporarily yield to the
+next eligible profile; unknown audience sizes are never fabricated.

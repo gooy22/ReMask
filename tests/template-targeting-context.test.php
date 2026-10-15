@@ -6,6 +6,18 @@ $catalogs=['16'=>['profile'=>'16','ad_accounts'=>['data'=>[]]],
     '19'=>['profile'=>'19','ad_accounts'=>['data'=>[['profile'=>'19','account_id'=>'654321','business_id'=>'123456','account_status'=>null]]]],
     '20'=>['profile'=>'20','ad_accounts'=>['data'=>[['profile'=>'20','account_id'=>'222222','business_id'=>'333333','account_status'=>1]]]]];
 $load=static fn($name)=>$catalogs[$name];
+$new=RemaskTemplateTargetingContext::candidates([$profiles[0]],$load,'',[],true);
+expect($new[0]['account_id']==='' && $new[0]['profile']==='16','empty catalogs remain eligible for read-only discovery');
+$proof=['ok'=>true,'profile'=>'20','account_id'=>'123456','business_id'=>'654321','checked_live'=>true,
+    'account_scope_verified'=>true,'transport'=>'private_http_h2','source_context_discovered'=>true];
+expect(RemaskTemplateTargetingContext::referenceResponse('20',$proof)===$proof,'verified new context accepted');
+foreach([['profile'=>'foreign'],['checked_live'=>false],['account_id'=>''],['business_id'=>''],
+    ['transport'=>'chromium'],['source_context_discovered'=>false]] as $bad) {
+    try { RemaskTemplateTargetingContext::referenceResponse('20',array_replace($proof,$bad)); throw new LogicException('unverified context accepted'); }
+    catch(RuntimeException $error) { expect($error->getMessage()==='TEMPLATE_LOOKUP_ACCESS_UNVERIFIED','discovery proof guard'); }
+}
+try {RemaskTemplateTargetingContext::referenceResponse('20',['detail'=>'TEMPLATE_REFERENCE_READ_TIMEOUT']);throw new LogicException('failed worker accepted');}
+catch(RuntimeException $error){expect($error->getMessage()==='TEMPLATE_REFERENCE_READ_TIMEOUT','typed string failure preserved');}
 $context=RemaskTemplateTargetingContext::resolve($profiles,$load);
 expect($context['profile']==='20' && $context['account_id']==='222222','choose available scoped identity without UI selection');
 $context=RemaskTemplateTargetingContext::resolve($profiles,$load,'19');
