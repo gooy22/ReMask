@@ -223,7 +223,7 @@ class AdsManagerPrivateHttp:
             client = cls(web, error.context)
             client.document_origin = final.scheme + '://' + final.hostname
             client.read_only = True
-            context = await client._renew_session()
+            context = await client._renew_session(body)
             # Every renewed session must independently confirm the selected
             # account and BM, even if the document retained its act parameter.
             account_matches = False
@@ -250,7 +250,7 @@ class AdsManagerPrivateHttp:
             log.info("ads_bootstrap scope_confirmed profile=%s source=exact_account_read", getattr(web.profile, "name", ""))
         return client
 
-    async def _renew_session(self):
+    async def _renew_session(self, document):
         """One cookie-authenticated native refresh, as AdsMgmtNetworkRefreshToken.
 
         No advertising write, OAuth grant, alternate actor or configured token.
@@ -264,18 +264,55 @@ class AdsManagerPrivateHttp:
             session = await self.web._ensure_session()
             if session.proxy != self._profile_proxy:
                 raise fail("PROFILE_CONTEXT_UNAVAILABLE", "Session renewal route changed")
-            form = {"client_id":self.context.application_id, "__a":"1",
+            form = {"client_id":self.context.application_id, "__a":"1", "__req":"1",
                     "__user":self.context.actor_id, "fb_dtsg":bootstrap.fb_dtsg}
+            extract = getattr(self.web, '_extract_request_context', None)
+            metadata = dict(getattr(bootstrap, 'request_context', {}) or {})
+            if callable(extract):
+                metadata.update(extract(document))
+            for name in ('__hs','__rev','__s','__hsi','__dyn','__csr','__comet_req',
+                         '__spin_r','__spin_b','__spin_t','dpr','__ccg'):
+                value = metadata.get(name)
+                if isinstance(value, (str, int)) and 0 < len(str(value)) <= 20000:
+                    form[name] = str(value)
+            counter = getattr(self.web, '_next_graphql_req', None)
+            if callable(counter):
+                form['__req'] = counter()
             for name in ("lsd", "jazoest"):
                 value = getattr(bootstrap, name, "")
                 if isinstance(value, str) and value:
                     form[name] = value
+            configs = {name:[] for name in ('DTSGInitialData','DTSGInitData','LSD','SprinkleConfig')}
+            for payload in _ads_document_payloads(document):
+                for node in _walk(payload):
+                    if (isinstance(node, list) and len(node) >= 3 and isinstance(node[0], str)
+                            and node[0] in configs and node[1] == [] and isinstance(node[2], dict)):
+                        configs[node[0]].append(node[2])
+            for module, field in (('DTSGInitialData','fb_dtsg'),('DTSGInitData','fb_dtsg'),('LSD','lsd')):
+                if configs[module]:
+                    value = _unique(configs[module], 'SESSION_RENEWAL_CONFIG_UNAVAILABLE').get('token')
+                    if not isinstance(value, str) or not 1 <= len(value) <= 4096:
+                        raise fail('SESSION_RENEWAL_CONFIG_UNAVAILABLE','Fresh AsyncRequest CSRF configuration is invalid')
+                    form[field] = value
+            if configs['SprinkleConfig']:
+                sprinkle = _unique(configs['SprinkleConfig'],'SESSION_RENEWAL_CONFIG_UNAVAILABLE')
+                version = sprinkle.get('version')
+                if (sprinkle.get('param_name') != 'jazoest' or type(sprinkle.get('should_randomize')) is not bool
+                        or not isinstance(version, (str,int)) or not str(version).isdigit()):
+                    raise fail('SESSION_RENEWAL_CONFIG_UNAVAILABLE','Fresh AsyncRequest CSRF checksum is unreviewed')
+                # DTSGUtils.getNumericValue sums UTF-16 code units, then adds
+                # the fresh SprinkleConfig version when randomization is off.
+                units = form['fb_dtsg'].encode('utf-16-le', errors='surrogatepass')
+                total = sum(units[i] + 256 * units[i+1] for i in range(0,len(units),2))
+                form['jazoest'] = ('' if sprinkle['should_randomize'] else str(version)) + str(total)
             headers = {"Accept":"application/json", "Origin":self.document_origin,
-                       "Referer":self.document_origin + "/"}
+                       "Referer":self.document_origin + "/", "Sec-Fetch-Dest":"empty",
+                       "Sec-Fetch-Mode":"cors", "Sec-Fetch-Site":"same-origin"}
             if form.get("lsd"):
                 headers["X-FB-LSD"] = form["lsd"]
             if not self._profile_matches():
                 raise fail("PROFILE_CONTEXT_UNAVAILABLE", "Session renewal profile changed before dispatch")
+            log.info('ads_session_renewal envelope profile=%s fields=%s',self._profile_name,sorted(form))
             async with session.request("POST", self.document_origin + "/ads/manager/ajax/renew_access_token/",
                     data=form, headers=headers, allow_redirects=False, request_timeout_seconds=30) as response:
                 if response.http_version != "HTTP/2":
