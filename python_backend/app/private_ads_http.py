@@ -56,6 +56,7 @@ class AdsManagerResponseError(ProvisioningError):
                 {"OAuthException", "GraphMethodException", "GraphAPIException", "ApplicationException"}):
             safe["type"] = diagnostic["type"]
         self.diagnostic = safe
+        log.warning("ads_request_rejected diagnostic=%s", json.dumps(safe, sort_keys=True, separators=(",", ":")))
         details = [f"{key}={value}" for key, value in safe.items()]
         message = "Meta rejected the advertising request"
         if details:
@@ -245,6 +246,10 @@ class AdsManagerPrivateHttp:
                     or account["id"].removeprefix("act_") != account_id
                     or not isinstance(account.get("business"), dict)
                     or account["business"].get("id") != business_id):
+                log.warning("ads_bootstrap scope_rejected profile=%s account_matches=%s business_matches=%s",
+                    getattr(web.profile, "name", ""),
+                    isinstance(account.get("id"), str) and account['id'].removeprefix('act_') == account_id,
+                    isinstance(account.get('business'), dict) and account['business'].get('id') == business_id)
                 raise fail("BOOTSTRAP_SCOPE_UNVERIFIED", "Ads Manager did not confirm the requested account and Business", True)
             client.read_only = False
             log.info("ads_bootstrap scope_confirmed profile=%s source=exact_account_read", getattr(web.profile, "name", ""))
