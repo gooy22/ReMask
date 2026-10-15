@@ -13,3 +13,10 @@ Reviewed Meta public modules, October 15, 2026.
 `XAdsCMRenewAccessTokenController` declares `/ads/manager/ajax/renew_access_token/`; its optional inputs are `privacy_mutation_token` and `client_id`. The observed caller supplies `client_id` only, plus the normal cookie-authenticated AsyncRequest CSRF envelope. `WebApiApplication` recognizes Ads Manager client `119211728144504`.
 
 ReMask uses this refresh only when both reviewed session initializers are absent after a fresh, actor-confirmed Ads Manager document. It sends one request over the same profile HTTP/2 pool with the same cookies and CSRF actor. A rejected refresh is never replayed. A returned session is memory-only and must confirm the exact selected account and BM before any advertising sender is returned. Conflicting initialization, login/checkpoint gates, foreign origins, changed actor and changed transport remain rejected.
+
+## AsyncRequest envelope
+
+The refresh includes the fresh document request metadata (`__req`, revision/session/spin fields), CSRF and LSD. When SprinkleConfig is present, its `jazoest` parameter is derived exactly as DTSGUtils.getNumericValue: sum UTF-16 code units and prefix the observed version unless should_randomize is true. No checksum version or page metadata is guessed.
+
+- getAsyncParams: public script `2b594c532c94bd9285cca6376feefb8bcf4493e3d91b11d3cf00093a95848b04`, module `a0dfb2fa9b7d70259546aaa209532e1c72b72e36e1c35ac4c166d15d6341d917`.
+- DTSGUtils: public script `2b594c532c94bd9285cca6376feefb8bcf4493e3d91b11d3cf00093a95848b04`, module `8ae6f4762bc79c6c104a012363932055192258b2a968d5fdc346b1d824521893`.
