@@ -61,3 +61,9 @@ or write a publishing binding. Private process hints expire after 30 minutes;
 changed cookies, proxy or user agent require a new context. Banned/excluded
 sources are skipped before discovery. Source failures temporarily yield to the
 next eligible profile; unknown audience sizes are never fabricated.
+
+Preset and bundle restoration keeps optimization, billing and bid controls in
+sync with their saved objective even when the configuration arrives later. A
+subsequent manual edit remains authoritative on configuration reload. Unsupported
+saved rule values remain visible and block launch instead of silently publishing
+with a different default.

@@ -37,6 +37,15 @@ class InstalledLaunchTests(unittest.TestCase):
         self.missing = False
         self.errors = []
         self.preset_objective = 'LEGACY_TEST_OBJECTIVE' if self._testMethodName == 'test_initial_config_keeps_legacy_goal' else 'OUTCOME_TRAFFIC'
+        self.preset_rules={}
+        if self._testMethodName=='test_initial_config_restores_dependent_preset_rules':
+            self.preset_rules={'optimization_goal':'LINK_CLICKS','billing_event':'IMPRESSIONS',
+                'bid_strategy':'LOWEST_COST_WITH_BID_CAP','bid_amount':250}
+        if self._testMethodName=='test_preset_changes_dependent_goal_after_config_is_loaded':
+            self.preset_objective='OUTCOME_SALES'
+            self.preset_rules={'optimization_goal':'OFFSITE_CONVERSIONS','billing_event':'IMPRESSIONS'}
+        if self._testMethodName=='test_unsupported_optimization_is_preserved_until_user_replaces_it':
+            self.preset_rules={'optimization_goal':'LEGACY_TEST_OPTIMIZATION','billing_event':'IMPRESSIONS'}
         self.delay_config = self._testMethodName.startswith('test_initial_config')
         self.waiting_config = []
         self.lookup_requests = []
@@ -109,7 +118,7 @@ class InstalledLaunchTests(unittest.TestCase):
         elif path == 'ajax/creativeLibrary.php':
             data = {'items': [{'id':'preset','name':'Fixture','format':'SINGLE','media_library_id':MEDIA_ID,
                 'media':MEDIA,'message':'Fixture message','headline':'Fixture headline','destination_url':'https://example.com/',
-                'meta_builder':{'campaign':{'daily_budget':500,'objective':self.preset_objective}}}]}
+                'meta_builder':{'campaign':{'daily_budget':500,'objective':self.preset_objective},'adset':self.preset_rules}}]}
             if self._testMethodName=='test_saved_preset_module_values_stay_removed_after_bundle_reload':
                 data['items'][0]['meta_builder'].update(adset={'is_dynamic_creative':True},targeting={'user_device':['iphone 17'],'education_statuses':[1]},
                     creative={'degrees_of_freedom_spec':{'creative_features_spec':{'standard_enhancements':{'enroll_status':'OPT_IN'}}}})
@@ -468,5 +477,49 @@ class InstalledLaunchTests(unittest.TestCase):
         self.assertEqual(self.page.locator('#dailyBudget').input_value(), '500')
         with self.assertRaisesRegex(Exception, 'Сохранённая цель недоступна'):
             self.page.evaluate('fixtureLaunch.payload()')
+
+    def test_initial_config_restores_dependent_preset_rules(self):
+        self.page.locator('#creativeLibrarySelect').select_option('preset')
+        self.release_config()
+        self.assertEqual(self.page.locator('#optimizationGoal').input_value(),'LINK_CLICKS')
+        self.assertEqual(self.page.locator('#billingEvent').input_value(),'IMPRESSIONS')
+        self.assertEqual(self.page.locator('#bidStrategy').input_value(),'LOWEST_COST_WITH_BID_CAP')
+        self.assertEqual(self.page.locator('#bidAmount').input_value(),'250')
+        self.assertTrue(self.page.locator('#bidAmount').is_enabled())
+        self.page.evaluate('fixtureLaunch.geo()')
+        self.assertEqual(self.page.evaluate('fixtureLaunch.effective().adset.optimization_goal'),'LINK_CLICKS')
+        self.assertEqual(self.page.evaluate('fixtureLaunch.effective().adset.bid_amount'),250)
+        self.page.locator('#optimizationGoal').select_option('LANDING_PAGE_VIEWS')
+        self.page.locator('#bidStrategy').select_option('LOWEST_COST_WITHOUT_CAP')
+        self.page.evaluate('fixtureLaunch.config()')
+        self.assertEqual(self.page.locator('#optimizationGoal').input_value(),'LANDING_PAGE_VIEWS')
+        self.assertEqual(self.page.locator('#bidStrategy').input_value(),'LOWEST_COST_WITHOUT_CAP')
+
+    def test_preset_changes_dependent_goal_after_config_is_loaded(self):
+        self.page.wait_for_function('fixtureLaunch.ready()')
+        self.page.locator('#creativeLibrarySelect').select_option('preset')
+        self.assertEqual(self.page.locator('#objective').input_value(),'OUTCOME_SALES')
+        self.assertEqual(self.page.locator('#optimizationGoal').input_value(),'OFFSITE_CONVERSIONS')
+        self.page.evaluate('fixtureLaunch.geo()')
+        self.assertEqual(self.page.evaluate('fixtureLaunch.effective().adset.optimization_goal'),'OFFSITE_CONVERSIONS')
+
+    def test_unsupported_optimization_is_preserved_until_user_replaces_it(self):
+        self.page.wait_for_function('fixtureLaunch.ready()')
+        self.page.locator('#creativeLibrarySelect').select_option('preset')
+        self.assertEqual(self.page.locator('#optimizationGoal').input_value(),'LEGACY_TEST_OPTIMIZATION')
+        with self.assertRaisesRegex(Exception,'Сохранённая оптимизация'):
+            self.page.evaluate('fixtureLaunch.payload()')
+        self.page.locator('#optimizationGoal').select_option('LINK_CLICKS')
+        self.page.evaluate('fixtureLaunch.geo()')
+        self.assertEqual(self.page.evaluate('fixtureLaunch.effective().adset.optimization_goal'),'LINK_CLICKS')
+
+    def test_initial_config_restores_bundle_rules_without_a_preset(self):
+        self.page.evaluate('(data)=>fixtureLaunch.restore(data)',{'fields':{'objective':'OUTCOME_TRAFFIC',
+            'optimizationGoal':'LINK_CLICKS','billingEvent':'IMPRESSIONS','bidStrategy':'COST_CAP','bidAmount':'300','dailyBudget':'700'}})
+        self.release_config()
+        self.assertEqual(self.page.locator('#optimizationGoal').input_value(),'LINK_CLICKS')
+        self.assertEqual(self.page.locator('#bidStrategy').input_value(),'COST_CAP')
+        self.assertEqual(self.page.locator('#bidAmount').input_value(),'300')
+        self.assertEqual(self.page.locator('#dailyBudget').input_value(),'700')
 
 if __name__ == '__main__': unittest.main()
