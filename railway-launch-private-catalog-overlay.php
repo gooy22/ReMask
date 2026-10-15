@@ -334,7 +334,7 @@ final class RemaskAdvertisingAssetBridge
         if (session_status()===PHP_SESSION_ACTIVE) session_write_close();
         $params=http_build_query(['resource'=>$resource,'account_id'=>$account,'force'=>$force?'true':'false',
             'query'=>$query,'limit'=>max(1,min(500,(int)($input['limit'] ?? 100)))],'','&',PHP_QUERY_RFC3986);
-        $context=stream_context_create(['http'=>['method'=>'GET','timeout'=>$force?85:20,'ignore_errors'=>true,
+        $context=stream_context_create(['http'=>['method'=>'GET','timeout'=>85,'ignore_errors'=>true,
             'follow_location'=>0,'header'=>"Accept: application/json\r\nX-Remask-Worker-Key: ".$key."\r\n"]]);
         $raw=@file_get_contents($base.'/api/v1/profiles/'.rawurlencode($profile).'/advertising-resources?'.$params,false,$context);
         $data=is_string($raw)?json_decode($raw,true):null;
@@ -390,7 +390,7 @@ try {
     $catalog = RemaskPrivateLaunchCatalog::load($profile);
     $resource = strtolower(trim((string)($input['resource'] ?? '')));
     $accountId = trim((string)($input['account_id'] ?? ''));
-    if (in_array($resource,['ad_accounts','pages','funding'],true)) {
+    if (in_array($resource,['ad_accounts','pages','funding'],true) && !($resource==='pages' && $accountId!=='')) {
         MetaEndpoint::ok(RemaskPrivateLaunchCatalog::asset($catalog, $resource, $accountId));
     } else {
         MetaEndpoint::ok(RemaskAdvertisingAssetBridge::read($input,$catalog,$resource,($input['force'] ?? '')==='1'));

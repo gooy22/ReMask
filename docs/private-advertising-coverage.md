@@ -67,3 +67,10 @@ sync with their saved objective even when the configuration arrives later. A
 subsequent manual edit remains authoritative on configuration reload. Unsupported
 saved rule values remain visible and block launch instead of silently publishing
 with a different default.
+
+Account resource pickers automatically perform their first private read on a
+cache miss and refresh metadata older than 30 minutes. A failed automatic refresh
+may retain existing metadata with non-live permission flags and an explicit
+`refresh_failed` cache marker; an unsuccessful first read is an error, not an empty
+inventory. Selecting one RK loads its exact promotable Page list. A response for
+an older selection cannot replace the newly selected account's Pages.

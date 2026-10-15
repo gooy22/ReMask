@@ -3610,13 +3610,24 @@ async def private_advertising_resources(profile_id: str, resource: str, account_
                   'query':query,'limit':max(1,min(limit,500)),
                   'actor_id':str(context.cookies.get('c_user') or '')}
         actor = str(context.cookies.get('c_user') or '')
-        if force:
+        cached = None
+        if not force:
+            cached = await pool.private_launch.resources.get(name=resource,values=values,actor_id=actor)
+            if cached.get('availability') != 'NOT_LOADED' and not cached.get('_cache', {}).get('stale'):
+                return {'ok':True,'profile':profile,'resource':resource,**cached}
+        try:
             async with ProfileSession(context) as session:
                 web = await session.facebook_web()
                 web.private_only = True
                 result = await pool.private_launch.resources.get(name=resource,values=values,actor_id=actor,force=True,web=web)
-        else:
-            result = await pool.private_launch.resources.get(name=resource,values=values,actor_id=actor)
+        except (AuthenticationError, RemoteRequestError, ProxyError, ProvisioningError,
+                ProfileContextError, asyncio.TimeoutError):
+            if force or not cached or not cached.get('data'):
+                raise
+            # Preserve last-confirmed picker metadata through a failed automatic
+            # refresh. It remains explicitly non-live and never proves access.
+            result = {**cached, 'checked_live':False, 'account_scope_verified':False,
+                '_cache':{**cached.get('_cache', {}), 'stale':True, 'refresh_failed':True}}
         return {'ok':True,'profile':profile,'resource':resource,**result}
     except AuthenticationError as exc:
         error = private_auth_error(exc)
