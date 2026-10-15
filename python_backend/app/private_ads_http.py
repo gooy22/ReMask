@@ -15,10 +15,31 @@ import re
 from urllib.parse import parse_qs, urlsplit
 
 from .private_ads_draft import fail, flatten_params, identity
-from .private_inventory import _auth_gate, _json_payloads
+from .private_inventory import _auth_gate, _json_payloads, _JSON_SCRIPT_RE, _response_only
 from .provisioning.models import ProvisioningError
 
 log = logging.getLogger("remask.private_ads_http")
+
+# ServerJS.handle receives literal JSON, including in legacy requireLazy
+# script wrappers. Parse its data argument; never execute the wrapper.
+_SERVERJS_HANDLE = re.compile(
+    r'''requireLazy\(\s*\[\s*["']ServerJS["']\s*\]\s*,\s*function\s*\(\s*'''
+    r'''(?P<receiver>[A-Za-z_$][A-Za-z0-9_$]*)\s*\)\s*\{\s*(?P=receiver)\.handle\(\s*''')
+
+
+def _ads_document_payloads(body):
+    payloads = _json_payloads(body)
+    decoder = json.JSONDecoder()
+    for script in _JSON_SCRIPT_RE.finditer(body):
+        source = script.group(1)
+        for call in _SERVERJS_HANDLE.finditer(source):
+            try:
+                value, end = decoder.raw_decode(source, call.end())
+            except (ValueError, RecursionError):
+                continue
+            if isinstance(value, dict) and source[end:].lstrip().startswith(")"):
+                payloads.append(_response_only(value))
+    return payloads
 
 
 class AdsManagerResponseError(ProvisioningError):
@@ -78,24 +99,27 @@ def context_from_document(body, *, account_id, business_id, actor_id):
     configurations = {name: [] for name in ("GraphAPIConfig", "UrlMapConfig", "CurrentUserInitialData")}
     setters = {name: [] for name in ("setAccessToken", "setClientID")}
     initializers = []
-    for payload in _json_payloads(body):
+    for payload in _ads_document_payloads(body):
         for node in _walk(payload):
             if not isinstance(node, list) or len(node) < 3 or not isinstance(node[0], str):
                 continue
             if node[0] in configurations and node[1] == [] and isinstance(node[2], dict):
                 configurations[node[0]].append(node[2])
-            if (node[0] in {"ApiClient", "WebApiApplication"} and isinstance(node[1], str)
+            # ServerJSDefine.getModuleNameAndHash strips the @hash suffix
+            # before resolving a require/call. The hash is not a credential.
+            module = node[0].split("@", 1)[0]
+            if (module in {"ApiClient", "WebApiApplication"} and isinstance(node[1], str)
                     and node[1] in {"init", "setAccessToken", "setAccessTokenForClientID", "setClientID", "setWithCredentials"}):
                 args = node[3] if len(node) > 3 else None
-                initializers.append({"module":node[0], "method":node[1],
+                initializers.append({"module":module, "method":node[1],
                     "arg_types":[type(value).__name__ for value in args] if isinstance(args, list) else []})
-            if node[0] == "ApiClient" and isinstance(node[1], str) and node[1] in setters:
+            if module == "ApiClient" and isinstance(node[1], str) and node[1] in setters:
                 # ServerJS require rows carry arguments at index 3. Do not
                 # search arbitrary response strings for credential patterns.
                 args = node[3] if len(node) > 3 else None
                 if isinstance(args, list) and len(args) == 1:
                     setters[node[1]].append(args[0])
-            if (node[0] == "WebApiApplication" and node[1] == "init" and len(node) == 4
+            if (module == "WebApiApplication" and node[1] == "init" and len(node) >= 4
                     and isinstance(node[2], list) and isinstance(node[3], list) and len(node[3]) >= 2):
                 # Public WebApiApplication.init forwards arguments 0/1 to
                 # ApiClient.setAccessToken/setClientID. Literal ServerJS only.
