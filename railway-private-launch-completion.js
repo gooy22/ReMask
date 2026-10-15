@@ -16,6 +16,40 @@ apiJson = async function(url, options = {}) {
     return remaskPrivateOriginalTargetingApiJson(url, options);
 };
 
+// A selected RK needs its own promotable Pages, not only the profile's old
+// inventory. Cache misses are refreshed by the private worker automatically.
+let remaskPrivatePagesGeneration=0;
+loadPages=async function(force=false) {
+    const generation=++remaskPrivatePagesGeneration;
+    const accounts=selectedAccountIds();
+    if (targetMode()) return;
+    const profile=state.profile,account=accounts.length===1 ? accounts[0] : '',selection=accounts.join(','),
+        wanted=$('page').value || state.pendingBundleAssets.page;
+    const data=await loadCachedAsset('pages',account,force);
+    if (generation!==remaskPrivatePagesGeneration || profile!==state.profile
+            || selectedAccountIds().join(',')!==selection) return;
+    const prior=new Map(state.pages.map(row=>[String(row.id),row]));
+    state.pages=(data.data || []).map(row=>({...prior.get(String(row.id)),...row}));
+    $('page').replaceChildren(new Option('Выберите страницу',''));
+    for (const row of state.pages) $('page').appendChild(new Option(`${row.name || row.id} — ${row.id}`,String(row.id)));
+    $('page').disabled=!state.pages.length;
+    if (wanted && hasOptionValue($('page'),String(wanted))) $('page').value=String(wanted);
+    refreshInstagram(); invalidateLaunchReview(); validateReady();
+};
+$('adAccount')?.addEventListener('change',()=>{
+    if (targetMode() || selectedAccountIds().length!==1) {remaskPrivatePagesGeneration++;return;}
+    const profile=state.profile,account=selectedAccountIds()[0];
+    let status=$('remaskPageReadStatus');
+    if (!status) {status=document.createElement('p');status.id='remaskPageReadStatus';status.className='muted';status.setAttribute('role','status');$('page').after(status);}
+    status.textContent='Загружаем страницы выбранного РК…';
+    loadPages().then(()=>{
+        if(profile===state.profile && selectedAccountIds()[0]===account) status.textContent='';
+    }).catch(()=>{
+        if(profile===state.profile && selectedAccountIds()[0]===account)
+            status.textContent='Не удалось обновить страницы выбранного РК. Ранее сохранённые данные не подтверждают текущий доступ.';
+    });
+});
+
 const remaskUnsupportedObjectiveMessage = 'Сохранённая цель недоступна для автозалива. Выберите доступную цель; остальные настройки сохранены.';
 let remaskRestoredLaunchObjective = '';
 let remaskPendingLaunchRules = null;

@@ -54,6 +54,8 @@ class InstalledLaunchTests(unittest.TestCase):
         self.instagram_wrong_scope = False
         self.estimate_requests=[]
         self.estimate_failure=False
+        self.asset_requests=[]
+        self.waiting_pages=[]
         self.page = self.browser.new_page()
         self.page.set_default_timeout(5000)
         self.page.on('pageerror', lambda e: self.errors.append(str(e)))
@@ -84,6 +86,7 @@ class InstalledLaunchTests(unittest.TestCase):
         if file.is_file() and not path.endswith('.php'):
             body = file.read_bytes()
             if path == 'scripts/launch.js':
+                body += b'\nwindow.fixtureSingleTarget=account=>{state.profile="20";state.targets=[];$("adAccount").innerHTML=`<option value="${account}" selected>${account}</option>`;$("adAccount").disabled=false;$("adAccount").dispatchEvent(new Event("change",{bubbles:true}));};'
                 body += b'\nwindow.fixtureLaunch={payload:()=>buildPayload(),effective:()=>remaskApplySavedMetaBuilderToPayload(buildPayload()),capture:()=>bundleFormState(),restore:applyBundleData,config:loadLaunchConfig,ready:()=>Boolean(state.launchConfig),geo:()=>{state.geo=[{type:"country",key:"US",country_code:"US",name:"United States"}];$("geoQuery").dispatchEvent(new Event("change",{bubbles:true}));},instagramTargets:()=>{state.targets=[{profile:"20",account_id:"act_123456",business_id:"654321"},{profile:"21",account_id:"act_234567",business_id:"765432"}];state.profile="20";state.targetBindingAssets.pages={"20":[{id:"345678",instagram_business_account:{id:"456789"}}],"21":[{id:"567890",instagram_business_account:{id:"678901"}}]};$("adAccount").innerHTML=state.targets.map(t=>`<option value="${t.account_id}" selected>${t.account_id}</option>`).join("");$("creativeFormat").value="INSTAGRAM_POST";renderTargetBindings();},binding:account=>({...bindingFor(account)})};'
             route.fulfill(body=body, content_type='application/javascript' if path.endswith('.js') else 'text/css'); return
         data = {}
@@ -107,6 +110,14 @@ class InstalledLaunchTests(unittest.TestCase):
                 'options':{'instagram_positions':['story']},'body':'<div>Fixture Meta preview</div>'}
             if path=='ajax/metaTemplateAdvertisingHelper.php':data['template_account_bound']=False
             else:data.update(scope)
+        elif path == 'ajax/metaAssets.php':
+            fields=parse_qs(request.post_data or '');self.asset_requests.append(fields)
+            resource=fields['resource'][0];account=fields.get('account_id',[''])[0]
+            if resource=='pages':
+                if self._testMethodName=='test_old_page_read_cannot_overwrite_new_selected_account' and account=='act_123456':
+                    self.waiting_pages.append(route);return
+                data={'data':[{'id':'345678' if account=='act_123456' else '567890','name':'Scoped Page'}]}
+            else:data={'data':[]}
         elif path == 'ajax/metaAssetManager.php':
             fields=parse_qs(request.post_data or '');self.instagram_requests.append(fields)
             account=fields['account_id'][0];actor='456789' if account=='123456' else '678901'
@@ -521,5 +532,24 @@ class InstalledLaunchTests(unittest.TestCase):
         self.assertEqual(self.page.locator('#bidStrategy').input_value(),'COST_CAP')
         self.assertEqual(self.page.locator('#bidAmount').input_value(),'300')
         self.assertEqual(self.page.locator('#dailyBudget').input_value(),'700')
+
+    def test_selected_account_loads_its_pages_automatically(self):
+        self.page.evaluate('fixtureSingleTarget("act_123456")')
+        self.page.locator('#page option[value="345678"]').wait_for(state='attached')
+        self.assertTrue(self.page.locator('#page').is_enabled())
+        pages=[fields for fields in self.asset_requests if fields['resource']==['pages']]
+        self.assertEqual(pages[-1]['profile'],['20'])
+        self.assertEqual(pages[-1]['account_id'],['act_123456'])
+
+    def test_old_page_read_cannot_overwrite_new_selected_account(self):
+        self.page.evaluate('fixtureSingleTarget("act_123456")')
+        self.page.wait_for_timeout(50)
+        self.assertEqual(len(self.waiting_pages),1)
+        self.page.evaluate('fixtureSingleTarget("act_234567")')
+        self.page.locator('#page option[value="567890"]').wait_for(state='attached')
+        self.waiting_pages[0].fulfill(json={'ok':True,'data':{'data':[{'id':'345678','name':'Old Page'}]}})
+        self.page.wait_for_timeout(50)
+        self.assertEqual(self.page.locator('#page option[value="345678"]').count(),0)
+        self.assertEqual(self.page.locator('#page option[value="567890"]').count(),1)
 
 if __name__ == '__main__': unittest.main()
