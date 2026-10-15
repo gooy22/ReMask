@@ -10,12 +10,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import json
 import hashlib
+import logging
 import re
 from urllib.parse import parse_qs, urlsplit
 
 from .private_ads_draft import fail, flatten_params, identity
 from .private_inventory import _auth_gate, _json_payloads
 from .provisioning.models import ProvisioningError
+
+log = logging.getLogger("remask.private_ads_http")
 
 
 class AdsManagerResponseError(ProvisioningError):
@@ -151,6 +154,14 @@ class AdsManagerPrivateHttp:
         status, body, final_url = await web.fetch_text(url, max_bytes=5_000_001, document_navigation=True)
         final = urlsplit(final_url)
         gate = _auth_gate(final_url, body)
+        # Only typed status and comparison results may leave this boundary.
+        # Raw URLs, HTML, cookies and initialization values can contain secrets.
+        log.info("ads_bootstrap profile=%s status=%s bytes=%d host_reviewed=%s path_matches=%s account_matches=%s business_matches=%s gate=%s",
+            getattr(web.profile, "name", ""), status, len(body.encode()),
+            final.hostname in {"adsmanager.facebook.com", "business.facebook.com"},
+            final.path == "/adsmanager/manage/campaigns",
+            parse_qs(final.query).get("act") == [account_id],
+            parse_qs(final.query).get("business_id") == [business_id], gate or "none")
         if gate:
             raise fail(gate, "Ads Manager requires restoration of the profile session", True)
         if (status != 200 or len(body.encode()) > 5_000_000 or final.scheme != "https"
@@ -159,8 +170,12 @@ class AdsManagerPrivateHttp:
                 or parse_qs(final.query).get("act") != [account_id]
                 or parse_qs(final.query).get("business_id") != [business_id]):
             raise fail("BOOTSTRAP_SCOPE_UNVERIFIED", "Ads Manager did not confirm the requested account context", True)
-        context = context_from_document(body, account_id=account_id,
-                    business_id=business_id, actor_id=actor_id)
+        try:
+            context = context_from_document(body, account_id=account_id,
+                        business_id=business_id, actor_id=actor_id)
+        except ProvisioningError as error:
+            log.warning("ads_bootstrap rejected profile=%s code=%s", getattr(web.profile, "name", ""), error.code)
+            raise
         refresh = getattr(web, 'refresh_reviewed_modules', None)
         if callable(refresh):
             await refresh(body, final_url)
