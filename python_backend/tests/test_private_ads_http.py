@@ -65,6 +65,60 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ProvisioningError):
             context_from_document(body, account_id="111111", business_id="222222", actor_id="123456")
 
+    async def test_missing_initializer_renews_once_then_proves_exact_account(self):
+        payload = json.loads(document());payload['require'] = []
+        async def missing(url, **kwargs):return 200, json.dumps(payload), url
+        self.web.fetch_text = missing
+        async def bootstrap():return SimpleNamespace(actor_id='123456',fb_dtsg='synthetic-csrf',lsd='synthetic-lsd')
+        self.web.bootstrap = bootstrap
+        calls = []
+        @asynccontextmanager
+        async def request(method, url, **options):
+            calls.append((method,url,options))
+            result = ({'payload':{'access_token':'synthetic-renewed-session','client_id':'119211728144504'}}
+                if method == 'POST' else {'id':'act_111111','business':{'id':'222222'}})
+            raw = ('for (;;);'+json.dumps(result)).encode() if method == 'POST' else json.dumps(result).encode()
+            yield SimpleNamespace(http_version='HTTP/2',status=200,content=Body(raw))
+        self.web.session.request = request
+        client = await AdsManagerPrivateHttp.open(self.web,
+            account_id='111111',business_id='222222',actor_id='123456')
+        self.assertEqual([row[0] for row in calls], ['POST','GET'])
+        self.assertTrue(calls[0][1].endswith('/ads/manager/ajax/renew_access_token/'))
+        self.assertEqual(calls[0][2]['data']['client_id'],'119211728144504')
+        self.assertTrue(calls[1][1].endswith('/act_111111'))
+        self.assertFalse(client.read_only)
+        self.assertNotIn('synthetic-renewed-session',repr(client.context))
+
+    async def test_session_renewal_never_retries_meta_rejection_or_accepts_wrong_client(self):
+        payload = json.loads(document());payload['require'] = []
+        async def missing(url, **kwargs):return 200, json.dumps(payload), url
+        self.web.fetch_text = missing
+        async def bootstrap():return SimpleNamespace(actor_id='123456',fb_dtsg='synthetic-csrf')
+        self.web.bootstrap = bootstrap
+        for result in ({'error':1357001}, {'payload':{'client_id':'999999','access_token':'synthetic-renewed-session'}},
+                       {'payload':{'client_id':'119211728144504','access_token':''}}):
+            calls = []
+            @asynccontextmanager
+            async def request(method,url,**options):
+                calls.append(method)
+                yield SimpleNamespace(http_version='HTTP/2',status=200,content=Body(json.dumps(result).encode()))
+            self.web.session.request = request
+            with self.subTest(result=result), self.assertRaises(ProvisioningError):
+                await AdsManagerPrivateHttp.open(self.web,
+                    account_id='111111',business_id='222222',actor_id='123456')
+            self.assertEqual(calls,['POST'])
+
+    async def test_session_renewal_rejects_wrong_bootstrap_actor_before_post(self):
+        payload = json.loads(document());payload['require'] = []
+        async def missing(url, **kwargs):return 200, json.dumps(payload), url
+        self.web.fetch_text = missing
+        async def bootstrap():return SimpleNamespace(actor_id='999999',fb_dtsg='synthetic-csrf')
+        self.web.bootstrap = bootstrap
+        with self.assertRaises(ProvisioningError):
+            await AdsManagerPrivateHttp.open(self.web,
+                account_id='111111',business_id='222222',actor_id='123456')
+        self.assertEqual(self.web.session.calls,[])
+
     async def test_post_claim_and_captured_encoding_on_profile_http2(self):
         result = await self.client.post("/act_111111/addrafts", {"enabled": False, "values": [1]}, before_submit=self.claim)
         self.assertEqual(self.claims, 1)

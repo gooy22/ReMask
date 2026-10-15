@@ -7,7 +7,7 @@ Credentials are private memory; neither receipts nor diagnostics include them.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import json
 import hashlib
 import logging
@@ -93,6 +93,13 @@ class AdsManagerContext:
     access_token: str = field(repr=False)
 
 
+class _MissingSessionInitialization(ProvisioningError):
+    def __init__(self, context):
+        super().__init__("PRIVATE_ADS_DRAFT_SESSION_CONTEXT_UNAVAILABLE",
+            "Ads Manager omitted its session initializer", retryable=True)
+        self.context = context
+
+
 def context_from_document(body, *, account_id, business_id, actor_id):
     """Read literal module data and source-supported initializers; never execute JS."""
     account_id, business_id, actor_id = map(identity, (account_id, business_id, actor_id))
@@ -141,6 +148,11 @@ def context_from_document(body, *, account_id, business_id, actor_id):
         len(setters["setAccessToken"]), len(setters["setClientID"]),
         sum(isinstance(value, str) and 10 <= len(value) <= 4096 and not any(ch.isspace() or ord(ch) < 32 for ch in value)
             for value in setters["setAccessToken"]), json.dumps(initializers[:20], separators=(",", ":")))
+    if not setters["setAccessToken"] and not setters["setClientID"]:
+        # Reviewed WebApiApplication Ads Manager client. A cookie-authenticated
+        # native renewal must succeed before this incomplete context is usable.
+        raise _MissingSessionInitialization(AdsManagerContext(account_id, business_id, actor_id,
+            "https://adsmanager-graph.facebook.com", "v22.0", "119211728144504", ""))
     token = _unique(setters["setAccessToken"], "SESSION_CONTEXT_UNAVAILABLE")
     application = _unique(setters["setClientID"], "SESSION_CONTEXT_UNAVAILABLE")
     if not isinstance(token, str) or not 10 <= len(token) <= 4096 or re.search(r"[\s\x00-\x1f]", token):
@@ -207,6 +219,14 @@ class AdsManagerPrivateHttp:
         try:
             context = context_from_document(body, account_id=account_id,
                         business_id=business_id, actor_id=actor_id)
+        except _MissingSessionInitialization as error:
+            client = cls(web, error.context)
+            client.document_origin = final.scheme + '://' + final.hostname
+            client.read_only = True
+            context = await client._renew_session()
+            # Every renewed session must independently confirm the selected
+            # account and BM, even if the document retained its act parameter.
+            account_matches = False
         except ProvisioningError as error:
             log.warning("ads_bootstrap rejected profile=%s code=%s", getattr(web.profile, "name", ""), error.code)
             raise
@@ -229,6 +249,65 @@ class AdsManagerPrivateHttp:
             client.read_only = False
             log.info("ads_bootstrap scope_confirmed profile=%s source=exact_account_read", getattr(web.profile, "name", ""))
         return client
+
+    async def _renew_session(self):
+        """One cookie-authenticated native refresh, as AdsMgmtNetworkRefreshToken.
+
+        No advertising write, OAuth grant, alternate actor or configured token.
+        Source: XAdsCMRenewAccessTokenController + AsyncRequest.promisePayload.
+        """
+        try:
+            bootstrap = await self.web.bootstrap()
+            if (not self._profile_matches() or bootstrap.actor_id != self.context.actor_id
+                    or not isinstance(bootstrap.fb_dtsg, str) or not bootstrap.fb_dtsg):
+                raise fail("PROFILE_CONTEXT_UNAVAILABLE", "Session renewal requires the same confirmed actor")
+            session = await self.web._ensure_session()
+            if session.proxy != self._profile_proxy:
+                raise fail("PROFILE_CONTEXT_UNAVAILABLE", "Session renewal route changed")
+            form = {"client_id":self.context.application_id, "__a":"1",
+                    "__user":self.context.actor_id, "fb_dtsg":bootstrap.fb_dtsg}
+            for name in ("lsd", "jazoest"):
+                value = getattr(bootstrap, name, "")
+                if isinstance(value, str) and value:
+                    form[name] = value
+            headers = {"Accept":"application/json", "Origin":self.document_origin,
+                       "Referer":self.document_origin + "/"}
+            if form.get("lsd"):
+                headers["X-FB-LSD"] = form["lsd"]
+            if not self._profile_matches():
+                raise fail("PROFILE_CONTEXT_UNAVAILABLE", "Session renewal profile changed before dispatch")
+            async with session.request("POST", self.document_origin + "/ads/manager/ajax/renew_access_token/",
+                    data=form, headers=headers, allow_redirects=False, request_timeout_seconds=30) as response:
+                if response.http_version != "HTTP/2":
+                    raise fail("PROTOCOL_UNAVAILABLE", "Session renewal requires HTTP/2")
+                raw = await response.content.read(2_000_001)
+                if response.status != 200 or len(raw) > 2_000_000:
+                    raise fail("SESSION_RENEWAL_UNAVAILABLE", "Meta did not return a usable session renewal")
+            text = raw.decode("utf-8").strip()
+            if text.startswith("for (;;);"):
+                text = text[len("for (;;);"):].lstrip()
+            result = json.loads(text)
+            if not isinstance(result, dict) or result.get("error") or result.get("errors"):
+                code = result.get("error") if isinstance(result, dict) else None
+                log.warning("ads_session_renewal rejected profile=%s code=%s",
+                    self._profile_name, code if type(code) is int else "unavailable")
+                raise fail("SESSION_RENEWAL_REJECTED", "Meta rejected the cookie-authenticated advertising session renewal")
+            payload = result.get("payload")
+            if not isinstance(payload, dict):
+                raise fail("SESSION_RENEWAL_UNAVAILABLE", "Meta session renewal payload is missing")
+            token = payload.get("access_token")
+            if (str(payload.get("client_id")) != self.context.application_id
+                    or not isinstance(token, str) or not 10 <= len(token) <= 4096
+                    or re.search(r"[\s\x00-\x1f]", token) or not self._profile_matches()):
+                raise fail("SESSION_RENEWAL_UNAVAILABLE", "Meta session renewal did not confirm the reviewed client")
+            log.info("ads_session_renewal confirmed profile=%s", self._profile_name)
+            return replace(self.context, access_token=token)
+        except ProvisioningError:
+            raise
+        except Exception:
+            # Transport and decoder exceptions may contain credential-bearing
+            # URLs or response content; never include them in diagnostics.
+            raise fail("SESSION_RENEWAL_UNAVAILABLE", "Advertising session renewal did not return usable data", True) from None
 
     async def request(self, method, path, params, *, before_submit=None, files=None, multipart=False):
         if method not in {"GET", "POST"} or not re.fullmatch(r"/[A-Za-z0-9_]+(?:/[A-Za-z0-9_]+)?", path):
