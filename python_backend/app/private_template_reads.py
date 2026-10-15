@@ -13,6 +13,7 @@ from .private_advertising_reads import TARGETING_TYPES
 from .private_inventory import private_inventory_snapshot, inventory_diagnostic_summary
 from .private_launch import PrivateLaunchContractStore
 from .provisioning.models import ProvisioningError
+from .static_meta_inventory import read_business_inventory, read_ad_account_inventory
 
 REFERENCE_TYPES = TARGETING_TYPES | {'locations', 'locales'}
 _sources = {}  # Private process memory. Hints expire and never prove permissions.
@@ -38,6 +39,54 @@ def _pairs(rows, actor):
         if business != actor and row.get('is_personal') is not True:
             pairs[(account, business)] = str(row.get('account_status', '')) == '1'
     return sorted(pairs, key=lambda pair: (not pairs[pair], pair))
+
+
+async def _discover_sources(web, actor):
+    snapshot = await private_inventory_snapshot(web,
+        known_accounts_by_business={}, known_business_ids=set(), personal_scope_id=actor,
+        execute_read_queries=True)
+    rows = [row for business in snapshot.get('businesses', [])
+            for row in business.get('ad_accounts', [])]
+    pairs = _pairs(rows, actor)
+    if pairs:
+        return pairs
+    diagnostics = list(snapshot.get('diagnostics', []))
+    for business in snapshot.get('businesses', []):
+        diagnostics.extend(business.get('diagnostics', []))
+    gates = {row.get('auth_gate') for row in diagnostics}
+    for code in ('CHECKPOINT_REQUIRED', 'SESSION_EXPIRED', 'BUSINESS_LOGIN_GATE'):
+        if code in gates:
+            raise fail(code, 'Meta session cannot supply template reference data')
+    if any(row.get('error_type') == 'ProxyError' for row in diagnostics):
+        raise fail('PRIVATE_HTTP_PROXY_UNAVAILABLE', 'The configured read transport is unavailable', True)
+    # Authenticated HTML need not embed the portfolio selector or RK collection.
+    # Reuse the installed, reviewed READ_BM/READ_RK modules. Their exact response
+    # identities are only lookup hints until the fresh ACCOUNT_READ below.
+    try:
+        business_proof = await read_business_inventory(web)
+        businesses = []
+        for raw in business_proof.get('rows', {}):
+            try:
+                business = identity(str(raw))
+            except (ValueError, TypeError, ProvisioningError):
+                continue
+            if business != actor:
+                businesses.append(business)
+        for business in sorted(set(businesses))[:2]:
+            account_proof = await read_ad_account_inventory(web, business, '')
+            pairs.extend(_pairs([{'id':raw, 'business_id':business}
+                for raw in account_proof.get('ids', [])], actor))
+    except Exception as error:
+        from .private_auth import private_auth_error
+        auth_error = private_auth_error(error)
+        if auth_error is not None:
+            raise auth_error from error
+        raise
+    if pairs:
+        return sorted(set(pairs))
+    log.info('template reference discovery profile=%s account_contexts=0 diagnostic=%s',
+        web.profile.name, json.dumps(inventory_diagnostic_summary(snapshot), ensure_ascii=True)[:12000])
+    raise fail('TEMPLATE_LOOKUP_NO_ACCOUNT', 'Meta did not confirm a template read account', True)
 
 
 async def read_template_reference(web, catalog, context, operation, inputs):
@@ -75,25 +124,7 @@ async def read_template_reference(web, catalog, context, operation, inputs):
     pairs = ([cached[1]] if cached and now-cached[0] < 1800 else [])
     pairs += [pair for pair in _pairs(context.ad_accounts or [], actor) if pair not in pairs]
     if not pairs:
-        snapshot = await asyncio.wait_for(private_inventory_snapshot(web,
-            known_accounts_by_business={}, known_business_ids=set(), personal_scope_id=actor,
-            execute_read_queries=True), timeout=18)
-        rows = [row for business in snapshot.get('businesses', [])
-                for row in business.get('ad_accounts', [])]
-        pairs = _pairs(rows, actor)
-        if not pairs:
-            log.info('template reference discovery profile=%s account_contexts=0 diagnostic=%s',
-                profile, json.dumps(inventory_diagnostic_summary(snapshot), ensure_ascii=True)[:12000])
-            diagnostics = list(snapshot.get('diagnostics', []))
-            for business in snapshot.get('businesses', []):
-                diagnostics.extend(business.get('diagnostics', []))
-            gates = {row.get('auth_gate') for row in diagnostics}
-            for code in ('CHECKPOINT_REQUIRED', 'SESSION_EXPIRED', 'BUSINESS_LOGIN_GATE'):
-                if code in gates:
-                    raise fail(code, 'Meta session cannot supply template reference data')
-            if any(row.get('error_type') == 'ProxyError' for row in diagnostics):
-                raise fail('PRIVATE_HTTP_PROXY_UNAVAILABLE', 'The configured read transport is unavailable', True)
-            raise fail('TEMPLATE_LOOKUP_NO_ACCOUNT', 'Meta did not confirm a template read account', True)
+        pairs = await asyncio.wait_for(_discover_sources(web, actor), timeout=18)
     # Exact fresh ACCOUNT_READ still confirms every selected pair. A stale or
     # foreign pair can fall through to another pair from this same profile.
     last = None

@@ -19,9 +19,12 @@ class TemplateReferenceTests(unittest.IsolatedAsyncioTestCase):
         self.account = {'id':'111111', 'business_id':'222222', 'account_status':1}
         self.snapshot = {'ready':False, 'businesses':[{'id':'222222','ad_accounts':[self.account]}]}
         self.discovery = AsyncMock(return_value=self.snapshot)
+        self.businesses = AsyncMock(return_value={'rows':{}, 'complete':True})
+        self.accounts = AsyncMock(return_value={'ids':[], 'complete':True})
         self.helper = AsyncMock(return_value={'checked_live':True, 'account_scope_verified':True,
             'profile':'20', 'account_id':'111111', 'business_id':'222222', 'transport':'private_http_h2'})
-        for name, mock in [('private_inventory_snapshot',self.discovery), ('read_form_helper',self.helper)]:
+        for name, mock in [('private_inventory_snapshot',self.discovery), ('read_form_helper',self.helper),
+                ('read_business_inventory',self.businesses), ('read_ad_account_inventory',self.accounts)]:
             patcher = patch('app.private_template_reads.'+name, mock)
             patcher.start(); self.addCleanup(patcher.stop)
 
@@ -46,6 +49,36 @@ class TemplateReferenceTests(unittest.IsolatedAsyncioTestCase):
         self.web.profile.cookies['xs']='fixture-renewal'
         await self.read()
         self.assertEqual(self.discovery.await_count,2)
+
+    async def test_native_read_modules_supply_missing_html_inventory_then_revalidate_exact_pair(self):
+        self.discovery.return_value={'businesses':[], 'diagnostics':[]}
+        self.businesses.return_value={'rows':{'222222':'BM'}, 'complete':False}
+        self.accounts.return_value={'ids':['111111'], 'complete':False}
+        result = await self.read()
+        self.accounts.assert_awaited_once_with(self.web, '222222', '')
+        self.assertEqual(self.helper.await_args.args[2]['ad_account_id'], '111111')
+        self.assertEqual(self.helper.await_args.args[2]['business_id'], '222222')
+        self.assertTrue(result['account_scope_verified'])
+        self.assertEqual(self.context.ad_accounts, [])
+
+    async def test_native_discovery_never_substitutes_personal_scope_or_invalid_ids(self):
+        self.discovery.return_value={'businesses':[]}
+        self.businesses.return_value={'rows':{'999999':'Personal','invalid':'Bad'}}
+        with self.assertRaises(ProvisioningError): await self.read()
+        self.accounts.assert_not_awaited(); self.helper.assert_not_awaited()
+
+    async def test_auth_gate_stops_before_native_inventory_modules(self):
+        self.discovery.return_value={'businesses':[], 'diagnostics':[{'auth_gate':'CHECKPOINT_REQUIRED'}]}
+        with self.assertRaises(ProvisioningError): await self.read()
+        self.businesses.assert_not_awaited(); self.accounts.assert_not_awaited()
+
+    async def test_native_inventory_never_replaces_fresh_account_scope_proof(self):
+        self.discovery.return_value={'businesses':[]}
+        self.businesses.return_value={'rows':{'222222':'BM'}}
+        self.accounts.return_value={'ids':['111111']}
+        self.helper.return_value['account_scope_verified']=False
+        with self.assertRaises(ProvisioningError): await self.read()
+        self.assertEqual(_sources,{})
 
     async def test_foreign_cached_pair_falls_through_to_another_same_profile_pair(self):
         self.context.ad_accounts=[self.account,{'id':'333333','business_id':'444444'}]
