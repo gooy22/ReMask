@@ -179,6 +179,34 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ProvisioningError):
             await AdsManagerPrivateHttp.open(self.web, account_id="111111", business_id="222222", actor_id="123456")
 
+    async def test_default_account_redirect_requires_independent_exact_account_read(self):
+        async def redirected(url, **kwargs):
+            return 200, document(), url.replace("act=111111", "act=999999")
+        self.web.fetch_text = redirected
+        self.web.session.response_body = json.dumps({"id":"act_111111", "business":{"id":"222222"}}).encode()
+        client = await AdsManagerPrivateHttp.open(self.web,
+            account_id="111111", business_id="222222", actor_id="123456")
+        self.assertFalse(client.read_only)
+        self.assertEqual(len(self.web.session.calls), 1)
+        method, url, options = self.web.session.calls[0]
+        self.assertEqual(method, "GET")
+        self.assertTrue(url.endswith("/act_111111"))
+        self.assertEqual(json.loads(options["params"]["fields"]), ["id", "business"])
+
+    async def test_redirect_account_proof_rejects_other_business_or_account(self):
+        async def redirected(url, **kwargs):
+            return 200, document(), url.replace("act=111111", "")
+        self.web.fetch_text = redirected
+        for row in ({"id":"act_111111","business":{"id":"999999"}},
+                    {"id":"act_999999","business":{"id":"222222"}},
+                    {"id":"act_111111"}):
+            self.web.session.calls = []
+            self.web.session.response_body = json.dumps(row).encode()
+            with self.subTest(row=row), self.assertRaises(ProvisioningError):
+                await AdsManagerPrivateHttp.open(self.web,
+                    account_id="111111", business_id="222222", actor_id="123456")
+            self.assertEqual([call[0] for call in self.web.session.calls], ["GET"])
+
 
     async def test_changed_non_actor_cookie_requires_fresh_document_before_claim(self):
         self.web.profile.cookies['xs'] = 'new-synthetic-cookie'
