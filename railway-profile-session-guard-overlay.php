@@ -271,7 +271,8 @@ try {
         [$sequenceLock, $sequencePath] = rmx_pm_sequence_open(LOCK_SH);
         $next = rmx_pm_sequence_last($store->deserialize(), $sequencePath) + 1;
         fclose($sequenceLock);
-        rmx_pm_out(['ok'=>true,'success'=>true,'next_number'=>$next]);
+        rmx_pm_out(['ok'=>true,'success'=>true,'next_number'=>$next,
+            'direct_test_until'=>RemaskCookieProfile::directTestUntil((string)$next)]);
     }
 
     if (in_array($action, ['list','get','load','all'], true)) {
@@ -410,7 +411,7 @@ try {
     elseif ($existing instanceof FbAccount) $proxy = $existing->proxy;
     else $proxy = null;
 
-    $cookies = RemaskCookieProfile::validate($cookies, $proxy, !$clearProxy);
+    $cookies = RemaskCookieProfile::validate($cookies, $proxy, !$clearProxy, $name);
 
     $accountsPath = (string)ACCOUNTSFILENAME;
     if (is_file($accountsPath) && filesize($accountsPath) > 2) {
