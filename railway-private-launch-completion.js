@@ -18,6 +18,27 @@ apiJson = async function(url, options = {}) {
 
 const remaskUnsupportedObjectiveMessage = 'Сохранённая цель недоступна для автозалива. Выберите доступную цель; остальные настройки сохранены.';
 let remaskRestoredLaunchObjective = '';
+let remaskPendingLaunchRules = null;
+const remaskLaunchRuleFields = ['optimizationGoal','billingEvent','bidStrategy','bidAmount','conversionEvent'];
+function remaskLaunchRulesFromBuilder(builder) {
+    const adset=builder?.adset || {};
+    return {optimizationGoal:adset.optimization_goal,billingEvent:adset.billing_event,
+        bidStrategy:adset.bid_strategy,bidAmount:adset.bid_amount,
+        conversionEvent:adset.promoted_object?.custom_event_type};
+}
+function remaskRestoreRuleValue(id,value) {
+    const select=$(id);
+    if (!select || value===undefined || value===null || value==='') return;
+    if (select.tagName==='SELECT' && !hasOptionValue(select,String(value))) {
+        const option=new Option('Сохранённое значение недоступно: '+value,String(value));
+        option.disabled=true; option.dataset.remaskUnsupportedRule='true'; select.appendChild(option);
+    }
+    select.value=String(value);
+}
+function remaskLaunchRuleIssue() {
+    return remaskLaunchRuleFields.some(id=>$(id)?.selectedOptions?.[0]?.dataset.remaskUnsupportedRule)
+        ? 'Сохранённая оптимизация, оплата или стратегия недоступна для этой цели. Выберите доступное значение.' : '';
+}
 function remaskRestoreLaunchObjective(value) {
     const select = $('objective');
     if (!select) return;
@@ -58,19 +79,40 @@ if ($('objective')) new MutationObserver(() => {
 const remaskPrivateOriginalLoadConfig = loadLaunchConfig;
 loadLaunchConfig = async function() {
     const saved = $('objective')?.value;
+    if (state.launchConfig && !remaskPendingLaunchRules)
+        remaskPendingLaunchRules=Object.fromEntries(remaskLaunchRuleFields.map(id=>[id,$(id)?.value]));
     await remaskPrivateOriginalLoadConfig();
     remaskRestoreLaunchObjective(remaskRestoredLaunchObjective || saved);
     invalidateLaunchReview(); validateReady();
 };
+$('objective')?.addEventListener('change',()=>{remaskPendingLaunchRules=null;},{capture:true});
 $('objective')?.addEventListener('change', () => {
     remaskRestoreLaunchObjective($('objective').value);
     invalidateLaunchReview(); validateReady();
 });
 
+// initializeLaunch's first request can predate this overlay. Its continuation
+// resolves this shared function after the selected preset has installed intent.
+const remaskPrivateOriginalObjectiveRules=applyObjectiveRules;
+applyObjectiveRules=function(desired={}) {
+    const pending=remaskPendingLaunchRules;
+    const values=pending ? {...pending,...desired} : desired;
+    if (pending && state.launchConfig) remaskRestoreLaunchObjective(remaskRestoredLaunchObjective);
+    remaskPrivateOriginalObjectiveRules(values);
+    if (pending && state.launchConfig) {
+        remaskPendingLaunchRules=null;
+        for (const id of remaskLaunchRuleFields) remaskRestoreRuleValue(id,values[id]);
+        updateBidControls(); invalidateLaunchReview(); validateReady();
+    }
+};
+for (const id of remaskLaunchRuleFields) for (const event of ['input','change'])
+    $(id)?.addEventListener(event,()=>{if (remaskPendingLaunchRules) remaskPendingLaunchRules[id]=$(id).value;});
+
 let remaskBundleMedia = null;
 let remaskBundleRestoreGeneration = 0;
 const remaskPrivateOriginalClearPreset = clearCreativeLibrarySelection;
 clearCreativeLibrarySelection = function() {
+    remaskPendingLaunchRules=null;
     remaskBundleMedia = null;
     remaskBundleRestoreGeneration++;
     return remaskPrivateOriginalClearPreset();
@@ -140,6 +182,8 @@ async function applyBundleData(data) {
     if ($('carouselMedia')) $('carouselMedia').value = '';
     // Loading old bundles must clear advanced values from the previous form.
     remaskPopulateLaunchMetaSdkFields(data?.meta_builder || {});
+    remaskPendingLaunchRules={...remaskLaunchRulesFromBuilder(data?.meta_builder),...(data?.fields || {})};
+    remaskRestoreLaunchObjective(data?.fields?.objective || data?.meta_builder?.campaign?.objective);
     remaskLegacyApplyBundleData(data);
     remaskRestoreLaunchObjective(data?.fields?.objective || data?.meta_builder?.campaign?.objective);
     remaskPrivateBudgetLabel();
@@ -203,6 +247,7 @@ remaskPrivateInstallBudgetPeriod();
 const remaskPrivateOriginalBuildPayload = buildPayload;
 buildPayload = function() {
     if (!currentObjectiveSpec()?.enabled) throw new Error(remaskUnsupportedObjectiveMessage);
+    if (remaskLaunchRuleIssue()) throw new Error(remaskLaunchRuleIssue());
     const payload = remaskPrivateOriginalBuildPayload();
     if ($('budgetPeriod')?.value === 'LIFETIME') {
         for (const section of ['campaign','adset']) {
@@ -229,6 +274,8 @@ applyCreativeLibrarySelection = function() {
     remaskPrivateOriginalApplyPreset();
     const builder = remaskSelectedCreativePreset?.meta_builder || {};
     remaskRestoreLaunchObjective(builder.campaign?.objective);
+    remaskPendingLaunchRules=remaskLaunchRulesFromBuilder(builder);
+    if (state.launchConfig) applyObjectiveRules();
     const lifetime = builder.campaign?.lifetime_budget || builder.adset?.lifetime_budget;
     if ($('budgetPeriod')) $('budgetPeriod').value = lifetime ? 'LIFETIME' : 'DAILY';
     if (lifetime) {
