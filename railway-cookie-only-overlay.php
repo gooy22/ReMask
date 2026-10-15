@@ -6,7 +6,15 @@ $helper = <<<'COOKIE_PROFILE'
 declare(strict_types=1);
 final class RemaskCookieProfile
 {
-    public static function validate(array $cookies, mixed $proxy, bool $requireProxy = true): array
+    public static function directTestUntil(string $profile): int
+    {
+        $selected = trim((string)(getenv('REMASK_DIRECT_TEST_PROFILE') ?: ''));
+        $until = (int)(getenv('REMASK_DIRECT_TEST_UNTIL') ?: 0);
+        $now = time();
+        return $profile !== '' && $selected === $profile && $until > $now && $until <= $now + 7200 ? $until : 0;
+    }
+
+    public static function validate(array $cookies, mixed $proxy, bool $requireProxy = true, string $profile = ''): array
     {
         $rows = [];
         if (!array_is_list($cookies)) {
@@ -31,7 +39,7 @@ final class RemaskCookieProfile
         if (!ctype_digit($auth['c_user'] ?? '') || trim($auth['xs'] ?? '') === '') {
             throw new InvalidArgumentException('Cookies должны содержать непустые c_user и xs.');
         }
-        if ($requireProxy && $proxy === null) throw new InvalidArgumentException('Прокси обязателен.');
+        if ($requireProxy && $proxy === null && self::directTestUntil($profile) === 0) throw new InvalidArgumentException('Прокси обязателен.');
         return array_values($rows);
     }
 }
@@ -81,7 +89,7 @@ try {
     if ($cookies === [] && $existing) $cookies = (array)$existing->cookies;
     $proxyRaw = trim((string)($_POST['proxy'] ?? ''));
     $proxy = $proxyRaw !== '' ? RemaskProxy::fromSemicolonString($proxyRaw) : ($existing?->proxy ?? null);
-    RemaskCookieProfile::validate($cookies, $proxy);
+    RemaskCookieProfile::validate($cookies, $proxy, true, $name);
     $data = ['name'=>$name, 'auth_mode'=>'cookies', 'token_required'=>false, 'cookie_format_valid'=>true, 'session_verified'=>false];
     echo json_encode(['ok'=>true, 'success'=>true, 'res'=>json_encode($data, JSON_UNESCAPED_UNICODE)]);
 } catch (Throwable $e) {
@@ -158,8 +166,8 @@ foreach (['workspace.php','launch.php','accounts.php','menu.php'] as $file) {
     if (!is_file($path)) continue;
     $s = file_get_contents($path);
     $s = str_replace(['Official Meta API','доступные по token'], ['Facebook cookies','сохранённые BM'], $s);
-    $s = preg_replace('#scripts/workspace\.js(?:\?[^"\']*)?#', 'scripts/workspace.js?v=20261004-python-worker-ui-v220-cookie-only-v1-numbered-v1-txt-v3', $s);
-    $s = preg_replace('#scripts/accounts\.js(?:\?[^"\']*)?#', 'scripts/accounts.js?v=20261002-cookie-only-v1-numbered-v1-txt-v3', $s);
+    $s = preg_replace('#scripts/workspace\.js(?:\?[^"\']*)?#', 'scripts/workspace.js?v=20261015-direct-import-v1', $s);
+    $s = preg_replace('#scripts/accounts\.js(?:\?[^"\']*)?#', 'scripts/accounts.js?v=20261015-direct-import-v1', $s);
     file_put_contents($path, $s);
 }
 // Shared import UI on Workspace and Accounts; no browser storage of shop secrets.

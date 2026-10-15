@@ -1,6 +1,7 @@
 import {Requests} from './requests.js';
 
 let remaskEditingProfile = false;
+let remaskDirectTest = {name:'', until:0};
 
 async function remaskLoadNextProfileNumber() {
     try {
@@ -9,6 +10,8 @@ async function remaskLoadNextProfileNumber() {
         if (!data.ok) throw new Error(data.message || data.error?.message || (typeof data.error === 'string' ? data.error : 'Не удалось получить номер'));
         document.add.name.value = String(data.next_number);
         document.add.name.readOnly = true;
+        remaskDirectTest = {name:String(data.next_number), until:Number(data.direct_test_until || 0)};
+        if (remaskDirectTest.until > Date.now()/1000) document.add.proxy.placeholder = 'Прямая проверка разрешена временно: прокси можно не указывать';
     } catch (error) { alert(error.message); }
 }
 
@@ -88,7 +91,8 @@ async function delAccount(name) {
 
 async function validateForm(name, token, cookies, proxy, editing = false) {
     if (!name) { alert('Название профиля обязательно.'); return false; }
-    if (!editing && (!cookies || !proxy)) { alert('Нужны Facebook cookies и прокси.'); return false; }
+    const direct = remaskDirectTest.name === name && remaskDirectTest.until > Date.now()/1000;
+    if (!editing && (!cookies || (!proxy && !direct))) { alert('Нужны Facebook cookies и прокси.'); return false; }
     if (cookies) {
         let parsed;
         try { parsed = JSON.parse(cookies); } catch { alert('Cookies must be a valid JSON array.'); return false; }

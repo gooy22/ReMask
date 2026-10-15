@@ -154,6 +154,31 @@ class CookieOnlyProfileTests(unittest.TestCase):
         self.assertTrue(self.endpoint('addAccount.php',payload)['ok'])
         self.assertEqual(self.saved()[0]['token'],'')
 
+    def test_direct_test_import_is_scoped_and_expires_on_server(self):
+        import time
+        self.env.update(REMASK_DIRECT_TEST_PROFILE='Fixture', REMASK_DIRECT_TEST_UNTIL=str(int(time.time()) + 1800))
+        payload = {'name':'Fixture','cookies':json.dumps(self.cookies),'proxy':''}
+        self.assertTrue(self.endpoint('checkAccount.php', payload)['ok'])
+        self.assertTrue(self.create(proxy='')['ok'])
+        self.assertIsNone(self.saved()[0]['proxy'])
+        self.assertFalse(self.create(name='Other', proxy='')['ok'])
+        for deadline in ('0', 'invalid', str(int(time.time()) - 1), str(int(time.time()) + 10000)):
+            self.env['REMASK_DIRECT_TEST_UNTIL'] = deadline
+            self.assertFalse(self.endpoint('checkAccount.php', payload)['ok'])
+            self.assertFalse(self.endpoint('metaProfileManager.php', {**payload,'action':'save'})['ok'])
+
+    def test_numbered_direct_import_checks_allocated_number_not_client_name(self):
+        import time
+        self.env.update(REMASK_DIRECT_TEST_PROFILE='1', REMASK_DIRECT_TEST_UNTIL=str(int(time.time()) + 1800))
+        sequence = self.endpoint('metaProfileManager.php', {'action':'next_number'})
+        self.assertGreater(sequence['direct_test_until'], time.time())
+        result = self.create(auto_number=True, proxy='')
+        self.assertTrue(result['ok'], result)
+        self.assertEqual(result['profile']['name'], '1')
+        sequence = self.endpoint('metaProfileManager.php', {'action':'next_number'})
+        self.assertEqual(sequence['direct_test_until'], 0)
+        self.assertFalse(self.create(name='1', auto_number=True, proxy='')['ok'])
+
     def test_actual_php_graph_and_refresh_boundaries_are_closed(self):
         code = 'require $argv[1]."/classes/MetaApiClient.php";require $argv[1]."/classes/FbRequests.php";$out=[];try{new MetaApiClient("fixture");}catch(Throwable $e){$out[]=$e->getMessage();}$a=new FbAccount("Fixture","fixture");$f=new FbRequests;foreach(["ApiGet","ApiPost"] as $method){try{$f->$method($a,"me","");}catch(Throwable $e){$out[]=$e->getMessage();}}$r=new ReflectionMethod(FbRequests::class,"GetNewToken");$out[]=$r->invoke($f,$a);echo json_encode($out);'
         result = subprocess.run(['php','-r',code,str(self.root)],env=self.env,capture_output=True,text=True,check=True,timeout=10)

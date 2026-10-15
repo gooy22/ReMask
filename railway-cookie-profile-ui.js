@@ -27,7 +27,7 @@ async function prepareAddProfile() {
     const name = $('newProfileName').value.trim();
     const proxy = $('newProfileProxy').value.trim();
     if (!name) throw new Error('Название профиля обязательно.');
-    if (!proxy) throw new Error('Прокси обязателен.');
+    if (!proxy && !(Number(sequence.direct_test_until || 0) > Date.now()/1000)) throw new Error('Прокси обязателен.');
     const cookies = JSON.stringify(remaskCookieRows($('newProfileCookies').value.trim()));
     await apiJson('ajax/metaProfileManager.php', post({action:'create', name, cookies, proxy, auto_number:'1'}));
     await loadInventory('Профиль сохранён. Facebook-сессия ещё не проверена.');
