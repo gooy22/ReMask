@@ -62,6 +62,12 @@ class CardIntentLedger:
                     WHERE profile=NEW.profile AND account=NEW.account
                       AND card_id=NEW.card_id AND phase='LINKED')
                 BEGIN SELECT RAISE(ABORT,'CARD_ALREADY_LINKED'); END''')
+            # Once Meta has independently confirmed the exact linked card,
+            # no stale worker or direct SQLite writer may demote that result.
+            con.execute('''CREATE TRIGGER IF NOT EXISTS card_http_linked_phase_terminal
+                BEFORE UPDATE OF phase ON card_http_intents
+                WHEN OLD.phase='LINKED' AND NEW.phase!='LINKED'
+                BEGIN SELECT RAISE(ABORT,'CARD_LINKED_TERMINAL'); END''')
             con.execute('''CREATE TABLE IF NOT EXISTS card_bank_verification_intents (
                 attempt_id TEXT PRIMARY KEY,
                 profile TEXT NOT NULL, account TEXT NOT NULL,
@@ -222,7 +228,12 @@ class CardIntentLedger:
         con = self.connect()
         try:
             con.execute('BEGIN IMMEDIATE')
-            existing = con.execute('SELECT result FROM card_http_intents WHERE attempt_id=?', (attempt_id,)).fetchone()
+            existing = con.execute('SELECT phase,result FROM card_http_intents WHERE attempt_id=?', (attempt_id,)).fetchone()
+            if existing and existing['phase'] == 'LINKED':
+                # Late or duplicated worker results cannot overwrite confirmed
+                # linkage, including its exact credential evidence.
+                con.commit()
+                return
             if existing:
                 safe = {**json.loads(existing['result']), **safe}
             con.execute('UPDATE card_http_intents SET phase=?,result=?,updated_at=? WHERE attempt_id=?',
