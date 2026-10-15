@@ -77,12 +77,18 @@ def context_from_document(body, *, account_id, business_id, actor_id):
     account_id, business_id, actor_id = map(identity, (account_id, business_id, actor_id))
     configurations = {name: [] for name in ("GraphAPIConfig", "UrlMapConfig", "CurrentUserInitialData")}
     setters = {name: [] for name in ("setAccessToken", "setClientID")}
+    initializers = []
     for payload in _json_payloads(body):
         for node in _walk(payload):
             if not isinstance(node, list) or len(node) < 3 or not isinstance(node[0], str):
                 continue
             if node[0] in configurations and node[1] == [] and isinstance(node[2], dict):
                 configurations[node[0]].append(node[2])
+            if (node[0] in {"ApiClient", "WebApiApplication"} and isinstance(node[1], str)
+                    and node[1] in {"init", "setAccessToken", "setAccessTokenForClientID", "setClientID", "setWithCredentials"}):
+                args = node[3] if len(node) > 3 else None
+                initializers.append({"module":node[0], "method":node[1],
+                    "arg_types":[type(value).__name__ for value in args] if isinstance(args, list) else []})
             if node[0] == "ApiClient" and isinstance(node[1], str) and node[1] in setters:
                 # ServerJS require rows carry arguments at index 3. Do not
                 # search arbitrary response strings for credential patterns.
@@ -107,6 +113,10 @@ def context_from_document(body, *, account_id, business_id, actor_id):
     # A changed origin/version needs a new source review before dispatch.
     if graph.get("adsApiVersion") != "v22.0" or url_map.get("graph") != "adsmanager-graph.facebook.com":
         raise fail("BOOTSTRAP_ROUTE_UNREVIEWED", "Ads Manager routing differs from the captured sender")
+    log.info("ads_session_initialization token_candidates=%d client_candidates=%d valid_token_candidates=%d initializers=%s",
+        len(setters["setAccessToken"]), len(setters["setClientID"]),
+        sum(isinstance(value, str) and 10 <= len(value) <= 4096 and not any(ch.isspace() or ord(ch) < 32 for ch in value)
+            for value in setters["setAccessToken"]), json.dumps(initializers[:20], separators=(",", ":")))
     token = _unique(setters["setAccessToken"], "SESSION_CONTEXT_UNAVAILABLE")
     application = _unique(setters["setClientID"], "SESSION_CONTEXT_UNAVAILABLE")
     if not isinstance(token, str) or not 10 <= len(token) <= 4096 or re.search(r"[\s\x00-\x1f]", token):
