@@ -166,8 +166,8 @@ foreach (['workspace.php','launch.php','accounts.php','menu.php'] as $file) {
     if (!is_file($path)) continue;
     $s = file_get_contents($path);
     $s = str_replace(['Official Meta API','доступные по token'], ['Facebook cookies','сохранённые BM'], $s);
-    $s = preg_replace('#scripts/workspace\.js(?:\?[^"\']*)?#', 'scripts/workspace.js?v=20261015-direct-import-v1', $s);
-    $s = preg_replace('#scripts/accounts\.js(?:\?[^"\']*)?#', 'scripts/accounts.js?v=20261015-direct-import-v1', $s);
+    $s = preg_replace('#scripts/workspace\.js(?:\?[^"\']*)?#', 'scripts/workspace.js?v=20261004-python-worker-ui-v220-cookie-only-v1-numbered-v1-txt-v3-direct-import-v1', $s);
+    $s = preg_replace('#scripts/accounts\.js(?:\?[^"\']*)?#', 'scripts/accounts.js?v=20261002-cookie-only-v1-numbered-v1-txt-v3-direct-import-v1', $s);
     file_put_contents($path, $s);
 }
 // Shared import UI on Workspace and Accounts; no browser storage of shop secrets.
