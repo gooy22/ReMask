@@ -8,7 +8,7 @@ permissions:
   contents: read
 concurrency:
   group: remask-pentagi-owner-audit
-  cancel-in-progress: false
+  cancel-in-progress: true
 jobs:
   audit:
     runs-on: ubuntu-24.04
