@@ -249,6 +249,7 @@ class WorkflowTests(unittest.TestCase):
         self.page.evaluate('fixtureTargetingWaits.shift()()')
         self.page.wait_for_timeout(40)
         self.assertFalse(self.page.locator('#mbInterestResults').is_visible())
+        self.assertTrue(self.page.locator('#creativeModal').is_visible())
         field.fill('second');field.press('Enter')
         self.page.wait_for_function('fixtureTargetingWaits.length===1')
         field.fill('new')

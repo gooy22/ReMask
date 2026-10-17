@@ -743,6 +743,7 @@ function creativeTargetSearchConfig(kind) {
 
 function closeCreativeTargetResults(kind) {
     clearTimeout(creativeTargetingTimers[kind]);
+    creativeTargetingTimers[kind] = 0;
     creativeTargetingControllers[kind]?.abort();
     creativeTargetingControllers[kind] = null;
     const cfg = creativeTargetSearchConfig(kind);
@@ -793,6 +794,7 @@ async function searchCreativeTargeting(kind) {
     const query = String(input?.value || '').trim();
 
     clearTimeout(creativeTargetingTimers[kind]);
+    creativeTargetingTimers[kind] = 0;
     creativeTargetingControllers[kind]?.abort();
     creativeTargetingControllers[kind] = null;
 
@@ -854,7 +856,10 @@ function installCreativeTargetSearch(kind) {
             clearTimeout(creativeTargetingTimers[kind]);
             searchCreativeTargeting(kind);
         }
-        if (event.key === 'Escape') closeCreativeTargetResults(kind);
+        if (event.key === 'Escape' && (creativeTargetingControllers[kind]
+                || creativeTargetingTimers[kind] || $(cfg.results)?.classList.contains('open'))) {
+            event.preventDefault();event.stopPropagation();closeCreativeTargetResults(kind);
+        }
     });
 }
 
