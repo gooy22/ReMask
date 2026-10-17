@@ -11,6 +11,9 @@ RUN apt-get update \
 
 WORKDIR /var/www/html
 
+COPY railway-web-security.conf /etc/apache2/conf-available/remask-web-security.conf
+RUN a2enconf remask-web-security
+
 COPY python_backend/requirements.txt /tmp/remask-python-requirements.txt
 RUN python3 -m venv /opt/remask-venv \
     && /opt/remask-venv/bin/pip install --no-cache-dir -r /tmp/remask-python-requirements.txt

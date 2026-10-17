@@ -36,6 +36,15 @@ jobs:
             docker logs --tail 250 remask-diagnostic-run || true
             exit 1
           fi
+      - name: Private bundle files stay behind the authenticated endpoint
+        run: |
+          set -e
+          for path in bundles.json bundles.json.bak BUNDLES.JSON accounts.json; do
+            status=$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:18080/$path")
+            test "$status" = 403 || { echo "Unexpected public file status for $path: $status"; exit 1; }
+          done
+          status=$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/ajax/metaBundles.php)
+          test "$status" = 401
       - name: Container logs
         if: always()
         run: docker logs --tail 120 remask-diagnostic-run || true
