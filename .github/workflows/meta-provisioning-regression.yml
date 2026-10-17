@@ -51,6 +51,8 @@ jobs:
         run: node tests/worker-auto-ui.test.cjs
       - name: Private Launch catalog and funding interface
         run: node tests/launch-private-catalog.test.cjs
+      - name: Bundle media snapshots and delayed restore guards
+        run: node --test tests/bundle-media-runtime.test.cjs
       - name: Cookie-only profile interface
         run: node tests/cookie-profile-ui.test.cjs
       - name: Private payment inspection interface

@@ -35,6 +35,7 @@ class InstalledLaunchTests(unittest.TestCase):
     def setUp(self):
         self.bundles = []
         self.missing = False
+        self.foreign_bundle_media = False
         self.errors = []
         self.preset_objective = 'LEGACY_TEST_OBJECTIVE' if self._testMethodName == 'test_initial_config_keeps_legacy_goal' else 'OUTCOME_TRAFFIC'
         self.preset_rules={}
@@ -159,7 +160,21 @@ class InstalledLaunchTests(unittest.TestCase):
             else:
                 ids = json.loads(parse_qs(url.query)['ids'][0])
                 data = {'media':[{**MEDIA,'id':id, 'media_type':'video' if i else 'image'} for i,id in enumerate(ids)]}
+                if self.foreign_bundle_media:
+                    data['media'][0]['id'] = 'm-' + 'f' * 24
         route.fulfill(status=status, json={'ok':status==200,'data':data,'error':{'message':'MEDIA_LIBRARY_ITEM_UNAVAILABLE'}})
+
+    def test_bundle_restore_rejects_foreign_media_without_checksums(self):
+        self.page.locator('#creativeLibrarySelect').select_option('preset')
+        data = self.page.evaluate('fixtureLaunch.capture()')
+        self.assertNotIn('checksums',data['media'])
+        self.foreign_bundle_media = True
+        error = self.page.evaluate('(data)=>fixtureLaunch.restore(data).then(()=>"",error=>error.message)',data)
+        self.assertIn('удалено или недоступно',error)
+        self.assertIsNone(self.page.evaluate('fixtureLaunch.capture().media'))
+        self.foreign_bundle_media = False
+        self.page.evaluate('(data)=>fixtureLaunch.restore(data)',data)
+        self.assertEqual(self.page.evaluate('fixtureLaunch.capture().media.media_library_id'),MEDIA_ID)
 
     def save_and_reload(self):
         self.page.locator('#bundleName').fill('Fixture bundle')

@@ -187,15 +187,15 @@ function bundleFormState() {
 }
 
 async function remaskPrivateCaptureBundle() {
-    const data = bundleFormState();
+    const data = JSON.parse(JSON.stringify(bundleFormState()));
     const format = creativeFormat();
     const files = format === 'CAROUSEL' ? carouselFiles() :
         format === 'SINGLE' ? Array.from($('media')?.files || []).slice(0, 1) : [];
+    const cards = format === 'CAROUSEL' ? JSON.parse(JSON.stringify(carouselCardsPayload())) : [];
     if (files.length) {
-        const staged = await Promise.all(files.map(remaskPrivateStageFile));
-        const cards = format === 'CAROUSEL' ? carouselCardsPayload() : [];
-        if (format === 'CAROUSEL' && (cards.length !== staged.length || staged.length < 2 || staged.length > 10))
+        if (format === 'CAROUSEL' && (cards.length !== files.length || files.length < 2 || files.length > 10))
             throw new Error('Для набора нужны все карточки карусели: от 2 до 10.');
+        const staged = await Promise.all(files.map(remaskPrivateStageFile));
         data.media = {
             id: '', name: 'Медиа набора', format, meta_builder: {},
             media_library_id: format === 'SINGLE' ? staged[0].id : '',
@@ -231,7 +231,8 @@ async function applyBundleData(data) {
             const result = await apiJson('ajax/metaBundleMedia.php?ids=' + encodeURIComponent(JSON.stringify(ids)));
             if (generation !== remaskBundleRestoreGeneration)
                 throw new Error('Выбор медиа изменён во время загрузки набора.');
-            if (!Array.isArray(result.media) || result.media.length !== ids.length)
+            if (!Array.isArray(result.media) || result.media.length !== ids.length ||
+                ids.some((id, index) => result.media[index]?.id !== id))
                 throw new Error('Медиа набора удалено или недоступно. Выберите файл заново.');
             for (const expected of snapshot.checksums || []) {
                 if (!result.media.some(row => row.id === expected.id && row.sha256 === expected.sha256))
