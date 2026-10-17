@@ -317,7 +317,7 @@ function remaskPrivateAssertCurrentConfig(config) {
 async function remaskPrivatePrepareConfig() {
     // Snapshot before awaiting: Review and Job must describe the same form.
     const snapshot=remaskPrivateInputSnapshot();
-    const {config,format,preset,selected,files,cards,delivery,targets}=snapshot;
+    const {config,format,preset,selected,files,cards,delivery}=snapshot;
     const creative=config.payload.creative||(config.payload.creative={});
     creative.format=format;
     if(delivery==='ACTIVE'||delivery==='PAUSED')config.payload.delivery={campaign:delivery,adset:delivery,ad:delivery};
@@ -341,6 +341,7 @@ async function remaskPrivatePrepareConfig() {
         const mediaId=String($('instagramMediaId')?.value||creative.source_instagram_media_id||'').trim();
         if(mediaId)creative.source_instagram_media_id=mediaId;
     }
+    const targets=remaskPrivateTargetRows(config);
     if(files.length){
         delete creative.media_library_id;
         delete creative.carousel_media_library_ids;

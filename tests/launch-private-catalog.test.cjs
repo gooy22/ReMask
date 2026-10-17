@@ -226,6 +226,15 @@ console.log('Private Launch catalog and funding truth checks passed');
   assert.equal(carousel.payload.creative.carousel_cards[1].headline,'Second');
   assert.deepEqual(Array.from(carousel.payload.creative.carousel_media_library_ids),['m-first','m-second']);
   assert.equal(config.payload.creative.format,undefined,'preparation must not mutate the form config');
+  privateCtx.creativeFormat=()=> 'INSTAGRAM_POST';
+  buttons.instagramMediaId={value:'888888888'};
+  bindings['111111111'].source_instagram_media_id='777777777';
+  bindings['222222222'].source_instagram_media_id='999999999';
+  const instagram=await privateCtx.remaskPrivatePrepareConfig();
+  assert.deepEqual(Array.from(instagram._targets,row=>row.launch.override.creative.source_instagram_media_id),
+    ['777777777','999999999'],'Instagram bindings must use the finalized format for each exact RK');
+  delete bindings['111111111'].source_instagram_media_id;
+  delete bindings['222222222'].source_instagram_media_id;
   privateCtx.creativeFormat=()=> 'SINGLE';
   privateCtx.state.pendingWorkspaceMedia={type:'image_hash',image_hash:'media-a',account_id:'111111111'};
   await assert.rejects(()=>privateCtx.remaskPrivatePrepareConfig(),/другому РК/);
