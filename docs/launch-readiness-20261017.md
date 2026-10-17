@@ -10,6 +10,8 @@ executable operations.
 - Shared source-backed lookup controls now send the current page CSRF token.
   Previously, work, education and other generated lookup fields used a raw POST
   without that token, so the existing login guard returned HTTP 403.
+- Private Launch plan/job/status requests and multipart media staging also send
+  the current CSRF token. The multipart content type stays browser-generated.
 - Creative and Launch invalidate in-flight searches immediately on new input.
   Escape, choosing an option and closing the Creative editor prevent delayed
   responses from repopulating dismissed results. IDs and serializers stay intact.

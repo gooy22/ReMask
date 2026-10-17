@@ -134,6 +134,8 @@ class InstalledLaunchTests(unittest.TestCase):
                 data['items'][0]['meta_builder'].update(adset={'is_dynamic_creative':True},targeting={'user_device':['iphone 17'],'education_statuses':[1]},
                     creative={'degrees_of_freedom_spec':{'creative_features_spec':{'standard_enhancements':{'enroll_status':'OPT_IN'}}}})
         elif path == 'ajax/metaTemplateTargetingSearch.php':
+            if request.headers.get('x-remask-csrf')!='fixture-csrf':
+                route.fulfill(status=403,json={'ok':False,'error':{'message':'CSRF validation failed.'}});return
             fields = parse_qs(request.post_data or '', keep_blank_values=True)
             self.lookup_requests.append(fields)
             if self.lookup_failure:

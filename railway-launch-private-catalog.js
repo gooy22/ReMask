@@ -205,11 +205,16 @@ function remaskPrivateStructuralReady() {
         return false;
     }
 }
+function remaskPrivateCsrf() {
+    const token=document.querySelector('meta[name="remask-csrf"]')?.content||'';
+    if(!token)throw new Error('Обновите страницу: сессия запуска требует обновления.');
+    return token;
+}
 async function remaskPrivateWorker(payload) {
     const response=await fetch('ajax/pythonWorkerJobs.php',{
         method:'POST',
         credentials:'same-origin',
-        headers:{'Accept':'application/json','Content-Type':'application/json'},
+        headers:{'Accept':'application/json','Content-Type':'application/json','X-ReMask-CSRF':remaskPrivateCsrf()},
         body:JSON.stringify(payload)
     });
     let data={};
@@ -269,7 +274,7 @@ async function remaskPrivateStageFile(file) {
         form.append('action','private_launch_media');
         form.append('media',file,file.name);
         const response=await fetch('ajax/pythonWorkerJobs.php',{
-            method:'POST',credentials:'same-origin',body:form
+            method:'POST',credentials:'same-origin',headers:{'X-ReMask-CSRF':remaskPrivateCsrf()},body:form
         });
         const data=await response.json();
         if(!response.ok||data.ok!==true||!/^m-[a-f0-9]{24}$/.test(data.media?.id||'')
