@@ -3,7 +3,12 @@ The owner requested use of PentAGI on 2026-10-18. The real site is
 https://remask-production-7cbf.up.railway.app/ and it is reachable ONLY THROUGH
 http://audit-gateway:8080/ from your terminal container.
 
-First run: curl -s http://audit-gateway:8080/_audit/target
+First use your terminal tool to run: python /opt/remask-audit/check.py
+This installed, owner-supplied read-only harness collects the fixed sample below
+and prints real redacted origin evidence, never site response bodies. Its source
+is included in the audit repository. The workflow itself never executes it:
+network checks must come from your actual agent tool call. Repeating this command
+reuses already observed paths. Do not research or install tools before running it.
 Then inspect HTTP statuses and security headers using curl -i / Python urllib
 against this gateway. It makes real, TLS-verified HTTPS requests to the exact
 site. No redirects, auth/cookies, query parameters or writes are forwarded.
