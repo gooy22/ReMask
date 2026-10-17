@@ -61,22 +61,30 @@ if (typeof creativeTargetSearchConfig !== 'function') {
         input.addEventListener('focus',()=>{
             clearTimeout(focusTimer);focusTimer=setTimeout(()=>runPicker(type),240);
         });
-        input.addEventListener('input',()=>{
+        // Own the debounce before legacy input handlers, which otherwise issue
+        // duplicate reads (and immediately submit one-character queries).
+        input.addEventListener('input',event=>{
+            event.stopImmediatePropagation();
             clearTimeout(focusTimer);
             pickerControllers[type]?.abort();delete pickerControllers[type];
             $(cfg.results).textContent='';
-        });
+            focusTimer=setTimeout(()=>runPicker(type),240);
+        },{capture:true});
         input.addEventListener('blur',()=>clearTimeout(focusTimer));
         input.addEventListener('keydown',event=>{
-            if(event.key==='Enter')clearTimeout(focusTimer);
+            if(event.key==='Enter'){
+                event.preventDefault();event.stopImmediatePropagation();
+                clearTimeout(focusTimer);runPicker(type);
+            }
             if(event.key==='ArrowDown'){
                 const first=$(cfg.results)?.querySelector('button');
                 if(first){event.preventDefault();first.focus();}
             }
             if(event.key==='Escape'){
+                event.stopImmediatePropagation();clearTimeout(focusTimer);
                 pickerControllers[type]?.abort();delete pickerControllers[type];
                 $(cfg.results).textContent='';
             }
-        });
+        },{capture:true});
     }
 }

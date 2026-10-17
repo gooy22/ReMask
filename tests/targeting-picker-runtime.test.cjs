@@ -17,13 +17,16 @@ class Element {
   set innerHTML(value){this.textContent=value;}
   get innerHTML(){return this.textContent;}
   setAttribute(key,value){this.attributes[key]=value;}
-  addEventListener(key,fn){(this.events[key]??=[]).push(fn);}
-  dispatchEvent(event){for(const fn of this.events[event.type]||[])fn(event);}
+  addEventListener(key,fn,options={}){(this.events[key]??=[]).push({fn,capture:options.capture===true});}
+  dispatchEvent(event){
+    let stopped=false;event.stopImmediatePropagation=()=>{stopped=true;};
+    for(const {fn} of [...(this.events[event.type]||[])].sort((a,b)=>Number(b.capture)-Number(a.capture))){fn(event);if(stopped)break;}
+  }
   closest(){return null;}
   after(node){this.next=node;}
   querySelector(){return this.children.find(node=>node.type==='button')||null;}
   focus(){}
-  fire(type,key){this.dispatchEvent({type,key,preventDefault(){},stopPropagation(){}});}
+  fire(type,key){this.dispatchEvent({type,key,preventDefault(){},stopPropagation(){},stopImmediatePropagation(){}});}
 }
 class Input extends Element {get value(){return this._value||'';}set value(value){this._value=String(value);}}
 class TextArea extends Input {}
@@ -76,12 +79,18 @@ function fixture(){
 
   const launch=fixture();const replies=[];
   for(const id of ['geoQuery','geoResults','selectedGeo'])launch.nodes.set(id,id.endsWith('Query')?new Input():new Element());
+  let legacyReads=0;
+  launch.nodes.get('geoQuery').addEventListener('input',()=>legacyReads++);
+  launch.nodes.get('geoQuery').addEventListener('keydown',()=>legacyReads++);
   Object.assign(launch.ctx,{$:id=>launch.nodes.get(id),state:{geo:[]},formPost:body=>body,
     apiJson:async()=>new Promise(resolve=>replies.push(resolve)),renderPills(){},invalidateLaunchReview(){},validateReady(){}});
   vm.runInContext(read('railway-targeting-pickers.js'),launch.ctx);
   let request=launch.ctx.searchTargeting('locations');
   launch.nodes.get('geoQuery').fire('input');replies.shift()({data:[{key:'UA',type:'country',name:'Ukraine'}]});await request;
   assert.equal(launch.nodes.get('geoResults').children.length,0,'Launch rejects old results while typing');
+  launch.nodes.get('geoQuery').fire('keydown','Escape');
+  assert.equal(launch.timers.size,0,'Escape cancels the pending input debounce');
+  assert.equal(legacyReads,0,'new Launch adapter owns events before old search handlers');
   request=launch.ctx.searchTargeting('locations');
   replies.shift()({data:[{key:'UA',type:'country',name:'Ukraine'}]});await request;
   launch.nodes.get('geoResults').children[0].fire('click');
