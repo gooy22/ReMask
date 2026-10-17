@@ -41,6 +41,7 @@ const remaskPrivateLaunchNotice='Подготовьте план рекламы.
 let remaskPrivateLaunchBusy=false;
 const remaskPrivateLaunchPendingKey='remask_private_launch_pending_v1';
 const remaskPrivatePaymentSelections={};
+let remaskPrivatePaymentRevision=0;
 
 function remaskPrivatePaymentKey(profile,accountId){
     return String(profile||'').trim()+'|'+remaskPrivateAccountId(accountId);
@@ -98,6 +99,7 @@ function remaskPrivateRenderPaymentSelector(row,methods){
         block.appendChild(select);
         container.appendChild(block);
         select.addEventListener('change',()=>{
+            remaskPrivatePaymentRevision++;
             const option=select.options[select.selectedIndex];
             if(!option||!option.dataset.last4){
                 delete remaskPrivatePaymentSelections[key];
@@ -285,21 +287,42 @@ async function remaskPrivateStageFile(file) {
     remaskPrivateStagedFiles.set(file,pending);
     try{return await pending;}catch(error){remaskPrivateStagedFiles.delete(file);throw error;}
 }
-async function remaskPrivatePrepareConfig() {
-    // Snapshot before awaiting: Review and Job must describe the same form.
+const remaskPrivateFormSnapshots=new WeakMap();
+function remaskPrivateInputSnapshot() {
     const config=JSON.parse(JSON.stringify(currentLaunchConfigForRequest()));
-    const creative=config.payload.creative||(config.payload.creative={});
     const format=typeof creativeFormat==='function'?creativeFormat():'SINGLE';
     const preset=typeof remaskSelectedCreativePreset!=='undefined'?remaskSelectedCreativePreset:null;
     const selected=typeof state!=='undefined'?state.pendingWorkspaceMedia:null;
-    const files=format==='CAROUSEL'&&typeof carouselFiles==='function'?carouselFiles():
+    const files=format==='CAROUSEL'&&typeof carouselFiles==='function'?Array.from(carouselFiles()):
         (format==='SINGLE'?Array.from($('media')?.files||[]).slice(0,1):[]);
-    creative.format=format;
+    const cards=format==='CAROUSEL'&&typeof carouselCardsPayload==='function'?carouselCardsPayload():[];
     const delivery=$('launchDeliverySelect')?.value;
+    const targets=remaskPrivateTargetRows(config);
+    // A review may discover the sole payment method. Only an explicit user
+    // change invalidates that discovery; account/page/override changes always do.
+    const signature=JSON.stringify({config,format,preset,selected,cards,delivery,
+        targets:targets.map(({selected_payment_method,...row})=>row),
+        paymentRevision:remaskPrivatePaymentRevision});
+    return {config,format,preset,selected,files,cards,delivery,targets,signature};
+}
+function remaskPrivateAssertCurrentConfig(config) {
+    const previous=remaskPrivateFormSnapshots.get(config);
+    let current;
+    try{current=remaskPrivateInputSnapshot();}catch(_){}
+    if(!previous||!current||previous.signature!==current.signature||
+        previous.files.length!==current.files.length||
+        previous.files.some((file,index)=>file!==current.files[index]))
+        throw new Error('Настройки изменились во время подготовки. Повторите проверку текущего плана.');
+}
+async function remaskPrivatePrepareConfig() {
+    // Snapshot before awaiting: Review and Job must describe the same form.
+    const snapshot=remaskPrivateInputSnapshot();
+    const {config,format,preset,selected,files,cards,delivery}=snapshot;
+    const creative=config.payload.creative||(config.payload.creative={});
+    creative.format=format;
     if(delivery==='ACTIVE'||delivery==='PAUSED')config.payload.delivery={campaign:delivery,adset:delivery,ad:delivery};
     if(format==='CAROUSEL'){
-        const cards=typeof carouselCardsPayload==='function'?carouselCardsPayload():[];
-        const saved=preset?.format==='CAROUSEL'?preset.carousel||[]:[];
+        const saved=!files.length&&preset?.format==='CAROUSEL'?preset.carousel||[]:[];
         if(cards.length<2||cards.length>10||cards.length!==(saved.length||files.length))
             throw new Error('Карусель требует от 2 до 10 подготовленных карточек.');
         creative.carousel_cards=JSON.parse(JSON.stringify(cards));
@@ -319,8 +342,13 @@ async function remaskPrivatePrepareConfig() {
         if(mediaId)creative.source_instagram_media_id=mediaId;
     }
     const targets=remaskPrivateTargetRows(config);
-    if(files.length)creative.staged_media=await Promise.all(files.map(remaskPrivateStageFile));
+    if(files.length){
+        delete creative.media_library_id;
+        delete creative.carousel_media_library_ids;
+        creative.staged_media=await Promise.all(files.map(remaskPrivateStageFile));
+    }
     config._targets=targets.map(row=>({...row,launch:{...row.launch,base:config.payload}}));
+    remaskPrivateFormSnapshots.set(config,snapshot);
     return config;
 }
 
@@ -428,6 +456,7 @@ async function remaskPrivateReviewOnly() {
     remaskPrivateLaunchBusy=true;validateReady();
     try{
         const config=await remaskPrivatePrepareConfig();
+        remaskPrivateAssertCurrentConfig(config);
         const rows=remaskPrivateTargetRows(config);
         const plans=[];
         for(const row of rows){
@@ -437,6 +466,7 @@ async function remaskPrivateReviewOnly() {
                 throw new Error('Сервер не подтвердил подготовку плана.');
             plans.push(response.plan);
         }
+        remaskPrivateAssertCurrentConfig(config);
         const incomplete=plans.some(plan=>plan.missing_contracts?.length);
         remaskPrivateShow('План подготовлен для '+plans.length+' РК. Проверка Meta не выполнялась.'+
             (incomplete?' Для запуска ещё требуется настройка серверного модуля публикации.':''));
@@ -617,7 +647,9 @@ async function remaskPrivateCreateJob() {
     remaskPrivateLaunchBusy=true;validateReady();
     try{
         const config=await remaskPrivatePrepareConfig();
+        remaskPrivateAssertCurrentConfig(config);
         const reviewed=await remaskPrivateReviewConfig(config,{render:true});
+        remaskPrivateAssertCurrentConfig(config);
         if(!reviewed?.length)return null;
         const planned=remaskPrivateJobRequest(config,reviewed);
         remaskPrivateShow((planned.reused?'Повторяю сохранённую отправку':'Создаю')+

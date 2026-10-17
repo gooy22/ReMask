@@ -25,22 +25,30 @@ executable operations.
   Existing `/health` remains the lightweight liveness route. Image-based Railway
   services also need the healthcheck path set in their service settings.
 - CI runs the picker runtime regressions on the current working branch.
+- Bundle saves capture fields, carousel order and card settings before media
+  staging starts. Restores verify every returned media ID in request order even
+  for older bundles without stored checksums.
+- Launch stops before job creation if settings, targets, bindings, delivery or
+  selected files changed during staging or review. Automatic discovery of the
+  sole masked payment method remains supported. New carousel files replace the
+  saved media source instead of submitting two competing sources.
 
 ## Validation
 
-The complete PHP overlay build passes in Docker installation order. Backend
-discovery ran 1,828 cases without failures; 83 Chromium cases were skipped because
-this local environment has no installed browser. The Chromium download endpoint
-returned an incomplete archive, so no local browser pass is claimed. The existing
-browser workflow includes the real editor serializer and newly strict CSRF
-fixtures. All eight Node test files pass, including controlled late-response and
-authenticated lookup cases. Readiness and PHP targeting/cache guards pass.
+The previous release passed all 1,828 backend cases in CI with no skips, plus
+the installed editor browser workflow and Docker readiness diagnostic. Local
+Chromium is unavailable; browser results come from CI. The current changes add
+delayed-upload, changed-form and foreign-media regressions. The complete PHP
+overlay build validates the actual Docker installation order. Readiness and PHP
+targeting/cache guards remain part of validation.
 
 ## Remaining live acceptance
 
-The destination Railway workspace is still Limited Trial. Its network restriction
-must be considered when evaluating authenticated Meta reads. Successful
-infrastructure checks do not establish profile validity, advertising permissions,
+Direct verified-TLS HTTP/2 requests from the destination container reached
+www.facebook.com (200), business.facebook.com (302), static.xx.fbcdn.net (302),
+and github.com (200), without profile cookies or an environment proxy. No network
+block to these endpoints was observed. Successful infrastructure checks do not
+establish profile validity, advertising permissions,
 funding readiness or publication success. Those require scoped live acceptance
 through ReMask. No ad publication, card transaction, profile scan or profile-16
 request is part of this preparation.

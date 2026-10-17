@@ -226,6 +226,15 @@ console.log('Private Launch catalog and funding truth checks passed');
   assert.equal(carousel.payload.creative.carousel_cards[1].headline,'Second');
   assert.deepEqual(Array.from(carousel.payload.creative.carousel_media_library_ids),['m-first','m-second']);
   assert.equal(config.payload.creative.format,undefined,'preparation must not mutate the form config');
+  privateCtx.creativeFormat=()=> 'INSTAGRAM_POST';
+  buttons.instagramMediaId={value:'888888888'};
+  bindings['111111111'].source_instagram_media_id='777777777';
+  bindings['222222222'].source_instagram_media_id='999999999';
+  const instagram=await privateCtx.remaskPrivatePrepareConfig();
+  assert.deepEqual(Array.from(instagram._targets,row=>row.launch.override.creative.source_instagram_media_id),
+    ['777777777','999999999'],'Instagram bindings must use the finalized format for each exact RK');
+  delete bindings['111111111'].source_instagram_media_id;
+  delete bindings['222222222'].source_instagram_media_id;
   privateCtx.creativeFormat=()=> 'SINGLE';
   privateCtx.state.pendingWorkspaceMedia={type:'image_hash',image_hash:'media-a',account_id:'111111111'};
   await assert.rejects(()=>privateCtx.remaskPrivatePrepareConfig(),/другому РК/);
@@ -248,6 +257,75 @@ console.log('Private Launch catalog and funding truth checks passed');
   assert.equal(JSON.stringify(uploadedAgain),JSON.stringify(uploaded));
   assert.equal(config.payload.creative.staged_media,undefined);
   buttons.media.files=[];
+
+  // Editing any launch input while the server reviews the captured form must
+  // prevent a stale submission. No real Meta or advertising requests are used.
+  const originalReview=privateCtx.remaskPrivateReviewConfig;
+  privateCtx.fetch=originalFetch;
+  privateCtx.remaskPrivatePollJob=async()=>null;
+  buttons.launchDeliverySelect={value:'PAUSED'};
+  const changes=[
+    [()=>{config.payload.creative.message='edited';},()=>{config.payload.creative.message='base';}],
+    [()=>{config.accountOverrides['111111111'].creative.message='new override';},()=>{config.accountOverrides['111111111'].creative.message='one';}],
+    [()=>{bindings['111111111'].page_id='777777777';},()=>{bindings['111111111'].page_id='333333333';}],
+    [()=>{config.accountIds.reverse();},()=>{config.accountIds.reverse();}],
+    [()=>{buttons.media.files=[{name:'replacement.png',size:68}];},()=>{buttons.media.files=[];}],
+    [()=>{buttons.launchDeliverySelect.value='ACTIVE';},()=>{buttons.launchDeliverySelect.value='PAUSED';}]
+  ];
+  for(const [change,restore] of changes){
+    let entered,release;
+    const started=new Promise(resolve=>entered=resolve);
+    const gate=new Promise(resolve=>release=resolve);
+    privateCtx.remaskPrivateReviewConfig=async prepared=>{
+      entered();await gate;
+      return privateCtx.remaskPrivateTargetRows(prepared).map(row=>({row,review:{ready:true}}));
+    };
+    const before=requests.filter(r=>r.body.action==='create').length;
+    const pending=privateCtx.remaskPrivateCreateJob();
+    await started;change();release();
+    assert.equal(await pending,null,'changed form must not create a job');
+    assert.equal(requests.filter(r=>r.body.action==='create').length,before);
+    assert.match(buttons.launchResult.textContent,/Настройки изменились/);
+    restore();
+  }
+  privateCtx.remaskPrivateReviewConfig=originalReview;
+  vm.runInContext('for(const key of Object.keys(remaskPrivatePaymentSelections))delete remaskPrivatePaymentSelections[key];',privateCtx);
+  const stable=await privateCtx.remaskPrivateCreateJob();
+  assert.equal(stable.job.job_id,'private-job-1','automatic masked payment discovery must allow an unchanged form');
+
+  const originalWorker=privateCtx.remaskPrivateWorker;
+  let planStarted,planRelease;
+  const planning=new Promise(resolve=>planStarted=resolve);
+  const planGate=new Promise(resolve=>planRelease=resolve);
+  privateCtx.remaskPrivateWorker=async()=>{
+    planStarted();await planGate;
+    return {plan:{configuration_valid:true,checked_live:false}};
+  };
+  const stalePlan=privateCtx.remaskPrivateReviewOnly();
+  await planning;config.payload.creative.message='changed during plan';planRelease();
+  assert.equal(await stalePlan,null);
+  assert.match(buttons.launchResult.textContent,/Настройки изменились/);
+  config.payload.creative.message='base';
+  privateCtx.remaskPrivateWorker=originalWorker;
+
+  let stageRelease;
+  buttons.media.files=[{name:'slow.png'}];
+  privateCtx.remaskPrivateStageFile=()=>new Promise(resolve=>stageRelease=resolve);
+  const staging=privateCtx.remaskPrivatePrepareConfig();
+  config.payload.creative.message='changed during upload';
+  stageRelease({id:'m-'+'c'.repeat(24),sha256:'c'.repeat(64)});
+  const staleUpload=await staging;
+  assert.throws(()=>privateCtx.remaskPrivateAssertCurrentConfig(staleUpload),/Настройки изменились/);
+  config.payload.creative.message='base';buttons.media.files=[];
+
+  // Replacing a saved carousel with files must select exactly one media source.
+  privateCtx.creativeFormat=()=> 'CAROUSEL';
+  privateCtx.carouselFiles=()=>[{name:'first.png'},{name:'second.png'}];
+  privateCtx.remaskPrivateStageFile=async()=>({id:'m-'+'c'.repeat(24),sha256:'c'.repeat(64)});
+  const replacement=await privateCtx.remaskPrivatePrepareConfig();
+  assert.equal(replacement.payload.creative.staged_media.length,2);
+  assert.equal(replacement.payload.creative.carousel_media_library_ids,undefined);
+  privateCtx.creativeFormat=()=> 'SINGLE';
 
   // Multiple live cards must stop before Job creation and expose only masked
   // choices for the exact RK.
