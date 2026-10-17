@@ -34,6 +34,8 @@ jobs:
           name: remask-pentagi-redacted-evidence
           path: .pentagi-results/
           retention-days: 7
+          include-hidden-files: true
+          if-no-files-found: error
       - name: Stop this audit's disposable services
         if: always()
         run: docker compose --env-file tools/pentagi_audit/.env -p remask-pentagi -f tools/pentagi_audit/compose.yml down -v --remove-orphans || true

@@ -2,6 +2,7 @@
 import http.cookiejar
 import json
 import os
+import re
 import subprocess
 import time
 import urllib.error
@@ -54,6 +55,9 @@ def diagnostics(flow_id):
             str(ROOT/'compose.yml'),'logs','--no-color','--tail=100',service],
             capture_output=True, text=True, timeout=15, cwd=ROOT)
         (OUT/(service+'-runtime.log')).write_text(result.stdout+result.stderr)
+        if service=='pentagi':
+            stages=re.findall(r'level=(?:info|warning|error) msg="([^"]+)"',result.stdout)
+            print('PENTAGI_STAGES',json.dumps(stages[-6:]),flush=True)
     print('PENTAGI_DIAGNOSTICS',json.dumps({'loaded_models':loaded}),flush=True)
 
 def main():
