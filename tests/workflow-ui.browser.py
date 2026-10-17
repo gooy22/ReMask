@@ -84,11 +84,14 @@ class WorkflowTests(unittest.TestCase):
                 let data='''+json.dumps(metadata)+''';
                 if(String(url).includes('metaPreflight.php')) data={ad_accounts:{data:[{account_id:'123456',name:'Fixture RK'}]}};
                 if(String(url).includes('metaTemplateTargetingSearch.php')){
+                    if(options.headers?.['X-ReMask-CSRF']!=='fixture-csrf')return {ok:false,status:403,text:async()=>JSON.stringify({ok:false,error:{message:'CSRF validation failed.'}})};
                     const params=new URLSearchParams(options.body);window.fixtureRequests.push(Object.fromEntries(params));
                     if(window.fixtureTargetingError) return {ok:false,status:409,text:async()=>JSON.stringify({ok:false,error:window.fixtureTargetingError})};
                     const type=params.get('type');data={account_id:'123456',checked_live:true,account_scope_verified:true,data:[
                         type==='locations'?{key:'US',name:'United States',type:'country',country_code:'US'}:
                         {id:'34567',key:'34567',name:'Fixture '+type} ]};
+                    data.truncated=Boolean(window.fixtureTargetingTruncated);
+                    if(window.fixtureDelayTargeting)return await new Promise(resolve=>(window.fixtureTargetingWaits??=[]).push(()=>resolve({ok:true,status:200,text:async()=>JSON.stringify({ok:true,data})})));
                 }
                 return {ok:true,status:200,text:async()=>JSON.stringify({ok:true,data})};
             };''')
@@ -234,6 +237,33 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate('testCreative.build()'),builder)
         self.page.get_by_role('button',name='Места показа',exact=True).click()
         self.assertEqual(self.page.get_by_role('button',name='Удалить iphone 17').count(),1)
+
+    def test_targeting_escape_and_new_input_reject_late_responses(self):
+        self.creative(context=True)
+        self.page.get_by_role('button',name='Аудитория',exact=True).click()
+        self.page.evaluate('window.fixtureDelayTargeting=true')
+        field=self.page.locator('#mbInterestSearch')
+        field.fill('old');field.press('Enter')
+        self.page.wait_for_function('window.fixtureTargetingWaits?.length===1')
+        field.press('Escape')
+        self.page.evaluate('fixtureTargetingWaits.shift()()')
+        self.page.wait_for_timeout(40)
+        self.assertFalse(self.page.locator('#mbInterestResults').is_visible())
+        self.assertTrue(self.page.locator('#creativeModal').is_visible())
+        field.fill('second');field.press('Enter')
+        self.page.wait_for_function('fixtureTargetingWaits.length===1')
+        field.fill('new')
+        self.page.evaluate('fixtureTargetingWaits.shift()()')
+        self.page.wait_for_timeout(40)
+        self.assertEqual(self.page.locator('#mbInterestResults .cr-target-result').count(),0)
+
+    def test_targeting_browse_displays_partial_catalog_hint(self):
+        self.creative(context=True)
+        self.page.get_by_role('button',name='Аудитория',exact=True).click()
+        self.page.evaluate('window.fixtureTargetingTruncated=true')
+        self.page.locator('#mbInterestSearch').press('Enter')
+        self.page.wait_for_function('document.querySelector("#mbInterestResults").textContent.includes("сузить список")')
+        self.assertEqual(self.page.locator('#mbInterestResults .cr-target-result').count(),1)
 
     def test_nested_module_fields_edit_without_json_and_keep_value_types(self):
         self.creative(context=True,modules=True)

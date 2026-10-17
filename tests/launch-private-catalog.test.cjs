@@ -111,7 +111,7 @@ console.log('Private Launch catalog and funding truth checks passed');
     },
     bindingFor:id=>bindings[String(id).replace(/^act_/,'')]||{},
     show:(target,text)=>{target.textContent=text;shown.push(text);},
-    document:{addEventListener(kind,handler,capture){
+    document:{querySelector:()=>({content:'fixture-csrf'}),addEventListener(kind,handler,capture){
       if(kind==='click'&&capture===true)captureHandler=handler;
     }},
     localStorage:{
@@ -122,6 +122,7 @@ console.log('Private Launch catalog and funding truth checks passed');
     crypto:{getRandomValues(values){for(let i=0;i<values.length;i++)values[i]=i+1;return values;}},
     Uint32Array,
     fetch:async(url,options)=>{
+      assert.equal(options.headers['X-ReMask-CSRF'],'fixture-csrf','plans and worker jobs require the page session CSRF token');
       const body=JSON.parse(options.body);requests.push({url,body});
       if(body.action==='private_launch_contracts')
         return {ok:true,status:200,json:async()=>({ok:true,contracts:{
@@ -236,7 +237,8 @@ console.log('Private Launch catalog and funding truth checks passed');
     uploadCount++;
     assert.equal(options.body.fields[0][1],'private_launch_media');
     assert.equal(options.body.fields[1][1],buttons.media.files[0]);
-    assert.equal(options.headers,undefined,'the browser must set the multipart boundary');
+    assert.equal(options.headers['Content-Type'],undefined,'the browser must set the multipart boundary');
+    assert.equal(options.headers['X-ReMask-CSRF'],'fixture-csrf','media staging requires the page session CSRF token');
     return {ok:true,json:async()=>({ok:true,media:{id:'m-'+'a'.repeat(24),sha256:'a'.repeat(64),media_type:'image',size_bytes:68}})};
   };
   const uploaded=await privateCtx.remaskPrivatePrepareConfig();

@@ -39,6 +39,7 @@ COPY railway-*.php railway-*.js /tmp/
 COPY tests/payment-card-vault.test.php /tmp/remask-tests/payment-card-vault.test.php
 COPY tests/private-inventory-identity.test.php /tmp/remask-tests/private-inventory-identity.test.php
 COPY tests/template-targeting-context.test.php /tmp/remask-tests/template-targeting-context.test.php
+COPY tests/readiness.test.php /tmp/remask-tests/readiness.test.php
 COPY docker-start.sh /tmp/docker-start.sh
 
 RUN set -eux; \
@@ -565,6 +566,7 @@ RUN set -eux; \
     php /tmp/railway-private-completion-overlay.php; \
     php /tmp/remask-tests/private-inventory-identity.test.php; \
     php /tmp/remask-tests/template-targeting-context.test.php; \
+    php /tmp/remask-tests/readiness.test.php; \
     chown -R www-data:www-data /var/lib/remask /var/www/html; \
     chmod 700 /var/lib/remask; \
     chmod +x /var/www/html/docker-start.sh;

@@ -2,6 +2,8 @@
 declare(strict_types=1);
 $root = '/var/www/html';
 foreach (['railway-private-form-schema.php'=>'classes/RemaskPrivateFormSchema.php',
+          'railway-readiness.php'=>'classes/RemaskReadiness.php',
+          'railway-ready-endpoint.php'=>'ready.php',
           'railway-private-inventory-identity.php'=>'classes/RemaskPrivateInventoryIdentity.php',
           'railway-template-targeting-context.php'=>'classes/RemaskTemplateTargetingContext.php',
           'railway-advertising-helper-client.php'=>'classes/RemaskAdvertisingHelperClient.php',
