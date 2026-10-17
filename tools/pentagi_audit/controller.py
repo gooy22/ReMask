@@ -2,6 +2,7 @@
 import http.cookiejar
 import json
 import os
+import subprocess
 import time
 import urllib.error
 import urllib.request
@@ -32,11 +33,28 @@ def evidence():
 def collect(flow_id):
     for kind in ['msglogs', 'agentlogs', 'termlogs', 'toolcalls', 'tasks', 'usage']:
         try:
-            result=api(f'/flows/{flow_id}/{kind}/')
+            query='' if kind=='usage' else '?page=1&pageSize=-1&type=init'
+            result=api(f'/flows/{flow_id}/{kind}/'+query)
             (OUT/(kind+'.json')).write_text(json.dumps(result, ensure_ascii=False, indent=2))
         except (OSError, ValueError, RuntimeError) as error:
             (OUT/(kind+'-unavailable.json')).write_text(json.dumps({'error_type':type(error).__name__}))
     evidence()
+
+def diagnostics(flow_id):
+    """Save current service evidence and print only non-sensitive counters."""
+    collect(flow_id)
+    loaded=[]
+    try:
+        with urllib.request.urlopen('http://127.0.0.1:11434/api/ps', timeout=10) as response:
+            loaded=[row.get('name') for row in json.load(response).get('models', [])]
+    except (OSError, ValueError):
+        pass
+    for service in ('pentagi', 'ollama'):
+        result=subprocess.run(['docker','compose','-p','remask-pentagi','-f',
+            str(ROOT/'compose.yml'),'logs','--no-color','--tail=100',service],
+            capture_output=True, text=True, timeout=15, cwd=ROOT)
+        (OUT/(service+'-runtime.log')).write_text(result.stdout+result.stderr)
+    print('PENTAGI_DIAGNOSTICS',json.dumps({'loaded_models':loaded}),flush=True)
 
 def main():
     deadline=time.monotonic()+300
@@ -64,6 +82,7 @@ def main():
     print('PENTAGI_FLOW_CREATED',flow_id,flush=True)
     deadline=time.monotonic()+28*60
     status=None
+    next_diagnostics=0
     try:
         while time.monotonic()<deadline:
             flow=api(f'/flows/{flow_id}')
@@ -71,14 +90,17 @@ def main():
             (OUT/'flow.json').write_text(json.dumps(flow, ensure_ascii=False, indent=2))
             print('PENTAGI_PROGRESS',json.dumps({'id':flow_id,'status':status,
                   'real_origin_requests':evidence()}),flush=True)
+            if time.monotonic()>=next_diagnostics:
+                diagnostics(flow_id)
+                next_diagnostics=time.monotonic()+60
             if status in ('finished','failed'):
                 break
             time.sleep(20)
         if status not in ('finished','failed'):
             api(f'/flows/{flow_id}',{'action':'stop'},method='PUT')
             status='time_limit_stopped'
-        collect(flow_id)
     finally:
+        collect(flow_id)
         summary={'tool':'PentAGI','mock':False,'model':'qwen3:4b-instruct',
                  'flow_id':flow_id,'status':status,'real_origin_requests':evidence(),
                  'mode':'read-only, unauthenticated, isolated gateway',

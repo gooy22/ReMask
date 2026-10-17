@@ -14,7 +14,8 @@ names=['simple','simple_json','primary_agent','assistant','generator','refiner',
        'adviser','reflector','searcher','enricher','coder','installer','pentester']
 config=''
 for name in names:
-    tokens=3072 if name in ('primary_agent','pentester','coder') else 1536
+    tokens=256 if name=='simple' else (512 if name=='simple_json' else
+        (3072 if name in ('primary_agent','pentester','coder') else 1536))
     config+=f'{name}:\n  model: remask-audit-qwen\n  max_tokens: {tokens}\n  temperature: 0.1\n  n: 1\n'
     if name=='simple_json': config+='  json: true\n'
 Path('ollama.provider.yml').write_text(config)
@@ -41,6 +42,19 @@ with urllib.request.urlopen('http://127.0.0.1:11434/api/tags',timeout=20) as res
     tags=json.load(response)
 Path(os.environ['AUDIT_RESULTS'],'model-manifests.json').write_text(json.dumps(tags,indent=2))
 print('REAL_LOCAL_MODEL_READY',body['model'])
+request=urllib.request.Request('http://127.0.0.1:11434/api/chat',data=json.dumps({
+    'model':'remask-audit-qwen','stream':False,
+    'messages':[{'role':'user','content':'Call audit_ready with status ready. Do not write prose.'}],
+    'tools':[{'type':'function','function':{'name':'audit_ready','description':'Confirm readiness',
+        'parameters':{'type':'object','properties':{'status':{'type':'string'}},'required':['status']}}}],
+    'options':{'num_predict':192,'num_ctx':24576,'temperature':0.1}
+}).encode(),headers={'Content-Type':'application/json'})
+with urllib.request.urlopen(request,timeout=180) as response:
+    smoke=json.load(response)
+calls=smoke.get('message',{}).get('tool_calls',[])
+assert any(row.get('function',{}).get('name')=='audit_ready' for row in calls), 'Native tool call failed'
+Path(os.environ['AUDIT_RESULTS'],'model-tool-smoke.json').write_text(json.dumps(smoke,indent=2))
+print('REAL_LOCAL_MODEL_NATIVE_TOOL_CALL_PASSED')
 PY
 test "$(docker network inspect remask-pentagi-workers --format '{{.Internal}}')" = true
 # Verify worker isolation and gateway access without sending an upstream request.
