@@ -30,6 +30,7 @@ if (typeof creativeTargetSearchConfig !== 'function') {
                     :(item.path||[]).join(' › ');
                 button.textContent=String(item.name||item.key||item.id)+(detail?' · '+detail:'');
                 button.addEventListener('click',()=>{
+                    pickerControllers[type]?.abort();delete pickerControllers[type];
                     const target=state[cfg.state]||(state[cfg.state]=[]);
                     const id=row=>type==='locations'? String(row.type)+':'+String(row.key||row.id):String(row.id||row.key);
                     if(!target.some(row=>id(row)===id(item)))target.push(item);
@@ -60,7 +61,11 @@ if (typeof creativeTargetSearchConfig !== 'function') {
         input.addEventListener('focus',()=>{
             clearTimeout(focusTimer);focusTimer=setTimeout(()=>runPicker(type),240);
         });
-        input.addEventListener('input',()=>clearTimeout(focusTimer));
+        input.addEventListener('input',()=>{
+            clearTimeout(focusTimer);
+            pickerControllers[type]?.abort();delete pickerControllers[type];
+            $(cfg.results).textContent='';
+        });
         input.addEventListener('blur',()=>clearTimeout(focusTimer));
         input.addEventListener('keydown',event=>{
             if(event.key==='Enter')clearTimeout(focusTimer);

@@ -75,7 +75,10 @@ const remaskModuleControls = (() => {
                 if(spec.kind==='lookup'){
                     status.textContent='Загружаю варианты…';
                     const body=new URLSearchParams({type:spec.lookup,q,limit:'100'}).toString();
-                    const response=await fetch('ajax/metaTemplateTargetingSearch.php',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body,signal:controller.signal});
+                    const response=await fetch('ajax/metaTemplateTargetingSearch.php',{method:'POST',headers:{
+                        'Content-Type':'application/x-www-form-urlencoded',
+                        'X-ReMask-CSRF':document.querySelector('meta[name="remask-csrf"]')?.content||''
+                    },body,signal:controller.signal});
                     const payload=JSON.parse(await response.text());
                     if(!response.ok||payload.ok!==true)throw new Error(payload.error?.message||'Справочник Meta временно недоступен.');
                     const data=payload.data||{};rows=Array.isArray(data.data)?data.data:[];truncated=Boolean(data.truncated);

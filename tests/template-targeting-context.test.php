@@ -73,6 +73,14 @@ try {
     expect($row['checked_live']===false && $row['template_account_bound']===false,'cache never fabricates live permission');
     expect($reference->get('locations','fixture',1001)===null,'query types isolated');
     expect($reference->get('interests','another',1001)===null,'query keys isolated');
+    $reference->put('interests','',array_replace($proof,['truncated'=>true,'catalog_count'=>1200]),1000);
+    $browse=$reference->get('interests','',1001);
+    expect($browse['truncated']===true && $browse['catalog_count']===1200,'browse cache preserves incomplete catalog metadata');
+    expect($reference->search('interests','Fixture',1001)['truncated']===true,'cached text matches never claim complete catalog coverage');
+    $large=array_replace($proof,['data'=>array_fill(0,501,['id'=>'123456','name'=>'Fixture'])]);
+    $reference->put('behaviors','',$large,1000);
+    expect(count($reference->get('behaviors','',1001)['data'])===500 && $reference->get('behaviors','',1001)['truncated']===true,
+        'server cache bound cannot silently discard remaining choices');
     expect($reference->get('interests','fixture',1000+86401)['reference_stale']===true,'stale reference explicitly identified');
     expect($reference->get('interests','fixture',1000+2592001)===null,'over-age reference expires');
     $reference->block('16',1000); expect($reference->blocked(1001)===['16'],'failed source cooldown');

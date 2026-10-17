@@ -113,6 +113,8 @@ final class RemaskTemplateTargetingReference {
             $row = $state['queries'][self::key($type,$query)] ?? null;
             if (!is_array($row) || !is_array($row['data'] ?? null) || $now-(int)($row['checked_at'] ?? 0)>2592000) return null;
             return ['data'=>$row['data'],'checked_live'=>false,'source'=>'private_meta_template_reference',
+                'truncated'=>($row['truncated'] ?? false) === true,
+                'catalog_count'=>(int)($row['catalog_count'] ?? count($row['data'])),
                 'template_account_bound'=>false,'reference_checked_at'=>$row['checked_at'],
                 'reference_stale'=>$now-(int)$row['checked_at']>86400];
         });
@@ -128,8 +130,11 @@ final class RemaskTemplateTargetingReference {
             if (!isset($safe['id']) && !isset($safe['key'])) continue;
             if (strlen(json_encode($safe,JSON_THROW_ON_ERROR))<=8192) $rows[]=$safe;
         }
-        $this->update(static function(array &$state) use ($type,$query,$rows,$now) {
-            $state['queries'][self::key($type,$query)] = ['data'=>$rows,'checked_at'=>$now];
+        $truncated = ($proof['truncated'] ?? false) === true || count((array)($proof['data'] ?? []))>500;
+        $catalogCount = max(count($rows), count((array)($proof['data'] ?? [])), (int)($proof['catalog_count'] ?? 0));
+        $this->update(static function(array &$state) use ($type,$query,$rows,$now,$truncated,$catalogCount) {
+            $state['queries'][self::key($type,$query)] = ['data'=>$rows,'checked_at'=>$now,
+                'truncated'=>$truncated,'catalog_count'=>$catalogCount];
             uasort($state['queries'], static fn($a,$b)=>(int)$b['checked_at']<=>(int)$a['checked_at']);
             $state['queries']=array_slice($state['queries'],0,200,true);
         });
@@ -152,6 +157,7 @@ final class RemaskTemplateTargetingReference {
                     implode(' ',(array)($item['path'] ?? [])).' '.(string)($item['id'] ?? ''))===1));
             if (!$rows) return null;
             return ['data'=>array_slice($rows,0,50),'checked_live'=>false,
+                'truncated'=>count($rows)>50 || ($row['truncated'] ?? false) === true,
                 'source'=>'private_meta_template_reference','template_account_bound'=>false,
                 'reference_checked_at'=>$row['checked_at']];
         });

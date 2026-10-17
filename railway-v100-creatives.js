@@ -91,6 +91,7 @@ function clearObjectUrls() {
     carouselPreviewUrls = [];
 }
 function closeEditor() {
+    for (const kind of Object.keys(creativeTargetingControllers)) closeCreativeTargetResults(kind);
     $('creativeModal').classList.remove('open');
     $('creativeModal').setAttribute('aria-hidden', 'true');
     clearObjectUrls();
@@ -741,6 +742,9 @@ function creativeTargetSearchConfig(kind) {
 }
 
 function closeCreativeTargetResults(kind) {
+    clearTimeout(creativeTargetingTimers[kind]);
+    creativeTargetingControllers[kind]?.abort();
+    creativeTargetingControllers[kind] = null;
     const cfg = creativeTargetSearchConfig(kind);
     const box = cfg ? $(cfg.results) : null;
     if (!box) return;
@@ -748,7 +752,7 @@ function closeCreativeTargetResults(kind) {
     box.innerHTML = '';
 }
 
-function renderCreativeTargetResults(kind, items) {
+function renderCreativeTargetResults(kind, items, truncated = false) {
     const cfg = creativeTargetSearchConfig(kind);
     const box = cfg ? $(cfg.results) : null;
     if (!box) return;
@@ -774,7 +778,7 @@ function renderCreativeTargetResults(kind, items) {
         });
         box.appendChild(row);
     }
-    if(items.length>100){
+    if(items.length>100 || truncated){
         const hint=document.createElement('div');hint.className='cr-target-empty';
         hint.textContent='Введите название, чтобы сузить список.';box.appendChild(hint);
     }
@@ -816,7 +820,7 @@ async function searchCreativeTargeting(kind) {
             : Array.isArray(data?.data) ? data.data
             : Array.isArray(data?.items) ? data.items
             : [];
-        renderCreativeTargetResults(kind, rows);
+        renderCreativeTargetResults(kind, rows, data?.truncated === true);
     } catch (error) {
         if (error?.name === 'AbortError') return;
         if (creativeTargetingControllers[kind] !== controller) return;
@@ -841,7 +845,7 @@ function installCreativeTargetSearch(kind) {
     });
     input.addEventListener('blur', () => clearTimeout(creativeTargetingTimers[kind]));
     input.addEventListener('input', () => {
-        clearTimeout(creativeTargetingTimers[kind]);
+        closeCreativeTargetResults(kind);
         creativeTargetingTimers[kind] = setTimeout(() => searchCreativeTargeting(kind), 240);
     });
     input.addEventListener('keydown', (event) => {

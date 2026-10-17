@@ -56,6 +56,8 @@ try {
                 throw new RuntimeException('TEMPLATE_LOOKUP_ACCESS_UNVERIFIED');
             $reference->put($type, $query, $result, time());
             MetaEndpoint::ok(['data'=>$result['data'] ?? [], 'checked_live'=>true,
+                'truncated'=>($result['truncated'] ?? false) === true,
+                'catalog_count'=>(int)($result['catalog_count'] ?? count($result['data'] ?? [])),
                 'source'=>'private_meta_template_lookup', 'template_account_bound'=>false]);
             exit;
         } catch (Throwable $error) {
