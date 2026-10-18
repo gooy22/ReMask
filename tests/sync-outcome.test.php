@@ -5,6 +5,11 @@ preg_match('/\/\/ REMASK_HONEST_SYNC_OUTCOME_V1\n(.*?)\n\/\/ REMASK_PERSISTENT_B
 if (!isset($match[1])) throw new RuntimeException('Sync outcome implementation missing');
 eval($match[1]);
 function check(bool $value): void { if (!$value) throw new RuntimeException('Sync outcome assertion failed'); }
+foreach (['CHECKPOINT_REQUIRED','BUSINESS_LOGIN_GATE','PRIVATE_HTTP_PROXY_UNAVAILABLE','PRIVATE_HTTP_READ_TIMEOUT'] as $code) {
+    $result = hierarchy_private_sync_outcome(['live_ready'=>false,'businesses'=>[],'sync_error_kind'=>$code]);
+    check(!$result['complete'] && $result['kind']===$code);
+}
+check(hierarchy_private_sync_outcome(['live_ready'=>true,'sync_error_kind'=>'PRIVATE_HTTP_READ_TIMEOUT'])['complete']);
 $business = ['id'=>'987654321','accounts'=>[['id'=>'act_987654321'],['id'=>'123456789','business_id'=>'987654321','_sync_preserved'=>true]]];
 $snapshot = hierarchy_asset_types_snapshot(['businesses'=>[$business], 'pages'=>[['id'=>'555555555']],
     'ad_accounts'=>[['id'=>'987654321','business_id'=>'987654321'],['id'=>'act_555555555','business_id'=>'987654321'],['id'=>'123456789','business_id'=>'987654321','_sync_preserved'=>true]],

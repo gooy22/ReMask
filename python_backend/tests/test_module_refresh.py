@@ -107,6 +107,15 @@ class SelectionTests(unittest.TestCase):
         web._module_refresh_attempted_at=time.monotonic()
         self.assertFalse(refresh.refresh_due(web))
 
+    def test_incomplete_collection_resumes_even_without_an_expired_relay_id(self):
+        web=SimpleNamespace(_reviewed_module_ids={'accepted':{},'blocked':[]},
+            _module_collection_progress={'collection_complete':False},
+            _module_collection_due_at=1060,_module_refresh_attempted_at=1000)
+        with patch.object(refresh.time,'monotonic',return_value=1059):
+            self.assertFalse(refresh.refresh_due(web))
+        with patch.object(refresh.time,'monotonic',return_value=1061):
+            self.assertTrue(refresh.refresh_due(web))
+
 
 class AutomaticReadsTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -155,6 +164,91 @@ class AutomaticReadsTests(unittest.IsolatedAsyncioTestCase):
             await refresh.refresh_from_document(self.web, self.document, url)
         await refresh.refresh_from_document(self.web, '<script src="https://example.com/evil.js"></script>', self.url)
         self.web.fetch_text.assert_not_awaited()
+
+    async def collect(self, sources, *, document=None, fail_once=()):
+        import os, tempfile
+        failed = set()
+        async def fetch(url, **kwargs):
+            if url in fail_once and url not in failed:
+                failed.add(url)
+                return 503, '', url
+            return 200, sources[url], url
+        self.web.fetch_text.side_effect = fetch
+        doc = document or ''.join('<script src="' + url + '"></script>' for url in sources)
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {'REMASK_DATA_DIR': folder}):
+            for index in range(40):
+                with patch.object(refresh.time, 'monotonic', return_value=1000 + index * 61):
+                    await refresh.refresh_from_document(self.web, doc, self.url)
+                if next(iter(refresh._cache.values()))['drained']:
+                    break
+            return json.loads((Path(folder) / 'private-module-catalog.json').read_text())
+
+    async def test_inventory_collects_beyond_the_old_256_url_ceiling(self):
+        sources = {f'https://static.xx.fbcdn.net/{i}.js':
+            f'__d("MetaFullInventory{i}",[],function(){{return {{}};}});' for i in range(270)}
+        result = await self.collect(sources)
+        self.assertEqual(self.web.fetch_text.await_count, 270)
+        self.assertIn('MetaFullInventory269', result['modules'])
+        self.assertTrue(self.web._module_collection_progress['collection_complete'])
+
+    async def test_deferred_maps_discovered_in_later_scripts_are_collected(self):
+        root = 'https://static.xx.fbcdn.net/root.js'
+        child = 'https://static.xx.fbcdn.net/child.js'
+        sources = {root: 'var metadata=' + json.dumps({'rsrcMap': {'child': {'type': 'js', 'src': child}}}) + ';',
+            child: '__d("DeferredGeneralMetaModule",[],function(){return {};});'}
+        result = await self.collect(sources, document='<script src="' + root + '"></script>')
+        self.assertIn('DeferredGeneralMetaModule', result['modules'])
+        self.assertEqual(self.web._module_collection_progress['collected_scripts'], 2)
+
+    async def test_transient_failed_resource_is_retried_without_losing_later_modules(self):
+        sources = {f'https://static.xx.fbcdn.net/{i}.js':
+            f'__d("MetaRetry{i}",[],function(){{return {{}};}});' for i in range(26)}
+        result = await self.collect(sources, fail_once=[next(iter(sources))])
+        self.assertEqual(self.web.fetch_text.await_count, 27)
+        self.assertIn('MetaRetry0', result['modules'])
+        self.assertIn('MetaRetry25', result['modules'])
+        self.assertTrue(self.web._module_collection_progress['collection_complete'])
+
+    async def test_artifact_and_sender_in_separate_windows_form_one_complete_proof(self):
+        name = 'BizKitSettingsCreateAdAccountMutation'
+        specs = refresh.baselines()[name]
+        old, new = specs['doc_id'], '99999999999999991'
+        rows = [copy.deepcopy(row) for row in observed_rows()
+            if row['name'] in set(specs['artifact_modules']) | set(specs['senders'])]
+        for row in rows:
+            row['module_source'] = row['module_source'].replace(old, new)
+        artifacts = [row for row in rows if row['name'] in specs['artifact_modules']]
+        senders = [row for row in rows if row['name'] in specs['senders']]
+        sources = {f'https://static.xx.fbcdn.net/{i}.js': '' for i in range(25)}
+        sources['https://static.xx.fbcdn.net/0.js'] = '\n'.join(row['module_source'] for row in artifacts)
+        sources['https://static.xx.fbcdn.net/24.js'] = '\n'.join(row['module_source'] for row in senders)
+        await self.collect(sources)
+        self.assertEqual(self.web._reviewed_module_ids['accepted'][name]['doc_id'], new)
+        self.assertNotIn(name, self.web._reviewed_module_ids['blocked'])
+
+    async def test_invalid_editor_table_does_not_suppress_unrelated_module_inventory(self):
+        source = '__d("AdsTargetingEducation",[],function(){return {BAD:fetch("invalid")};});' \
+            '__d("IndependentSyncModule",[],function(){return {};});'
+        with patch.object(refresh, 'refresh_editor', side_effect=ValueError('changed schema')):
+            result = await self.collect({self.cdn: source})
+        self.assertIn('IndependentSyncModule', result['modules'])
+
+    async def test_failed_capture_is_never_reported_as_complete(self):
+        source='__d("SuccessfulGeneralModule",[],function(){return {};});'
+        good='https://static.xx.fbcdn.net/good.js'
+        bad='https://static.xx.fbcdn.net/bad.js'
+        async def fetch(url,**kwargs):
+            return (200,source,url) if url==good else (503,'',url)
+        self.web.fetch_text.side_effect=fetch
+        import os,tempfile
+        with tempfile.TemporaryDirectory() as folder,patch.dict(os.environ,{'REMASK_DATA_DIR':folder}):
+            for now in (1000,1061,1122):
+                with patch.object(refresh.time,'monotonic',return_value=now):
+                    await refresh.refresh_from_document(self.web,
+                        '<script src="'+good+'"></script><script src="'+bad+'"></script>',self.url)
+        self.assertEqual(self.web.fetch_text.await_count,4)
+        self.assertFalse(self.web._module_collection_progress['collection_complete'])
+        self.assertEqual(self.web._module_collection_progress['failed_scripts'],1)
 
     async def test_unavailable_proxy_does_not_reroute_or_replay(self):
         self.web.fetch_text.side_effect = OSError('private proxy password must never be recorded')

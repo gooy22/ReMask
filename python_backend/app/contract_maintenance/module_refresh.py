@@ -32,6 +32,10 @@ TTL = 1800
 SCRIPT_LIMIT = 24
 SCRIPT_BYTES = 2_000_000
 TOTAL_BYTES = 12_000_000
+URL_LIMIT = 4096
+SCRIPT_ATTEMPTS = 3
+PROOF_BYTES = 8_000_000
+CACHE_PROOF_BYTES = 16_000_000
 _cache = OrderedDict()
 
 
@@ -111,22 +115,31 @@ async def refresh_from_document(web, document, final_url):
     references = baselines()
     wanted = sorted({name for spec in references.values() for name in (*spec['artifact_modules'], *spec['senders'])}
                     | set(TARGETING_MODULES) | set(EDITOR_MODULES))
-    urls = list(dict.fromkeys(deferred_script_urls(document, preferred=wanted) +
-        [url for url in _script_urls(document, final_url, limit=256) if public_script_url(url)]))[:256]
+    urls = list(dict.fromkeys(deferred_script_urls(document, preferred=wanted, all_resources=True) +
+        [url for url in _script_urls(document, final_url, limit=URL_LIMIT) if public_script_url(url)]))
     if not urls:
         return
     profile = web.profile
     route = str(getattr(profile, 'proxy', '') or '')
     key = hashlib.sha256(json.dumps([getattr(profile, 'name', ''), profile.cookies.get('c_user', ''), route,
-        parts.hostname, parts.path, urls], separators=(',', ':')).encode()).hexdigest()
+        parts.hostname, parts.path, sorted(urls)], separators=(',', ':')).encode()).hexdigest()
     now = time.monotonic()
     previous = _cache.get(key)
     if previous and previous['until'] > now:
         _apply_snapshot(web, previous['snapshot'])
+        web._module_collection_progress = dict(previous['progress'])
+        web._module_collection_due_at = previous['until']
         return
-    cursor = int(previous.get('cursor', 0)) if previous else 0
-    window = urls[cursor:cursor + SCRIPT_LIMIT]
-    attempted = 0
+    # Retain only reviewed proof candidates between bounded windows. A sender,
+    # its Relay artifact and a literal reference table may live in different
+    # CDN files. Unrelated factories are inventoried, then discarded.
+    continuing = previous and not previous['drained']
+    state = previous if continuing else {
+        'urls': urls[:URL_LIMIT], 'attempts': {}, 'collected': set(),
+        'proofs': {}, 'proof_bytes': 0, 'limited': len(urls) > URL_LIMIT}
+    pending = [url for url in state['urls'] if url not in state['collected']
+               and state['attempts'].get(url, 0) < SCRIPT_ATTEMPTS]
+    window = sorted(pending, key=lambda url: state['attempts'].get(url, 0))[:SCRIPT_LIMIT]
     rows, bytes_read = [], 0
     failures = 0
     # Sequential reads keep a strict aggregate budget and the same cookie jar.
@@ -137,7 +150,7 @@ async def refresh_from_document(web, document, final_url):
                 budget = min(SCRIPT_BYTES, TOTAL_BYTES - bytes_read)
                 if budget <= 0:
                     break
-                attempted += 1
+                state['attempts'][url] = state['attempts'].get(url, 0) + 1
                 try:
                     status, source, final = await web.fetch_text(url, max_bytes=budget + 1, referer=final_url)
                     size = len(source.encode())
@@ -159,6 +172,27 @@ async def refresh_from_document(web, document, final_url):
                                 'script_sha256':hashlib.sha256(source.encode()).hexdigest(),
                                 'observed_public_url':url}
                     rows.extend(parsed)
+                    state['collected'].add(url)
+                    for candidate in deferred_script_urls(source, preferred=wanted, all_resources=True):
+                        if candidate in state['urls']:
+                            continue
+                        if len(state['urls']) >= URL_LIMIT:
+                            state['limited'] = True
+                            break
+                        state['urls'].append(candidate)
+                    for row in parsed:
+                        if row['name'] not in wanted:
+                            continue
+                        digest = hashlib.sha256(row['module_source'].encode()).hexdigest()
+                        proof_key = (row['name'], digest)
+                        if proof_key in state['proofs']:
+                            continue
+                        size = len(row['module_source'].encode())
+                        if state['proof_bytes'] + size > PROOF_BYTES:
+                            state['limited'] = True
+                            continue
+                        state['proofs'][proof_key] = row
+                        state['proof_bytes'] += size
                 except asyncio.CancelledError:
                     raise
                 except Exception:
@@ -167,25 +201,36 @@ async def refresh_from_document(web, document, final_url):
                     failures += 1
     except TimeoutError:
         failures += 1
-    snapshot = select_updates(rows, references)
+    proofs = list(state['proofs'].values())
+    snapshot = select_updates(proofs, references)
     try:
-        await asyncio.to_thread(refresh_reference, rows)
+        await asyncio.to_thread(refresh_reference, proofs)
     except (ValueError, KeyError, TypeError, OSError):
         # An incomplete or changed reference table cannot erase usable IDs.
         log.info('targeting_reference refresh rejected; installed reference preserved')
     try:
         object_fields=json.loads((BASELINES.parent/'ads_manager_http_20261012.json').read_text())['object_fields']
-        await asyncio.to_thread(refresh_editor, rows, object_fields)
-        await asyncio.to_thread(refresh_registry, rows)
+        await asyncio.to_thread(refresh_editor, rows + proofs, object_fields)
     except (ValueError, KeyError, TypeError, OSError):
         log.info('module_metadata refresh rejected; installed adapters preserved')
+    # A changed editor table must not suppress collection of unrelated modules.
+    try:
+        await asyncio.to_thread(refresh_registry, rows)
+    except (ValueError, KeyError, TypeError, OSError):
+        log.info('module_inventory refresh rejected; installed inventory preserved')
     _apply_snapshot(web, snapshot)
-    cursor += attempted
-    complete = cursor >= len(urls)
-    _cache[key] = {'until': now + (60 if failures or not complete else TTL),
-                   'cursor': 0 if complete else cursor, 'snapshot': snapshot}
+    pending = [url for url in state['urls'] if url not in state['collected']
+               and state['attempts'].get(url, 0) < SCRIPT_ATTEMPTS]
+    progress = {'discovered_scripts': len(state['urls']), 'collected_scripts': len(state['collected']),
+        'pending_scripts': len(pending), 'failed_scripts': len(state['urls']) - len(state['collected']) - len(pending),
+        'collection_limited': state['limited'],
+        'collection_complete': not pending and len(state['collected']) == len(state['urls']) and not state['limited']}
+    web._module_collection_progress = progress
+    state.update(until=now + (60 if pending else TTL), drained=not pending, snapshot=snapshot, progress=progress)
+    web._module_collection_due_at = state['until']
+    _cache[key] = state
     _cache.move_to_end(key)
-    while len(_cache) > 64:
+    while len(_cache) > 64 or sum(row['proof_bytes'] for row in _cache.values()) > CACHE_PROOF_BYTES:
         _cache.popitem(last=False)
     log.info('module_refresh accepted=%d changed=%d modules=%d failures=%d bytes=%d changed_names=%s http2=True browser_started=False',
         len(snapshot['accepted']), len(snapshot['blocked']), snapshot['observed_modules'], failures, bytes_read,
@@ -208,8 +253,11 @@ def _apply_snapshot(web, snapshot):
 
 def refresh_due(web):
     now = time.monotonic()
-    return now - getattr(web, '_module_refresh_attempted_at', 0) >= 60 and any(
-        row['until'] <= now for row in getattr(web, '_reviewed_module_ids', {}).get('accepted', {}).values())
+    progress = getattr(web, '_module_collection_progress', {})
+    unfinished = bool(progress) and not progress.get('collection_complete', False)
+    return now - getattr(web, '_module_refresh_attempted_at', 0) >= 60 and (
+        unfinished and now >= getattr(web, '_module_collection_due_at', 0) or any(
+            row['until'] <= now for row in getattr(web, '_reviewed_module_ids', {}).get('accepted', {}).values()))
 
 
 def effective_doc_id(web, friendly_name, original):

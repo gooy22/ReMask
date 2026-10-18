@@ -289,6 +289,11 @@ async def _fetch_payloads(web, url: str) -> tuple[list[Any], dict[str, Any]]:
     target, final = urlsplit(url), urlsplit(final_url)
     trusted = final.scheme == "https" and final.hostname in {"facebook.com", "www.facebook.com",
         "business.facebook.com", "adsmanager.facebook.com"}
+    if status == 200 and not gate and trusted:
+        from .contract_maintenance.module_refresh import refresh_due
+        refresh = getattr(web, 'refresh_reviewed_modules', None)
+        if callable(refresh) and (not hasattr(web, '_module_collection_progress') or refresh_due(web)):
+            await refresh(body, final_url)
     return payloads, {
         "requested_url": target.scheme + "://" + (target.hostname or "") + target.path,
         "final_url": final.scheme + "://" + (final.hostname or "") + final.path,
@@ -329,10 +334,11 @@ async def private_inventory_snapshot(
         try:
             payloads, diag = await _fetch_payloads(web, url)
         except Exception as exc:
+            from .private_transport_error import private_transport_error
+            _, failure = private_transport_error(exc)
             diagnostics.append({
                 "phase": "business_discovery",
-                "url": url,
-                "error": f"{exc.__class__.__name__}: {exc}"[:500],
+                "code": failure['code'],
                 "error_type": exc.__class__.__name__,
             })
             continue
@@ -414,9 +420,10 @@ async def private_inventory_snapshot(
             try:
                 payloads, diag = await _fetch_payloads(web, url)
             except Exception as exc:
+                from .private_transport_error import private_transport_error
+                _, failure = private_transport_error(exc)
                 business_diags.append({
-                    "url": url,
-                    "error": f"{exc.__class__.__name__}: {exc}"[:500],
+                    "code": failure['code'],
                     "error_type": exc.__class__.__name__,
                 })
                 continue

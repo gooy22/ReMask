@@ -76,7 +76,8 @@ class EditorModulesTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder,patch.dict(os.environ,{'REMASK_DATA_DIR':folder}):
             refresh_registry(self.rows[:1])
             result=json.loads((Path(folder)/'private-module-catalog.json').read_text())
-            self.assertEqual(len(result['modules']),15111)
+            installed_catalog=json.loads((ROOT/'app/contracts/meta_module_catalog_20261014.json').read_text())
+            self.assertEqual(len(result['modules']),len(installed_catalog['modules']))
             self.assertFalse(result['checked_live'])
             self.assertNotIn('source',next(iter(result['modules'].values())))
             self.assertNotIn('fb_dtsg',result)

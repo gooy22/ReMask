@@ -2101,23 +2101,24 @@ async def profile_live_inventory(
     try:
         stage='profile_session'
         async with ProfileSession(context) as profile_session:
-            meta_transport=MetaTransportRouter(profile_session)
+            meta_transport=MetaTransportRouter(profile_session, private_only=True)
             # REMASK_PRIVATE_FIRST_SYNC_V1
-            # Sync is transport-agnostic: reuse the profile cookie/proxy web
-            # session first and open Chromium only when private Relay/HTML
-            # inventory cannot prove the known BM/RK targets.
+            # Normal Sync uses only the assigned profile's private HTTP/2.
+            # An inconclusive read cannot switch to a renderer session.
             stage='private_inventory'
             private_started=time.monotonic()
             private_snapshot: dict[str,Any] = {}
             try:
                 facebook_web=await meta_transport.facebook_web()
-                private_timeout=budget(12.0)
+                private_timeout=budget(32.0)
                 private_snapshot=await hard_deadline(
                     private_inventory_snapshot(
                         facebook_web,
                         known_accounts_by_business=known_accounts_by_business,
                         known_business_ids=known_business_ids,
                         personal_scope_id=personal_scope_id,
+                        discover_businesses=not bool(requested_business_ids),
+                        execute_read_queries=True,
                     ),
                     private_timeout,
                 )
@@ -2125,9 +2126,14 @@ async def profile_live_inventory(
                 log.info(
                     'live inventory profile=%s private-first unavailable=%s',
                     clean_profile,
-                    f'{exc.__class__.__name__}: {exc}'[:700],
+                    exc.__class__.__name__,
                 )
-                private_snapshot={}
+                from app.private_auth import private_auth_error
+                from app.private_transport_error import private_transport_error
+                auth_error=private_auth_error(exc)
+                _,transport_error=private_transport_error(exc)
+                private_snapshot={'diagnostics':[{'auth_gate':auth_error.code if auth_error else '',
+                    'code':auth_error.code if auth_error else transport_error['code']}]}
 
             if private_snapshot.get('ready'):
                 private_businesses=[
@@ -2259,6 +2265,37 @@ async def profile_live_inventory(
                     private_pages_live_verified,
                 )
                 return result
+
+            if meta_transport.policy('INVENTORY').fallback == 'none_private_only':
+                # REMASK_PRIVATE_ONLY_SYNC_V1
+                # Return partial evidence through the existing PHP outcome
+                # boundary. It preserves the last confirmed inventory and does
+                # not label an empty/unreadable result as live or complete.
+                partial_businesses=[row for row in private_snapshot.get('businesses', []) if isinstance(row,dict)]
+                diagnostics=[row for row in private_snapshot.get('diagnostics', []) if isinstance(row,dict)]
+                for row in partial_businesses:
+                    diagnostics.extend(item for item in row.get('diagnostics', []) if isinstance(item,dict))
+                gates={row.get('auth_gate') for row in diagnostics if row.get('auth_gate')}
+                blocked_code=next((code for code in ('CHECKPOINT_REQUIRED','TWO_FACTOR_REQUIRED','SESSION_EXPIRED','BUSINESS_LOGIN_GATE') if code in gates),'')
+                connection_codes={row.get('code') for row in diagnostics}
+                error_code=blocked_code or next((code for code in ('PRIVATE_HTTP_PROXY_UNAVAILABLE',
+                    'PRIVATE_HTTP_READ_TIMEOUT','PRIVATE_HTTP_CONNECTION_UNAVAILABLE','PRIVATE_HTTP_PROTOCOL_ERROR',
+                    'PRIVATE_HTTP_READ_UNAVAILABLE') if code in connection_codes),'PRIVATE_INCONCLUSIVE')
+                blocked={business:blocked_code for business in known_business_ids} if blocked_code else {}
+                return {'ok':True,'profile_id':clean_profile,'live_ready':False,
+                    'sync_error_kind':error_code,
+                    'session_ready':not bool(blocked_code) and any(row.get('usable') is True for row in diagnostics),
+                    'business_inventory_confirmed_empty':False,
+                    'businesses':partial_businesses,'businesses_count':len(partial_businesses),
+                    'live_businesses_count':len(private_snapshot.get('confirmed_business_ids', [])),
+                    'known_businesses_count':len(known_business_ids),
+                    'auth_blocked_businesses':sorted(blocked),'auth_blocked_business_codes':blocked,
+                    'discovery_source':'private_http_relay_inventory','source':'private_http_relay_inventory',
+                    'business_inventory_diagnostic':{'transport':'private_http_relay','diagnostics':diagnostics},
+                    'pages':[],'pages_count':0,'pages_ready':False,'pages_live_verified':False,
+                    'pages_source':'','pages_diagnostic':'',
+                    'warnings':[error_code],
+                    'browser_started':False,'transport':'private_http_h2'}
 
             log.info(
                 'live inventory profile=%s private-first inconclusive ms=%d businesses=%s; falling back to Chromium',
