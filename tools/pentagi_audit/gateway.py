@@ -100,7 +100,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json(502, {'error': 'Origin unavailable', 'type': type(error).__name__})
             redacted = sensitive(self.path, body, headers.get('Content-Type', ''))
             record = {'method': self.command, 'path': self.path, 'status': status,
-                      'headers': headers, 'cookie_flags': flags,
+                      'headers': dict(headers), 'cookie_flags': flags,
                       'body_bytes_observed': len(body), 'body_sha256': hashlib.sha256(body).hexdigest(),
                       'body_redacted': redacted}
             RECORDS.append(record)

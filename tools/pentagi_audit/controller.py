@@ -42,6 +42,12 @@ def collect(flow_id):
             (OUT/(kind+'-unavailable.json')).write_text(json.dumps({'error_type':type(error).__name__}))
     evidence()
 
+def assessment_ready(observed, toolcalls, agentlogs):
+    complete=set(PATHS).issubset({row['path'] for row in observed if isinstance(row.get('status'),int)})
+    returned=any(row.get('name')=='hack_result' and row.get('status')=='finished' for row in toolcalls)
+    written=any(row.get('executor')=='pentester' and str(row.get('result','')).strip() for row in agentlogs)
+    return complete and returned and written
+
 def diagnostics(flow_id):
     """Save current service evidence and print only non-sensitive counters."""
     collect(flow_id)
@@ -100,6 +106,7 @@ def main():
     print('PENTAGI_FLOW_CREATED',flow_id,flush=True)
     deadline=time.monotonic()+28*60
     status=None
+    closure='native_flow_completion'
     next_diagnostics=0
     try:
         while time.monotonic()<deadline:
@@ -111,6 +118,19 @@ def main():
             if time.monotonic()>=next_diagnostics:
                 diagnostics(flow_id)
                 next_diagnostics=time.monotonic()+60
+                observed=json.loads((OUT/'origin-evidence.json').read_text())['requests']
+                calls=json.loads((OUT/'toolcalls.json').read_text()).get('toolcalls',[])
+                agents=json.loads((OUT/'agentlogs.json').read_text()).get('agentlogs',[])
+                if assessment_ready(observed,calls,agents):
+                    # The native pentester has returned its report. The outer
+                    # coordinator closes this explicitly bounded engagement;
+                    # this does not claim the LLM called the closing tool.
+                    closure='controller_after_native_pentester_report'
+                    api(f'/flows/{flow_id}',{'action':'finish'},method='PUT')
+                    closed=api(f'/flows/{flow_id}')
+                    (OUT/'flow.json').write_text(json.dumps(closed,ensure_ascii=False,indent=2))
+                    status=closed.get('status')
+                    break
             if status in ('finished','failed'):
                 break
             if status=='waiting':
@@ -132,14 +152,18 @@ def main():
         collect(flow_id)
         observed=json.loads((OUT/'origin-evidence.json').read_text())['requests']
         complete=set(PATHS).issubset({row['path'] for row in observed if 'status' in row})
+        calls=json.loads((OUT/'toolcalls.json').read_text()).get('toolcalls',[])
+        agents=json.loads((OUT/'agentlogs.json').read_text()).get('agentlogs',[])
+        assessed=assessment_ready(observed,calls,agents)
         summary={'tool':'PentAGI','mock':False,'model':'qwen3:4b-instruct',
                  'flow_id':flow_id,'status':status,'real_origin_requests':evidence(),
-                 'sample_complete':complete,'audit_completed':status=='finished' and complete,
+                 'sample_complete':complete,'assessment_returned':assessed,
+                 'closure':closure,'audit_completed':status=='finished' and assessed,
                  'mode':'read-only, unauthenticated, isolated gateway',
                  'limitations':['local 4B model','no authenticated testing','origin TLS via verified gateway']}
         (OUT/'run-summary.json').write_text(json.dumps(summary, ensure_ascii=False, indent=2))
         print('PENTAGI_RESULT',json.dumps(summary),flush=True)
-    if status!='finished' or not complete:
+    if status!='finished' or not assessed:
         raise SystemExit('PentAGI did not finish; partial evidence retained.')
 
 if __name__=='__main__':

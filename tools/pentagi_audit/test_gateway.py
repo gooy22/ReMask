@@ -48,6 +48,7 @@ class BoundaryTests(unittest.TestCase):
                     self.assertEqual(response.headers['X-Audit-Body-Redacted'],'true')
                     self.assertNotIn(b'private-value',response.read())
             self.assertNotIn('private-value',json.dumps(gateway.RECORDS))
+            self.assertEqual(gateway.RECORDS[0]['headers'],{'Content-Type':'application/json'})
         finally:
             server.shutdown();server.server_close();thread.join()
 
