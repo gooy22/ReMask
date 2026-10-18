@@ -302,6 +302,7 @@ echo json_encode(['token'=>$saved->token,'cookies'=>$saved->cookies,'proxy'=>$sa
         self.assertTrue(saved['encrypted'])
 
     def test_direct_transport_snapshot_preserves_real_proxy_state(self):
+        self.env['REMASK_DATA_DIR'] = str(self.root)
         self.create(proxy='', allow_direct_test=True)
         source = (ROOT/'railway-direct-transport-display-overlay.php').read_text()
         helper = re.search(r"<<<'DIRECT_TRANSPORT'\n(.*?)\nDIRECT_TRANSPORT;", source, re.S).group(1)
