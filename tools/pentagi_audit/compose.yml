@@ -1,0 +1,92 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: pentagi
+      POSTGRES_PASSWORD: ${AUDIT_DB_PASSWORD:?required}
+      POSTGRES_DB: pentagidb
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U pentagi]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    networks: [control]
+  ollama:
+    image: ollama/ollama:latest
+    environment:
+      OLLAMA_NUM_PARALLEL: '1'
+      OLLAMA_MAX_LOADED_MODELS: '2'
+      OLLAMA_CONTEXT_LENGTH: '24576'
+      OLLAMA_KEEP_ALIVE: 30m
+    ports: [127.0.0.1:11434:11434]
+    networks: [control]
+  gateway:
+    image: python:3.12-slim
+    command: [python, -u, /app/gateway.py]
+    volumes: [./gateway.py:/app/gateway.py:ro]
+    ports: [127.0.0.1:18081:8080]
+    networks:
+      control:
+      workers:
+        aliases: [audit-gateway]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+  pentagi:
+    image: vxcontrol/pentagi:latest
+    depends_on:
+      postgres:
+        condition: service_healthy
+    user: root:root
+    ports: [127.0.0.1:18443:8443]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./ollama.provider.yml:/opt/pentagi/conf/audit.provider.yml:ro
+      - pentagi-data:/opt/pentagi/data
+    environment:
+      DATABASE_URL: postgres://pentagi:${AUDIT_DB_PASSWORD}@postgres:5432/pentagidb?sslmode=disable
+      COOKIE_SIGNING_SALT: ${AUDIT_COOKIE_SALT:?required}
+      SERVER_USE_SSL: 'false'
+      SERVER_HOST: 0.0.0.0
+      SERVER_PORT: '8443'
+      PUBLIC_URL: http://localhost:18443
+      CORS_ORIGINS: http://localhost:18443
+      OLLAMA_SERVER_URL: http://ollama:11434
+      OLLAMA_SERVER_MODEL: remask-audit-qwen
+      OLLAMA_SERVER_CONFIG_PATH: /opt/pentagi/conf/audit.provider.yml
+      OLLAMA_SERVER_PULL_MODELS_ENABLED: 'false'
+      OLLAMA_SERVER_LOAD_MODELS_ENABLED: 'true'
+      EMBEDDING_PROVIDER: ollama
+      EMBEDDING_URL: http://ollama:11434
+      EMBEDDING_MODEL: nomic-embed-text
+      DOCKER_HOST: unix:///var/run/docker.sock
+      DOCKER_NETWORK: remask-pentagi-workers
+      DOCKER_INSIDE: 'false'
+      DOCKER_NET_ADMIN: 'false'
+      DOCKER_DEFAULT_IMAGE: remask-audit-worker:local
+      DOCKER_DEFAULT_IMAGE_FOR_PENTEST: remask-audit-worker:local
+      DOCKER_ALLOWED_IMAGES: remask-audit-worker:local
+      DOCKER_IMAGE_SELECTION_MODE: fixed
+      DOCKER_PORTS_BASE: '32000'
+      DUCKDUCKGO_ENABLED: 'false'
+      SPLOITUS_ENABLED: 'false'
+      WEB_SEARCH_INTERNAL_ENABLED: 'false'
+      GRAPHITI_ENABLED: 'false'
+      ASK_USER: 'false'
+      HTTP_CLIENT_TIMEOUT: '900'
+      TERMINAL_TOOL_TIMEOUT: '45'
+      MAX_GENERAL_AGENT_TOOL_CALLS: '14'
+      MAX_LIMITED_AGENT_TOOL_CALLS: '6'
+      EXECUTION_MONITOR_ENABLED: 'true'
+      EXECUTION_MONITOR_SAME_TOOL_LIMIT: '3'
+      EXECUTION_MONITOR_TOTAL_TOOL_LIMIT: '14'
+      AGENT_PLANNING_STEP_ENABLED: 'false'
+      DEBUG: 'false'
+    networks: [control]
+networks:
+  control:
+  workers:
+    name: remask-pentagi-workers
+    internal: true
+volumes:
+  pentagi-data:

@@ -1,0 +1,7 @@
+Perform ONE owner-authorized READ-ONLY UNAUTHENTICATED audit of ReMask, including the final report in that same subtask. Target: https://remask-production-7cbf.up.railway.app/.
+
+FIRST use your native terminal tool to run `python /opt/remask-audit/check.py` with cwd=/work, detach=false, timeout=120. This installed owner-supplied harness requests 13 fixed paths through http://audit-gateway:8080, using TLS-verified HTTPS upstream. It prints redacted evidence only. The CI workflow never runs the harness: a real agent must invoke it. Repeating it reuses existing evidence.
+
+The sample covers /, /ready.php, /accounts.json, /bundles.json and backup/case variants, /.env, /.git/HEAD, /classes/, /server-status, and three protected PHP endpoints. Analyze actual access control, security headers, cache control and cookie flags. Empty cookie_flags means no cookie was set. All requests are unauthenticated. 401/403 is successful protection. Gateway HTTP and body redaction are not site flaws.
+
+No writes, login, credentials, brute force, fuzzing, exploitation, port scans, Meta/bank integrations, other hostnames, research or package installation. Workers have no direct internet; do not bypass isolation. Budget: 80 upstream requests, at most 1/second. Delegate to the pentester once if needed, then close with the evidence-based report. Distinguish confirmed facts, hardening and untested attacks. No invented SQLi/XSS/SSRF/CVE findings. The verified owner-facing report will be in Russian.

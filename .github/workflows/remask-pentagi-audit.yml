@@ -1,0 +1,41 @@
+name: ReMask PentAGI owner audit
+on:
+  push:
+    branches: [fix/ads-received-response-diagnostics]
+    paths: ['tools/pentagi_audit/**', '.github/workflows/remask-pentagi-audit.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: remask-pentagi-owner-audit
+  cancel-in-progress: true
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      AUDIT_RESULTS: ${{ github.workspace }}/.pentagi-results
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check read-only gateway boundaries
+        run: python3 tools/pentagi_audit/test_gateway.py
+      - name: Start real PentAGI with a local Ollama model and audit ReMask
+        timeout-minutes: 39
+        run: bash tools/pentagi_audit/run.sh
+      - name: Preserve redacted evidence
+        if: always()
+        run: |
+          mkdir -p "$AUDIT_RESULTS"
+          docker compose --env-file tools/pentagi_audit/.env -p remask-pentagi -f tools/pentagi_audit/compose.yml logs --no-color --tail=100 pentagi >"$AUDIT_RESULTS/pentagi-runtime.log" 2>&1 || true
+          docker compose --env-file tools/pentagi_audit/.env -p remask-pentagi -f tools/pentagi_audit/compose.yml logs --no-color gateway >"$AUDIT_RESULTS/gateway.log" 2>&1 || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: remask-pentagi-redacted-evidence
+          path: .pentagi-results/
+          retention-days: 7
+          include-hidden-files: true
+          if-no-files-found: error
+      - name: Stop this audit's disposable services
+        if: always()
+        run: docker compose --env-file tools/pentagi_audit/.env -p remask-pentagi -f tools/pentagi_audit/compose.yml down -v --remove-orphans || true
