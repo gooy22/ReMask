@@ -138,7 +138,8 @@ if ($action === 'update_profile') {
 }
 
 FORWARD_UPDATE;
-file_put_contents($hierarchyPath, substr($hierarchy, 0, $start) . $forward . substr($hierarchy, $end));
+$hierarchy = substr($hierarchy, 0, $start) . $forward . substr($hierarchy, $end);
+file_put_contents($hierarchyPath, $hierarchy);
 
 $workspacePath = $root . '/scripts/workspace.js';
 $js = file_get_contents($workspacePath);
@@ -191,8 +192,8 @@ foreach (['workspace.php','launch.php','accounts.php','menu.php'] as $file) {
     if (!is_file($path)) continue;
     $s = file_get_contents($path);
     $s = str_replace(['Official Meta API','доступные по token'], ['Facebook cookies','сохранённые BM'], $s);
-    $s = preg_replace('#scripts/workspace\.js(?:\?[^"\']*)?#', 'scripts/workspace.js?v=20261004-python-worker-ui-v220-cookie-only-v1-numbered-v1-txt-v3-direct-import-v2-ui', $s);
-    $s = preg_replace('#scripts/accounts\.js(?:\?[^"\']*)?#', 'scripts/accounts.js?v=20261002-cookie-only-v1-numbered-v1-txt-v3-direct-import-v2-ui', $s);
+    $s = preg_replace('#scripts/workspace\.js(?:\?[^"\']*)?#', 'scripts/workspace.js?v=20261004-python-worker-ui-v220-cookie-only-v1-numbered-v1-txt-v3-direct-import-v3-display', $s);
+    $s = preg_replace('#scripts/accounts\.js(?:\?[^"\']*)?#', 'scripts/accounts.js?v=20261002-cookie-only-v1-numbered-v1-txt-v3-direct-import-v3-display', $s);
     file_put_contents($path, $s);
 }
 // Shared import UI on Workspace and Accounts; no browser storage of shop secrets.

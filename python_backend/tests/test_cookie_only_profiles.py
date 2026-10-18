@@ -301,6 +301,31 @@ echo json_encode(['token'=>$saved->token,'cookies'=>$saved->cookies,'proxy'=>$sa
         self.assertTrue(saved['proxy'])
         self.assertTrue(saved['encrypted'])
 
+    def test_direct_transport_snapshot_preserves_real_proxy_state(self):
+        self.create(proxy='', allow_direct_test=True)
+        source = (ROOT/'railway-direct-transport-display-overlay.php').read_text()
+        helper = re.search(r"<<<'DIRECT_TRANSPORT'\n(.*?)\nDIRECT_TRANSPORT;", source, re.S).group(1)
+        helper = helper.replace("__DIR__ . '/../classes/RemaskCookieProfile.php'", json.dumps(str(self.root/'classes/RemaskCookieProfile.php')))
+        script = self.root/'transport-fixture.php'
+        script.write_text('<?php require __DIR__."/settings.php";require __DIR__."/classes/AccountStoreFactory.php";'
+            'class MetaEndpoint {static function accountForName($name) {return AccountStoreFactory::create(ACCOUNTSFILENAME)->getAccountByName($name);}}'
+            + helper + 'echo json_encode(hierarchy_cookie_transport("Fixture",["proxy_configured"=>true,"proxy"=>["type"=>"proxy"],"proxy_health"=>["status"=>"LIVE"]]));')
+        def read():
+            return json.loads(subprocess.run(['php',str(script)],env=self.env,capture_output=True,text=True,check=True,timeout=10).stdout)
+        row = read()
+        self.assertFalse(row['proxy_configured'])
+        self.assertIsNone(row['proxy'])
+        self.assertIsNone(row['proxy_health'])
+        self.assertEqual(row['network_mode'], 'DIRECT_TEST')
+        self.assertFalse(row['transport']['proxy_configured'])
+        self.assertFalse(row['transport']['direct_fallback'])
+        (self.root/'profile-direct-test.json').unlink()
+        self.assertEqual(read()['network_mode'], 'NOT_CONFIGURED')
+        self.endpoint('metaProfileManager.php', {'action':'save','name':'Fixture','proxy':self.proxy})
+        row = read()
+        self.assertTrue(row['proxy_configured'])
+        self.assertEqual(row['network_mode'], 'PROXY')
+
     def test_complete_runtime_overlay_order_and_installed_php_build_contracts(self):
         parts=sorted((ROOT/'.deploy/clean-preview-valid').glob('runtime.b64.*'))
         archive=base64.b64decode(''.join(p.read_text() for p in parts))

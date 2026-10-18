@@ -7,6 +7,11 @@ const ctx={JSON,Map,esc:String,openModal(title,html,label,submit){modal={title,h
 const apiSource=fs.readFileSync('railway-cookie-only-overlay.php','utf8').match(/<<<'COOKIE_API_JSON'\n([\s\S]*?)\nCOOKIE_API_JSON;/)[1];
 ctx.fetch=async(url,payload)=>{requests.push({url,payload});return{ok:true,status:200,text:async()=>JSON.stringify({ok:true,next_number:8})};};
 vm.createContext(ctx);vm.runInContext(apiSource,ctx);vm.runInContext(source,ctx);
+const direct={proxy_configured:false,network_mode:'DIRECT_TEST',direct_test_until:Date.now()/1000+600};
+assert.equal(ctx.remaskDirectProfile(direct),true);
+assert.equal(ctx.remaskDirectProfile({...direct,proxy_configured:true}),false);
+assert.equal(ctx.remaskDirectProfile({...direct,direct_test_until:1}),false);
+assert.equal(ctx.remaskDirectProfile({...direct,network_mode:'PROXY'}),false);
 const cookies=[{name:'c_user',value:'123456789'},{name:'xs',value:'test-fixture-only'}];
 assert.equal(ctx.remaskCookieRows(JSON.stringify(cookies)).length,2);
 assert.equal(ctx.remaskCookieRows(JSON.stringify({c_user:'123456789',xs:'test-fixture-only'})).length,2);
