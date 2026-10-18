@@ -127,6 +127,7 @@ RUN set -eux; \
     php /tmp/railway-launch-private-catalog-overlay.php; \
     php -l /tmp/railway-cookie-only-overlay.php; \
     php /tmp/railway-cookie-only-overlay.php; \
+    php /tmp/railway-direct-transport-display-overlay.php; \
     php -l /tmp/railway-payment-inspection-overlay.php; \
     php /tmp/railway-payment-inspection-overlay.php; \
     grep -q 'REMASK_UI_SESSION_PERSISTENCE_V2' /var/www/html/checkpassword.php; \

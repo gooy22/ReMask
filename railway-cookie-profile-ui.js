@@ -1,4 +1,8 @@
 /* REMASK_COOKIE_PROFILE_UI_V1 */
+function remaskDirectProfile(profile) {
+  return profile?.proxy_configured === false && profile.network_mode === 'DIRECT_TEST' &&
+    Number(profile.direct_test_until || 0) > Date.now()/1000;
+}
 function remaskCookieRows(raw) {
   let value;
   try { value = JSON.parse(raw); } catch (_) { throw new Error('Cookies должны быть валидным JSON.'); }
@@ -39,7 +43,7 @@ async function prepareAddProfile() {
 function prepareEditProfile() {
   const p = selectedRows('profiles')[0];
   if (!p) return;
-  openModal(`Редактировать ${p.name}`, `<div class="ws-form"><div class="full"><label>Новый прокси (пусто = сохранить текущий)</label><input id="editProxy" placeholder="http:ip:port:login:password"></div><div class="full"><label><input id="editDirect" type="checkbox" style="width:auto"> Без прокси: разрешить тест на 2 часа для этого аккаунта</label></div><div class="full"><label>Новые cookies JSON (пусто = сохранить текущие)</label><textarea id="editCookies" rows="5"></textarea></div><div class="full"><label><input id="editClearProxy" type="checkbox" style="width:auto"> удалить текущий прокси</label></div></div><div class="ws-muted mt-2">Токен Ads Manager не нужен. Пустое поле cookies сохраняет текущую сессию.</div>`, 'Сохранить', async () => {
+  openModal(`Редактировать ${p.name}`, `<div class="ws-form"><div class="full"><label>Новый прокси (пусто = сохранить текущий)</label><input id="editProxy" placeholder="http:ip:port:login:password"></div><div class="full"><label><input id="editDirect" type="checkbox" style="width:auto" ${remaskDirectProfile(p) ? 'checked' : ''}> Без прокси: разрешить тест на 2 часа для этого аккаунта</label></div><div class="full"><label>Новые cookies JSON (пусто = сохранить текущие)</label><textarea id="editCookies" rows="5"></textarea></div><div class="full"><label><input id="editClearProxy" type="checkbox" style="width:auto"> удалить текущий прокси</label></div></div><div class="ws-muted mt-2">Токен Ads Manager не нужен. Пустое поле cookies сохраняет текущую сессию.</div>`, 'Сохранить', async () => {
     const raw = $('editCookies').value.trim();
     const cookies = raw ? JSON.stringify(remaskCookieRows(raw)) : '';
     const direct = $('editDirect')?.checked === true;
