@@ -6,12 +6,37 @@ $helper = <<<'COOKIE_PROFILE'
 declare(strict_types=1);
 final class RemaskCookieProfile
 {
-    public static function directTestUntil(string $profile): int
+    public static function directTestPath(): string
+    {
+        $root = (string)(getenv('REMASK_DATA_DIR') ?: getenv('RAILWAY_VOLUME_MOUNT_PATH') ?: dirname((string)ACCOUNTSFILENAME));
+        return rtrim($root, '/') . '/profile-direct-test.json';
+    }
+
+    public static function directTestUntil(string $profile, string $actor = ''): int
     {
         $selected = trim((string)(getenv('REMASK_DIRECT_TEST_PROFILE') ?: ''));
         $until = (int)(getenv('REMASK_DIRECT_TEST_UNTIL') ?: 0);
         $now = time();
-        return $profile !== '' && $selected === $profile && $until > $now && $until <= $now + 7200 ? $until : 0;
+        if ($profile !== '' && $selected === $profile && $until > $now && $until <= $now + 7200) return $until;
+        $path = self::directTestPath();
+        if ($profile === '' || $actor === '' || !is_file($path) || filesize($path) > 2048) return 0;
+        $row = json_decode((string)@file_get_contents($path), true);
+        $until = $row['expires_at'] ?? 0;
+        return is_array($row) && ($row['profile_id'] ?? null) === $profile && ($row['actor_id'] ?? null) === $actor
+            && is_int($until) && $until > $now && $until <= $now + 7200 ? $until : 0;
+    }
+
+    public static function saveDirectTest(string $profile, string $actor, int $until): void
+    {
+        $path = self::directTestPath();
+        if (!is_dir(dirname($path)) && !mkdir(dirname($path), 0700, true)) throw new RuntimeException('DIRECT_TEST_SAVE_FAILED');
+        $temporary = tempnam(dirname($path), '.direct-test-');
+        if ($temporary === false) throw new RuntimeException('DIRECT_TEST_SAVE_FAILED');
+        try {
+            chmod($temporary, 0600);
+            if (file_put_contents($temporary, json_encode(['profile_id'=>$profile, 'actor_id'=>$actor, 'expires_at'=>$until], JSON_THROW_ON_ERROR)) === false
+                || !rename($temporary, $path)) throw new RuntimeException('DIRECT_TEST_SAVE_FAILED');
+        } finally { if (is_file($temporary)) unlink($temporary); }
     }
 
     public static function validate(array $cookies, mixed $proxy, bool $requireProxy = true, string $profile = ''): array
@@ -39,7 +64,7 @@ final class RemaskCookieProfile
         if (!ctype_digit($auth['c_user'] ?? '') || trim($auth['xs'] ?? '') === '') {
             throw new InvalidArgumentException('Cookies должны содержать непустые c_user и xs.');
         }
-        if ($requireProxy && $proxy === null && self::directTestUntil($profile) === 0) throw new InvalidArgumentException('Прокси обязателен.');
+        if ($requireProxy && $proxy === null && self::directTestUntil($profile, $auth['c_user']) === 0) throw new InvalidArgumentException('Прокси обязателен.');
         return array_values($rows);
     }
 }
@@ -166,8 +191,8 @@ foreach (['workspace.php','launch.php','accounts.php','menu.php'] as $file) {
     if (!is_file($path)) continue;
     $s = file_get_contents($path);
     $s = str_replace(['Official Meta API','доступные по token'], ['Facebook cookies','сохранённые BM'], $s);
-    $s = preg_replace('#scripts/workspace\.js(?:\?[^"\']*)?#', 'scripts/workspace.js?v=20261004-python-worker-ui-v220-cookie-only-v1-numbered-v1-txt-v3-direct-import-v1', $s);
-    $s = preg_replace('#scripts/accounts\.js(?:\?[^"\']*)?#', 'scripts/accounts.js?v=20261002-cookie-only-v1-numbered-v1-txt-v3-direct-import-v1', $s);
+    $s = preg_replace('#scripts/workspace\.js(?:\?[^"\']*)?#', 'scripts/workspace.js?v=20261004-python-worker-ui-v220-cookie-only-v1-numbered-v1-txt-v3-direct-import-v2-ui', $s);
+    $s = preg_replace('#scripts/accounts\.js(?:\?[^"\']*)?#', 'scripts/accounts.js?v=20261002-cookie-only-v1-numbered-v1-txt-v3-direct-import-v2-ui', $s);
     file_put_contents($path, $s);
 }
 // Shared import UI on Workspace and Accounts; no browser storage of shop secrets.

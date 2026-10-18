@@ -179,6 +179,36 @@ class CookieOnlyProfileTests(unittest.TestCase):
         self.assertEqual(sequence['direct_test_until'], 0)
         self.assertFalse(self.create(name='1', auto_number=True, proxy='')['ok'])
 
+    def test_ui_direct_save_authorizes_exact_actor_without_changing_environment(self):
+        import time
+        self.env['REMASK_DATA_DIR'] = str(self.root)
+        self.assertTrue(self.create()['ok'])
+        result = self.endpoint('metaProfileManager.php', {'action':'save','name':'Fixture',
+            'clear_proxy':True,'allow_direct_test':True})
+        self.assertTrue(result['ok'], result)
+        self.assertIsNone(self.saved()[0]['proxy'])
+        lease = json.loads((self.root/'profile-direct-test.json').read_text())
+        self.assertEqual(lease['profile_id'], 'Fixture')
+        self.assertEqual(lease['actor_id'], '123456789')
+        self.assertLessEqual(lease['expires_at'], time.time() + 7200)
+        self.assertGreater(result['profile']['direct_test_until'], time.time())
+        self.assertEqual((self.root/'profile-direct-test.json').stat().st_mode & 0o777, 0o600)
+        checked = self.endpoint('checkAccount.php', {'name':'Fixture','proxy':''})
+        self.assertTrue(checked['ok'], checked)
+        self.assertFalse(self.create(name='Other', proxy='')['ok'])
+        saved = self.endpoint('metaProfileManager.php', {'action':'save','name':'Fixture','proxy':self.proxy})
+        self.assertTrue(saved['ok'], saved)
+        self.assertEqual(json.loads((self.root/'profile-direct-test.json').read_text())['expires_at'], 0)
+
+    def test_direct_create_uses_allocated_number_and_rejects_invalid_session(self):
+        self.env['REMASK_DATA_DIR'] = str(self.root)
+        result = self.create(auto_number=True, proxy='', allow_direct_test=True)
+        self.assertTrue(result['ok'], result)
+        lease = json.loads((self.root/'profile-direct-test.json').read_text())
+        self.assertEqual(lease['profile_id'], result['profile']['name'])
+        self.assertFalse(self.create(name='Other', proxy='', cookies=[], allow_direct_test=True)['ok'])
+        self.assertEqual(json.loads((self.root/'profile-direct-test.json').read_text()), lease)
+
     def test_actual_php_graph_and_refresh_boundaries_are_closed(self):
         code = 'require $argv[1]."/classes/MetaApiClient.php";require $argv[1]."/classes/FbRequests.php";$out=[];try{new MetaApiClient("fixture");}catch(Throwable $e){$out[]=$e->getMessage();}$a=new FbAccount("Fixture","fixture");$f=new FbRequests;foreach(["ApiGet","ApiPost"] as $method){try{$f->$method($a,"me","");}catch(Throwable $e){$out[]=$e->getMessage();}}$r=new ReflectionMethod(FbRequests::class,"GetNewToken");$out[]=$r->invoke($f,$a);echo json_encode($out);'
         result = subprocess.run(['php','-r',code,str(self.root)],env=self.env,capture_output=True,text=True,check=True,timeout=10)

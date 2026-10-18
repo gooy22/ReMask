@@ -23,13 +23,15 @@ function remaskCookieRows(raw) {
 async function prepareAddProfile() {
   const sequence = await apiJson('ajax/metaProfileManager.php', post({action:'next_number'}));
   const nextNumber = String(sequence.next_number);
-  openModal('Добавить FB аккаунт', `<div class="ws-form"><div><label>Номер аккаунта</label><input id="newProfileName" value="${esc(nextNumber)}" readonly></div><div class="full"><label>Прокси</label><input id="newProfileProxy" placeholder="http:ip:port:login:password"></div><div class="full"><label>Facebook cookies JSON</label><textarea id="newProfileCookies" rows="5" placeholder="JSON cookies с c_user и xs"></textarea></div></div><div class="ws-muted mt-2">Авторизация через cookies. Токен Ads Manager не нужен. Сохранение профиля не подтверждает действительность Facebook-сессии.</div>`, 'Добавить', async () => {
+  openModal('Добавить FB аккаунт', `<div class="ws-form"><div><label>Номер аккаунта</label><input id="newProfileName" value="${esc(nextNumber)}" readonly></div><div class="full"><label>Прокси</label><input id="newProfileProxy" placeholder="http:ip:port:login:password"></div><div class="full"><label><input id="newProfileDirect" type="checkbox" style="width:auto"> Без прокси: разрешить тест на 2 часа для этого аккаунта</label></div><div class="full"><label>Facebook cookies JSON</label><textarea id="newProfileCookies" rows="5" placeholder="JSON cookies с c_user и xs"></textarea></div></div><div class="ws-muted mt-2">Авторизация через cookies. Токен Ads Manager не нужен. Сохранение профиля не подтверждает действительность Facebook-сессии.</div>`, 'Добавить', async () => {
     const name = $('newProfileName').value.trim();
     const proxy = $('newProfileProxy').value.trim();
     if (!name) throw new Error('Название профиля обязательно.');
-    if (!proxy && !(Number(sequence.direct_test_until || 0) > Date.now()/1000)) throw new Error('Прокси обязателен.');
+    const direct = $('newProfileDirect')?.checked === true;
+    if (direct && proxy) throw new Error('Для режима без прокси оставьте поле прокси пустым.');
+    if (!proxy && !direct && !(Number(sequence.direct_test_until || 0) > Date.now()/1000)) throw new Error('Прокси обязателен.');
     const cookies = JSON.stringify(remaskCookieRows($('newProfileCookies').value.trim()));
-    await apiJson('ajax/metaProfileManager.php', post({action:'create', name, cookies, proxy, auto_number:'1'}));
+    await apiJson('ajax/metaProfileManager.php', post({action:'create', name, cookies, proxy, auto_number:'1', allow_direct_test:direct ? '1' : '0'}));
     await loadInventory('Профиль сохранён. Facebook-сессия ещё не проверена.');
     closeModal();
   });
@@ -37,10 +39,13 @@ async function prepareAddProfile() {
 function prepareEditProfile() {
   const p = selectedRows('profiles')[0];
   if (!p) return;
-  openModal(`Редактировать ${p.name}`, `<div class="ws-form"><div class="full"><label>Новый прокси (пусто = сохранить текущий)</label><input id="editProxy" placeholder="http:ip:port:login:password"></div><div class="full"><label>Новые cookies JSON (пусто = сохранить текущие)</label><textarea id="editCookies" rows="5"></textarea></div><div class="full"><label><input id="editClearProxy" type="checkbox" style="width:auto"> удалить текущий прокси</label></div></div><div class="ws-muted mt-2">Токен Ads Manager не нужен. Пустое поле cookies сохраняет текущую сессию.</div>`, 'Сохранить', async () => {
+  openModal(`Редактировать ${p.name}`, `<div class="ws-form"><div class="full"><label>Новый прокси (пусто = сохранить текущий)</label><input id="editProxy" placeholder="http:ip:port:login:password"></div><div class="full"><label><input id="editDirect" type="checkbox" style="width:auto"> Без прокси: разрешить тест на 2 часа для этого аккаунта</label></div><div class="full"><label>Новые cookies JSON (пусто = сохранить текущие)</label><textarea id="editCookies" rows="5"></textarea></div><div class="full"><label><input id="editClearProxy" type="checkbox" style="width:auto"> удалить текущий прокси</label></div></div><div class="ws-muted mt-2">Токен Ads Manager не нужен. Пустое поле cookies сохраняет текущую сессию.</div>`, 'Сохранить', async () => {
     const raw = $('editCookies').value.trim();
     const cookies = raw ? JSON.stringify(remaskCookieRows(raw)) : '';
-    await apiJson('ajax/metaProfileManager.php', post({action:'save', name:p.name, cookies, proxy:$('editProxy').value.trim(), clear_proxy:$('editClearProxy').checked ? '1' : '0'}));
+    const direct = $('editDirect')?.checked === true;
+    const proxy = $('editProxy').value.trim();
+    if (direct && proxy) throw new Error('Для режима без прокси оставьте поле прокси пустым.');
+    await apiJson('ajax/metaProfileManager.php', post({action:'save', name:p.name, cookies, proxy, clear_proxy:direct || $('editClearProxy').checked ? '1' : '0', allow_direct_test:direct ? '1' : '0'}));
     await loadInventory('Настройки профиля сохранены. Facebook-сессия ещё не проверена.');
     closeModal();
   });

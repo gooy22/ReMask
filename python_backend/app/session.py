@@ -315,7 +315,7 @@ class ProfileResolver:
                 category="invalid_profile_context",
             )
 
-        direct_until = direct_test_deadline(profile_id)
+        direct_until = direct_test_deadline(profile_id, cookie_map.get('c_user', ''))
         proxy = None if direct_until else str(payload.get("proxy") or "").strip() or None
         if not proxy and not direct_until:
             raise ProfileContextError(
@@ -431,7 +431,7 @@ class MetaSession:
         **kwargs: Any,
     ) -> aiohttp.ClientResponse:
         if (self.context.direct_test_until and
-                direct_test_deadline(self.context.profile_id) != self.context.direct_test_until):
+                direct_test_deadline(self.context.profile_id, self.context.cookies.get('c_user', '')) != self.context.direct_test_until):
             raise ProfileContextError('DIRECT_TEST_EXPIRED', retryable=False)
         session = await self._get_session()
         return await session.request(method, url, **kwargs)
@@ -464,7 +464,7 @@ class MetaSession:
 
     async def facebook_business_browser(self):
         direct_until = getattr(self.context, 'direct_test_until', 0)
-        if direct_until and direct_test_deadline(self.context.profile_id) != direct_until:
+        if direct_until and direct_test_deadline(self.context.profile_id, self.context.cookies.get('c_user', '')) != direct_until:
             raise ProfileContextError('DIRECT_TEST_EXPIRED', retryable=False)
         current = self._business_browser
         if current is not None:
@@ -548,7 +548,7 @@ class MetaSession:
         from .provisioning.proxy import ProxyChecker
 
         if getattr(self.context, 'direct_test_until', 0):
-            result = direct_test_result(self.context.profile_id)
+            result = direct_test_result(self.context.profile_id, self.context.cookies.get('c_user', ''))
             if result is None:
                 raise ProxyCheckError('DIRECT_TEST_EXPIRED')
             return result

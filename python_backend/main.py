@@ -2229,9 +2229,9 @@ async def profile_live_inventory(
                     'live_ready':_live_inventory_targets_ready(
                         private_business_map,
                         private_live_business_ids,
-                        confirmed_empty=False,
+                        confirmed_empty=private_snapshot.get('business_inventory_confirmed_empty') is True,
                     ),
-                    'business_inventory_confirmed_empty':False,
+                    'business_inventory_confirmed_empty':private_snapshot.get('business_inventory_confirmed_empty') is True,
                     'businesses':private_businesses,
                     'businesses_count':len(private_businesses),
                     'live_businesses_count':len(private_live_business_ids),

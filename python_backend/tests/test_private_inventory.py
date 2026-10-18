@@ -1,5 +1,6 @@
 import json
 import unittest
+from unittest.mock import AsyncMock
 
 from app.private_inventory import private_inventory_snapshot, inventory_diagnostic_summary
 
@@ -33,6 +34,54 @@ def account(account_id="222222", business="111111"):
 
 
 class PrivateInventoryTests(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def selector(rows, more=False):
+        return {'data': {'viewer': {'meta_business_scoping': {'business_scopes': {
+            'nodes': [{'scope_id': key, 'scope_name': name, 'scope_type': 'BUSINESS'}
+                      for key, name in rows], 'page_info': {'has_next_page': more}}}}}}
+
+    async def test_selector_query_discovers_business_when_home_is_only_an_app_shell(self):
+        web = FakeWeb(inventory([account()]))
+        web.graphql = AsyncMock(return_value=self.selector([('111111', 'BM One')]))
+        result = await private_inventory_snapshot(web, known_accounts_by_business={},
+            known_business_ids=set(), personal_scope_id='999999', execute_read_queries=True)
+        self.assertTrue(result['ready'])
+        self.assertEqual(result['businesses'][0]['ad_accounts'][0]['id'], '222222')
+        self.assertEqual(len(web.calls), 1)
+        self.assertIn('/settings/ad_accounts/', web.calls[0])
+        self.assertEqual(web.graphql.await_args.kwargs['friendly_name'],
+            'NorthStarBusinessUnifiedScopingSelectorPopoverContainerAllFirstLevelScopesQuery')
+
+    async def test_complete_empty_selector_is_explicitly_empty_without_html_guessing(self):
+        web = FakeWeb({})
+        web.graphql = AsyncMock(return_value=self.selector([]))
+        result = await private_inventory_snapshot(web, known_accounts_by_business={},
+            known_business_ids=set(), execute_read_queries=True)
+        self.assertTrue(result['ready'])
+        self.assertTrue(result['business_inventory_confirmed_empty'])
+        self.assertEqual(web.calls, [])
+
+    async def test_paginated_empty_selector_cannot_confirm_empty_profile(self):
+        web = FakeWeb({})
+        web.graphql = AsyncMock(return_value=self.selector([], more=True))
+        result = await private_inventory_snapshot(web, known_accounts_by_business={},
+            known_business_ids=set(), execute_read_queries=True)
+        self.assertFalse(result['ready'])
+        self.assertFalse(result['business_inventory_confirmed_empty'])
+        self.assertEqual(web.graphql.await_count, 3)
+
+    async def test_selector_auth_gate_stops_other_http_probes(self):
+        from fb_worker import AuthenticationError
+        error = AuthenticationError('Fixture authentication required')
+        error.meta_payload = {'business_precheck': [{'auth_reason': 'checkpoint_redirect'}]}
+        web = FakeWeb({})
+        web.graphql = AsyncMock(side_effect=error)
+        result = await private_inventory_snapshot(web, known_accounts_by_business={},
+            known_business_ids=set(), execute_read_queries=True)
+        self.assertFalse(result['ready'])
+        self.assertEqual(result['diagnostics'][0]['auth_gate'], 'CHECKPOINT_REQUIRED')
+        self.assertEqual(web.calls, [])
+
     async def snapshot(self, web, expected=None, known=True):
         return await private_inventory_snapshot(
             web,
