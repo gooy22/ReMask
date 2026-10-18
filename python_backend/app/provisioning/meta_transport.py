@@ -60,7 +60,7 @@ class MetaTransportRouter:
         "INVENTORY": TransportPolicy(
             capability="INVENTORY",
             primary="facebook_private_http_relay",
-            fallback="chromium_inventory",
+            fallback="none_private_only",
         ),
     }
 

@@ -45,7 +45,7 @@ def public_script_url(url):
         return False
 
 
-def deferred_script_urls(document, *, preferred=()):
+def deferred_script_urls(document, *, preferred=(), all_resources=False):
     """Follow only unambiguous resource/component maps observed in the document."""
     maps = {"rsrcMap": {}, "compMap": {}}
     conflicts = {key: set() for key in maps}
@@ -108,6 +108,17 @@ def deferred_script_urls(document, *, preferred=()):
         # Breadth-first traversal put its actual sender behind hundreds of UI
         # components and outside the transport's bounded script window.
         queue.extendleft(reversed(list(dict.fromkeys(dependencies))))
+    if all_resources:
+        # Inventory must also include generic modules and resources whose lazy
+        # component has not been opened. Preserve sender priority above, then
+        # append every unambiguous public JS URL actually advertised by Meta.
+        for identity, resource in resources.items():
+            if (identity in conflicts['rsrcMap'] or not isinstance(resource, dict)
+                    or resource.get('type') != 'js'):
+                continue
+            url = resource.get('src')
+            if public_script_url(url) and url not in urls:
+                urls.append(url)
     return urls
 
 
@@ -151,6 +162,9 @@ def module_records(source, *, selected=(), all_modules=False):
         if not all_modules and name not in selected and not advertising_module_name(name):
             continue
         raw = body.text.decode()
-        if len(raw) <= 180_000:
+        # Full inventory must not silently drop large factories. The caller
+        # already bounds each complete script and its aggregate read budget.
+        # Several actual targeting Relay artifacts exceed the old 180 KB cap.
+        if all_modules or len(raw) <= 180_000:
             yield {"name": name, "dependencies": dependencies, "source": raw,
                    "module_source": node.text.decode() + ";"}

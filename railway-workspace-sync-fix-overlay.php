@@ -643,6 +643,16 @@ function hierarchy_asset_types_snapshot(array $snapshot): array
 
 function hierarchy_private_sync_outcome(array $inventory): array
 {
+    // Profile-level HTTP/auth failures also apply when no BM was discovered.
+    $privateCode = (string)($inventory['sync_error_kind'] ?? '');
+    if (($inventory['live_ready'] ?? false) !== true && in_array($privateCode, [
+        'CHECKPOINT_REQUIRED', 'TWO_FACTOR_REQUIRED', 'SESSION_EXPIRED', 'BUSINESS_LOGIN_GATE',
+        'PRIVATE_HTTP_PROXY_UNAVAILABLE', 'PRIVATE_HTTP_READ_TIMEOUT',
+        'PRIVATE_HTTP_CONNECTION_UNAVAILABLE', 'PRIVATE_HTTP_PROTOCOL_ERROR', 'PRIVATE_HTTP_READ_UNAVAILABLE',
+    ], true)) {
+        return ['complete' => false, 'kind' => $privateCode,
+            'error' => $privateCode . ': Private Meta inventory could not be confirmed.'];
+    }
     foreach ((array)($inventory['businesses'] ?? []) as $business) {
         if (!is_array($business) || empty($business['auth_blocked'])) continue;
         $code = (string)($business['browser_error_code'] ?? '');

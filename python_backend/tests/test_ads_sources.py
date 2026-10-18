@@ -122,6 +122,22 @@ class AdsBootstrapAuditTests(unittest.IsolatedAsyncioTestCase):
 
 
 class AdsSourceTests(unittest.TestCase):
+    def test_full_inventory_retains_large_targeting_artifacts(self):
+        source = '__d("AdsLargeTargetingQuery.graphql",[],function(){return "' + 'x' * 190000 + '";});'
+        self.assertEqual(list(module_records(source)), [])
+        rows = list(module_records(source, all_modules=True))
+        self.assertEqual([row['name'] for row in rows], ['AdsLargeTargetingQuery.graphql'])
+        self.assertEqual(rows[0]['module_source'], source)
+
+    def test_full_inventory_includes_generic_and_unattached_advertised_resources(self):
+        resources = {str(i): {'type': 'js', 'src': f'https://static.xx.fbcdn.net/{i}.js'} for i in range(4)}
+        document = json.dumps({'rsrcMap': resources, 'compMap': {'AdsEditor': {'r': ['1']},
+            'UnrelatedMetaComponent': {'r': ['2']}}})
+        self.assertEqual(deferred_script_urls(document, all_resources=True),
+            [resources[str(i)]['src'] for i in (1, 0, 2, 3)])
+        conflicting = json.dumps({'rsrcMap': {'2': {'type': 'js', 'src': 'https://static.xx.fbcdn.net/other.js'}}})
+        self.assertNotIn(resources['2']['src'], deferred_script_urls(document + conflicting, all_resources=True))
+
     def test_only_observed_unambiguous_public_resources_are_followed(self):
         resources = {"1": {"type": "js", "src": "https://static.xx.fbcdn.net/editor.js"},
                      "2": {"type": "js", "src": "https://static.xx.fbcdn.net/publish.js"},
