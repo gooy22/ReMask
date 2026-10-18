@@ -30,6 +30,11 @@ for(const raw of ['[]','{}','null','invalid',JSON.stringify([{name:'c_user',valu
   ctx.prepareEditProfile();assert.equal(/editToken|editClearSession/.test(modal.html),false);
   elements.set('editCookies',{value:''});elements.set('editProxy',{value:''});elements.set('editClearProxy',{checked:false});
   await modal.submit();assert.equal('token' in requests[0].payload,false);assert.equal(requests[0].payload.cookies,'');assert.equal(requests[0].payload.proxy,'');
+  requests=[];elements.set('editDirect',{checked:true});await modal.submit();
+  assert.equal(requests[0].payload.allow_direct_test,'1');assert.equal(requests[0].payload.clear_proxy,'1');
+  assert.ok(modal.html.includes('id="editDirect"'));assert.ok(modal.html.includes('2 часа'));
+  requests=[];elements.get('editProxy').value='http:127.0.0.1:8080:u:p';
+  await assert.rejects(modal.submit(),/оставьте поле прокси пустым/);assert.equal(requests.length,0);
   // Exercise the legacy Accounts module functions after removing its import.
   const legacy=fs.readFileSync('railway-cookie-accounts.js','utf8').replace(/^import .*\n/,'');
   const form={name:{value:'Fixture',readOnly:false},cookies:{value:JSON.stringify(cookies)},proxy:{value:'http:127.0.0.1:8080:u:p'}};

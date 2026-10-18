@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import asyncio
 import json
 import re
 from typing import Any
@@ -325,11 +326,36 @@ async def private_inventory_snapshot(
 
     diagnostics: list[dict[str, Any]] = []
     businesses: dict[str, str] = {}
+    discovery_complete = False
+    discovery_auth_blocked = False
+
+    # Business Suite HTML can be only a logged-in shell with business_id=null.
+    # Reuse the reviewed selector read already used by BM provisioning instead
+    # of treating that shell as the profile's complete inventory.
+    if discover_businesses and execute_read_queries and callable(getattr(web, 'graphql', None)):
+        try:
+            from .static_meta_inventory import read_business_inventory
+            proof = await asyncio.wait_for(read_business_inventory(web), timeout=18)
+            businesses.update({str(key): str(name) for key, name in proof.get('rows', {}).items()
+                if _clean_id(key) and str(key) != personal_scope_id})
+            discovery_complete = proof.get('complete') is True
+            diagnostics.append({'phase': 'business_discovery_query', 'operation_kind': 'query',
+                'usable': True, 'complete': discovery_complete, 'business_count': len(businesses),
+                'source': proof.get('source', ''), 'queries': proof.get('diagnostics', [])})
+        except Exception as exc:
+            from .private_auth import private_auth_error
+            from .private_transport_error import private_transport_error
+            auth = private_auth_error(exc)
+            _, failure = private_transport_error(exc)
+            discovery_auth_blocked = auth is not None
+            diagnostics.append({'phase': 'business_discovery_query', 'operation_kind': 'query',
+                'code': auth.code if auth else failure['code'],
+                'auth_gate': auth.code if auth else '', 'error_type': type(exc).__name__})
 
     discovery_urls = (
         "https://business.facebook.com/latest/home",
         "https://business.facebook.com/latest/overview",
-    ) if discover_businesses else ()
+    ) if discover_businesses and not discovery_complete and not discovery_auth_blocked else ()
     for url in discovery_urls:
         try:
             payloads, diag = await _fetch_payloads(web, url)
@@ -356,6 +382,10 @@ async def private_inventory_snapshot(
     targets = set(known_business_ids)
     targets.update(businesses)
     targets.discard(str(personal_scope_id or ""))
+    if discovery_auth_blocked:
+        return {'ready': False, 'businesses': [], 'confirmed_business_ids': [],
+            'inconclusive_business_ids': sorted(targets), 'discovered_business_ids': [],
+            'discovery_complete': False, 'diagnostics': diagnostics}
 
     rows: list[dict[str, Any]] = []
     confirmed_businesses: set[str] = set()
@@ -490,7 +520,8 @@ async def private_inventory_snapshot(
         if value and value != personal_scope_id
     }
     required_targets = known_targets | set(businesses)
-    ready = bool(required_targets) and required_targets.issubset(confirmed_businesses)
+    confirmed_empty = discovery_complete and not required_targets
+    ready = confirmed_empty or (bool(required_targets) and required_targets.issubset(confirmed_businesses))
 
     return {
         "ready": ready,
@@ -499,7 +530,8 @@ async def private_inventory_snapshot(
         "confirmed_business_ids": sorted(confirmed_businesses),
         "inconclusive_business_ids": sorted(inconclusive_businesses),
         "discovered_business_ids": sorted(businesses),
-        "discovery_complete": bool(businesses),
+        "discovery_complete": discovery_complete or bool(businesses),
+        "business_inventory_confirmed_empty": confirmed_empty,
         "source": "private_http_relay_inventory",
         "diagnostics": diagnostics,
     }

@@ -240,7 +240,7 @@ class ProvisioningService:
                         {"action_phase": "EXECUTE"},
                     )
                     if getattr(context, 'direct_test_until', 0):
-                        result = direct_test_result(context.profile_id)
+                        result = direct_test_result(context.profile_id, context.cookies.get('c_user', ''))
                         if result is None:
                             raise ProxyCheckError('DIRECT_TEST_EXPIRED')
                     else:

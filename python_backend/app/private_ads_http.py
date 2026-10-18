@@ -172,7 +172,7 @@ class AdsManagerPrivateHttp:
         self._profile_name = getattr(web.profile, "name", "")
         self._profile_user_agent = getattr(web.profile, "user_agent", "")
         from .direct_test import direct_test_deadline
-        self._direct_deadline = direct_test_deadline(self._profile_name) if not self._profile_proxy else 0
+        self._direct_deadline = direct_test_deadline(self._profile_name, str(web.profile.cookies.get('c_user') or '')) if not self._profile_proxy else 0
 
     def _cookies(self):
         # Digest remains private memory. A renewed/changed profile document
@@ -183,7 +183,7 @@ class AdsManagerPrivateHttp:
     def _profile_matches(self):
         from .direct_test import direct_test_deadline
         route_valid = bool(self._profile_proxy) or (self._direct_deadline > 0 and
-            direct_test_deadline(self._profile_name) == self._direct_deadline)
+            direct_test_deadline(self._profile_name, str(self.web.profile.cookies.get('c_user') or '')) == self._direct_deadline)
         return (route_valid and self.web.profile.proxy == self._profile_proxy
                 and getattr(self.web.profile, "name", "") == self._profile_name
                 and getattr(self.web.profile, "user_agent", "") == self._profile_user_agent
@@ -370,7 +370,7 @@ class AdsManagerPrivateHttp:
             raise fail("PROFILE_CONTEXT_UNAVAILABLE", "Advertising proxy differs from the initialized profile", True)
         if not self.web.profile.proxy:
             from .direct_test import direct_test_deadline
-            deadline = direct_test_deadline(getattr(self.web.profile, "name", ""))
+            deadline = direct_test_deadline(getattr(self.web.profile, "name", ""), str(self.web.profile.cookies.get('c_user') or ''))
             if not deadline or getattr(session, "direct_test_until", 0) != deadline:
                 raise fail("PROFILE_CONTEXT_UNAVAILABLE", "Advertising direct test is absent, changed or expired", True)
         from .private_launch import PrivateLaunchContractStore

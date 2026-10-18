@@ -1,5 +1,8 @@
 import os
 import unittest
+import json
+import tempfile
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -79,4 +82,37 @@ class DirectTestTests(unittest.IsolatedAsyncioTestCase):
             with patch.dict(os.environ, {'REMASK_DIRECT_TEST_UNTIL': deadline}):
                 self.assertEqual(direct_test_deadline('19'), 0)
                 self.assertIsNone(direct_test_result('19'))
+
+    async def test_ui_lease_resolves_only_approved_profile_and_actor_and_can_be_revoked(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {'REMASK_DATA_DIR': directory}):
+            path = Path(directory) / 'profile-direct-test.json'
+            row = {'profile_id': '27', 'actor_id': '123456789', 'expires_at': 1600}
+            path.write_text(json.dumps(row))
+            self.assertEqual(direct_test_deadline('27', '123456789'), 1600)
+            self.assertEqual(direct_test_deadline('27', '987654321'), 0)
+            self.assertEqual(direct_test_deadline('28', '123456789'), 0)
+            self.assertEqual(direct_test_deadline('27'), 0)
+            context = await self.resolver('27')
+            self.assertIsNone(context.proxy)
+            client = PrivateHttpClient(profile_name='27', cookies={'c_user': '123456789'},
+                proxy=None, user_agent='fixture', timeout_seconds=1, pool_size=1)
+            self.addAsyncCleanup(client.close)
+            self.assertEqual(client.direct_test_until, 1600)
+            client._client.stream = AsyncMock(side_effect=AssertionError('network must stay closed'))
+            path.write_text(json.dumps({**row, 'expires_at': 0}))
+            with self.assertRaises(httpx.ProxyError):
+                async with client.get('https://www.facebook.com/'):
+                    pass
+            client._client.stream.assert_not_called()
+            self.assertEqual((await self.resolver('27')).proxy, 'http://127.0.0.1:1')
+
+    def test_ui_lease_rejects_expired_malformed_or_unbounded_values(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {'REMASK_DATA_DIR': directory}):
+            path = Path(directory) / 'profile-direct-test.json'
+            for expiry in (True, '1600', 999, 99999999999):
+                path.write_text(json.dumps({'profile_id': '27', 'actor_id': '123456789', 'expires_at': expiry}))
+                self.assertEqual(direct_test_deadline('27', '123456789'), 0)
+            for raw in ('{broken', '[]', 'null', 'x' * 2049):
+                path.write_text(raw)
+                self.assertEqual(direct_test_deadline('27', '123456789'), 0)
 

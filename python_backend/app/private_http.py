@@ -65,7 +65,8 @@ class PrivateHttpClient:
                  pool_size: int) -> None:
         self.proxy = proxy
         self.profile_name = profile_name
-        self.direct_test_until = direct_test_deadline(profile_name) if not proxy else 0
+        self._actor_id = str(cookies.get('c_user') or '')
+        self.direct_test_until = direct_test_deadline(profile_name, self._actor_id) if not proxy else 0
         self.timeout_seconds = timeout_seconds
         limits = httpx.Limits(max_connections=pool_size,
                               max_keepalive_connections=pool_size)
@@ -109,7 +110,7 @@ class PrivateHttpClient:
         # even when a caller bypasses ProfileResolver or drops its proxy.
         if not self.proxy and not self.direct_test_until:
             raise httpx.ProxyError("Private request requires the profile proxy")
-        if self.direct_test_until and direct_test_deadline(self.profile_name) != self.direct_test_until:
+        if self.direct_test_until and direct_test_deadline(self.profile_name, self._actor_id) != self.direct_test_until:
             raise httpx.ProxyError('DIRECT_TEST_EXPIRED')
         requested_proxy = kwargs.pop("proxy", self.proxy)
         if requested_proxy != self.proxy:

@@ -130,6 +130,7 @@ function rmx_pm_safe(FbAccount $acc): array {
         'proxy_configured' => $acc->proxy !== null,
         'session_ready' => rmx_pm_session_ready($acc),
         'cookie_count' => count((array)$acc->cookies),
+        'direct_test_until' => RemaskCookieProfile::directTestUntil((string)$acc->name, (string)$acc->userId),
         'legacy_ready' => $acc->isLegacyReady(),
     ];
 }
@@ -304,7 +305,7 @@ try {
             throw new InvalidArgumentException('Fresh Facebook Cookies JSON is required.');
         }
 
-        $incomingCookies = RemaskCookieProfile::validate($incomingCookies, $existing->proxy);
+        $incomingCookies = RemaskCookieProfile::validate($incomingCookies, $existing->proxy, true, $name);
 
         $hasCUser = false;
         $hasXs = false;
@@ -411,7 +412,9 @@ try {
     elseif ($existing instanceof FbAccount) $proxy = $existing->proxy;
     else $proxy = null;
 
-    $cookies = RemaskCookieProfile::validate($cookies, $proxy, !$clearProxy, $name);
+    $enableDirect = rmx_pm_find_bool($input, ['allow_direct_test'], false);
+    if ($enableDirect && $proxy !== null) throw new InvalidArgumentException('Для режима без прокси удалите текущий прокси.');
+    $cookies = RemaskCookieProfile::validate($cookies, $proxy, !$clearProxy && !$enableDirect, $name);
 
     $accountsPath = (string)ACCOUNTSFILENAME;
     if (is_file($accountsPath) && filesize($accountsPath) > 2) {
@@ -423,6 +426,11 @@ try {
     $store->addOrUpdateAccount($account);
     $saved = $store->getAccountByName($name);
     if (!$saved instanceof FbAccount) throw new RuntimeException('Профиль не сохранился.');
+    if ($enableDirect) {
+        RemaskCookieProfile::saveDirectTest($name, (string)$saved->userId, time() + 7200);
+    } elseif ($proxy !== null && RemaskCookieProfile::directTestUntil($name, (string)$saved->userId)) {
+        RemaskCookieProfile::saveDirectTest($name, (string)$saved->userId, 0);
+    }
     if ($sequenceLock !== null) {
         $last = rmx_pm_sequence_last($store->deserialize(), $sequencePath);
         $temporary = $sequencePath . '.tmp';

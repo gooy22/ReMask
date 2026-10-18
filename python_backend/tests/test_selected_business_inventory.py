@@ -77,6 +77,16 @@ class SelectedBusinessInventoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({row['id'] for row in result['businesses']},{'111111111','333333333'})
         self.assertTrue(any('/latest/home' in url for url in fixtures[1].calls))
 
+    async def test_full_profile_confirmed_empty_selector_reaches_ui_as_live_empty(self):
+        fixtures = self.fixtures()
+        fixtures[1].graphql.return_value = {'data': {'viewer': {'meta_business_scoping': {
+            'business_scopes': {'nodes': [], 'page_info': {'has_next_page': False}}}}}}
+        result = await self.sync(fixtures)
+        self.assertTrue(result['live_ready'])
+        self.assertTrue(result['business_inventory_confirmed_empty'])
+        self.assertEqual(result['businesses'], [])
+        self.assertEqual(fixtures[1].calls, [])
+
     async def test_unconfirmed_selected_account_hint_does_not_become_live_inventory(self):
         fixtures=self.fixtures([{'business_id':'1632909278268870','ad_account_id':'120251669477430356'}])
         result=await self.sync(fixtures,business_ids='1632909278268870')
