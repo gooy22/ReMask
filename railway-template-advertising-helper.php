@@ -30,7 +30,7 @@ try {
             ? RemaskTemplateTargetingContext::readReference($profile,$helper,$request)
             : RemaskAdvertisingHelperClient::read($profile,$account,$catalog,$helper,$request);}
         catch(Throwable $error) {
-            if(preg_match('/SESSION|CHECKPOINT|AUTH|PROXY|TIMEOUT|TEMPLATE_LOOKUP_NO_ACCOUNT/', $error->getMessage()))$reference->block($profile,time());
+            if(RemaskTemplateTargetingContext::sourceFailure($error))$reference->block($profile,time());
             throw $error;
         }
     };

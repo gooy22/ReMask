@@ -60,6 +60,11 @@ foreach(['PRIVATE_ADS_DRAFT_CHECKPOINT_REQUIRED','PRIVATE_HTTP_PROXY_UNAVAILABLE
     expect(!str_contains($failure['message'],'16') && !isset($failure['source_profile']),'templates never ask to repair a named FB profile');
     expect($failure['settings_preserved']===true && $failure['template_account_bound']===false,'saving remains independent of lookup availability');
 }
+foreach(['PRIVATE_HTTP_CONNECTION_UNAVAILABLE','PRIVATE_HTTP_PROTOCOL_ERROR','PRIVATE_HTTP_READ_UNAVAILABLE',
+    'PRIVATE_HTTP_PROXY_UNAVAILABLE','PRIVATE_HTTP_READ_TIMEOUT'] as $code)
+    expect(RemaskTemplateTargetingContext::sourceFailure(new RuntimeException($code)), 'transport failure must cool down its source: '.$code);
+foreach(['INVALID_TARGETING_QUERY','TARGETING_FIELDS_UNAVAILABLE','PRIVATE_ADS_DRAFT_REQUEST_REJECTED'] as $code)
+    expect(!RemaskTemplateTargetingContext::sourceFailure(new RuntimeException($code)), 'a field/query error must not disable unrelated dictionaries');
 $secret=RemaskTemplateTargetingContext::failure(new RuntimeException('proxy http://secret:password@example.com cookie=xs-sensitive'),'19');
 expect(!str_contains(json_encode($secret),'password') && !str_contains(json_encode($secret),'xs-sensitive'),'transport secrets never reach UI');
 $file=sys_get_temp_dir().'/remask-template-reference-'.bin2hex(random_bytes(8)).'.json';

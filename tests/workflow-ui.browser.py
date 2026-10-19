@@ -154,6 +154,18 @@ class WorkflowTests(unittest.TestCase):
         builder=self.page.evaluate('testCreative.build()')
         self.assertEqual(builder['identity'],{});self.assertNotIn('forecast',builder)
 
+    def test_potential_audience_does_not_parse_unrelated_creative_or_ad_fields(self):
+        self.prepare_estimate()
+        self.page.wait_for_function('fixtureEstimates.length>0')
+        self.page.evaluate('''document.getElementById('mbDegreesOfFreedom').value='{';
+            document.getElementById('mbTrackingSpecs').value='{';''')
+        spec=self.page.evaluate('testCreative.build(true)')
+        self.assertEqual(spec['targeting']['age_min'],21)
+        self.assertNotIn('creative',spec);self.assertNotIn('ad',spec)
+        with self.assertRaises(Exception):self.page.evaluate('testCreative.build()')
+        self.page.locator('#mbAgeMin').fill('29')
+        self.page.wait_for_function('fixtureEstimates.some(r=>JSON.parse(r.targeting_spec).age_min===29)')
+
     def test_not_ready_and_expired_source_leave_settings_editable(self):
         self.prepare_estimate()
         self.page.evaluate('window.fixtureEstimateData={estimate_ready:false,lower_bound:1000,upper_bound:5000,forecast:{available:false,reason:"META_FORECAST_NOT_READY"}}')

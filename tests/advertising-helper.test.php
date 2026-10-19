@@ -27,4 +27,14 @@ foreach([['helper'=>'preview'],['targeting_spec'=>['custom_audiences'=>[['id'=>'
 }
 try{RemaskAdvertisingHelperClient::template($input,$candidates,static fn()=>['checked_live'=>false]);throw new RuntimeException('Unverified source accepted');}
 catch(RuntimeException $error){check($error->getMessage()==='TEMPLATE_LOOKUP_ACCESS_UNVERIFIED','Wrong source guard');}
+foreach(['ADVERTISING_HELPER_READ_TIMEOUT',['code'=>'PRIVATE_HTTP_CONNECTION_UNAVAILABLE']] as $detail){
+    try{RemaskAdvertisingHelperClient::response('29','123456',['detail'=>$detail]);throw new LogicException('Failed response accepted');}
+    catch(RuntimeException $error){check($error->getMessage()===(is_array($detail)?$detail['code']:$detail),'Typed worker failure lost');}
+}
+try{RemaskAdvertisingHelperClient::response('29','123456',['detail'=>'secret proxy url/cookie']);throw new LogicException('Unsafe response accepted');}
+catch(RuntimeException $error){check($error->getMessage()==='ADVERTISING_HELPER_UNAVAILABLE','Only safe machine codes may leave worker bridge');}
+$proof=['ok'=>true,'profile'=>'29','account_id'=>'123456','checked_live'=>true,'account_scope_verified'=>true,'transport'=>'private_http_h2'];
+check(RemaskAdvertisingHelperClient::response('29','123456',$proof)===$proof,'Exact helper proof rejected');
+try{RemaskAdvertisingHelperClient::response('29','654321',$proof);throw new LogicException('Foreign proof accepted');}
+catch(RuntimeException $error){check($error->getMessage()==='ADVERTISING_HELPER_UNAVAILABLE','Foreign helper scope must remain rejected');}
 echo "Advertising template helper contracts passed\n";

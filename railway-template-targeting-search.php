@@ -61,7 +61,7 @@ try {
         } catch (Throwable $error) {
             $lastError = $error;
             // A query/schema failure says nothing about unrelated resources.
-            if (preg_match('/SESSION|CHECKPOINT|AUTH|PROXY|TIMEOUT|ACCOUNT_INACTIVE|TEMPLATE_LOOKUP_NO_ACCOUNT/', $error->getMessage()))
+            if (RemaskTemplateTargetingContext::sourceFailure($error))
                 $reference->block($context['profile'], time());
         }
     }

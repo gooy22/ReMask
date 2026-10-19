@@ -46,11 +46,19 @@ final class RemaskAdvertisingHelperClient {
         $body=@file_get_contents($base.'/api/v1/profiles/'.rawurlencode($profile).'/advertising-helper/'.$helper,
             false,$context,0,524289);
         $data=is_string($body) && strlen($body)<=524288 ? json_decode($body,true) : null;
+        return self::response($profile,$account,$data);
+    }
+
+    public static function response(string $profile, string $account, mixed $data): array {
         if (!is_array($data) || ($data['ok']??null)!==true || ($data['profile']??'')!==$profile
             || ($data['account_id']??'')!==$account || ($data['checked_live']??null)!==true
             || ($data['account_scope_verified']??null)!==true || ($data['transport']??'')!=='private_http_h2')
-            throw new RuntimeException(is_array($data['detail']??null)
-                ? (string)($data['detail']['code']??'ADVERTISING_HELPER_UNAVAILABLE') : 'ADVERTISING_HELPER_UNAVAILABLE');
+        {
+            $detail=is_array($data) ? ($data['detail']??null) : null;
+            $code=is_array($detail) ? ($detail['code']??'') : $detail;
+            throw new RuntimeException(is_string($code) && preg_match('/^[A-Z][A-Z0-9_]{2,119}$/D',$code)
+                ? $code : 'ADVERTISING_HELPER_UNAVAILABLE');
+        }
         return $data;
     }
 

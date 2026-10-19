@@ -1090,10 +1090,11 @@ function renderMetaSdkFields() {
         populateMetaSdkFields(saved);
     }
 }
-function readMetaSdkFields() {
+function readMetaSdkFields(groups = null) {
     const out = {campaign:{},adset:{},targeting:{},creative:{},ad:{}};
     document.querySelectorAll('[data-meta-group][data-meta-field]').forEach((el) => {
         const group = el.dataset.metaGroup;
+        if (groups && !groups.includes(group)) return;
         const field = el.dataset.metaField;
         const type = el.dataset.metaType || 'string';
         const value = metaFieldValue(el, type, field);
@@ -1174,9 +1175,9 @@ function remaskCreativeRetainedSection(group,id) {
     for(const field of coveredMetaFields[group]||[])delete retained[field];
     return retained;
 }
-function buildMetaBuilder() {
+function buildMetaBuilder(audienceOnly = false) {
     const special = $('mbSpecialCategory').value;
-    const sdkFields = readMetaSdkFields();
+    const sdkFields = readMetaSdkFields(audienceOnly ? ['campaign','adset','targeting'] : null);
     let campaign = deepMerge(remaskCreativeRetainedSection('campaign','mbAdvancedCampaign'), sdkFields.campaign);
     campaign = deepMerge(campaign, compactObject({
         name: $('mbCampaignName').value.trim(),
@@ -1274,6 +1275,8 @@ function buildMetaBuilder() {
         user_os: csvStrings($('mbUserOs').value),
         user_device: csvStrings($('mbUserDevice').value),
     }));
+
+    if (audienceOnly) return {campaign, adset, targeting};
 
     let creative = deepMerge(remaskCreativeRetainedSection('creative','mbAdvancedCreative'), sdkFields.creative);
     creative = deepMerge(creative, compactObject({
