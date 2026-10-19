@@ -473,11 +473,13 @@ def _variables_for(
 
 async def list_pages_via_private_graphql(
     session: Any,
+    *,
+    allow_runtime_discovery: bool = True,
 ) -> PageDiscoveryResult:
     diagnostics: list[str] = []
     candidates = list_candidates("LIST_PAGES")
 
-    if not candidates:
+    if not candidates and allow_runtime_discovery:
         # REMASK_LIST_PAGES_SELF_HEAL_V2
         # Recover the current read-only Page query BEFORE paying the relatively
         # expensive fb_dtsg bootstrap cost. On slower profile proxies bootstrap
@@ -502,7 +504,7 @@ async def list_pages_via_private_graphql(
                 f"doc_id={discovered.doc_id}"
             )
 
-    if not candidates:
+    if not candidates and allow_runtime_discovery:
         # REMASK_LIST_PAGES_BUNDLE_SELF_HEAL_V1
         # Modern Facebook frequently leaves the persisted-query doc_id only in
         # a loaded JS bundle, not in the initial HTML/headers inspected by the
