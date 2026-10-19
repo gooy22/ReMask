@@ -13,6 +13,8 @@ final class RemaskRequestPolicy
             'pythonWorkerJobs.php'=>['','csrf','health','ready','payment_status','funding_status','preflight','profile_state','docids','private_launch_contracts','private_launch_sources','status','get'],
             'pythonWorkerState.php'=>['','health','list','get'], 'pythonProfileContext.php'=>['','list','resolve'],
             'paymentCards.php'=>['','list'],
+            // Reviewed schema metadata performs authenticated reads only.
+            'metaPrivateSchema.php'=>[''], 'metaSdkSchema.php'=>[''], 'metaCreativeCapabilities.php'=>[''],
         ];
         foreach (['creativePreview.php','metaActivity.php','metaAssetManager.php','metaAssetReadiness.php','metaAssets.php',
             'metaAudienceEstimate.php','metaBundleMedia.php','metaCreativePreview.php','metaJobGet.php','metaJobItemInsights.php',

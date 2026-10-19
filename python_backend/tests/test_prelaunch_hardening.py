@@ -165,6 +165,42 @@ class HardeningPhpTests(unittest.TestCase):
         result=self.endpoint('metaDrafts.php','GET',{'action':'list'})
         self.assertTrue(json.loads(result.stdout)['ok'],(result.stdout,result.stderr))
 
+    def test_schema_reads_keep_authentication_and_reject_mutation_actions(self):
+        import http.server
+        import threading
+        requests=[]
+        fixture={'ok':True,'source':'reviewed_private_ads_manager_modules','schema':{},
+                 'object_fields':{},'source_digest':'f'*64}
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self,*args):pass
+            def do_GET(self):
+                requests.append((self.path,self.headers.get('X-Remask-Worker-Key')))
+                self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers()
+                self.wfile.write(json.dumps(fixture).encode())
+        server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler)
+        thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+        old=self.env.copy()
+        self.env.update({'REMASK_PYTHON_WORKER_URL':f'http://127.0.0.1:{server.server_port}',
+                         'REMASK_WORKER_API_KEY':'fixture-worker-key'})
+        try:
+            names=['metaPrivateSchema.php','metaSdkSchema.php','metaCreativeCapabilities.php']
+            for name in names:
+                p=self.endpoint(name,'GET',{})
+                self.assertTrue(json.loads(p.stdout)['ok'],(name,p.stdout,p.stderr))
+                for method,action in [('GET','save'),('GET','delete'),('HEAD',''),('OPTIONS','')]:
+                    p=self.endpoint(name,method,{'action':action})
+                    self.assertIn('STATUS=405',p.stderr,(name,method,p.stdout,p.stderr))
+            self.assertEqual(requests,[('/api/v1/private-launch/schema','fixture-worker-key')]*3)
+            p=self.php('$_SERVER["REQUEST_METHOD"]="GET";$_SERVER["REQUEST_URI"]="/ajax/metaPrivateSchema.php";'
+                'register_shutdown_function(function(){fwrite(STDERR,"STATUS=".http_response_code());});require $argv[1];',
+                self.runtime/'ajax/metaPrivateSchema.php')
+            self.assertIn('STATUS=401',p.stderr,(p.stdout,p.stderr))
+            for page in ['launch.php','creatives.php']:
+                self.assertNotIn('styles/bootstrap.min.js',(self.runtime/page).read_text())
+        finally:
+            self.env.clear();self.env.update(old)
+            server.shutdown();server.server_close();thread.join()
+
     def profile_script(self):
         return 'require $argv[1]."/classes/RemaskProxy.php";require $argv[1]."/classes/FbAccount.php";require $argv[1]."/classes/FbAccountSerializer.php";$s=new FbAccountSerializer($argv[2]);'
 
