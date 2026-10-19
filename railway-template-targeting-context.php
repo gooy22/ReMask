@@ -3,6 +3,9 @@ declare(strict_types=1);
 
 /** Read transport only. This context is never a template destination. */
 final class RemaskTemplateTargetingContext {
+    public static function sourceFailure(Throwable $error): bool {
+        return preg_match('/SESSION|CHECKPOINT|AUTH|PROXY|TIMEOUT|ACCOUNT_INACTIVE|TEMPLATE_LOOKUP_NO_ACCOUNT|PRIVATE_HTTP_(?:CONNECTION|PROTOCOL|READ)_UNAVAILABLE|PRIVATE_HTTP_PROTOCOL_ERROR/', $error->getMessage())===1;
+    }
     public static function candidates(array $profiles, callable $loadCatalog, string $preferred = '', array $excluded = [], bool $discover = false): array {
         $candidates = [];
         foreach ($profiles as $profile) {

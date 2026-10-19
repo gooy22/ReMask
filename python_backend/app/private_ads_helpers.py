@@ -15,8 +15,9 @@ async def read_form_helper(web, catalog, values, helper, inputs):
     if 'include_forecast' in inputs and type(inputs['include_forecast']) is not bool:
         raise fail('INVALID_INPUT', 'Advertising forecast selection must be boolean')
     client = _ReadClient(web, catalog, values)
+    forecast = helper == 'audience_estimate' and inputs.get('include_forecast') is not False
     account = await client.account_record(require_active=helper == 'preview',
-                                          currency=helper == 'audience_estimate')
+        currency=forecast, reference=helper != 'preview')
     common = {'profile': values['profile_id'], 'account_id': client.account,
               'business_id': client.business, 'account_scope_verified': True,
               'checked_live': True, 'checked_at': int(time.time()),
@@ -31,7 +32,7 @@ async def read_form_helper(web, catalog, values, helper, inputs):
             raise fail('TARGETING_FIELDS_UNAVAILABLE', 'Audience estimate requires reviewed targeting')
         params = {'targeting_spec': targeting, 'skip_bid_suggestion': True,
                   'send_long_term_prediction_shadow_request': True}
-        currency = account.get('currency')
+        currency = account.get('currency') if forecast else None
         if isinstance(currency, str) and re.fullmatch('[A-Z]{3}', currency):
             params['currency'] = currency
         else:

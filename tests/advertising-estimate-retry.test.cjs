@@ -11,7 +11,7 @@ function fixture(targets, failure) {
     snapshot:()=>current,blockedTargets:new Set(),lastFingerprint:'',generation:0,
     controller:null,needsRefresh:true,lastReadAt:0,timer:null,AbortController,Date,JSON,
     requestSpec:()=>({}),status:{},results:{querySelector:()=>null,appendChild:()=>{}},render:()=>{},
-    read:async()=>{reads++;if(failure)throw new Error(failure);return {estimate_ready:false};},
+    read:async()=>{reads++;if(failure)throw typeof failure==='string'?new Error(failure):failure;return {estimate_ready:false};},
     setTimeout:fn=>{const task={fn};scheduled.push(task);return task;},
     clearTimeout:()=>{},invalidate:()=>{c.generation++;c.lastFingerprint='';},};
   vm.createContext(c);vm.runInContext(estimate,c);
@@ -33,5 +33,17 @@ function fixture(targets, failure) {
   }
   const empty=fixture([],null);await empty.c.estimate();
   assert.equal(empty.reads(),0);assert.equal(empty.c.needsRefresh,false);
+  for(const code of ['CHECKPOINT_REQUIRED','PRIVATE_HTTP_CONNECTION_UNAVAILABLE','PRIVATE_HTTP_PROTOCOL_ERROR','TEMPLATE_LOOKUP_SOURCE_UNAVAILABLE']){
+    const error=new Error('Источник недоступен.');error.meta={code};
+    const f=fixture([target],error);await f.c.estimate();
+    assert.equal(f.reads(),1);assert.equal(f.scheduled.length,0,'structured failures must stop without matching a code in translated text');
+  }
+  const request=source.slice(source.indexOf('    async function read('),source.indexOf('    function render('));
+  const calls=[];
+  const context={URLSearchParams,document:{querySelector:()=>({content:'fixture-csrf'})},
+    fetch:async(url,options)=>{calls.push({url,options});return {ok:false,text:async()=>JSON.stringify({ok:false,error:{code:'PRIVATE_HTTP_CONNECTION_UNAVAILABLE',message:'Соединение недоступно.'}})};}};
+  vm.createContext(context);vm.runInContext(request,context);
+  await assert.rejects(()=>context.read('audience_estimate',{include_forecast:false},{},null),error=>error.meta.code==='PRIVATE_HTTP_CONNECTION_UNAVAILABLE');
+  assert.equal(calls[0].options.headers['X-ReMask-CSRF'],'fixture-csrf');
   console.log('Authentication/scope gates stop reads; transient/pending reads bounded to three; no unselected Launch reads.');
 })().catch(error=>{console.error(error);process.exitCode=1;});

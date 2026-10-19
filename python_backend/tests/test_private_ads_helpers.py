@@ -24,7 +24,7 @@ class HelperTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result['checked_live'])
         self.assertFalse(result['browser_started'])
         self.client.account_record.assert_awaited_once()
-        self.client.account_record.assert_awaited_once_with(require_active=False,currency=True)
+        self.client.account_record.assert_awaited_once_with(require_active=False,currency=True,reference=True)
         self.assertEqual(self.client.request.await_args.args[0], 'DELIVERY_ESTIMATE')
         self.client.request.return_value = {'data':[{'estimate_ready':False,'estimate_mau_lower_bound':-1}]}
         result = await read_form_helper(None, self.catalog, self.values, 'audience_estimate', self.inputs)
@@ -47,6 +47,9 @@ class HelperTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((result['lower_bound'],result['upper_bound']),(1000,5000))
         self.assertNotIn('forecast',result)
         self.assertNotIn('include_forecast',self.client.request.await_args.kwargs['params'])
+        self.client.account_record.assert_awaited_once_with(require_active=False,currency=False,reference=True)
+        self.assertNotIn('currency',self.client.request.await_args.kwargs['params'])
+        self.assertIsNone(result['currency'])
 
     async def test_foreign_account_scope_stops_before_estimate_dispatch(self):
         self.client.account_record.side_effect = ProvisioningError('RESOURCE_SCOPE_MISMATCH','foreign account',retryable=False)
@@ -61,7 +64,7 @@ class HelperTests(unittest.IsolatedAsyncioTestCase):
             {'type':'instagram_positions','id':'story'}]}
         result = await read_form_helper(None,self.catalog,self.values,'placements',{})
         self.assertEqual(result['options'], {'facebook_positions':['facebook_reels'],'instagram_positions':['story']})
-        self.client.account_record.assert_awaited_once_with(require_active=False,currency=False)
+        self.client.account_record.assert_awaited_once_with(require_active=False,currency=False,reference=True)
         self.assertEqual(self.client.request.await_args.args[0], 'TARGETING_BROWSE')
         self.client.request.return_value = {'data':[]}
         result = await read_form_helper(None,self.catalog,self.values,'placements',{})

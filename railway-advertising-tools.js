@@ -47,7 +47,8 @@
     }
     function specification() {
         if(creative) {
-            const builder=buildMetaBuilder();
+            // Audience reads do not depend on unrelated ad/media JSON fields.
+            const builder=buildMetaBuilder(true);
             return {campaign:builder.campaign||{},adset:builder.adset||{},targeting:builder.targeting||{}};
         }
         const payload=remaskApplySavedMetaBuilderToPayload(buildPayload());
@@ -89,7 +90,22 @@
         const body=new URLSearchParams();
         for(const [key,value] of Object.entries(input))if(value!==undefined)body.set(key,typeof value==='object'?JSON.stringify(value):String(value));
         if(scoped){body.set('profile',destination.profile);body.set('account_id',destination.account_id);}else body.set('helper',helper);
-        const data=await (creative?api:apiJson)('ajax/'+endpoint,{method:'POST',body,signal});
+        // Both editors must retain the typed failure. Some legacy apiJson
+        // adapters flatten it to a message and defeat auth/transport stops.
+        const response=await fetch('ajax/'+endpoint,{method:'POST',body,signal,headers:{
+            'X-ReMask-CSRF':document.querySelector('meta[name="remask-csrf"]')?.content||''
+        }});
+        let payload;
+        try{payload=JSON.parse(await response.text());}
+        catch{throw new Error('Не удалось прочитать ответ оценки аудитории.');}
+        if(!response.ok||payload.ok===false){
+            const failure=payload.error||{};
+            const error=new Error(failure.message||'Оценка аудитории временно недоступна.');
+            const code=String(failure.code||'');
+            error.meta={code:/^[A-Z][A-Z0-9_]{2,119}$/.test(code)?code:''};
+            throw error;
+        }
+        const data=payload.data;
         if(!data||data.checked_live!==true||data.account_scope_verified!==true||data.transport!=='private_http_h2'
             ||(scoped?(data.profile!==destination.profile||String(data.account_id)!==destination.account_id):data.template_account_bound!==false))
             throw new Error('Источник оценки не подтверждён. Настройки можно сохранить.');
@@ -117,7 +133,7 @@
         if(!force&&current.fingerprint===lastFingerprint)return;
         invalidate('Получаем оценку Meta…');lastFingerprint=current.fingerprint;
         const seq=generation;controller=new AbortController();const signal=controller.signal;
-        let success=0, pending=false, failed=false, blocked=false;lastReadAt=Date.now();
+        let success=0, pending=false, failed=false, blocked=false, sourceUnavailable=false;lastReadAt=Date.now();
         // Bound concurrent profile reads; never reuse one account's numbers for another.
         for(const target of current.targets.slice(0,20)) {
             if(seq!==generation)return;
@@ -129,13 +145,19 @@
                 results.querySelector('[data-rm-placeholder]')?.remove();render(data,target);success++;pending ||= data.estimate_ready!==true;
             } catch(error) {
                 if(seq!==generation||signal.aborted)return;
-                if(/CHECKPOINT_REQUIRED|SESSION_EXPIRED|TWO_FACTOR_REQUIRED|LOGIN_REQUIRED|BOOTSTRAP_SCOPE_UNVERIFIED|ACTOR_MISMATCH|RESOURCE_SCOPE_MISMATCH/.test(String(error.message))){blockedTargets.add(targetKey);blocked=true;}
+                const errorCode=String(error.meta?.code||error.payload?.error?.code||error.payload?.code||'');
+                const failureText=errorCode+' '+String(error.message);
+                if(/TEMPLATE_LOOKUP_SOURCE_UNAVAILABLE|PRIVATE_HTTP_(?:PROXY|CONNECTION|PROTOCOL|READ)_UNAVAILABLE|PRIVATE_HTTP_PROTOCOL_ERROR/.test(failureText)){
+                    sourceUnavailable=true;blocked=true;
+                }else if(/CHECKPOINT_REQUIRED|SESSION_EXPIRED|TWO_FACTOR_REQUIRED|LOGIN_REQUIRED|BOOTSTRAP_SCOPE_UNVERIFIED|ACTOR_MISMATCH|RESOURCE_SCOPE_MISMATCH/.test(failureText)){
+                    blockedTargets.add(targetKey);blocked=true;
+                }
                 failed=true;const p=document.createElement('p');p.textContent=(target.account_id?'РК '+target.account_id+': ':'')+'Размер аудитории временно недоступен.';p.title=error.message;results.appendChild(p);
             }
         }
         if(seq!==generation)return;
         needsRefresh=!blocked&&attempt<2&&(pending||failed);
-        status.textContent=blocked?'Доступ Meta не подтверждён. Проверьте состояние аккаунта перед повторной оценкой.':pending?'Meta готовит размер аудитории…':failed?'Данные Meta временно недоступны. Шаблон можно сохранить.':'Размер аудитории получен из Meta.';
+        status.textContent=sourceUnavailable?'Нет доступного соединения с источником оценки аудитории.':blocked?'Доступ Meta не подтверждён. Проверьте состояние аккаунта перед повторной оценкой.':pending?'Meta готовит размер аудитории…':failed?'Данные Meta временно недоступны. Шаблон можно сохранить.':'Размер аудитории получен из Meta.';
         if(current.targets.length>20)status.textContent+=' Показаны первые 20 выбранных РК.';
         // Stop at authentication/scope gates; bound transient reads to three attempts.
         if(needsRefresh)timer=setTimeout(()=>{
