@@ -49,6 +49,8 @@ for(const [tab,label] of [['businesses','Добавить RK'],['ad_accounts','�
   for(const group of calls[0].profiles)for(const task of group.tasks){
     assert.equal(task.payload.parameters.FAN_PAGES,undefined);
     assert.equal(task.payload.parameters.PAGE_ACCESS.page_topology,'ONE_PAGE_PER_BUSINESS');
+    assert.equal(task.payload.parameters.PAGE_ACCESS.access_mode,'existing_page_full_control');
+    assert.equal(task.payload.transport_mode,'private_http_only');
     assert.equal(task.payload.parameters.PAGE_ACCESS.policies_accepted,true);
     assert.notEqual(task.payload.parameters.PAGE_ACCESS.business_id,scopes[group.profile_id]);
     assert.deepEqual(task.payload.steps,['PROXY_CHECK','PAGE_ACCESS']);

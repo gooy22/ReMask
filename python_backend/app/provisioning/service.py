@@ -159,9 +159,13 @@ class ProvisioningService:
         ).strip() or "default"
 
         completed: list[dict[str, Any]] = []
+        page_access = parameters.get('PAGE_ACCESS', parameters.get('page_access', {}))
+        bundle_page_access = (ProvisioningStep.PAGE_ACCESS in steps and isinstance(page_access, dict)
+            and page_access.get('page_topology') == 'ONE_PAGE_PER_BUSINESS')
         meta_transport = MetaTransportRouter(session, private_only=(
             payload.get("transport_mode") == "private_http_only" or scope_key.startswith("prepare:")
             or any(step in {ProvisioningStep.BUSINESS, ProvisioningStep.AD_ACCOUNT} for step in steps)
+            or bundle_page_access
         ))
 
         for step in steps:
