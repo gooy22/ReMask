@@ -389,7 +389,7 @@ class InstalledLaunchTests(unittest.TestCase):
         self.assertEqual([x['media_library_id'] for x in media['carousel']], [MEDIA_ID,second])
         self.assertEqual([x['headline'] for x in media['carousel']], ['First','Second'])
 
-    def test_disabled_launch_buttons_explain_missing_account(self):
+    def test_launch_controls_expose_missing_account_on_click(self):
         self.page.wait_for_function('fixtureLaunch.ready()')
         self.page.wait_for_selector('#remaskPrivateDisabledReason:not([hidden])')
         reason = self.page.locator('#remaskPrivateDisabledReason')
@@ -397,10 +397,14 @@ class InstalledLaunchTests(unittest.TestCase):
         self.assertIn('Select at least one ad account.', reason.inner_text())
         for button_id in ('launchButton', 'reviewLaunch', 'dryRunPlan'):
             button = self.page.locator('#' + button_id)
-            self.assertFalse(button.is_enabled())
+            self.assertTrue(button.is_enabled())
             self.assertIn('Select at least one ad account.', button.get_attribute('title'))
+        self.page.locator('#reviewLaunch').click()
+        self.page.wait_for_function(
+            'document.querySelector("#launchResult").textContent.includes("Select at least one ad account.")')
+        self.assertTrue(self.page.locator('#launchButton').is_enabled())
 
-    def test_disabled_launch_buttons_explain_unavailable_goal(self):
+    def test_launch_controls_expose_unavailable_goal_on_click(self):
         self.page.wait_for_function('fixtureLaunch.ready()')
         self.page.evaluate("fixtureSingleTarget('123456')")
         self.page.evaluate('(data)=>fixtureLaunch.restore(data)',
@@ -409,8 +413,12 @@ class InstalledLaunchTests(unittest.TestCase):
         reason = self.page.locator('#remaskPrivateDisabledReason')
         self.assertTrue(reason.is_visible())
         self.assertIn('Сохранённая цель недоступна', reason.inner_text())
-        self.assertFalse(self.page.locator('#launchButton').is_enabled())
-        self.assertFalse(self.page.locator('#reviewLaunch').is_enabled())
+        self.assertTrue(self.page.locator('#launchButton').is_enabled())
+        self.assertTrue(self.page.locator('#reviewLaunch').is_enabled())
+        self.page.locator('#reviewLaunch').click()
+        self.page.wait_for_function(
+            'document.querySelector("#launchResult").textContent.includes("Сохранённая цель недоступна")')
+        self.assertTrue(self.page.locator('#launchButton').is_enabled())
 
     def test_legacy_preset_goal_survives_bundle_reload_until_user_selects_supported_goal(self):
         self.preset_objective = 'LEGACY_TEST_OBJECTIVE'
@@ -443,7 +451,7 @@ class InstalledLaunchTests(unittest.TestCase):
         self.page.evaluate('(data)=>fixtureLaunch.restore(data)',
             {'fields':{'objective':disabled,'dailyBudget':'800','campaignName':'Keep name'}})
         self.assertEqual(self.page.locator('#objective').input_value(), disabled)
-        self.assertFalse(self.page.locator('#dryRunPlan').is_enabled())
+        self.assertTrue(self.page.locator('#dryRunPlan').is_enabled())
         self.assertTrue(self.page.locator('#remaskUnsupportedObjective').is_visible())
         self.assertEqual(self.page.locator('#campaignName').input_value(), 'Keep name')
         self.assertEqual(self.page.locator('#dailyBudget').input_value(), '800')
