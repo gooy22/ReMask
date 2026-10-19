@@ -2108,7 +2108,9 @@ async def profile_live_inventory(
             stage='private_inventory'
             private_started=time.monotonic()
             # Safe rollout switch; default keeps the existing Sync behavior.
-            fast_sync = str(os.getenv('REMASK_FAST_INVENTORY_SYNC', '0')).strip().lower() in {'1', 'true', 'yes', 'on'}
+            fast_sync_requested = str(os.getenv('REMASK_FAST_INVENTORY_SYNC', '0')).strip().lower() in {'1', 'true', 'yes', 'on'}
+            fast_sync_profile = str(os.getenv('REMASK_FAST_SYNC_PROFILE', '')).strip()
+            fast_sync = fast_sync_requested and bool(fast_sync_profile) and fast_sync_profile in {clean_profile, '*'}
             private_snapshot: dict[str,Any] = {}
             try:
                 facebook_web=await meta_transport.facebook_web()
