@@ -402,6 +402,7 @@ class InstalledLaunchTests(unittest.TestCase):
 
     def test_disabled_launch_buttons_explain_unavailable_goal(self):
         self.page.wait_for_function('fixtureLaunch.ready()')
+        self.page.evaluate("fixtureSingleTarget('123456')")
         self.page.evaluate('(data)=>fixtureLaunch.restore(data)',
             {'fields': {'objective': 'LEGACY_TEST_OBJECTIVE'}})
         self.page.evaluate('validateReady()')
