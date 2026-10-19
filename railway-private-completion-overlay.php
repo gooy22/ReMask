@@ -164,6 +164,9 @@ $creatives .= "\n".file_get_contents('/tmp/railway-advertising-tools.js');
 file_put_contents($root.'/scripts/creatives.js', $creatives);
 foreach (['launch.php','creatives.php'] as $name) {
     $page = file_get_contents($root.'/'.$name);
+    // These editors use native handlers. The obsolete Bootstrap 4 JS crashes
+    // without jQuery; retain Bootstrap CSS and the editors' own interactions.
+    $page = str_replace('<script src="styles/bootstrap.min.js"></script>', '', $page);
     $module = $name === 'launch.php' ? 'launch' : 'creatives';
     $revision = substr(hash_file('sha256', $root.'/scripts/'.$module.'.js'), 0, 16);
     $page = preg_replace('~(scripts/'.$module.'\.js)\?v=[^"\s]+~', '$1?v=private-'.$revision, $page);

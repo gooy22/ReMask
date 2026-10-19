@@ -77,9 +77,9 @@ class InstalledLaunchTests(unittest.TestCase):
         path = url.path.lstrip('/')
         if path == 'launch.php':
             html = re.sub(r'<\?(?:php|=).*?\?>', '', (self.root/path).read_text(), flags=re.S)
-            # The PHP shell supplies jQuery on the real page; this fixture tests
-            # Launch itself and retains CSS without executing its shell plugin.
-            html = re.sub(r'<script src="styles/bootstrap.min.js"></script>', '', html)
+            # Check the deployed shell itself; never mask a broken dependency
+            # in the browser fixture before asserting pageerror is empty.
+            self.assertNotIn('styles/bootstrap.min.js', html)
             html=html.replace('<meta name="remask-csrf" content=""/>','<meta name="remask-csrf" content="fixture-csrf"/>',1)
             self.assertIn('content="fixture-csrf"',html)
             route.fulfill(body=html, content_type='text/html'); return
