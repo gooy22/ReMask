@@ -186,17 +186,23 @@ class InstalledLaunchTests(unittest.TestCase):
         self.page.locator('#bundleLoad').click()
         self.page.wait_for_function('document.querySelector("#launchResult").classList.contains("ready")')
 
-    def test_launch_estimate_without_profile_uses_template_source_and_keeps_bundle_generic(self):
+    def test_launch_without_selected_account_does_not_probe_template_profiles(self):
         self.page.evaluate('fixtureLaunch.geo()')
-        self.page.wait_for_function('document.querySelector("[data-rm-estimates]").textContent.includes("1 000")')
-        path,request=self.estimate_requests[-1]
-        self.assertEqual(path,'ajax/metaTemplateAdvertisingHelper.php')
-        self.assertNotIn('profile',request);self.assertNotIn('account_id',request)
+        self.page.wait_for_function('document.querySelector("[data-rm-estimate-status]").textContent.includes("Выберите рекламный кабинет")')
+        self.assertEqual(self.estimate_requests, [])
         self.save_and_reload()
         self.assertNotIn('forecast',self.bundles[0]['data'])
 
+    def select_estimate_account(self):
+        self.page.evaluate("""() => {
+            state.targets=[];state.profile="20";
+            $("adAccount").innerHTML='<option value="act_123456" selected>Fixture RK</option>';
+            $("adAccount").dispatchEvent(new Event("change",{bubbles:true}));
+        }""")
+
     def test_launch_audience_sidebar_tracks_budget_and_survives_saved_bundle_reload(self):
         self.page.set_viewport_size({'width':1600,'height':1000})
+        self.select_estimate_account()
         self.page.evaluate('fixtureLaunch.geo()')
         self.page.locator('#dailyBudget').fill('875')
         self.page.wait_for_function('document.querySelector("[data-rm-estimates]").textContent.includes("1 000")')
@@ -238,6 +244,7 @@ class InstalledLaunchTests(unittest.TestCase):
         self.assertEqual(self.page.locator('[data-rm-preview-body] iframe').count(),0)
 
     def test_launch_estimate_error_preserves_budget_and_targeting(self):
+        self.select_estimate_account()
         self.estimate_failure=True;self.page.evaluate('fixtureLaunch.geo()')
         self.page.wait_for_function('document.querySelector("[data-rm-estimates]").textContent.includes("Размер аудитории временно недоступен")')
         self.assertEqual(self.page.evaluate('fixtureLaunch.payload().adset.targeting.geo_locations.countries'),['US'])

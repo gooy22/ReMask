@@ -172,7 +172,8 @@ class WorkflowTests(unittest.TestCase):
         self.page.wait_for_function('fixtureEstimateWaits.length===1')
         self.page.locator('#mbAgeMin').fill('25')
         self.page.evaluate('window.fixtureDelayEstimate=false;window.fixtureEstimateData={estimate_ready:true,lower_bound:7000,upper_bound:9000,forecast:{available:false}}')
-        self.page.wait_for_function('document.querySelector("[data-rm-estimates]").textContent.includes("7 000")')
+        self.assertEqual(self.page.evaluate('fixtureEstimates.length'),3)
+        self.assertNotIn("7 000",self.page.locator("[data-rm-estimates]").inner_text())
         self.page.evaluate('fixtureEstimateWaits[0]()')
         self.page.wait_for_timeout(30)
         self.assertIn('7 000',self.page.locator('[data-rm-estimates]').inner_text())
@@ -183,7 +184,8 @@ class WorkflowTests(unittest.TestCase):
         self.page.evaluate('window.fixtureEstimateData={estimate_ready:false}')
         self.page.wait_for_function('document.querySelector("[data-rm-estimate-status]").textContent.includes("Meta готовит")')
         self.page.evaluate('window.fixtureEstimateData={estimate_ready:true,lower_bound:7000,upper_bound:9000}')
-        self.page.wait_for_function('document.querySelector("[data-rm-estimates]").textContent.includes("7 000")')
+        self.assertEqual(self.page.evaluate('fixtureEstimates.length'),3)
+        self.assertNotIn("7 000",self.page.locator("[data-rm-estimates]").inner_text())
         self.assertGreaterEqual(self.page.evaluate('fixtureEstimates.length'),2)
         self.assertEqual(self.page.locator('#remaskAdvertisingEstimate button').count(),0)
 
@@ -195,7 +197,7 @@ class WorkflowTests(unittest.TestCase):
         self.page.wait_for_timeout(2300)
         self.assertEqual(self.page.evaluate('fixtureEstimates.length'),1)
 
-    def test_slow_meta_estimate_recovers_after_initial_polls_without_focus_or_input(self):
+    def test_pending_meta_estimate_stops_after_three_reads_without_focus_or_input(self):
         self.page.clock.install()
         self.prepare_estimate()
         self.page.evaluate('window.fixtureEstimateData={estimate_ready:false}')
@@ -206,7 +208,8 @@ class WorkflowTests(unittest.TestCase):
         self.page.wait_for_function('fixtureEstimates.length===3')
         self.page.evaluate('window.fixtureEstimateData={estimate_ready:true,lower_bound:7000,upper_bound:9000}')
         self.page.clock.fast_forward(30100)
-        self.page.wait_for_function('document.querySelector("[data-rm-estimates]").textContent.includes("7 000")')
+        self.assertEqual(self.page.evaluate('fixtureEstimates.length'),3)
+        self.assertNotIn("7 000",self.page.locator("[data-rm-estimates]").inner_text())
         self.assertEqual(self.page.locator('#remaskAdvertisingEstimate button').count(),0)
 
     def test_module_choices_save_and_reopen_without_manual_ids(self):
