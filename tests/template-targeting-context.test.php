@@ -15,6 +15,10 @@ expect($preferredNew[0]['profile']==='25' && $preferredNew[0]['account_id']===''
     'new direct-test source must precede saved active and unverified accounts within the bounded attempt budget');
 $excludedNew=RemaskTemplateTargetingContext::candidates([...$profiles,$newProfile],$newLoad,'25',['25'],true);
 expect(!in_array('25',array_column($excludedNew,'profile'),true),'preference never overrides source exclusion');
+$uiDirect=RemaskTemplateTargetingContext::candidates([...$profiles,$newProfile+['direct_ready'=>true]],$newLoad,'',[],true);
+expect($uiDirect[0]['profile']==='25','UI-authorized actor-validated direct lease is eligible without Railway env preference');
+$uiExcluded=RemaskTemplateTargetingContext::candidates([...$profiles,$newProfile+['direct_ready'=>true]],$newLoad,'',['25'],true);
+expect(!in_array('25',array_column($uiExcluded,'profile'),true),'direct lease never overrides excluded or blocked sources');
 $proof=['ok'=>true,'profile'=>'20','account_id'=>'123456','business_id'=>'654321','checked_live'=>true,
     'account_scope_verified'=>true,'transport'=>'private_http_h2','source_context_discovered'=>true];
 expect(RemaskTemplateTargetingContext::referenceResponse('20',$proof)===$proof,'verified new context accepted');
@@ -79,8 +83,16 @@ try {
     expect($reference->search('interests','Fixture',1001)['truncated']===true,'cached text matches never claim complete catalog coverage');
     $large=array_replace($proof,['data'=>array_fill(0,501,['id'=>'123456','name'=>'Fixture'])]);
     $reference->put('behaviors','',$large,1000);
-    expect(count($reference->get('behaviors','',1001)['data'])===500 && $reference->get('behaviors','',1001)['truncated']===true,
-        'server cache bound cannot silently discard remaining choices');
+    expect(count($reference->get('behaviors','',1001)['data'])===100 && $reference->get('behaviors','',1001)['truncated']===true,
+        'browser response stays bounded independently of the stored catalog');
+    $many=[];for($i=0;$i<601;$i++)$many[]=['id'=>(string)(700000+$i),'name'=>'Interest '.$i];
+    $reference->put('interests','',array_replace($proof,['data'=>$many]),1000);
+    expect($reference->search('interests','Interest 600',1001)['data'][0]['id']==='700600',
+        'search finds leaves after the old 500-row cache boundary');
+    expect($reference->search('interests','Interest 600',1000+86401)['reference_stale']===true,
+        'genuine cached labels remain searchable after one day without claiming live eligibility');
+    expect($reference->search('interests','Not in the browse tree',1001)===null,
+        'browse cache misses still permit actual Meta text search');
     expect($reference->get('interests','fixture',1000+86401)['reference_stale']===true,'stale reference explicitly identified');
     expect($reference->get('interests','fixture',1000+2592001)===null,'over-age reference expires');
     $reference->block('16',1000); expect($reference->blocked(1001)===['16'],'failed source cooldown');
@@ -94,6 +106,8 @@ $ru=RemaskModuleTargetingReference::search('locales','russi',$manifest);
 expect($ru['data'][0]['id']==='17' && $ru['checked_live']===false,'source-derived Russian ID without a profile');
 expect(RemaskModuleTargetingReference::search('locales','РУСС',$manifest)['data'][0]['id']==='17','Unicode case-insensitive search');
 expect(count(RemaskModuleTargetingReference::search('locales','',$manifest)['data'])===72,'empty query lists actual languages');
+expect(RemaskModuleTargetingReference::search('locales','no such language exists',$manifest)['data']===[],
+    'complete language map misses do not fall through to network profiles');
 expect(RemaskModuleTargetingReference::search('locations','Ukraine',$manifest)['data'][0]['key']==='UA','country English alias preserves ISO key');
 expect(RemaskModuleTargetingReference::search('locations','unsupported city query',$manifest)===null,'unknown cities still require live source');
 $seen=[];

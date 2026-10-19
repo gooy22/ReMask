@@ -9,7 +9,8 @@ final class RemaskTemplateTargetingContext {
             $name = (string)($profile['name'] ?? '');
             if ($name === '' || in_array($name, $excluded, true) || ($profile['disabled'] ?? false) === true
                 || ($profile['banned'] ?? false) === true || ($profile['cookies_ready'] ?? false) !== true
-                || (($profile['proxy_configured'] ?? false) !== true && $name !== $preferred)) continue;
+                || (($profile['proxy_configured'] ?? false) !== true && $name !== $preferred
+                    && ($profile['direct_ready'] ?? false) !== true)) continue;
             try { $catalog = $loadCatalog($name); }
             catch (Throwable $error) { continue; }
             if (($catalog['profile'] ?? '') !== $name) throw new RuntimeException('TEMPLATE_LOOKUP_PROFILE_MISMATCH');
@@ -23,14 +24,14 @@ final class RemaskTemplateTargetingContext {
                 // Reference reads do not require publishing readiness. The worker
                 // still confirms the exact account/Business through this profile.
                 $candidates[] = ['profile'=>$name, 'account_id'=>$account, 'catalog'=>$catalog,
-                    'priority'=>$name === $preferred ? 2 : ((string)$status === '1' ? 1 : ($status === null ? 0 : -1)),
+                    'priority'=>$name === $preferred || ($profile['direct_ready'] ?? false) === true ? 2 : ((string)$status === '1' ? 1 : ($status === null ? 0 : -1)),
                     'updated'=>(int)($catalog['_cache']['fetched_at'] ?? 0)];
             }
             if ($discover && count($candidates) === $count) {
                 // A newly imported profile has no saved RK catalog yet. The
                 // private worker may discover a READ context, never provision one.
                 $candidates[] = ['profile'=>$name, 'account_id'=>'', 'catalog'=>$catalog,
-                    'priority'=>$name === $preferred ? 2 : -2, 'updated'=>0];
+                    'priority'=>$name === $preferred || ($profile['direct_ready'] ?? false) === true ? 2 : -2, 'updated'=>0];
             }
         }
         usort($candidates, static fn($a,$b)=>($b['priority'] <=> $a['priority']) ?: ($b['updated'] <=> $a['updated'])
@@ -52,8 +53,8 @@ final class RemaskTemplateTargetingContext {
         if (session_status()===PHP_SESSION_ACTIVE) session_write_close();
         $context=stream_context_create(['http'=>['method'=>'POST','timeout'=>35,'ignore_errors'=>true,
             'follow_location'=>0,'content'=>$raw,'header'=>"Content-Type: application/json\r\nAccept: application/json\r\nX-Remask-Worker-Key: ".$key."\r\n"]]);
-        $body=@file_get_contents($base.'/api/v1/profiles/'.rawurlencode($profile).'/template-reference/'.rawurlencode($operation),false,$context,0,524289);
-        $data=is_string($body) && strlen($body)<=524288 ? json_decode($body,true) : null;
+        $body=@file_get_contents($base.'/api/v1/profiles/'.rawurlencode($profile).'/template-reference/'.rawurlencode($operation),false,$context,0,2097153);
+        $data=is_string($body) && strlen($body)<=2097152 ? json_decode($body,true) : null;
         return self::referenceResponse($profile,$data);
     }
 
@@ -96,6 +97,9 @@ final class RemaskTemplateTargetingReference {
             $state = is_string($raw) ? json_decode($raw, true) : null;
             if (!is_array($state)) $state = ['queries'=>[], 'blocked'=>[]];
             $result = $operation($state);
+            // Bound aggregate storage without discarding leaves of a complete browse tree.
+            while (count($state['queries'])>1 && strlen(json_encode($state,JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR))>8388608)
+                array_pop($state['queries']);
             $tmp = $this->file.'.'.bin2hex(random_bytes(6)).'.tmp';
             try {
                 $json = json_encode($state, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
@@ -112,8 +116,8 @@ final class RemaskTemplateTargetingReference {
         return $this->update(static function(array &$state) use ($type,$query,$now) {
             $row = $state['queries'][self::key($type,$query)] ?? null;
             if (!is_array($row) || !is_array($row['data'] ?? null) || $now-(int)($row['checked_at'] ?? 0)>2592000) return null;
-            return ['data'=>$row['data'],'checked_live'=>false,'source'=>'private_meta_template_reference',
-                'truncated'=>($row['truncated'] ?? false) === true,
+            return ['data'=>array_slice($row['data'],0,100),'checked_live'=>false,'source'=>'private_meta_template_reference',
+                'truncated'=>($row['truncated'] ?? false) === true || count($row['data'])>100,
                 'catalog_count'=>(int)($row['catalog_count'] ?? count($row['data'])),
                 'template_account_bound'=>false,'reference_checked_at'=>$row['checked_at'],
                 'reference_stale'=>$now-(int)$row['checked_at']>86400];
@@ -123,14 +127,14 @@ final class RemaskTemplateTargetingReference {
         if (($proof['checked_live'] ?? null)!==true || ($proof['account_scope_verified'] ?? null)!==true)
             throw new RuntimeException('TEMPLATE_LOOKUP_ACCESS_UNVERIFIED');
         $rows = [];
-        foreach (array_slice((array)($proof['data'] ?? []),0,500) as $row) {
+        foreach (array_slice((array)($proof['data'] ?? []),0,20000) as $row) {
             if (!is_array($row)) continue;
             $safe = array_intersect_key($row,array_flip(['id','key','name','type','country_code','country_name',
                 'region','region_id','radius','distance_unit','description','path']));
             if (!isset($safe['id']) && !isset($safe['key'])) continue;
             if (strlen(json_encode($safe,JSON_THROW_ON_ERROR))<=8192) $rows[]=$safe;
         }
-        $truncated = ($proof['truncated'] ?? false) === true || count((array)($proof['data'] ?? []))>500;
+        $truncated = ($proof['truncated'] ?? false) === true || count((array)($proof['data'] ?? []))>20000;
         $catalogCount = max(count($rows), count((array)($proof['data'] ?? [])), (int)($proof['catalog_count'] ?? 0));
         $this->update(static function(array &$state) use ($type,$query,$rows,$now,$truncated,$catalogCount) {
             $state['queries'][self::key($type,$query)] = ['data'=>$rows,'checked_at'=>$now,
@@ -151,15 +155,17 @@ final class RemaskTemplateTargetingReference {
     public function search(string $type, string $query, int $now): ?array {
         return $this->update(static function(array &$state) use ($type,$query,$now) {
             $row = $state['queries'][self::key($type,'')] ?? null;
-            if (!is_array($row) || $now-(int)($row['checked_at'] ?? 0)>86400) return null;
+            if (!is_array($row) || $now-(int)($row['checked_at'] ?? 0)>2592000) return null;
             $rows = array_values(array_filter((array)$row['data'], static fn($item)=>
                 preg_match('~'.preg_quote($query,'~').'~iu', (string)($item['name'] ?? '').' '.
                     implode(' ',(array)($item['path'] ?? [])).' '.(string)($item['id'] ?? ''))===1));
+            // The browse tree is not the entire Meta search index. A cache
+            // miss must still allow searching interests outside that tree.
             if (!$rows) return null;
-            return ['data'=>array_slice($rows,0,50),'checked_live'=>false,
-                'truncated'=>count($rows)>50 || ($row['truncated'] ?? false) === true,
+            return ['data'=>array_slice($rows,0,100),'checked_live'=>false,
+                'truncated'=>count($rows)>100 || ($row['truncated'] ?? false) === true,
                 'source'=>'private_meta_template_reference','template_account_bound'=>false,
-                'reference_checked_at'=>$row['checked_at']];
+                'reference_checked_at'=>$row['checked_at'], 'reference_stale'=>$now-(int)$row['checked_at']>86400];
         });
     }
 }
@@ -179,7 +185,7 @@ final class RemaskModuleTargetingReference {
                 (string)($row['country_code'] ?? '')],(array)($row['aliases'] ?? [])));
             return $query==='' || preg_match('~'.preg_quote($query,'~').'~iu',$haystack)===1;
         }));
-        if (!$rows && $query!=='') return null;
+        if (!$rows && $query!=='' && $type!=='locales') return null;
         if ($query!=='') usort($rows, static function($a,$b) use ($query) {
             $score=static function($row) use ($query) {
                 foreach (array_merge([(string)($row['name'] ?? '')],(array)($row['aliases'] ?? [])) as $name)

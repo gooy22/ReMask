@@ -499,7 +499,9 @@ class AdsManagerPrivateHttp:
         root, *edge = path.lstrip('/').split('/')
         wire_path = '/act_' + native + ('/' + edge[0] if edge else '') if root == 'act_' + selected else path
         values = dict(params)
-        account_keys = {'account_id', 'ad_account_id'}
+        # AdsUnifiedFlexibleTargetingDataSource spells its account selector
+        # accountId. It must agree with the proven native advertising edge.
+        account_keys = {'account_id', 'ad_account_id', 'accountId'}
         if path.endswith('/advideos'):
             account_keys.add('target_id')
         for key in account_keys:

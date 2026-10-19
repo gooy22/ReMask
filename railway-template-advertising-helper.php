@@ -16,7 +16,8 @@ try {
         if(!$row instanceof FbAccount)continue;
         try {RemaskCookieProfile::validate((array)$row->cookies,$row->proxy,false);$ready=true;}
         catch(InvalidArgumentException $error){$ready=false;}
-        $profiles[]=['name'=>(string)$row->name,'proxy_configured'=>$row->proxy!==null,'cookies_ready'=>$ready];
+        $profiles[]=['name'=>(string)$row->name,'proxy_configured'=>$row->proxy!==null,'cookies_ready'=>$ready,
+            'direct_ready'=>RemaskCookieProfile::directTestUntil((string)$row->name,(string)$row->userId)>time()];
     }
     $reference=new RemaskTemplateTargetingReference(dirname(ACCOUNTSFILENAME).'/template-targeting-'.hash('sha256',ACCOUNTSFILENAME).'.json');
     $until=(int)(getenv('REMASK_DIRECT_TEST_UNTIL')?:0);

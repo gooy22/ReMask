@@ -396,6 +396,12 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(json.loads(options['params']['creative_spec']), {'object_story_id':'111111','page_id':'111111'})
         self.assertEqual(params['ad_account_id'], '111111')
         self.assertIn('(111111)', params['fields'][1])
+        search = {'accountId':'111111', 'q':'fitness', 'whitelisted_types':['interests']}
+        await self.client.get('/act_111111/targetingsearch', search)
+        _, url, options = self.web.session.calls[-1]
+        self.assertTrue(url.endswith('/act_999999/targetingsearch'))
+        self.assertEqual(options['params']['accountId'], '999999')
+        self.assertEqual(search['accountId'], '111111')
         await self.client.post('/act_111111/addrafts', {'name':'synthetic draft'}, before_submit=self.claim)
         self.assertTrue(self.web.session.calls[-1][1].endswith('/act_999999/addrafts'))
         self.assertEqual(self.client.context.account_id, '111111')

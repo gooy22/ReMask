@@ -32,7 +32,8 @@ try {
         if (!$row instanceof FbAccount) continue;
         try { RemaskCookieProfile::validate((array)$row->cookies, $row->proxy, false); $cookiesReady = true; }
         catch (InvalidArgumentException $error) { $cookiesReady = false; }
-        $profiles[] = ['name'=>(string)$row->name, 'proxy_configured'=>$row->proxy !== null, 'cookies_ready'=>$cookiesReady];
+        $profiles[] = ['name'=>(string)$row->name, 'proxy_configured'=>$row->proxy !== null, 'cookies_ready'=>$cookiesReady,
+            'direct_ready'=>RemaskCookieProfile::directTestUntil((string)$row->name,(string)$row->userId)>time()];
     }
     $until = (int)(getenv('REMASK_DIRECT_TEST_UNTIL') ?: 0);
     $preferred = $until > time() && $until <= time()+7200 ? trim((string)(getenv('REMASK_DIRECT_TEST_PROFILE') ?: '')) : '';
@@ -46,17 +47,14 @@ try {
         if (count($attempted) >= 2) break; // bounded read fallback, never mutation retry
         $attempted[$context['profile']] = true;
         try {
-            $result = $context['account_id']===''
-                ? RemaskTemplateTargetingContext::readReference($context['profile'],$type,
-                    ['q'=>$query,'limit'=>$query==='' ? 500 : 50])
-                : RemaskAdvertisingAssetBridge::read([
-                'profile'=>$context['profile'], 'account_id'=>$context['account_id'], 'q'=>$query,
-                'limit'=>$query==='' ? 500 : 50], $context['catalog'], $type, true);
+            // Complete bounded reference tree is cached; browser responses stay at 100 choices.
+            $result = RemaskTemplateTargetingContext::readReference($context['profile'],$type,
+                ['q'=>$query,'limit'=>$query==='' ? 20000 : 50]);
             if (($result['checked_live'] ?? null) !== true || ($result['account_scope_verified'] ?? null) !== true)
                 throw new RuntimeException('TEMPLATE_LOOKUP_ACCESS_UNVERIFIED');
             $reference->put($type, $query, $result, time());
-            MetaEndpoint::ok(['data'=>$result['data'] ?? [], 'checked_live'=>true,
-                'truncated'=>($result['truncated'] ?? false) === true,
+            MetaEndpoint::ok(['data'=>array_slice($result['data'] ?? [],0,100), 'checked_live'=>true,
+                'truncated'=>($result['truncated'] ?? false) === true || count($result['data'] ?? [])>100,
                 'catalog_count'=>(int)($result['catalog_count'] ?? count($result['data'] ?? [])),
                 'source'=>'private_meta_template_lookup', 'template_account_bound'=>false]);
             exit;

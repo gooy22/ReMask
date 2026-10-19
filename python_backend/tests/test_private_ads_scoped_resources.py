@@ -75,6 +75,8 @@ class ResourceCases(unittest.IsolatedAsyncioTestCase):
         self.responses['/act_111111/targetingbrowse']={'data':[{'id':'777777','name':'Exact interest','type':'interests'}]}
         result=await self.catalog.read(self.web,'interests',self.values)
         self.assertTrue(result['checked_live']);self.assertEqual(result['data'][0]['id'],'777777')
+        self.assertNotIn('account_status', self.calls[0][1]['fields'])
+        self.assertNotIn('ad_account_promotable_objects', self.calls[0][1]['fields'])
         with self.assertRaises(ProvisioningError):await self.catalog.read(self.web,'images',self.values)
         self.account['business']['id']='foreign'
         with self.assertRaises(ProvisioningError):await self.catalog.read(self.web,'interests',self.values)
@@ -138,8 +140,19 @@ class ResourceCases(unittest.IsolatedAsyncioTestCase):
                 await self.catalog.read(self.web,'behaviors',self.values)
 
     async def test_typed_interest_search_still_uses_source_sender(self):
-        self.responses['/act_111111/targetingsearch']={'data':[{'id':'777777','name':'Fitness'}]}
+        self.responses['/act_111111/targetingsearch']={'data':[{'id':'777777','name':'Fitness'},
+            {'id':'888888','name':'Unavailable interest','valid':False}]}
         result=await self.catalog.read(self.web,'interests',{**self.values,'query':'fit'})
         self.assertEqual(result['data'][0]['id'],'777777')
         self.assertEqual(self.calls[-1][0],'/act_111111/targetingsearch')
         self.assertEqual(self.calls[-1][1]['q'],'fit')
+        self.assertEqual(len(result['data']),1)
+        self.assertIn('valid', self.calls[-1][1]['fields'])
+
+    async def test_complete_browse_tree_can_warm_template_cache_beyond_500_rows(self):
+        self.responses['/act_111111/targetingbrowse']={'data':[
+            {'id':str(700000+n),'name':'Interest '+str(n),'type':'interests'} for n in range(601)]}
+        result=await self.catalog.read(self.web,'interests',{**self.values,'limit':20000})
+        self.assertEqual(len(result['data']),601)
+        self.assertFalse(result['truncated'])
+        self.assertEqual(result['catalog_count'],601)

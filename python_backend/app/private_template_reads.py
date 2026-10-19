@@ -129,8 +129,10 @@ async def read_template_reference(web, catalog, context, operation, inputs):
     # foreign pair can fall through to another pair from this same profile.
     last = None
     for account, business in pairs[:2]:
+        query = str(inputs.get('q') or '').strip()
+        maximum = 20000 if operation in TARGETING_TYPES and not query else 500
         values = {'profile_id': profile, 'ad_account_id': account, 'business_id': business,
-                  'query': str(inputs.get('q') or '').strip(), 'limit': min(500, max(1, int(inputs.get('limit', 100))))}
+                  'query': query, 'limit': min(maximum, max(1, int(inputs.get('limit', 100))))}
         try:
             if operation in REFERENCE_TYPES:
                 if len(values['query']) > 200:
