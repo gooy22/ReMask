@@ -79,6 +79,14 @@ class ResourceCases(unittest.IsolatedAsyncioTestCase):
         self.account['business']['id']='foreign'
         with self.assertRaises(ProvisioningError):await self.catalog.read(self.web,'interests',self.values)
 
+    async def test_unrelated_resources_do_not_request_promotable_page_permissions(self):
+        self.responses['/act_111111/customaudiences'] = {'data':[]}
+        await self.catalog.read(self.web, 'custom_audiences', self.values)
+        self.assertNotIn('ad_account_promotable_objects', self.calls[0][1]['fields'])
+        self.calls.clear()
+        await self.catalog.read(self.web, 'pages', self.values)
+        self.assertIn('ad_account_promotable_objects', self.calls[0][1]['fields'])
+
     async def test_exact_business_and_nested_promotable_pages_are_required(self):
         result = await self.catalog.pages(self.web, self.values)
         self.assertEqual(result['data'][0]['id'], '555555')

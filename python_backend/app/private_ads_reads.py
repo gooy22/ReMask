@@ -29,8 +29,10 @@ class _ReadClient:
                 business_id=self.business, actor_id=self.actor)
         return await self.http.get(path.removeprefix("/" + self.catalog.data["api_version"]), params or {})
 
-    async def account_record(self, *, require_active=True, currency=False):
-        fields = ["id", "account_id", "account_status", "business", "ad_account_promotable_objects"]
+    async def account_record(self, *, require_active=True, currency=False, pages=False):
+        fields = ["id", "account_id", "account_status", "business"]
+        if pages:
+            fields.append('ad_account_promotable_objects')
         if currency:
             fields.append("currency")
         row = await self.request("ACCOUNT_READ", params={"fields":
@@ -76,7 +78,7 @@ class AdsManagerReadCatalog:
             raise fail("RESOURCE_CONTRACT_REQUIRED", "Reviewed account query is unavailable for " + name)
         client = self.client(web, values)
         reference = name in TARGETING_TYPES | {"locations","locales"}
-        account = await client.account_record(require_active=not reference)
+        account = await client.account_record(require_active=not reference, pages=name == 'pages')
         if not reference and str(account.get("account_status")) != "1":
             raise fail("ACCOUNT_INACTIVE", "The selected advertising account is not active")
         if name in TARGETING_TYPES and not str(values.get("query") or "").strip():
