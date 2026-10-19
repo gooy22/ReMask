@@ -490,6 +490,9 @@ class AdsManagerPrivateHttp:
                 return [visit(child, depth+1) for child in value]
             return value
         mapped = visit(result)
+        if (path == '/act_' + self.context.account_id and 'account_id' in mapped
+                and mapped['account_id'] != self.context.account_id):
+            raise fail('READ_SCOPE_MISMATCH', 'Account read conflicts with the proven Settings identity')
         if (path == '/act_' + self.context.account_id
                 and type(mapped.get('id')) in (str, int)
                 and str(mapped['id']).removeprefix('act_') == self._native_account_id):

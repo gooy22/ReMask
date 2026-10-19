@@ -369,6 +369,10 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
             AdsManagerDraftPublisher._account(result['data'][1], '111111')
         with self.assertRaises(ProvisioningError):
             await self.client.get('/act_888888/campaigns', {})
+        self.web.session.response_body = json.dumps({'id':'999999', 'account_id':'888888',
+            'business':{'id':'222222'}}).encode()
+        with self.assertRaises(ProvisioningError):
+            await self.client.get('/act_111111', {'fields':['id','account_id','business']})
         self.assertEqual(self.claims, 0)
 
     async def test_redirect_proof_accepts_only_lossless_numeric_id(self):
