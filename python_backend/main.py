@@ -2214,7 +2214,11 @@ async def profile_live_inventory(
                         ).strip()
                         private_pages_by_id[page_id]=current
                     private_pages=list(private_pages_by_id.values())
-                    private_pages_live_verified=True
+                    # A Page list is live-verified only if its connection is complete.
+                    # Preserve previous behavior until the fast path is opted in.
+                    private_pages_live_verified=(
+                        private_page_result.inventory_complete is True if fast_sync else True
+                    )
                     private_pages_source=str(
                         private_page_result.source or 'facebook_web_graphql'
                     )
