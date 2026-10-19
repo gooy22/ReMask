@@ -1,10 +1,11 @@
 # deploy-trigger: bm-preflight-sync-hotfix 2026-09-24
-FROM php:8.4-apache
+FROM php:8.4-apache AS remask-runtime
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libcurl4-openssl-dev libpq-dev xz-utils ca-certificates python3 python3-venv chromium \
+    && apt-get upgrade -y --no-install-recommends \
+    && apt-get install -y --no-install-recommends libcurl4-openssl-dev libpq-dev xz-utils ca-certificates python3 python3-venv \
     && docker-php-ext-install curl pdo_pgsql \
     && a2enmod rewrite headers \
     && rm -rf /var/lib/apt/lists/*
@@ -15,8 +16,9 @@ COPY railway-web-security.conf /etc/apache2/conf-available/remask-web-security.c
 RUN a2enconf remask-web-security
 
 COPY python_backend/requirements.txt /tmp/remask-python-requirements.txt
+COPY python_backend/requirements.lock /tmp/requirements.lock
 RUN python3 -m venv /opt/remask-venv \
-    && /opt/remask-venv/bin/pip install --no-cache-dir -r /tmp/remask-python-requirements.txt
+    && /opt/remask-venv/bin/pip install --no-cache-dir --require-hashes -r /tmp/remask-python-requirements.txt
 COPY python_backend /opt/remask-python
 # The early backend schema regression also checks the installed UI routing source.
 COPY railway-private-completion-overlay.php /opt/railway-private-completion-overlay.php
@@ -34,8 +36,8 @@ RUN /opt/remask-venv/bin/python -m compileall -q /opt/remask-python \
     && grep -q 'async def add_existing_page' /opt/remask-python/app/facebook_business_browser.py \
     && grep -q 'private_http_contract_v1' /opt/remask-python/main.py \
     && grep -q 'def facebook_business_browser' /opt/remask-python/app/session.py \
-    && /opt/remask-venv/bin/python -c "import playwright; import shutil; assert shutil.which('chromium')" \
-    && echo "[bm-browser-v1] Meta Business UI flow + resumable checkpoints passed"
+    && /opt/remask-venv/bin/python -c "import importlib.util, shutil; assert importlib.util.find_spec('playwright') is None; assert not any(shutil.which(name) for name in ('chromium', 'chromium-browser', 'google-chrome')); import app.payment_card_binding" \
+    && echo "[private-http] HTTP-only contracts + retained checkpoints passed"
 
 COPY .deploy/clean-preview-valid/runtime.b64.* /tmp/remask-parts/
 COPY railway-*.php railway-*.js /tmp/
@@ -166,7 +168,6 @@ RUN set -eux; \
     grep -q 'syncApiJson' /var/www/html/scripts/workspace.js; \
     ! grep -q 'нет ads_management' /var/www/html/scripts/workspace.js; \
     grep -Fq "'proxy_configured' => \$proxy !== null" /var/www/html/ajax/metaHierarchy.php; \
-    /opt/remask-venv/bin/python -c "from pathlib import Path; from playwright.sync_api import sync_playwright; src=Path('/var/www/html/scripts/workspace.js').read_text(encoding='utf-8'); p=sync_playwright().start(); b=p.chromium.launch(executable_path='/usr/bin/chromium', headless=True, args=['--no-sandbox']); page=b.new_page(); err=page.evaluate(Path('/tmp/railway-workspace-module-check.js').read_text(encoding='utf-8'), src); b.close(); p.stop(); assert not err, err"; \
     grep -q 'ad_account_bindings' /opt/remask-python/main.py; \
     grep -q 'confirmed_ad_account_bindings_for_profile' /opt/remask-python/app/provisioning/state.py; \
     grep -q 'confirmed_ad_account_binding_groups' /opt/remask-python/app/provisioning/state.py; \
@@ -347,7 +348,7 @@ RUN set -eux; \
     ! grep -q 'Добавь Cookies JSON текущей FB-сессии' /var/www/html/scripts/workspace.js; \
     ! grep -Fq "value.trim()||'[]'" /var/www/html/scripts/workspace.js; \
     grep -q 'metaProfileManager.php' /var/www/html/ajax/metaHierarchy.php; \
-    grep -q 'bak.session-safe' /var/www/html/ajax/metaProfileManager.php; \
+    grep -q 'addOrUpdateAccount' /var/www/html/ajax/metaProfileManager.php; \
     grep -q 'existing->cookies' /var/www/html/ajax/metaProfileManager.php; \
     grep -q 'setSessionCookies' /var/www/html/classes/MetaApiClient.php; \
     grep -q 'setSessionCookies($account->getCurlCookies())' /var/www/html/classes/MetaEndpoint.php; \
@@ -568,12 +569,15 @@ RUN set -eux; \
     php /tmp/railway-workflow-ui-overlay.php; \
     php -l /tmp/railway-private-completion-overlay.php; \
     php /tmp/railway-private-completion-overlay.php; \
+    php /tmp/railway-prelaunch-hardening-overlay.php; \
     php /tmp/remask-tests/private-inventory-identity.test.php; \
     php /tmp/remask-tests/template-targeting-context.test.php; \
     php /tmp/remask-tests/readiness.test.php; \
     chown -R www-data:www-data /var/lib/remask /var/www/html; \
     chmod 700 /var/lib/remask; \
-    chmod +x /var/www/html/docker-start.sh;
+    chmod +x /var/www/html/docker-start.sh; \
+    ! command -v chromium; \
+    /opt/remask-venv/bin/python -c "import importlib.util; assert importlib.util.find_spec('playwright') is None";
 
 
 ENV REMASK_META_CACHE_TTL=1800 \
@@ -584,4 +588,12 @@ EXPOSE 80
 CMD ["/var/www/html/docker-start.sh"]
 # railway deploy trigger: private-page-business-loader-v190 2026-09-29
 
+# Validate the assembled bundle as an ES module in a build-only stage.
+# Node and all renderer tooling stay outside the production filesystem.
+FROM node:22-bookworm-slim AS workspace-module-validation
+COPY --from=remask-runtime /var/www/html/scripts/workspace.js /tmp/workspace.js
+RUN node --input-type=module --check < /tmp/workspace.js \
+    && touch /tmp/workspace-module-validated
 
+FROM remask-runtime
+COPY --from=workspace-module-validation /tmp/workspace-module-validated /opt/workspace-module-validated

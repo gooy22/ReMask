@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import shutil
 import json
 import hashlib
 import re
@@ -30,6 +32,16 @@ def _interleave_profile_items(rows: list[Any]) -> list[str]:
             if not pending:
                 del groups[profile_id]
     return ordered
+
+
+def _profiles_serialized_bytes(profiles: list[Any]) -> int:
+    # Use the same structural interface as create_job, including expanded auto-plan rows.
+    total = 0
+    for profile in profiles:
+        tasks = [{'action':task.action, 'payload':task.payload, 'idempotency_key':task.idempotency_key,
+            **task.model_dump(exclude={'action','payload','idempotency_key'}, exclude_none=True)} for task in profile.tasks]
+        total += len(json.dumps({'profile_id':profile.profile_id,'tasks':tasks}, ensure_ascii=False).encode('utf-8'))
+    return total
 
 class JobStore:
     def __init__(self, db_path: str) -> None:
@@ -686,9 +698,22 @@ class JobStore:
                 row = con.execute('SELECT id FROM jobs WHERE idempotency_key=?', (request.idempotency_key,)).fetchone()
                 if row:
                     return str(row['id']), False
+            reserve = max(1048576, int(os.getenv('REMASK_STORAGE_RESERVE_BYTES', '33554432')))
+            requested_bytes = _profiles_serialized_bytes(request.profiles)
+            if requested_bytes > 8 * 1024 * 1024:
+                raise ValueError('JOB_REQUEST_TOO_LARGE')
+            if shutil.disk_usage(self.path.parent).free < reserve + requested_bytes * 4:
+                raise ValueError('STORAGE_LOW_SPACE')
+            maximum = max(1, int(os.getenv('REMASK_MAX_PENDING_ITEMS', '10000')))
+            pending = con.execute("SELECT count(*) FROM job_items WHERE status IN ('QUEUED','RUNNING')").fetchone()[0]
             job_id = uuid.uuid4().hex
             from .provisioning.auto_plan import expand_auto_profiles
             profiles = expand_auto_profiles(request.profiles, job_id)
+            if pending + len(profiles) > maximum:
+                raise ValueError('JOB_QUEUE_FULL')
+            expanded_bytes = _profiles_serialized_bytes(profiles)
+            if shutil.disk_usage(self.path.parent).free < reserve + expanded_bytes * 4:
+                raise ValueError('STORAGE_LOW_SPACE')
             con.execute('INSERT INTO jobs(id,status,idempotency_key,created_at,updated_at) VALUES(?,?,?,?,?)',
                         (job_id,'QUEUED',request.idempotency_key,now,now))
             for profile in profiles:
@@ -750,8 +775,29 @@ class JobStore:
                 out.append(d)
             return out
 
-    async def set_item_running(self, item_id: str) -> None:
-        await asyncio.to_thread(self._execute, "UPDATE job_items SET status='RUNNING',attempt=attempt+1,error_code=NULL,error_message=NULL,retryable=0,updated_at=? WHERE id=?", (_now(),item_id))
+    async def set_item_running(self, item_id: str) -> bool:
+        return await asyncio.to_thread(self._claim_item_sync, item_id)
+
+    def _claim_item_sync(self, item_id: str) -> bool:
+        with self._connect() as con:
+            return con.execute("UPDATE job_items SET status='RUNNING',attempt=attempt+1,error_code=NULL,error_message=NULL,retryable=0,updated_at=? WHERE id=? AND status='QUEUED'", (_now(),item_id)).rowcount == 1
+
+    async def queued_count(self, job_id: str) -> int:
+        def count():
+            with self._connect() as con:
+                return int(con.execute("SELECT count(*) FROM job_items WHERE job_id=? AND status='QUEUED'", (job_id,)).fetchone()[0])
+        return await asyncio.to_thread(count)
+
+    async def next_queued_item(self, blocked_profiles: set[str], after_profile: str) -> dict | None:
+        def select():
+            blocked = sorted(blocked_profiles)
+            exclusion = ' AND profile_id NOT IN (' + ','.join('?' for _ in blocked) + ')' if blocked else ''
+            with self._connect() as con:
+                row = con.execute("SELECT id,profile_id FROM job_items WHERE status='QUEUED'" + exclusion +
+                    " ORDER BY CASE WHEN profile_id > ? THEN 0 ELSE 1 END, profile_id, created_at, rowid LIMIT 1", (*blocked,after_profile)).fetchone()
+                return dict(row) if row else None
+        return await asyncio.to_thread(select)
+
 
     async def set_task_running(self, task_id: str) -> None:
         await asyncio.to_thread(self._execute, "UPDATE job_tasks SET status='RUNNING',attempt=attempt+1,error_code=NULL,error_message=NULL,retryable=0,updated_at=? WHERE id=?", (_now(),task_id))

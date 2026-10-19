@@ -17,6 +17,17 @@ class FanPagePrivatePreflightTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows[0]["id"], "123456789")
         self.assertEqual(session.context.pages[0]["id"], "123456789")
 
+    async def test_production_partial_inventory_never_launches_browser_or_proves_empty(self):
+        from app.facebook_business_browser import BrowserBusinessError
+        for outcome in (PageDiscoveryResult(pages=[],source='private',inventory_complete=False),TimeoutError()):
+            session=SimpleNamespace(private_only=True,context=SimpleNamespace(pages=[{'id':'saved','name':'saved'}]),facebook_web=AsyncMock())
+            discovery=AsyncMock(side_effect=outcome) if isinstance(outcome,Exception) else AsyncMock(return_value=outcome)
+            with patch('app.provisioning.fan_pages_handler.list_pages_via_private_graphql',new=discovery), \
+                 patch('app.provisioning.fan_pages_handler._browser_lease',side_effect=AssertionError('No browser')):
+                with self.assertRaises(BrowserBusinessError) as error:await _fresh_page_inventory(session)
+            self.assertEqual(error.exception.code,'PRIVATE_PAGE_INVENTORY_INCONCLUSIVE')
+            self.assertEqual(session.context.pages,[{'id':'saved','name':'saved'}])
+
     async def test_partial_or_failed_private_inventory_preserves_browser_fallback(self):
         for outcome in (PageDiscoveryResult(pages=[], source="private", inventory_complete=False), TimeoutError()):
             session = SimpleNamespace(context=SimpleNamespace(pages=[{"id": "saved", "name": "saved"}]),

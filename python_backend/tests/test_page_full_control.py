@@ -1,6 +1,7 @@
 """Chromium coverage of Add existing Page and full rights, never Ads-only success."""
 from __future__ import annotations
 import json
+from tests.renderer_fixture import renderer_executable
 import shutil
 import unittest
 from types import SimpleNamespace
@@ -93,7 +94,7 @@ Add an existing Page</button><button onclick="window.partialRequests++">Request 
 class ExistingPageFullControlChromiumTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         executable=next((path for name in ("google-chrome","chromium","chromium-browser")
-                         if (path:=shutil.which(name))),None)
+                         if (path:=renderer_executable(name))),None)
         if not executable:
             self.skipTest("No local Chromium installed")
         from playwright.async_api import async_playwright

@@ -1,11 +1,22 @@
 #!/bin/bash
 set -euo pipefail
+umask 0077
 
 ROOT="/var/www/html"
 PORT_VALUE="${PORT:-80}"
 DATA_DIR="${REMASK_DATA_DIR:-${RAILWAY_VOLUME_MOUNT_PATH:-/var/lib/remask}}"
 WORKER_INTERVAL="${REMASK_WORKER_INTERVAL_SECONDS:-15}"
 PYTHON_WORKER_PORT="${REMASK_LOCAL_WORKER_PORT:-8081}"
+
+# Production must fail closed; keys are durable and must not change on restart.
+if [ -z "${REMASK_PASSWORD:-}" ] || [ "${REMASK_PASSWORD:-}" = "change-me-now" ]; then
+  echo "REMASK_PASSWORD must be configured" >&2; exit 1
+fi
+if [ -z "${REMASK_CREDENTIALS_KEY:-}" ]; then
+  echo "REMASK_CREDENTIALS_KEY must be configured" >&2; exit 1
+fi
+export REMASK_ENCRYPT_PROFILE_JSON=1
+export REMASK_HTTP_ONLY=1
 
 export REMASK_DATA_DIR="$DATA_DIR"
 export REMASK_ACCOUNTS_FILE="${REMASK_ACCOUNTS_FILE:-$DATA_DIR/accounts.json}"
@@ -67,7 +78,7 @@ persist_legacy_file() {
 
   mkdir -p "$(dirname "$target")"
 
-  if [ ! -s "$target" ]; then
+  if [ ! -e "$target" ]; then
     if [ -f "$legacy" ] && [ ! -L "$legacy" ] && [ -s "$legacy" ]; then
       cp "$legacy" "$target"
     else
@@ -87,9 +98,16 @@ persist_legacy_file "$ROOT/bundles.json" "$DATA_DIR/bundles.json" '[]'
 
 rm -rf "$ROOT/health"
 printf '%s\n' '{"ok":true,"service":"remask"}' > "$ROOT/health"
+chmod 644 "$ROOT/health"
 
 chown -R www-data:www-data "$DATA_DIR" 2>/dev/null || true
-chmod -R u+rwX,g+rwX "$DATA_DIR" 2>/dev/null || true
+find "$DATA_DIR" -type d -exec chmod 700 {} +
+find "$DATA_DIR" -type f -exec chmod 600 {} +
+# Remove only abandoned atomic temp files, never profiles, jobs, backups or media.
+find "$DATA_DIR" -type f -name '*.tmp-*' -mmin +1440 -delete
+# Migrate legacy credentials before opening the service. An invalid key/data aborts startup.
+php -r 'require $argv[1]."/settings.php";require $argv[1]."/classes/AccountStoreFactory.php";$store=AccountStoreFactory::create(ACCOUNTSFILENAME);$profiles=$store->deserialize();if ($store instanceof FbAccountSerializer) $store->serialize($profiles);echo "[profile-storage] ready count=".count($store->deserialize())." encrypted=1\n";' "$ROOT"
+chown -R www-data:www-data "$DATA_DIR"
 chmod 700 "$REMASK_PHP_SESSION_DIR" 2>/dev/null || true
 chown www-data:www-data "$REMASK_PHP_SESSION_DIR" 2>/dev/null || true
 
@@ -111,9 +129,9 @@ echo "[ui-session] configured save_path=$REMASK_PHP_SESSION_DIR persistent=1"
 
 if [ "${REMASK_JOB_EXECUTION_MODE:-browser}" = "background" ] && [ -f "$ROOT/bin/remask-worker.php" ]; then
   (
-    echo "[$(date -u +%FT%TZ)] starting remask background worker loop" >> "$DATA_DIR/worker.log"
+    echo "[$(date -u +%FT%TZ)] starting remask background worker loop"
     while true; do
-      php "$ROOT/bin/remask-worker.php" >> "$DATA_DIR/worker.log" 2>&1 || true
+      php "$ROOT/bin/remask-worker.php" || true
       sleep "$WORKER_INTERVAL"
     done
   ) &
@@ -124,7 +142,7 @@ if [ "$USE_EXTERNAL_PYTHON_WORKER" != "1" ]; then
   (
     cd /opt/remask-python
     exec /opt/remask-venv/bin/uvicorn main:app --host 127.0.0.1 --port "$PYTHON_WORKER_PORT" --workers 1
-  ) > >(tee -a "$DATA_DIR/python-worker.log") 2> >(tee -a "$DATA_DIR/python-worker.log" >&1) &
+  ) &
   PYTHON_WORKER_PID="$!"
   echo "$PYTHON_WORKER_PID" > "$DATA_DIR/python-worker.pid"
 
@@ -153,14 +171,12 @@ PY
 
   if [ "$WORKER_HEALTH_OK" != "1" ]; then
     echo "Embedded Python worker did not become healthy during initial probe window; watchdog will recover it" >&2
-    tail -n 160 "$DATA_DIR/python-worker.log" >&2 || true
   fi
 
   # Live inventory is verified after Apache starts, because ProfileResolver
   # calls the local PHP context endpoint.
 
-  # Keep monitoring after startup too. A Chromium-heavy BUSINESS job can leave
-  # the worker process alive while its HTTP loop is no longer responsive.
+  # Keep monitoring the HTTP-only worker after startup too.
   # Restart only after three consecutive failed health probes to avoid killing
   # the worker on a single transient event-loop stall.
   (
@@ -195,7 +211,7 @@ PY
       fi
 
       if [ -n "$CURRENT_PID" ] && kill -0 "$CURRENT_PID" 2>/dev/null; then
-        echo "[$(date -u +%FT%TZ)] embedded Python worker unhealthy; terminating pid=$CURRENT_PID" >> "$DATA_DIR/python-worker.log"
+        echo "[$(date -u +%FT%TZ)] embedded Python worker unhealthy; terminating pid=$CURRENT_PID" >&2
         kill -TERM "$CURRENT_PID" 2>/dev/null || true
         for _ in $(seq 1 12); do
           if ! kill -0 "$CURRENT_PID" 2>/dev/null; then
@@ -208,11 +224,11 @@ PY
         fi
       fi
 
-      echo "[$(date -u +%FT%TZ)] restarting embedded Python worker after health failure" >> "$DATA_DIR/python-worker.log"
+      echo "[$(date -u +%FT%TZ)] restarting embedded Python worker after health failure" >&2
       (
         cd /opt/remask-python
         exec /opt/remask-venv/bin/uvicorn main:app --host 127.0.0.1 --port "$PYTHON_WORKER_PORT" --workers 1
-      ) > >(tee -a "$DATA_DIR/python-worker.log") 2> >(tee -a "$DATA_DIR/python-worker.log" >&1) &
+      ) &
       echo "$!" > "$DATA_DIR/python-worker.pid"
       FAIL_COUNT=0
       sleep 5

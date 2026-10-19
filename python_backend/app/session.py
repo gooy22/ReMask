@@ -6,6 +6,7 @@ import os
 import time
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlsplit
 
 import aiohttp
 
@@ -416,7 +417,6 @@ class MetaSession:
                 self._session = aiohttp.ClientSession(
                     timeout=self.timeout,
                     connector=connector,
-                    cookies=self.context.cookies,
                     headers={
                         "User-Agent": self.context.user_agent,
                         "Accept": "application/json,text/html;q=0.9,*/*;q=0.8",
@@ -433,6 +433,9 @@ class MetaSession:
         if (self.context.direct_test_until and
                 direct_test_deadline(self.context.profile_id, self.context.cookies.get('c_user', '')) != self.context.direct_test_until):
             raise ProfileContextError('DIRECT_TEST_EXPIRED', retryable=False)
+        host=(urlsplit(str(url)).hostname or '').lower()
+        if host == 'facebook.com' or host.endswith('.facebook.com') or host == 'fbcdn.net' or host.endswith('.fbcdn.net'):
+            raise ProfileContextError('PRIVATE_HTTP_REQUIRED: use the profile HTTP/2 transport', retryable=False)
         session = await self._get_session()
         return await session.request(method, url, **kwargs)
 

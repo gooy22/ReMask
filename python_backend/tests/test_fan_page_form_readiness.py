@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from tests.renderer_fixture import renderer_executable
 import shutil
 import unittest
 from types import SimpleNamespace
@@ -11,7 +12,7 @@ from app.facebook_business_browser import BrowserBusinessError, FacebookBusiness
 class FanPageFormReadinessTests(unittest.IsolatedAsyncioTestCase):
     async def test_delayed_unbound_required_fields_fill_in_real_chromium(self):
         executable = next((path for name in ("google-chrome", "chromium", "chromium-browser")
-                           if (path := shutil.which(name))), None)
+                           if (path := renderer_executable(name))), None)
         if not executable:
             self.skipTest("No local Chromium installed")
         from playwright.async_api import async_playwright
@@ -63,7 +64,7 @@ class FanPageFormReadinessTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_ambiguous_unbound_label_never_chooses_field_by_position(self):
         executable = next((path for name in ("google-chrome", "chromium", "chromium-browser")
-                           if (path := shutil.which(name))), None)
+                           if (path := renderer_executable(name))), None)
         if not executable:
             self.skipTest("No local Chromium installed")
         from playwright.async_api import async_playwright

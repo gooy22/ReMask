@@ -1,6 +1,7 @@
 import asyncio
 import json
 import tempfile
+from tests.renderer_fixture import renderer_executable
 import shutil
 import unittest
 from pathlib import Path
@@ -165,7 +166,7 @@ class CardBrowserTests(unittest.IsolatedAsyncioTestCase):
         control.click.assert_not_awaited()
 
     async def test_matching_custom_picker_value_in_real_chromium_does_not_click(self):
-        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
+        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=renderer_executable(name))),None)
         if not executable:self.skipTest('No local Chromium installed')
         from playwright.async_api import async_playwright
         from app.payment_card_binding import _setup_choice
@@ -462,7 +463,7 @@ class CardBrowserTests(unittest.IsolatedAsyncioTestCase):
 class RealCardSelectorTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_delayed_mask_after_save_is_observed_in_real_chromium(self):
-        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
+        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=renderer_executable(name))),None)
         if not executable:self.skipTest('No local Chromium installed')
         from playwright.async_api import async_playwright
         async with async_playwright() as playwright:
@@ -480,7 +481,7 @@ class RealCardSelectorTests(unittest.IsolatedAsyncioTestCase):
             finally:await chromium.close()
 
     async def test_card_scope_selects_only_account_and_rejects_ambiguous_or_broad_scope(self):
-        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
+        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=renderer_executable(name))),None)
         if not executable:self.skipTest('No local Chromium installed')
         from playwright.async_api import async_playwright
         from app.payment_card_binding import _set_card_account_availability
@@ -517,7 +518,7 @@ class RealCardSelectorTests(unittest.IsolatedAsyncioTestCase):
             finally:await chromium.close()
 
     async def test_unselectable_only_account_scope_blocks_before_card_entry_or_save(self):
-        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
+        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=renderer_executable(name))),None)
         if not executable:self.skipTest('No local Chromium installed')
         from playwright.async_api import async_playwright
         async with async_playwright() as playwright:
@@ -545,7 +546,7 @@ class RealCardSelectorTests(unittest.IsolatedAsyncioTestCase):
             finally:await chromium.close()
 
     async def test_unnamed_country_currency_controls_resolve_the_label_parent(self):
-        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
+        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=renderer_executable(name))),None)
         if not executable:self.skipTest('No local Chromium installed')
         import re
         from playwright.async_api import async_playwright
@@ -578,7 +579,7 @@ class RealCardSelectorTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(await page.locator('#zone').inner_text(),'Kyiv, Europe (GMT+03:00)')
             finally:await chromium.close()
     async def test_country_policy_and_dependent_settings_in_real_browser(self):
-        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
+        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=renderer_executable(name))),None)
         if not executable:self.skipTest('No local Chromium installed')
         from playwright.async_api import async_playwright
         setup={'country':'UA','currency':'USD','timezone':'Europe/Kyiv'}
@@ -618,7 +619,7 @@ class RealCardSelectorTests(unittest.IsolatedAsyncioTestCase):
             finally:await chromium.close()
 
     async def test_picker_click_without_selected_value_change_does_not_advance(self):
-        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
+        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=renderer_executable(name))),None)
         if not executable:self.skipTest('No local Chromium installed')
         from playwright.async_api import async_playwright
         from app.payment_card_binding import _setup_choice
@@ -632,7 +633,7 @@ class RealCardSelectorTests(unittest.IsolatedAsyncioTestCase):
             finally:await chromium.close()
 
     async def test_timezone_name_change_and_picker_outside_dialog_remain_verifiable(self):
-        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
+        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=renderer_executable(name))),None)
         if not executable:self.skipTest('No local Chromium installed')
         from playwright.async_api import async_playwright
         from app.payment_card_binding import _setup_choice, _setup_selected
@@ -647,7 +648,7 @@ class RealCardSelectorTests(unittest.IsolatedAsyncioTestCase):
             finally:await chromium.close()
 
     async def test_lazy_payment_dialog_is_awaited_without_reclicking_add(self):
-        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
+        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=renderer_executable(name))),None)
         if not executable:self.skipTest('No local Chromium installed')
         from playwright.async_api import async_playwright
         async with async_playwright() as playwright:
@@ -669,7 +670,7 @@ class RealCardSelectorTests(unittest.IsolatedAsyncioTestCase):
 
 
     async def test_add_click_timeout_after_opening_dialog_observes_without_reclick(self):
-        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
+        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=renderer_executable(name))),None)
         if not executable:self.skipTest('No local Chromium installed')
         from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
         async with async_playwright() as playwright:
@@ -699,7 +700,7 @@ class RealCardSelectorTests(unittest.IsolatedAsyncioTestCase):
             finally:await chromium.close()
 
     async def test_slow_picker_overlay_search_and_selection_are_observed_once(self):
-        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
+        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=renderer_executable(name))),None)
         if not executable:self.skipTest('No local Chromium installed')
         from playwright.async_api import async_playwright
         from app.payment_card_binding import _setup_choice
@@ -720,7 +721,7 @@ class RealCardSelectorTests(unittest.IsolatedAsyncioTestCase):
             finally:await chromium.close()
 
     async def test_picker_click_timeout_after_opening_does_not_toggle_it_again(self):
-        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
+        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=renderer_executable(name))),None)
         if not executable:self.skipTest('No local Chromium installed')
         from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
         from app.payment_card_binding import _setup_choice
@@ -742,7 +743,7 @@ class RealCardSelectorTests(unittest.IsolatedAsyncioTestCase):
             finally:await chromium.close()
 
     async def test_slow_setup_gets_its_own_card_form_observation_window(self):
-        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
+        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=renderer_executable(name))),None)
         if not executable:self.skipTest('No local Chromium installed')
         from playwright.async_api import async_playwright
         async with async_playwright() as playwright:
@@ -770,7 +771,7 @@ class RealCardSelectorTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(await page.locator('input').evaluate_all('(es)=>es.map(e=>e.value)'),['','',''])
             finally:await chromium.close()
     async def test_native_country_currency_timezone_choices_use_requested_values(self):
-        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
+        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=renderer_executable(name))),None)
         if not executable:self.skipTest('No local Chromium installed')
         from playwright.async_api import async_playwright
         async with async_playwright() as playwright:
@@ -790,7 +791,7 @@ class RealCardSelectorTests(unittest.IsolatedAsyncioTestCase):
             finally:await chromium.close()
 
     async def test_nested_meta_rows_disabled_button_without_false_sibling_status(self):
-        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
+        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=renderer_executable(name))),None)
         if not executable:self.skipTest('No local Chromium installed')
         from playwright.async_api import async_playwright
         async with async_playwright() as playwright:
@@ -805,7 +806,7 @@ class RealCardSelectorTests(unittest.IsolatedAsyncioTestCase):
 
 
     async def test_card_form_handles_nested_and_hidden_rows_only_after_exact_id_proof(self):
-        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
+        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=renderer_executable(name))),None)
         if not executable:self.skipTest('No local Chromium installed')
         from playwright.async_api import async_playwright
         async with async_playwright() as playwright:
@@ -838,7 +839,7 @@ class RealCardSelectorTests(unittest.IsolatedAsyncioTestCase):
             finally:await chromium.close()
 
     async def test_payment_tab_waits_for_lazy_add_method_control(self):
-        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
+        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=renderer_executable(name))),None)
         if not executable:self.skipTest('No local Chromium installed')
         from playwright.async_api import async_playwright
         async with async_playwright() as playwright:
@@ -853,7 +854,7 @@ class RealCardSelectorTests(unittest.IsolatedAsyncioTestCase):
             finally:await chromium.close()
 
     async def test_credit_debit_label_is_resolved_by_real_playwright_selector_parser(self):
-        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
+        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=renderer_executable(name))),None)
         if not executable:self.skipTest('No local Chromium installed')
         from playwright.async_api import async_playwright
         async with async_playwright() as playwright:

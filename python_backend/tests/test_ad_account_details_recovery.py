@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from tests.renderer_fixture import renderer_executable
 import shutil
 import unittest
 from types import SimpleNamespace
@@ -60,7 +61,7 @@ class DetailsCandidateTests(unittest.TestCase):
 class AdAccountDetailsChromiumTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         executable = next((path for name in ("google-chrome", "chromium", "chromium-browser")
-                           if (path := shutil.which(name))), None)
+                           if (path := renderer_executable(name))), None)
         if not executable:
             self.skipTest("No Chromium installed")
         from playwright.async_api import async_playwright

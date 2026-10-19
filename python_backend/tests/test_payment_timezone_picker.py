@@ -1,6 +1,7 @@
 """Real Chromium coverage of Meta city search and complete selected-RK binding."""
 from __future__ import annotations
 import json
+from tests.renderer_fixture import renderer_executable
 import shutil
 import unittest
 from types import SimpleNamespace
@@ -30,7 +31,7 @@ class TimezoneIdentityTests(unittest.TestCase):
 class MetaTimezoneChromiumTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         executable = next((path for name in ("google-chrome", "chromium", "chromium-browser")
-                           if (path := shutil.which(name))), None)
+                           if (path := renderer_executable(name))), None)
         if not executable:
             self.skipTest("No local Chromium installed")
         from playwright.async_api import async_playwright

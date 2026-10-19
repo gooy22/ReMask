@@ -15,6 +15,10 @@ final class RemaskReadiness {
             } finally { fclose($handle); @unlink($file); }
             if (!$storage) break;
         }
+        foreach (array_unique($directories) as $directory) {
+            $free = @disk_free_space($directory);
+            if ($free === false || $free < max(1048576, (int)(getenv('REMASK_STORAGE_RESERVE_BYTES') ?: 33554432))) $storage = false;
+        }
         $accounts = false;
         // Do not expose or return account contents in a public health response.
         if (is_file($accountsFile) && is_readable($accountsFile)) {

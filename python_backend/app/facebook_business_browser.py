@@ -1885,6 +1885,8 @@ class FacebookBusinessBrowser:
         return _clean(getattr(self.context, "profile_id", ""))
 
     async def open(self) -> None:
+        raise BrowserBusinessError('BROWSER_TRANSPORT_DISABLED',
+            'This service uses private HTTP/2 only; Chromium transport is disabled.', retryable=False)
         if self.page is not None:
             return
 

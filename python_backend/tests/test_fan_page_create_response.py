@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+from tests.renderer_fixture import renderer_executable
 import shutil
 import unittest
 from types import SimpleNamespace
@@ -135,7 +136,7 @@ class FanPageCreateCaptureTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_real_chromium_create_response_confirms_before_any_pages_inventory(self):
         executable = next((path for name in ("google-chrome", "chromium", "chromium-browser")
-                           if (path := shutil.which(name))), None)
+                           if (path := renderer_executable(name))), None)
         if not executable:
             self.skipTest("No local Chromium installed")
         from playwright.async_api import async_playwright
