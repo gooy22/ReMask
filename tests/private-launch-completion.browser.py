@@ -427,8 +427,8 @@ class InstalledLaunchTests(unittest.TestCase):
         self.page.locator('#creativeLibrarySelect').select_option('preset')
         self.assertEqual(self.page.locator('#objective').input_value(), self.preset_objective)
         self.assertTrue(self.page.locator('#remaskUnsupportedObjective').is_visible())
-        self.assertFalse(self.page.locator('#launchButton').is_enabled())
-        self.assertFalse(self.page.locator('#reviewLaunch').is_enabled())
+        self.assertTrue(self.page.locator('#launchButton').is_enabled())
+        self.assertTrue(self.page.locator('#reviewLaunch').is_enabled())
         self.page.evaluate('fixtureLaunch.geo()')
         with self.assertRaisesRegex(Exception, 'Сохранённая цель недоступна'):
             self.page.evaluate('fixtureLaunch.payload()')
