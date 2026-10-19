@@ -389,6 +389,28 @@ class InstalledLaunchTests(unittest.TestCase):
         self.assertEqual([x['media_library_id'] for x in media['carousel']], [MEDIA_ID,second])
         self.assertEqual([x['headline'] for x in media['carousel']], ['First','Second'])
 
+    def test_disabled_launch_buttons_explain_missing_account(self):
+        self.page.wait_for_function('fixtureLaunch.ready()')
+        self.page.evaluate('validateReady()')
+        reason = self.page.locator('#remaskPrivateDisabledReason')
+        self.assertTrue(reason.is_visible())
+        self.assertIn('Select at least one ad account.', reason.inner_text())
+        for button_id in ('launchButton', 'reviewLaunch', 'dryRunPlan'):
+            button = self.page.locator('#' + button_id)
+            self.assertFalse(button.is_enabled())
+            self.assertIn('Select at least one ad account.', button.get_attribute('title'))
+
+    def test_disabled_launch_buttons_explain_unavailable_goal(self):
+        self.page.wait_for_function('fixtureLaunch.ready()')
+        self.page.evaluate('(data)=>fixtureLaunch.restore(data)',
+            {'fields': {'objective': 'LEGACY_TEST_OBJECTIVE'}})
+        self.page.evaluate('validateReady()')
+        reason = self.page.locator('#remaskPrivateDisabledReason')
+        self.assertTrue(reason.is_visible())
+        self.assertIn('Сохранённая цель недоступна', reason.inner_text())
+        self.assertFalse(self.page.locator('#launchButton').is_enabled())
+        self.assertFalse(self.page.locator('#reviewLaunch').is_enabled())
+
     def test_legacy_preset_goal_survives_bundle_reload_until_user_selects_supported_goal(self):
         self.preset_objective = 'LEGACY_TEST_OBJECTIVE'
         self.page.reload()
