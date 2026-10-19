@@ -31,6 +31,21 @@ class CookieTxtImportTests(unittest.TestCase):
         return self.endpoint('metaProfileManager.php', {'action':'import_preview' if preview else 'import_txt',
             'text':text, 'proxy':self.proxy, **extra})
 
+    def test_direct_import_scoped_to_single_account(self):
+        result = self.run_import(self.row(), proxy='', allow_direct_test=True)
+        self.assertEqual(result['imported'], 1)
+        profiles = self.endpoint('metaProfileManager.php', {'action':'list'})['profiles']
+        self.assertGreater(profiles[0]['direct_test_until'], 0)
+        self.assertEqual(profiles[0]['name'], result['records'][0]['profile_name'])
+        self.assertFalse(result['session_verified'])
+
+    def test_direct_import_rejects_multiple_accounts_and_proxy(self):
+        for text, proxy in [(self.row()+'\n'+self.row('345678901'), ''), (self.row(), self.proxy)]:
+            result = self.run_import(text, proxy=proxy, allow_direct_test=True)
+            self.assertFalse(result['ok'])
+            self.assertIn('TXT_DIRECT_SINGLE_ACCOUNT_REQUIRED', str(result))
+        self.assertFalse(self.data.exists() and self.saved())
+
     def test_both_shop_formats_and_bom_crlf(self):
         text='\ufeff'+self.row(suffix='\tAAAA BBBB CCCC DDDD')+'\r\n\r\n'+self.row('345678901')+'\r\n'
         result=self.run_import(text, preview=True)
