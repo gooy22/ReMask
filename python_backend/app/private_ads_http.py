@@ -57,12 +57,22 @@ class AdsManagerResponseError(ProvisioningError):
             safe["type"] = diagnostic["type"]
         if safe.get('code') == 10 and isinstance(diagnostic.get('message'), str):
             message = diagnostic['message'].casefold()
-            if 'ads_management' in message:
+            if 'ads_read' in message:
+                safe['permission_hint'] = 'ads_read'
+            elif 'ads_management' in message:
                 safe['permission_hint'] = 'ads_management'
             elif 'business_management' in message:
                 safe['permission_hint'] = 'business_management'
             elif 'application does not have permission' in message:
                 safe['permission_hint'] = 'application_permission'
+            hints = [word for word in ('ad_account_promotable_objects', 'account_status', 'currency',
+                'user', 'application', 'permission', 'token', 'read', 'access', 'restricted', 'disabled',
+                'unsupported', 'support', 'call', 'endpoint', 'deprecated', 'business', 'session',
+                'required', 'requires', 'request', 'scope', 'field', 'fields', 'missing', 'valid',
+                'invalid', 'allowed', 'denied', 'enabled', 'account', 'accounts', 'advertising')
+                if re.search(r'\b' + word + r'\b', message)]
+            if hints:
+                safe['permission_terms'] = hints
         self.diagnostic = safe
         log.warning("ads_request_rejected diagnostic=%s", json.dumps(safe, sort_keys=True, separators=(",", ":")))
         details = [f"{key}={value}" for key, value in safe.items()]
