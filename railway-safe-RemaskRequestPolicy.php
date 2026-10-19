@@ -15,6 +15,7 @@ final class RemaskRequestPolicy
             'paymentCards.php'=>['','list'],
             // Reviewed schema metadata performs authenticated reads only.
             'metaPrivateSchema.php'=>[''], 'metaSdkSchema.php'=>[''], 'metaCreativeCapabilities.php'=>[''],
+            'metaLaunchConfig.php'=>[''], 'storageStatus.php'=>[''], 'editAccount.php'=>[''],
         ];
         foreach (['creativePreview.php','metaActivity.php','metaAssetManager.php','metaAssetReadiness.php','metaAssets.php',
             'metaAudienceEstimate.php','metaBundleMedia.php','metaCreativePreview.php','metaJobGet.php','metaJobItemInsights.php',

@@ -204,6 +204,40 @@ class HardeningPhpTests(unittest.TestCase):
     def profile_script(self):
         return 'require $argv[1]."/classes/RemaskProxy.php";require $argv[1]."/classes/FbAccount.php";require $argv[1]."/classes/FbAccountSerializer.php";$s=new FbAccountSerializer($argv[2]);'
 
+    def test_editor_bootstrap_config_and_storage_reads_keep_mutation_guards(self):
+        for name in ['metaLaunchConfig.php','storageStatus.php']:
+            p=self.endpoint(name,'GET',{})
+            data=json.loads(p.stdout)
+            self.assertTrue(data['ok'],(name,p.stdout,p.stderr))
+            if name=='metaLaunchConfig.php':
+                self.assertTrue(data['data']['objectives'])
+                self.assertTrue(data['data']['optimization_rules'])
+                self.assertIn('job_execution_mode',data['data']['runtime'])
+            for method,action in [('GET','save'),('GET','delete'),('HEAD',''),('OPTIONS','')]:
+                p=self.endpoint(name,method,{'action':action})
+                self.assertIn('STATUS=405',p.stderr,(name,method,p.stdout,p.stderr))
+        # Existing edit UI reads require a name; it must reach that read-only
+        # handler instead of being mistaken for a save operation.
+        p=self.endpoint('editAccount.php','GET',{})
+        self.assertIn('Name not set',p.stdout)
+        self.assertNotIn('STATUS=405',p.stderr)
+        p=self.endpoint('editAccount.php','GET',{'action':'save'})
+        self.assertIn('STATUS=405',p.stderr)
+
+    def test_installed_editor_default_GET_calls_are_allowed_by_read_policy(self):
+        import re
+        urls=set()
+        for name in ['launch.js','creatives.js']:
+            source=(self.runtime/'scripts'/name).read_text()
+            urls.update(re.findall(r'''(?:apiJson|fetch)\(\s*['"](ajax/[^'"\s]+\.php(?:\?[^'"]*)?)['"]\s*\)''',source))
+        self.assertIn('ajax/metaLaunchConfig.php',urls)
+        self.assertIn('ajax/metaPrivateSchema.php',urls)
+        code='require $argv[1];$_SERVER["REQUEST_METHOD"]="GET";parse_str(parse_url($argv[2],PHP_URL_QUERY)??"",$_GET);'
+        code+='RemaskRequestPolicy::enforce(basename(parse_url($argv[2],PHP_URL_PATH)));echo "ALLOWED";'
+        for url in sorted(urls):
+            p=self.php(code,self.runtime/'classes/RemaskRequestPolicy.php',url)
+            self.assertEqual(p.stdout,'ALLOWED',(url,p.stdout,p.stderr))
+
     def test_interrupted_profile_write_preserves_original_and_recovery_snapshot(self):
         file=self.data/'accounts.json';file.write_text(json.dumps([{'name':'fixture','cookies':[]}]))
         before=file.read_bytes()
