@@ -38,6 +38,7 @@
     }
     emptyMetrics();
     let timer=null, generation=0, controller=null, lastFingerprint='', needsRefresh=true, lastReadAt=0;
+    const blockedTargets=new Set();
     const valid=n=>typeof n==='number'&&Number.isFinite(n)&&n>=0;
     const fmt=n=>new Intl.NumberFormat('ru-RU',{maximumFractionDigits:0}).format(n);
     function range(low,high,value) {
@@ -54,9 +55,9 @@
     }
     function destinations() {
         if(creative)return [{}];
-        if(targetMode())return selectedTargets().length?selectedTargets().map(t=>({profile:String(t.profile),account_id:String(t.account_id).replace(/^act_/,''),binding:bindingFor(t.account_id)})):[{}];
+        if(targetMode())return selectedTargets().map(t=>({profile:String(t.profile),account_id:String(t.account_id).replace(/^act_/,''),binding:bindingFor(t.account_id)}));
         const accounts=Array.from(byId('adAccount')?.selectedOptions||[]).filter(o=>o.value);
-        return state.profile && accounts.length?accounts.map(o=>({profile:String(state.profile),account_id:o.value.replace(/^act_/,''),binding:{}})):[{}];
+        return state.profile && accounts.length?accounts.map(o=>({profile:String(state.profile),account_id:o.value.replace(/^act_/,''),binding:{}})):[];
     }
     function requestSpec(spec,destination={}) {
         const campaign=spec.campaign,adset=spec.adset;
@@ -111,31 +112,34 @@
         if(document.hidden||(creative&&!byId('creativeModal')?.classList.contains('open')))return;
         let current;
         try{current=snapshot();if(!current.spec.targeting.geo_locations||!Object.keys(current.spec.targeting.geo_locations).length)throw new Error('Выберите географию аудитории.');}
-        catch(error){invalidate(error.message);lastFingerprint='';return;}
+        catch(error){invalidate(error.message);needsRefresh=false;return;}
+        if(!current.targets.length){invalidate('Выберите рекламный кабинет для оценки аудитории.');needsRefresh=false;return;}
         if(!force&&current.fingerprint===lastFingerprint)return;
         invalidate('Получаем оценку Meta…');lastFingerprint=current.fingerprint;
         const seq=generation;controller=new AbortController();const signal=controller.signal;
-        let success=0, pending=false, failed=false;lastReadAt=Date.now();
+        let success=0, pending=false, failed=false, blocked=false;lastReadAt=Date.now();
         // Bound concurrent profile reads; never reuse one account's numbers for another.
         for(const target of current.targets.slice(0,20)) {
             if(seq!==generation)return;
+            const targetKey=JSON.stringify([target.profile||'',target.account_id||'']);
+            if(blockedTargets.has(targetKey)){blocked=true;continue;}
             try {
                 const data=await read('audience_estimate',requestSpec(current.spec,target),target,signal);
                 if(seq!==generation||snapshot().fingerprint!==current.fingerprint)return;
                 results.querySelector('[data-rm-placeholder]')?.remove();render(data,target);success++;pending ||= data.estimate_ready!==true;
             } catch(error) {
                 if(seq!==generation||signal.aborted)return;
+                if(/CHECKPOINT_REQUIRED|SESSION_EXPIRED|TWO_FACTOR_REQUIRED|LOGIN_REQUIRED|BOOTSTRAP_SCOPE_UNVERIFIED|ACTOR_MISMATCH|RESOURCE_SCOPE_MISMATCH/.test(String(error.message))){blockedTargets.add(targetKey);blocked=true;}
                 failed=true;const p=document.createElement('p');p.textContent=(target.account_id?'РК '+target.account_id+': ':'')+'Размер аудитории временно недоступен.';p.title=error.message;results.appendChild(p);
             }
         }
         if(seq!==generation)return;
-        needsRefresh=pending||failed;
-        status.textContent=pending?'Meta готовит размер аудитории…':failed?'Данные Meta временно недоступны. Шаблон можно сохранить.':'Размер аудитории получен из Meta.';
+        needsRefresh=!blocked&&attempt<2&&(pending||failed);
+        status.textContent=blocked?'Доступ Meta не подтверждён. Проверьте состояние аккаунта перед повторной оценкой.':pending?'Meta готовит размер аудитории…':failed?'Данные Meta временно недоступны. Шаблон можно сохранить.':'Размер аудитории получен из Meta.';
         if(current.targets.length>20)status.textContent+=' Показаны первые 20 выбранных РК.';
-        // Back off while the visible editor still needs a real Meta response.
-        // The worker bounds each read and cools down unavailable sources.
+        // Stop at authentication/scope gates; bound transient reads to three attempts.
         if(needsRefresh)timer=setTimeout(()=>{
-            try{if(seq===generation&&snapshot().fingerprint===current.fingerprint)estimate(true,Math.min(2,attempt+1));}catch{}
+            try{if(seq===generation&&snapshot().fingerprint===current.fingerprint)estimate(true,attempt+1);}catch{}
         },failed?([15000,45000][attempt]||60000):([2000,5000][attempt]||30000));
     }
     function changed(force=false) {

@@ -61,6 +61,9 @@ jobs:
       - name: Authenticated targeting choices and stale response guards
         run: node tests/targeting-picker-runtime.test.cjs
 
+      - name: Advertising estimate retry and account selection guards
+        run: node tests/advertising-estimate-retry.test.cjs
+
       - name: TXT account import interface
         run: node tests/cookie-txt-import-ui.test.cjs
 
