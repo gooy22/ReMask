@@ -242,14 +242,19 @@ class AdsManagerPrivateHttp:
             # and BM through the reviewed account READ on this same session.
             client.read_only = True
             account = await client.get("/act_" + account_id, {"fields": ["id", "business"]})
-            if (not isinstance(account.get("id"), str)
-                    or account["id"].removeprefix("act_") != account_id
-                    or not isinstance(account.get("business"), dict)
-                    or account["business"].get("id") != business_id):
-                log.warning("ads_bootstrap scope_rejected profile=%s account_matches=%s business_matches=%s",
-                    getattr(web.profile, "name", ""),
-                    isinstance(account.get("id"), str) and account['id'].removeprefix('act_') == account_id,
-                    isinstance(account.get('business'), dict) and account['business'].get('id') == business_id)
+            # JSON can carry an ID as an exact integer. Never accept floats,
+            # booleans or rounded/coerced IDs when proving an advertising scope.
+            observed = account.get("id")
+            observed_id = (str(observed).removeprefix("act_")
+                           if type(observed) in (str, int) else "")
+            if not re.fullmatch(r"\d{5,30}", observed_id):
+                observed_id = ""
+            business_matches = (isinstance(account.get("business"), dict)
+                                and account["business"].get("id") == business_id)
+            if observed_id != account_id or not business_matches:
+                log.warning("ads_bootstrap scope_rejected profile=%s account_matches=%s business_matches=%s requested_account=%s observed_account=%s id_type=%s",
+                    getattr(web.profile, "name", ""), observed_id == account_id,
+                    business_matches, account_id, observed_id or "invalid", type(observed).__name__)
                 raise fail("BOOTSTRAP_SCOPE_UNVERIFIED", "Ads Manager did not confirm the requested account and Business", True)
             client.read_only = False
             log.info("ads_bootstrap scope_confirmed profile=%s source=exact_account_read", getattr(web.profile, "name", ""))

@@ -270,6 +270,25 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(url.endswith("/act_111111"))
         self.assertEqual(json.loads(options["params"]["fields"]), ["id", "business"])
 
+    async def test_redirect_proof_accepts_only_lossless_numeric_id(self):
+        requested = "120250985990010713"
+        async def redirected(url, **kwargs):
+            return 200, document(), url.replace("act=" + requested, "")
+        self.web.fetch_text = redirected
+        for value in (requested, "act_" + requested, int(requested), float(requested), True, 999999):
+            self.web.session.calls = []
+            self.web.session.response_body = json.dumps({"id":value,"business":{"id":"222222"}}).encode()
+            with self.subTest(value=value):
+                if type(value) in (str, int) and str(value).removeprefix("act_") == requested:
+                    client = await AdsManagerPrivateHttp.open(self.web,
+                        account_id=requested, business_id="222222", actor_id="123456")
+                    self.assertFalse(client.read_only)
+                else:
+                    with self.assertRaises(ProvisioningError):
+                        await AdsManagerPrivateHttp.open(self.web,
+                            account_id=requested, business_id="222222", actor_id="123456")
+            self.assertEqual([call[0] for call in self.web.session.calls], ["GET"])
+
     async def test_redirect_account_proof_rejects_other_business_or_account(self):
         async def redirected(url, **kwargs):
             return 200, document(), url.replace("act=111111", "")
