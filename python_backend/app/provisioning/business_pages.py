@@ -152,7 +152,22 @@ async def ensure_business_page(session, params, state, resolver=None):
             if isinstance(row, dict) and str(row.get('id') or '').isdigit()}
         if legacy.get('page_id'):
             known[str(legacy['page_id'])] = {**legacy, 'id': str(legacy['page_id'])}
-        candidates = [row for page, row in known.items() if not config.get('creation_item_id') and page not in excluded
+        creation_pending = bool(config.get('creation_item_id'))
+        if creation_pending:
+            retained = ((await state.step(config['creation_item_id'], ProvisioningStep.FAN_PAGES)) or {}).get('result') or {}
+            evidence = retained.get('create_response') or {}
+            # An authoritative rejection is settled non-creation. An eligible
+            # existing Page can satisfy the bundle without retrying CREATE.
+            # Unknown/sent intents still reconcile their exact result first.
+            creation_pending = not (
+                retained.get('phase') == 'PAGE_CREATE_REJECTED'
+                and evidence.get('version') == 1 and evidence.get('outcome') == 'REJECTED'
+                and not any(retained.get(key) for key in ('page_id', 'page_ids', 'pages', 'created_pages',
+                    'response_page_id', 'additional_profile_id'))
+                and not any(evidence.get(key) for key in ('page_id', 'additional_profile_id'))
+                and not (retained.get('browser_diagnostic') or {}).get('response_page_id')
+            )
+        candidates = [row for page, row in known.items() if not creation_pending and page not in excluded
             and (page == selected if selected else str(row.get('name') or '').casefold() == config['name'].casefold())]
         if selected and (selected in excluded or selected not in known):
             raise ProvisioningError('PROFILE_PAGE_UNAVAILABLE', 'Selected Page is absent or reserved for another bundle.')

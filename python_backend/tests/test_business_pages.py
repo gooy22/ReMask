@@ -213,6 +213,38 @@ class BusinessPageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(create.await_count, 1)
         self.assertEqual({row['page_id'] for row in result}, {FP2})
 
+    async def test_rejected_create_can_reuse_proven_existing_page_without_retrying_creation(self):
+        store = BusinessPageStore(self.state, self.context, BM2)
+        await store.patch(name='PrgsTeam', creation_item_id='rejected', creation_profile_id='15')
+        await self.state.set_running('rejected', '15', 'rejected', ProvisioningStep.FAN_PAGES)
+        rejection = {'phase':'PAGE_CREATE_REJECTED', 'business_id':BM2,
+            'target_names':['PrgsTeam'], 'create_response':{'version':1, 'outcome':'REJECTED', 'meta_error_code':3922001}}
+        await self.state.checkpoint('rejected', '15', 'rejected', ProvisioningStep.FAN_PAGES, rejection)
+        self.context.pages = [{'id':FP2, 'name':'PrgsTeam'}]
+        self.meta.names[FP2], self.meta.owners[FP2] = 'PrgsTeam', None
+        create = AsyncMock(side_effect=AssertionError('Rejected CREATE must not be retried'))
+        with patch('app.provisioning.fan_pages_handler.fan_pages_handler', create):
+            result = await ensure_business_page(self.session, {'business_id':BM2}, self.state)
+        self.assertEqual(result['page_id'], FP2)
+        create.assert_not_awaited()
+        self.assertEqual(self.meta.posts, [])
+        self.assertEqual((await self.state.step('rejected', ProvisioningStep.FAN_PAGES))['result'], rejection)
+
+    async def test_unknown_create_does_not_adopt_a_different_existing_page(self):
+        store = BusinessPageStore(self.state, self.context, BM2)
+        await store.patch(name='PrgsTeam', creation_item_id='pending', creation_profile_id='15')
+        await self.state.set_running('pending', '15', 'pending', ProvisioningStep.FAN_PAGES)
+        await self.state.checkpoint('pending', '15', 'pending', ProvisioningStep.FAN_PAGES,
+            {'phase':'PAGE_CREATE_RESULT_UNKNOWN', 'business_id':BM2, 'target_names':['PrgsTeam']})
+        self.context.pages = [{'id':FP2, 'name':'PrgsTeam'}]
+        reconcile = AsyncMock(side_effect=ProvisioningError('FAN_PAGE_CREATE_RESULT_UNKNOWN','Unresolved',retryable=True))
+        with patch('app.provisioning.fan_pages_handler.fan_pages_handler', reconcile):
+            with self.assertRaises(ProvisioningError):
+                await ensure_business_page(self.session, {'business_id':BM2}, self.state)
+        self.assertEqual(reconcile.call_args.kwargs['item_id'], 'pending')
+        self.assertNotIn('page_id', await store.get())
+        self.assertEqual(self.meta.calls, [])
+
     async def test_uncertain_same_name_creates_are_scoped_and_do_not_tombstone_other_business(self):
         for item, bm, phase in [('pending', BM1, 'PAGE_CREATE_CLICK_INTENT'), ('done', BM2, 'PAGE_CREATED')]:
             await self.state.set_running(item, '15', item, ProvisioningStep.FAN_PAGES)

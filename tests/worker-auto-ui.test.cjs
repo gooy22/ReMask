@@ -47,14 +47,27 @@ for(const [tab,label] of [['businesses','Добавить RK'],['ad_accounts','�
   assert.equal(calls.length,1); assert.equal(calls[0].profiles.length,100);
   assert.equal(calls[0].profiles.reduce((sum,p)=>sum+p.tasks.length,0),200);
   for(const group of calls[0].profiles)for(const task of group.tasks){
-    assert.equal(task.payload.parameters.FAN_PAGES.count,1);
-    assert.equal(task.payload.parameters.FAN_PAGES.policies_accepted,true);
+    assert.equal(task.payload.parameters.FAN_PAGES,undefined);
+    assert.equal(task.payload.parameters.PAGE_ACCESS.page_topology,'ONE_PAGE_PER_BUSINESS');
+    assert.equal(task.payload.parameters.PAGE_ACCESS.policies_accepted,true);
     assert.notEqual(task.payload.parameters.PAGE_ACCESS.business_id,scopes[group.profile_id]);
-    assert.deepEqual(task.payload.steps,['PROXY_CHECK','FAN_PAGES','PAGE_ACCESS']);
+    assert.deepEqual(task.payload.steps,['PROXY_CHECK','PAGE_ACCESS']);
+  }
+  for(const group of calls[0].profiles){
+    assert.deepEqual(group.tasks.map(t=>t.payload.parameters.PAGE_ACCESS.bundle_page_name),['PrgssTeam','PrgsTeam']);
+    assert.equal(new Set(group.tasks.map(t=>t.idempotency_key)).size,2);
   }
   const account=inventory.ad_accounts[0];
   assert.equal(bulk.pythonWorkerPageTargetPlan(inventory,'ad_accounts',[account],scopes).targets.length,1);
   assert.equal(bulk.pythonWorkerPageTargetPlan(inventory,'businesses',[{profile_id:account.profile_id,id:account.business_id}],scopes).targets.length,1);
+  const second=inventory.ad_accounts[1];
+  assert.equal(bulk.pythonWorkerPageTargetPlan(inventory,'ad_accounts',[second],scopes).targets[0].bundle_page_name,'PrgsTeam');
+  const reversed={ad_accounts:[...inventory.ad_accounts].reverse()};
+  assert.equal(bulk.pythonWorkerPageTargetPlan(reversed,'ad_accounts',[second],scopes).targets[0].bundle_page_name,'PrgsTeam');
+  calls.length=0;ui.busy=false;
+  bulk.pythonWorkerBridge=async payload=>{calls.push(payload);return {job:{job_id:'retained-auth-failure',status:'FAILED'}};};
+  await bulk.pythonWorkerPrepareCommonPage();
+  assert.deepEqual(calls.map(c=>c.action),['create']);
   console.log('100 profiles / 200 BM accounts: one automatic FP job, no personal accounts or duplicates.');
 })().catch(error=>{console.error(error);process.exitCode=1;});
 // A failed FP preflight must preserve the real auth reason, never synthesize
