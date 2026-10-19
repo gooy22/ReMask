@@ -250,6 +250,14 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
             await self.client.get('/act_111111', {})
         self.assertEqual(caught.exception.diagnostic, {'http_status':200})
 
+    async def test_permission_hint_is_an_allowlisted_label_without_response_text(self):
+        self.web.session.response_body = json.dumps({'error':{'code':10, 'type':'OAuthException',
+            'message':'Application does not have permission for this action synthetic-private-value'}}).encode()
+        with self.assertRaises(ProvisioningError) as caught:
+            await self.client.get('/act_111111', {})
+        self.assertEqual(caught.exception.diagnostic['permission_hint'], 'application_permission')
+        self.assertNotIn('synthetic-private-value', str(caught.exception))
+
     async def test_foreign_bootstrap_url_is_rejected(self):
         async def foreign(url, **kwargs):return 200, document(), url.replace("act=111111", "act=999999")
         self.web.fetch_text = foreign
@@ -374,6 +382,28 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ProvisioningError):
             await self.client.get('/act_111111', {'fields':['id','account_id','business']})
         self.assertEqual(self.claims, 0)
+
+    async def test_proven_alias_uses_native_wire_edges_without_changing_journal_or_object_ids(self):
+        self.alias_fixture()
+        await self.client.get('/act_111111', {'fields':['id','account_id','business']})
+        params = {'ad_account_id':'111111', 'fields':['id','is_connected_to_ad_account.ad_account_id(111111)'],
+            'creative_spec':{'object_story_id':'111111', 'page_id':'111111'}}
+        await self.client.get('/act_111111/instagram_accounts', params)
+        _, url, options = self.web.session.calls[-1]
+        self.assertTrue(url.endswith('/act_999999/instagram_accounts'))
+        self.assertEqual(options['params']['ad_account_id'], '999999')
+        self.assertEqual(json.loads(options['params']['fields']), ['id','is_connected_to_ad_account.ad_account_id(999999)'])
+        self.assertEqual(json.loads(options['params']['creative_spec']), {'object_story_id':'111111','page_id':'111111'})
+        self.assertEqual(params['ad_account_id'], '111111')
+        self.assertIn('(111111)', params['fields'][1])
+        await self.client.post('/act_111111/addrafts', {'name':'synthetic draft'}, before_submit=self.claim)
+        self.assertTrue(self.web.session.calls[-1][1].endswith('/act_999999/addrafts'))
+        self.assertEqual(self.client.context.account_id, '111111')
+        self.assertEqual(self.claims, 1)
+        _, video = self.client._account_request('/act_111111/advideos', {'target_id':'111111','video_id':'111111'})
+        self.assertEqual(video, {'target_id':'999999','video_id':'111111'})
+        _, other = self.client._account_request('/555555', {'target_id':'111111'})
+        self.assertEqual(other, {'target_id':'111111'})
 
     async def test_redirect_proof_accepts_only_lossless_numeric_id(self):
         requested = "120250985990010713"

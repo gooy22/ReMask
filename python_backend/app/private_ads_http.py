@@ -55,6 +55,14 @@ class AdsManagerResponseError(ProvisioningError):
         if (isinstance(diagnostic.get("type"), str) and diagnostic["type"] in
                 {"OAuthException", "GraphMethodException", "GraphAPIException", "ApplicationException"}):
             safe["type"] = diagnostic["type"]
+        if safe.get('code') == 10 and isinstance(diagnostic.get('message'), str):
+            message = diagnostic['message'].casefold()
+            if 'ads_management' in message:
+                safe['permission_hint'] = 'ads_management'
+            elif 'business_management' in message:
+                safe['permission_hint'] = 'business_management'
+            elif 'application does not have permission' in message:
+                safe['permission_hint'] = 'application_permission'
         self.diagnostic = safe
         log.warning("ads_request_rejected diagnostic=%s", json.dumps(safe, sort_keys=True, separators=(",", ":")))
         details = [f"{key}={value}" for key, value in safe.items()]
@@ -392,7 +400,8 @@ class AdsManagerPrivateHttp:
                 raise fail("PROFILE_CONTEXT_UNAVAILABLE", "Advertising direct test is absent, changed or expired", True)
         from .private_launch import PrivateLaunchContractStore
         PrivateLaunchContractStore._reject_auth_material(params)
-        url = self.context.origin + "/" + self.context.version + path
+        wire_path, wire_params = self._account_request(path, params)
+        url = self.context.origin + "/" + self.context.version + wire_path
         headers = {"Accept": "application/json", "Origin": "https://adsmanager.facebook.com",
                    "Referer": "https://adsmanager.facebook.com/", "X-Requested-With": "XMLHttpRequest"}
         if path.endswith("/advideos") and params.get("upload_phase") == "transfer":
@@ -401,7 +410,7 @@ class AdsManagerPrivateHttp:
                 raise fail("INVALID_INPUT", "Video upload waterfall identity is malformed")
             headers["X_FB_VIDEO_WATERFALL_ID"] = waterfall
         query = {"access_token": self.context.access_token, "suppress_http_code": "1"}
-        fields = flatten_params(params)
+        fields = flatten_params(wire_params)
         if files or multipart:
             query["suppress_http_code"] = "1"
             fields.setdefault("locale", "en_US")
@@ -467,6 +476,30 @@ class AdsManagerPrivateHttp:
             self._native_account_id = native_id
             log.info('ads_bootstrap scope_alias_confirmed profile=%s source=exact_business_inventory requested_account=%s native_account=%s',
                 self._profile_name, self.context.account_id, native_id)
+
+    def _account_request(self, path, params):
+        """Use Meta's proven advertising ID on the wire; retain journal scope.
+
+        Settings' admarketID identifies the saved asset, while its adAccountID
+        addresses advertising edges. Never substitute IDs in object payloads.
+        """
+        selected, native = self.context.account_id, self._native_account_id
+        if native == selected:
+            return path, params
+        root, *edge = path.lstrip('/').split('/')
+        wire_path = '/act_' + native + ('/' + edge[0] if edge else '') if root == 'act_' + selected else path
+        values = dict(params)
+        account_keys = {'account_id', 'ad_account_id'}
+        if path.endswith('/advideos'):
+            account_keys.add('target_id')
+        for key in account_keys:
+            value = values.get(key)
+            if type(value) in (str, int) and str(value).removeprefix('act_') == selected:
+                values[key] = ('act_' if str(value).startswith('act_') else '') + native
+        if isinstance(values.get('fields'), list):
+            values['fields'] = [value.replace('.ad_account_id(' + selected + ')', '.ad_account_id(' + native + ')')
+                if isinstance(value, str) else value for value in values['fields']]
+        return wire_path, values
 
     def _account_response(self, path, result):
         """Expose the selected Settings identity consistently to scope guards.
