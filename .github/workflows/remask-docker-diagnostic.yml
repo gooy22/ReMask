@@ -48,6 +48,7 @@ jobs:
             sleep 1
           done
           cat /tmp/remask-health.json 2>/dev/null || true
+          curl -fsS http://127.0.0.1:18080/health
           if [ "$ok" != "1" ]; then
             docker logs --tail 250 remask-diagnostic-run || true
             exit 1

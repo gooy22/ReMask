@@ -98,6 +98,7 @@ persist_legacy_file "$ROOT/bundles.json" "$DATA_DIR/bundles.json" '[]'
 
 rm -rf "$ROOT/health"
 printf '%s\n' '{"ok":true,"service":"remask"}' > "$ROOT/health"
+chmod 644 "$ROOT/health"
 
 chown -R www-data:www-data "$DATA_DIR" 2>/dev/null || true
 find "$DATA_DIR" -type d -exec chmod 700 {} +
