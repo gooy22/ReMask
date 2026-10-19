@@ -198,14 +198,24 @@ function remaskPrivateTargetRows(config) {
         };
     });
 }
-function remaskPrivateStructuralReady() {
+function remaskPrivateStructuralReadiness() {
     try {
-        if (typeof currentLaunchConfigForRequest!=='function') return false;
+        if (typeof currentLaunchConfigForRequest!=='function')
+            return {ready:false,reason:'Проверка формы ещё загружается.'};
         const config=currentLaunchConfigForRequest();
-        return remaskPrivateTargetRows(config).length>0;
-    } catch (_) {
-        return false;
+        if (!remaskPrivateTargetRows(config).length)
+            return {ready:false,reason:'Нет выбранных рекламных аккаунтов с подтверждёнными настройками.'};
+        return {ready:true,reason:''};
+    } catch (error) {
+        // Keep the existing disabled-button safety gate. Explain which local
+        // validation rejected the form instead of silently discarding it.
+        const reason=String(error?.message||'Заполните обязательные настройки.')
+            .replace(/[\r\n]+/g,' ').slice(0,300);
+        return {ready:false,reason};
     }
+}
+function remaskPrivateStructuralReady() {
+    return remaskPrivateStructuralReadiness().ready;
 }
 function remaskPrivateCsrf() {
     const token=document.querySelector('meta[name="remask-csrf"]')?.content||'';
@@ -675,14 +685,30 @@ async function remaskPrivateCreateJob() {
 const remaskOriginalValidateReady=validateReady;
 validateReady=function() {
     remaskOriginalValidateReady();
-    const structurallyReady=remaskPrivateStructuralReady();
+    const readiness=remaskPrivateStructuralReadiness();
+    const busy=remaskPrivateLaunchBusy||
+        (typeof state!=='undefined'&&state.processingJob===true);
     for (const id of ['reviewLaunch','launchButton','serverDryRun','dryRunPlan']) {
         const button=$(id);
         if(!button)continue;
-        button.disabled=!structurallyReady||remaskPrivateLaunchBusy||
-            (typeof state!=='undefined'&&state.processingJob===true);
-        button.title=structurallyReady?remaskPrivateLaunchNotice:
-            'Выберите РК и страницу и заполните обязательные параметры объявления.';
+        button.disabled=!readiness.ready||busy;
+        button.title=readiness.ready?remaskPrivateLaunchNotice:readiness.reason;
+    }
+    // A disabled control cannot be clicked to show its validation error.
+    // Keep all guards intact and expose the concrete reason accessibly.
+    const anchor=$('reviewLaunch')||$('launchButton');
+    if(anchor?.parentNode) {
+        let diagnostic=$('remaskPrivateDisabledReason');
+        if(!diagnostic) {
+            diagnostic=document.createElement('div');
+            diagnostic.id='remaskPrivateDisabledReason';
+            diagnostic.className='muted mt-2';
+            diagnostic.setAttribute('role','status');
+            diagnostic.setAttribute('aria-live','polite');
+            anchor.parentNode.appendChild(diagnostic);
+        }
+        diagnostic.hidden=readiness.ready||busy;
+        diagnostic.textContent=diagnostic.hidden?'':'Недоступно: '+readiness.reason;
     }
 };
 validateReady();
