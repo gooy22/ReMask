@@ -153,7 +153,7 @@
                     loginRequired ||= /SESSION_EXPIRED|LOGIN_REQUIRED|BUSINESS_LOGIN_GATE/.test(failureText);
                     blockedTargets.add(targetKey);blocked=true;
                 }
-                failed=true;const p=document.createElement('p');p.textContent=(target.account_id?'РК '+target.account_id+': ':'')+(error.message||'Размер аудитории временно недоступен.');results.appendChild(p);
+                failed=true;const p=document.createElement('p');p.textContent=(target.account_id?'РК '+target.account_id+': ':'')+'Размер аудитории временно недоступен. '+(error.message||'');results.appendChild(p);
             }
         }
         if(seq!==generation)return;
