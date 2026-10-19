@@ -2107,6 +2107,10 @@ async def profile_live_inventory(
             # An inconclusive read cannot switch to a renderer session.
             stage='private_inventory'
             private_started=time.monotonic()
+            # Safe rollout switch; default keeps the existing Sync behavior.
+            fast_sync_requested = str(os.getenv('REMASK_FAST_INVENTORY_SYNC', '0')).strip().lower() in {'1', 'true', 'yes', 'on'}
+            fast_sync_profile = str(os.getenv('REMASK_FAST_SYNC_PROFILE', '')).strip()
+            fast_sync = fast_sync_requested and bool(fast_sync_profile) and fast_sync_profile in {clean_profile, '*'}
             private_snapshot: dict[str,Any] = {}
             try:
                 facebook_web=await meta_transport.facebook_web()
@@ -2119,6 +2123,7 @@ async def profile_live_inventory(
                         personal_scope_id=personal_scope_id,
                         discover_businesses=not bool(requested_business_ids),
                         execute_read_queries=True,
+                        fast_sync=fast_sync,
                     ),
                     private_timeout,
                 )
@@ -2187,7 +2192,9 @@ async def profile_live_inventory(
                 try:
                     private_page_timeout=min(3.5,budget(4.0))
                     private_page_result=await hard_deadline(
-                        list_pages_via_private_graphql(facebook_web),
+                        list_pages_via_private_graphql(
+                            facebook_web, allow_runtime_discovery=not fast_sync,
+                        ),
                         private_page_timeout,
                     )
                     for page in private_page_result.pages or []:
@@ -2209,7 +2216,11 @@ async def profile_live_inventory(
                         ).strip()
                         private_pages_by_id[page_id]=current
                     private_pages=list(private_pages_by_id.values())
-                    private_pages_live_verified=True
+                    # A Page list is live-verified only if its connection is complete.
+                    # Preserve previous behavior until the fast path is opted in.
+                    private_pages_live_verified=(
+                        private_page_result.inventory_complete is True if fast_sync else True
+                    )
                     private_pages_source=str(
                         private_page_result.source or 'facebook_web_graphql'
                     )
