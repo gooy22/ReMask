@@ -51,10 +51,14 @@ vm.createContext(context);vm.runInContext(source,context);
   assert.equal(el('txtResults').children[0].children.some(c=>String(c.textContent).includes('fixture-session')),false);
   await el('txtCommit').fire('click'); assert.equal(requests.length,1); // Proxy required before any write.
   const boxes=dialog.querySelectorAll('input[data-txt-line]'); boxes[0].checked=false; await boxes[0].fire('change');
+  el('txtDirect').checked=true;
   el('txtProxy').value='http:127.0.0.1:8080:fixture:fixture';
+  await el('txtCommit').fire('click'); assert.equal(requests.length,1);
+  el('txtProxy').value='';
   responses.push({ok:true,total:1,processed:1,imported:1,skipped:0,errors:0,records:[{line:2,user_id:'234567890',profile_name:'8',status:'imported'}]});
   await Promise.all([el('txtCommit').fire('click'),el('txtCommit').fire('click')]);
   assert.equal(requests.length,2); assert.deepEqual(requests[1].body.selected_lines,[2]);
+  assert.equal(requests[1].body.allow_direct_test,true); assert.equal(requests[1].body.proxy,'');
   assert.equal(requests[1].body.action,'import_txt'); assert.equal(el('txtCommit').disabled,true);
   assert.equal(el('txtProxy').value,''); assert.equal(el('txtFile').value,''); assert.equal(reloads,0);
   assert.ok(el('txtStatus').textContent.includes('Facebook-сессии ещё не проверены'));

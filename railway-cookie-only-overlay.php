@@ -201,7 +201,7 @@ foreach (['workspace.php','accounts.php'] as $file) {
     $path = $root . '/' . $file;
     $source = file_get_contents($path);
     if (substr_count($source, '</body>') !== 1) throw new RuntimeException('TXT UI body boundary missing: ' . $file);
-    $source = str_replace('</body>', '<script src="scripts/cookie-txt-import.js?v=20261002-txt-v2" defer></script></body>', $source);
+    $source = str_replace('</body>', '<script src="scripts/cookie-txt-import.js?v=20261019-txt-direct-v3" defer></script></body>', $source);
     file_put_contents($path, $source);
 }
 // A legacy token input is removed before the Accounts form becomes usable.

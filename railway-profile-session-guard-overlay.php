@@ -194,7 +194,11 @@ function rmx_pm_txt_import(array $input, mixed $store, bool $preview): array {
     }
     if (!$preview && !$records) throw new InvalidArgumentException('TXT_SELECTION_EMPTY: нет выбранных записей.');
     $proxy = null;
-    if (!$preview && count(array_filter($records, fn($r)=>$r['status'] === 'ready'))) {
+    $enableDirect = !$preview && rmx_pm_find_bool($input, ['allow_direct_test'], false);
+    if ($enableDirect && (count($records) !== 1 || rmx_pm_find_scalar($input, ['proxy']) !== '')) {
+        throw new InvalidArgumentException('TXT_DIRECT_SINGLE_ACCOUNT_REQUIRED: выберите один аккаунт без прокси.');
+    }
+    if (!$preview && !$enableDirect && count(array_filter($records, fn($r)=>$r['status'] === 'ready'))) {
         try {
             $raw = rmx_pm_find_scalar($input, ['proxy']);
             if ($raw === '') throw new InvalidArgumentException();
@@ -225,11 +229,12 @@ function rmx_pm_txt_import(array $input, mixed $store, bool $preview): array {
                 } else {
                     $name = (string)$next;
                     try {
-                        $cookies = RemaskCookieProfile::validate($record['cookies'], $proxy);
+                        $cookies = RemaskCookieProfile::validate($record['cookies'], $proxy, !$enableDirect);
                         $account = new FbAccount($name, '', json_encode($cookies, JSON_THROW_ON_ERROR), null, $proxy);
                         $store->addOrUpdateAccount($account);
                         $saved = $store->getAccountByName($name);
                         if (!$saved instanceof FbAccount || RemaskCookieTxt::userId((array)$saved->cookies) !== $record['user_id']) throw new RuntimeException();
+                        if ($enableDirect) RemaskCookieProfile::saveDirectTest($name, $record['user_id'], time() + 7200);
                         rmx_pm_sequence_save($store->deserialize(), $sequencePath);
                         $record['status'] = 'imported';
                         $record['profile_name'] = $name;

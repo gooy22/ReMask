@@ -21,7 +21,7 @@
   const field = id => dialog.querySelector('#' + id);
   function setBusy(value) {
     busy = value;
-    for (const id of ['txtFile','txtProxy','txtPreview','txtClose','txtSelectAll']) field(id).disabled = value;
+    for (const id of ['txtFile','txtProxy','txtDirect','txtPreview','txtClose','txtSelectAll']) field(id).disabled = value;
     field('txtCommit').disabled = value || !preview || !dialog.querySelector('input[data-txt-line]:checked');
     dialog.querySelectorAll('input[data-txt-line]').forEach(input => { input.disabled = value; });
   }
@@ -61,7 +61,7 @@
     dialog.innerHTML = `<h2 id="txtTitle">Импорт Facebook аккаунтов из TXT</h2>
       <p>Логин и пароль отделяются от JSON cookies автоматически. Аккаунт определяется по c_user. Пароль и 2FA не сохраняются.</p>
       <div style="display:grid;gap:12px"><label>TXT файл (UTF-8, до 2 МБ, до 500 записей)<br><input id="txtFile" type="file" accept=".txt,text/plain"></label>
-      <label>Прокси для выбранных аккаунтов<br><input id="txtProxy" type="password" autocomplete="off" placeholder="http:ip:port:login:password" style="width:100%"></label></div>
+      <label>Прокси для выбранных аккаунтов<br><input id="txtProxy" type="password" autocomplete="off" placeholder="http:ip:port:login:password" style="width:100%"></label><label><input id="txtDirect" type="checkbox"> Без прокси: разрешить тест на 2 часа для одного выбранного аккаунта</label></div>
       <p>Сначала распознай файл, затем выбери записи для импорта. Дубликаты пропускаются. Проверка формата не подтверждает вход в Facebook.</p>
       <button type="button" id="txtPreview">Распознать файл</button>
       <p id="txtStatus" role="status" aria-live="polite"></p>
@@ -71,7 +71,7 @@
       <div style="display:flex;gap:12px;margin-top:18px"><button type="button" id="txtCommit" disabled>Импортировать выбранные</button><button type="button" id="txtClose">Закрыть</button></div>`;
     document.body.append(dialog);
     dialog.addEventListener('cancel', event => { if (busy) event.preventDefault(); });
-    dialog.addEventListener('close', () => { clear(); field('txtFile').value = ''; field('txtProxy').value = ''; });
+    dialog.addEventListener('close', () => { clear(); field('txtFile').value = ''; field('txtProxy').value = ''; field('txtDirect').checked = false; });
     field('txtClose').addEventListener('click', () => dialog.close());
     field('txtFile').addEventListener('change', clear);
     field('txtSelectAll').addEventListener('change', () => {
@@ -95,11 +95,13 @@
       if (busy || !preview) return;
       const selected_lines = [...dialog.querySelectorAll('input[data-txt-line]:checked')].map(box => Number(box.dataset.txtLine));
       const proxy = field('txtProxy').value.trim();
-      if (!proxy) { field('txtStatus').textContent = 'Прокси обязателен для импорта.'; return; }
+      const direct = field('txtDirect').checked === true;
+      if (direct && (proxy || selected_lines.length !== 1)) { field('txtStatus').textContent = 'Без прокси выберите ровно один аккаунт и очистите прокси.'; return; }
+      if (!proxy && !direct) { field('txtStatus').textContent = 'Укажите прокси или включите тест без прокси.'; return; }
       if (!selected_lines.length) return;
       setBusy(true);
       try {
-        const result = await request('import_txt', {selected_lines, proxy});
+        const result = await request('import_txt', {selected_lines, proxy, allow_direct_test:direct});
         render(result, false); raw = ''; preview = null; field('txtProxy').value = '';
         field('txtFile').value = '';
         // Refresh Workspace after closing, while keeping the import result reviewable.
