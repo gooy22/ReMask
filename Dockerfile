@@ -4,6 +4,7 @@ FROM php:8.4-apache AS remask-runtime
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
     && apt-get install -y --no-install-recommends libcurl4-openssl-dev libpq-dev xz-utils ca-certificates python3 python3-venv \
     && docker-php-ext-install curl pdo_pgsql \
     && a2enmod rewrite headers \
