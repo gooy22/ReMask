@@ -198,14 +198,24 @@ function remaskPrivateTargetRows(config) {
         };
     });
 }
-function remaskPrivateStructuralReady() {
+function remaskPrivateStructuralReadiness() {
     try {
-        if (typeof currentLaunchConfigForRequest!=='function') return false;
+        if (typeof currentLaunchConfigForRequest!=='function')
+            return {ready:false,reason:'Проверка формы ещё загружается.'};
         const config=currentLaunchConfigForRequest();
-        return remaskPrivateTargetRows(config).length>0;
-    } catch (_) {
-        return false;
+        if (!remaskPrivateTargetRows(config).length)
+            return {ready:false,reason:'Нет выбранных рекламных аккаунтов с подтверждёнными настройками.'};
+        return {ready:true,reason:''};
+    } catch (error) {
+        // Keep the existing disabled-button safety gate. Explain which local
+        // validation rejected the form instead of silently discarding it.
+        const reason=String(error?.message||'Заполните обязательные настройки.')
+            .replace(/[\r\n]+/g,' ').slice(0,300);
+        return {ready:false,reason};
     }
+}
+function remaskPrivateStructuralReady() {
+    return remaskPrivateStructuralReadiness().ready;
 }
 function remaskPrivateCsrf() {
     const token=document.querySelector('meta[name="remask-csrf"]')?.content||'';
@@ -675,14 +685,37 @@ async function remaskPrivateCreateJob() {
 const remaskOriginalValidateReady=validateReady;
 validateReady=function() {
     remaskOriginalValidateReady();
-    const structurallyReady=remaskPrivateStructuralReady();
+    const readiness=remaskPrivateStructuralReadiness();
+    const busy=remaskPrivateLaunchBusy||
+        (typeof state!=='undefined'&&state.processingJob===true);
     for (const id of ['reviewLaunch','launchButton','serverDryRun','dryRunPlan']) {
         const button=$(id);
         if(!button)continue;
-        button.disabled=!structurallyReady||remaskPrivateLaunchBusy||
-            (typeof state!=='undefined'&&state.processingJob===true);
-        button.title=structurallyReady?remaskPrivateLaunchNotice:
-            'Выберите РК и страницу и заполните обязательные параметры объявления.';
+        // Form-completeness failures are reported by the click handler:
+        // review-only checks locally and Launch checks before creating a job.
+        // A disabled button prevented operators from reaching either handler.
+        // Only in-flight work disables the controls to prevent duplicate jobs.
+        button.disabled=busy;
+        button.title=busy?'Подождите завершения текущей проверки.':
+            (readiness.ready?remaskPrivateLaunchNotice:
+            'Проверка при нажатии: '+readiness.reason);
+    }
+    // Keep validation visible before the click without blocking interaction.
+    // Never skip validation inside remaskPrivatePrepareConfig or server review.
+    const anchor=$('reviewLaunch')||$('launchButton');
+    if(anchor?.parentNode) {
+        let diagnostic=$('remaskPrivateDisabledReason');
+        if(!diagnostic) {
+            diagnostic=document.createElement('div');
+            diagnostic.id='remaskPrivateDisabledReason';
+            diagnostic.className='muted mt-2';
+            diagnostic.setAttribute('role','status');
+            diagnostic.setAttribute('aria-live','polite');
+            anchor.parentNode.appendChild(diagnostic);
+        }
+        diagnostic.hidden=readiness.ready||busy;
+        diagnostic.textContent=diagnostic.hidden?'':'Перед запуском проверьте: '+readiness.reason+
+            ' Нажатие на кнопку покажет результат проверки.';
     }
 };
 validateReady();

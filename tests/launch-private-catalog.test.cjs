@@ -54,9 +54,12 @@ assert.equal(label({account_status:1,is_prepay_account:true,balance:0}),'PREPAY 
 assert.equal(label({account_status:1,is_prepay_account:true}),'PREPAY EMPTY');
 assert.equal(label({account_status:1,is_prepay_account:true,balance:100}),'PREPAY BALANCE');
 assert.equal(label({account_status:1,funding_source_details:{id:'123'}}),'SOURCE SAVED');
-assert.equal(controls.launchButton.disabled,true);
-assert.equal(controls.reviewLaunch.disabled,true);
-assert.equal(controls.dryRunPlan.disabled,true);
+// An incomplete form must not deadlock the user: click handlers report
+// validation failures before any worker CREATE operation is possible.
+assert.equal(controls.launchButton.disabled,false);
+assert.equal(controls.reviewLaunch.disabled,false);
+assert.equal(controls.dryRunPlan.disabled,false);
+assert.match(controls.launchButton.title,/Проверка при нажатии/);
 assert.match(controls.reviewStatus.textContent,/Подготовьте план рекламы/);
 assert.equal(controls.preflight.textContent,'Загрузить сохранённые РК');
 console.log('Private Launch catalog and funding truth checks passed');
@@ -153,6 +156,13 @@ console.log('Private Launch catalog and funding truth checks passed');
 
   assert.equal(buttons.launchButton.disabled,false,'structurally complete private selection should enable Launch');
   assert.equal(buttons.reviewLaunch.disabled,false);
+  privateCtx.state.processingJob=true;
+  privateCtx.validateReady();
+  assert.equal(buttons.launchButton.disabled,true,'busy worker must still prevent duplicate submission');
+  assert.equal(buttons.reviewLaunch.disabled,true);
+  privateCtx.state.processingJob=false;
+  privateCtx.validateReady();
+  assert.equal(buttons.launchButton.disabled,false);
   assert.equal(typeof captureHandler,'function');
 
   const originalFetch=privateCtx.fetch;

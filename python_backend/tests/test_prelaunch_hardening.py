@@ -194,6 +194,26 @@ class HardeningPhpTests(unittest.TestCase):
         self.assertEqual(p.returncode,0,p.stderr);self.assertTrue(link.is_symlink())
         self.assertEqual(json.loads(target.read_text())[0]['name'],'fixture')
 
+    def test_hex_migration_can_read_base64_v1_and_never_replaces_key_or_card_storage(self):
+        file=self.data/'accounts.json'
+        file.write_text(json.dumps([{'name':'fixture','cookies':[{'name':'xs','value':'fixture-cookie-secret'}]}]))
+        key=b'\xfb\xef'*16
+        env={**self.env,'REMASK_ENCRYPT_PROFILE_JSON':'1','REMASK_CREDENTIALS_KEY':key.hex()}
+        cards=self.data/'payment-cards';cards.mkdir()
+        (cards/'key').write_bytes(b'c'*32);(cards/'cards.json').write_text('{"fixture":"untouched"}')
+        originals={p:p.read_bytes() for p in cards.iterdir()}
+        code=self.profile_script()+'$s->serialize($s->deserialize());echo json_encode($s->deserialize()[0]->cookies);'
+        p=self.php(code,self.runtime,file,env=env);self.assertEqual(p.returncode,0,p.stderr)
+        self.assertIn('fixture-cookie-secret',p.stdout)
+        before=file.read_bytes()
+        for value in ['base64:'+base64.b64encode(key).decode(),base64.urlsafe_b64encode(key).decode().rstrip('=')]:
+            env['REMASK_CREDENTIALS_KEY']=value
+            p=self.php(self.profile_script()+'echo json_encode($s->deserialize()[0]->cookies);',self.runtime,file,env=env)
+            self.assertEqual(p.returncode,0,p.stderr);self.assertIn('fixture-cookie-secret',p.stdout)
+            self.assertEqual(file.read_bytes(),before)
+        self.assertEqual({p:p.read_bytes() for p in cards.iterdir()},originals)
+        for p in [file,Path(str(file)+'.previous')]:self.assertNotIn('fixture-cookie-secret',p.read_text())
+
     def test_parallel_profile_updates_keep_every_profile(self):
         file=self.data/'accounts.json'
         code=self.profile_script()+'$s->addOrUpdateAccount(new FbAccount($argv[3],"","[]"));'

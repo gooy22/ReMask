@@ -35,7 +35,13 @@ jobs:
           path: remask-image-vulnerabilities.json
       - name: Start container
         run: |
-          docker run -d --name remask-diagnostic-run -p 18080:80             -e REMASK_PASSWORD=ci-fixture-only -e REMASK_CREDENTIALS_KEY=base64:ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY= -e PORT=80             -e REMASK_E2E_SMOKE_ON_START=0             remask-diagnostic
+          mkdir -p /tmp/remask-ci-state
+          printf '%s\n' '[{"name":"fixture","cookies":[]}]' > /tmp/remask-ci-state/accounts.json
+          docker run -d --name remask-diagnostic-run -p 18080:80 \
+            -v /tmp/remask-ci-state:/var/lib/remask \
+            -e REMASK_PASSWORD=ci-fixture-only \
+            -e REMASK_CREDENTIALS_KEY=6666666666666666666666666666666666666666666666666666666666666666 \
+            -e PORT=80 -e REMASK_E2E_SMOKE_ON_START=0 remask-diagnostic
       - name: Verify runtime health
         run: |
           set -e
@@ -64,6 +70,7 @@ jobs:
           test "$status" = 401
       - name: Assert HTTP-only runtime and encrypted profiles
         run: |
+          docker logs remask-diagnostic-run 2>&1 | grep -F '[profile-storage] ready count=1 encrypted=1 key_encoding=hex'
           docker exec remask-diagnostic-run sh -c '! command -v chromium && ! command -v chromium-browser'
           docker exec remask-diagnostic-run /opt/remask-venv/bin/python -c "import importlib.util; assert importlib.util.find_spec('playwright') is None"
           docker exec remask-diagnostic-run php -r 'require "/var/www/html/settings.php";require "/var/www/html/classes/AccountStoreFactory.php"; $store=AccountStoreFactory::create(ACCOUNTSFILENAME); assert(is_array($store->deserialize()));'

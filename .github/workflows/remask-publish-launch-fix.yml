@@ -1,0 +1,51 @@
+name: ReMask verified Launch UI fix image
+on:
+  push:
+    branches:
+      - fix/launch-readiness-reasons-20261019
+    paths:
+      - ".github/workflows/remask-publish-launch-fix.yml"
+      - "railway-launch-private-catalog.js"
+      - "tests/private-launch-completion.browser.py"
+      - "tests/launch-private-catalog.test.cjs"
+      - "railway-safe-CredentialVault.php"
+      - "railway-prelaunch-hardening-overlay.php"
+      - "docker-start.sh"
+      - "tests/credential-key-compat.test.php"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: remask-launch-fix-image
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout exact revision
+        uses: actions/checkout@v4
+      - name: Check Launch UI button readiness and busy guards
+        run: node tests/launch-private-catalog.test.cjs
+      - name: Preserve existing credential encryption keys and envelopes
+        run: php tests/credential-key-compat.test.php
+      - name: Build and test production Docker image
+        run: docker build --progress=plain -t remask-launch-checked .
+      - name: Authenticate GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish immutable canary tag
+        env:
+          IMAGE: ghcr.io/gooy22/remask:canary-launch-ui-${{ github.sha }}
+        run: |
+          set -euo pipefail
+          docker tag remask-launch-checked "$IMAGE"
+          docker push "$IMAGE"
+          docker buildx imagetools inspect "$IMAGE"
