@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+from tests.renderer_fixture import renderer_executable
 import shutil
 import tempfile
 import unittest
@@ -160,7 +161,7 @@ class FanPageNoClickTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_real_chromium_button_removed_after_intent_never_dispatches_click(self):
         executable = next((path for name in ("google-chrome", "chromium", "chromium-browser")
-                           if (path := shutil.which(name))), None)
+                           if (path := renderer_executable(name))), None)
         if not executable:
             self.skipTest("No local Chromium installed")
         from playwright.async_api import async_playwright

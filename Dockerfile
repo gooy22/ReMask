@@ -1,5 +1,5 @@
 # deploy-trigger: bm-preflight-sync-hotfix 2026-09-24
-FROM php:8.4-apache
+FROM php:8.4-apache AS remask-runtime
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -35,8 +35,8 @@ RUN /opt/remask-venv/bin/python -m compileall -q /opt/remask-python \
     && grep -q 'async def add_existing_page' /opt/remask-python/app/facebook_business_browser.py \
     && grep -q 'private_http_contract_v1' /opt/remask-python/main.py \
     && grep -q 'def facebook_business_browser' /opt/remask-python/app/session.py \
-    && /opt/remask-venv/bin/python -c "import playwright; import shutil; assert shutil.which('chromium')" \
-    && echo "[bm-browser-v1] Meta Business UI flow + resumable checkpoints passed"
+    && /opt/remask-venv/bin/python -c "import importlib.util, shutil; assert importlib.util.find_spec('playwright') is None; assert not any(shutil.which(name) for name in ('chromium', 'chromium-browser', 'google-chrome')); import app.payment_card_binding" \
+    && echo "[private-http] HTTP-only contracts + retained checkpoints passed"
 
 COPY .deploy/clean-preview-valid/runtime.b64.* /tmp/remask-parts/
 COPY railway-*.php railway-*.js /tmp/
@@ -167,7 +167,6 @@ RUN set -eux; \
     grep -q 'syncApiJson' /var/www/html/scripts/workspace.js; \
     ! grep -q 'нет ads_management' /var/www/html/scripts/workspace.js; \
     grep -Fq "'proxy_configured' => \$proxy !== null" /var/www/html/ajax/metaHierarchy.php; \
-    /opt/remask-venv/bin/python -c "from pathlib import Path; from playwright.sync_api import sync_playwright; src=Path('/var/www/html/scripts/workspace.js').read_text(encoding='utf-8'); p=sync_playwright().start(); b=p.chromium.launch(executable_path='/usr/bin/chromium', headless=True, args=['--no-sandbox']); page=b.new_page(); err=page.evaluate(Path('/tmp/railway-workspace-module-check.js').read_text(encoding='utf-8'), src); b.close(); p.stop(); assert not err, err"; \
     grep -q 'ad_account_bindings' /opt/remask-python/main.py; \
     grep -q 'confirmed_ad_account_bindings_for_profile' /opt/remask-python/app/provisioning/state.py; \
     grep -q 'confirmed_ad_account_binding_groups' /opt/remask-python/app/provisioning/state.py; \
@@ -588,4 +587,12 @@ EXPOSE 80
 CMD ["/var/www/html/docker-start.sh"]
 # railway deploy trigger: private-page-business-loader-v190 2026-09-29
 
+# Validate the assembled bundle as an ES module in a build-only stage.
+# Node and all renderer tooling stay outside the production filesystem.
+FROM node:22-bookworm-slim AS workspace-module-validation
+COPY --from=remask-runtime /var/www/html/scripts/workspace.js /tmp/workspace.js
+RUN node --input-type=module --check < /tmp/workspace.js \
+    && touch /tmp/workspace-module-validated
 
+FROM remask-runtime
+COPY --from=workspace-module-validation /tmp/workspace-module-validated /opt/workspace-module-validated

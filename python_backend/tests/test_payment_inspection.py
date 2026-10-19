@@ -2,6 +2,7 @@ import asyncio
 import json
 import unittest
 import tempfile
+from tests.renderer_fixture import renderer_executable
 import shutil
 from pathlib import Path
 from types import SimpleNamespace
@@ -220,7 +221,7 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['verification_status'],'LINKED')
 
     async def test_slow_all_tools_drawer_waits_for_rendered_billing_link_once(self):
-        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
+        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=renderer_executable(name))),None)
         if not executable:self.skipTest('No local Chromium installed')
         from playwright.async_api import async_playwright
         start='https://adsmanager.facebook.com/adsmanager/manage/campaigns?act='+ID
@@ -245,7 +246,7 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
             finally:await chromium.close()
 
     async def test_fresh_billing_process_uses_validated_link_and_new_page_scope(self):
-        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
+        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=renderer_executable(name))),None)
         if not executable:self.skipTest('No local Chromium installed')
         from playwright.async_api import async_playwright
         start='https://adsmanager.facebook.com/adsmanager/manage/campaigns?act='+ID
@@ -296,7 +297,7 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['verification_status'],'NONE')
 
     async def test_real_chromium_waits_for_lazy_billing_account(self):
-        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
+        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=renderer_executable(name))),None)
         if not executable:self.skipTest('No local Chromium installed')
         from playwright.async_api import async_playwright
         async with async_playwright() as playwright:

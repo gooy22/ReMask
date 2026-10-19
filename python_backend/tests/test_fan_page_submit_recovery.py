@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from tests.renderer_fixture import renderer_executable
 import shutil
 import unittest
 from types import SimpleNamespace
@@ -147,7 +148,7 @@ class FanPageSubmitRecoveryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_real_chromium_actionability_probe_sends_no_click_and_no_intent(self):
         executable = next((path for name in ("google-chrome", "chromium", "chromium-browser")
-                           if (path := shutil.which(name))), None)
+                           if (path := renderer_executable(name))), None)
         if not executable:
             self.skipTest("No local Chromium installed")
         from playwright.async_api import async_playwright
@@ -210,7 +211,7 @@ class FanPageSubmitRecoveryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_real_chromium_click_changes_document_then_confirmation_recovers(self):
         executable = next((path for name in ("google-chrome", "chromium", "chromium-browser")
-                           if (path := shutil.which(name))), None)
+                           if (path := renderer_executable(name))), None)
         if not executable:
             self.skipTest("No local Chromium installed")
         from playwright.async_api import async_playwright

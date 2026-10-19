@@ -633,9 +633,10 @@ class PageHydrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_page_autocomplete_portal_uses_exact_saved_name_and_id(self):
         # Use a real portal: a fake text-count locator cannot prove that the
         # selectable row, rather than an unrelated heading, was clicked.
+        from tests.renderer_fixture import renderer_executable
         import shutil
         executable = next((path for name in ("google-chrome", "chromium", "chromium-browser")
-                           if (path := shutil.which(name))), None)
+                           if (path := renderer_executable(name))), None)
         if not executable:
             self.skipTest("No local Chromium installed")
         from playwright.async_api import async_playwright

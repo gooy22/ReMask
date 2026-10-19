@@ -11,7 +11,15 @@ import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode, urlsplit, parse_qs
-from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+# The public entry uses private HTTP. Keep legacy fixture exception handling
+# importable without adding a renderer to the production dependency set.
+try:
+    from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+except ModuleNotFoundError as exc:
+    if exc.name != 'playwright':
+        raise
+    class PlaywrightTimeoutError(TimeoutError):
+        pass
 
 from .facebook_business_browser import BrowserBusinessError
 from .payment_inspection import account_id, masked_payment_methods, payment_summary, inspect_payment_methods, select_settings_payment_tab, selected_payment_pane_text, settings_payment_summary, selected_payment_asset, _resolve_payment_account_name
