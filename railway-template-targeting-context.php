@@ -4,7 +4,7 @@ declare(strict_types=1);
 /** Read transport only. This context is never a template destination. */
 final class RemaskTemplateTargetingContext {
     public static function sourceFailure(Throwable $error): bool {
-        return preg_match('/SESSION|CHECKPOINT|AUTH|PROXY|TIMEOUT|ACCOUNT_INACTIVE|TEMPLATE_LOOKUP_NO_ACCOUNT|PRIVATE_HTTP_(?:CONNECTION|PROTOCOL|READ)_UNAVAILABLE|PRIVATE_HTTP_PROTOCOL_ERROR/', $error->getMessage())===1;
+        return preg_match('/SESSION|CHECKPOINT|LOGIN|TWO_FACTOR|AUTH|PROXY|TIMEOUT|ACCOUNT_INACTIVE|TEMPLATE_LOOKUP_NO_ACCOUNT|PRIVATE_HTTP_(?:CONNECTION|PROTOCOL|READ)_UNAVAILABLE|PRIVATE_HTTP_PROTOCOL_ERROR/', $error->getMessage())===1;
     }
     public static function candidates(array $profiles, callable $loadCatalog, string $preferred = '', array $excluded = [], bool $discover = false): array {
         $candidates = [];
@@ -83,6 +83,12 @@ final class RemaskTemplateTargetingContext {
         $message = in_array($code, ['UNKNOWN_TARGETING_TYPE','INVALID_TARGETING_QUERY'], true)
             ? 'Выберите тип справочника и введите не более 200 символов.'
             : 'Общий справочник Meta временно недоступен. Шаблон можно редактировать и сохранить без выбора профиля.';
+        if (preg_match('/LOGIN|SESSION_EXPIRED/', $code))
+            $message='Meta вернула страницу входа вместо данных. Обновите Facebook-сессию. Сохранённые варианты доступны из кэша; новые варианты и оценка аудитории требуют действующей сессии.';
+        elseif (preg_match('/CHECKPOINT|TWO_FACTOR/', $code))
+            $message='Meta требует подтверждения входа. Завершите проверку аккаунта и обновите Facebook-сессию. Сохранённые варианты доступны из кэша.';
+        elseif (preg_match('/PROXY|PRIVATE_HTTP_(?:CONNECTION|PROTOCOL|READ)_UNAVAILABLE|PRIVATE_HTTP_PROTOCOL_ERROR/', $code))
+            $message='Не удалось соединиться с Meta. Проверьте разрешённое для аккаунта подключение. Сохранённые варианты доступны из кэша.';
         return ['code'=>$code,'message'=>$message,'settings_preserved'=>true,'template_account_bound'=>false];
     }
 }
@@ -119,6 +125,8 @@ final class RemaskTemplateTargetingReference {
         return $this->update(static function(array &$state) use ($type,$query,$now) {
             $row = $state['queries'][self::key($type,$query)] ?? null;
             if (!is_array($row) || !is_array($row['data'] ?? null) || $now-(int)($row['checked_at'] ?? 0)>2592000) return null;
+            // Exact keys safely identify older query entries for later searches.
+            $state['queries'][self::key($type,$query)]['type']=$type;
             return ['data'=>array_slice($row['data'],0,100),'checked_live'=>false,'source'=>'private_meta_template_reference',
                 'truncated'=>($row['truncated'] ?? false) === true || count($row['data'])>100,
                 'catalog_count'=>(int)($row['catalog_count'] ?? count($row['data'])),
@@ -140,7 +148,7 @@ final class RemaskTemplateTargetingReference {
         $truncated = ($proof['truncated'] ?? false) === true || count((array)($proof['data'] ?? []))>20000;
         $catalogCount = max(count($rows), count((array)($proof['data'] ?? [])), (int)($proof['catalog_count'] ?? 0));
         $this->update(static function(array &$state) use ($type,$query,$rows,$now,$truncated,$catalogCount) {
-            $state['queries'][self::key($type,$query)] = ['data'=>$rows,'checked_at'=>$now,
+            $state['queries'][self::key($type,$query)] = ['type'=>$type,'data'=>$rows,'checked_at'=>$now,
                 'truncated'=>$truncated,'catalog_count'=>$catalogCount];
             uasort($state['queries'], static fn($a,$b)=>(int)$b['checked_at']<=>(int)$a['checked_at']);
             $state['queries']=array_slice($state['queries'],0,200,true);
@@ -152,23 +160,53 @@ final class RemaskTemplateTargetingReference {
             return array_map('strval',array_keys($state['blocked']));
         });
     }
-    public function block(string $profile, int $now): void {
-        $this->update(static function(array &$state) use ($profile,$now) { $state['blocked'][$profile]=$now+600; });
+    public function block(string $profile, int $now, string $code = ''): void {
+        $this->update(static function(array &$state) use ($profile,$now,$code) {
+            $state['blocked'][$profile]=$now+600;
+            unset($state['failures'][$profile]);
+            if (preg_match('/^[A-Z][A-Z0-9_]{2,119}$/D',$code)
+                && RemaskTemplateTargetingContext::sourceFailure(new RuntimeException($code)))
+                $state['failures'][$profile]=$code;
+        });
+    }
+    public function available(array $candidates, int $now): array {
+        return $this->update(static function(array &$state) use ($candidates,$now) {
+            $available=[];$reason='TEMPLATE_LOOKUP_SOURCE_UNAVAILABLE';
+            foreach ($candidates as $candidate) {
+                $profile=$candidate['profile'];
+                if ((int)($state['blocked'][$profile] ?? 0)<=$now) {$available[]=$candidate;continue;}
+                $code=$state['failures'][$profile] ?? '';
+                if (is_string($code) && preg_match('/^[A-Z][A-Z0-9_]{2,119}$/D',$code))$reason=$code;
+            }
+            if (!$available)throw new RuntimeException($reason);
+            return $available;
+        });
     }
     public function search(string $type, string $query, int $now): ?array {
         return $this->update(static function(array &$state) use ($type,$query,$now) {
-            $row = $state['queries'][self::key($type,'')] ?? null;
-            if (!is_array($row) || $now-(int)($row['checked_at'] ?? 0)>2592000) return null;
-            $rows = array_values(array_filter((array)$row['data'], static fn($item)=>
-                preg_match('~'.preg_quote($query,'~').'~iu', (string)($item['name'] ?? '').' '.
-                    implode(' ',(array)($item['path'] ?? [])).' '.(string)($item['id'] ?? ''))===1));
+            $rows=[]; $checkedAt=$now; $truncated=false;
+            foreach ($state['queries'] as $key=>$row) {
+                // Older stores have no type metadata. Only the known browse
+                // key can identify those rows safely; never mix dictionary types.
+                if (($row['type'] ?? null)!==$type && $key!==self::key($type,'')) continue;
+                if ($now-(int)($row['checked_at'] ?? 0)>2592000) continue;
+                foreach ((array)($row['data'] ?? []) as $item) {
+                    if (preg_match('~'.preg_quote($query,'~').'~iu', (string)($item['name'] ?? '').' '.
+                        implode(' ',(array)($item['path'] ?? [])).' '.(string)($item['id'] ?? ''))!==1) continue;
+                    $id=(string)($item['type'] ?? '').':'.(string)($item['id'] ?? $item['key'] ?? '');
+                    if (isset($rows[$id])) continue;
+                    $rows[$id]=$item;
+                    $checkedAt=min($checkedAt,(int)$row['checked_at']);
+                    $truncated=$truncated || ($row['truncated'] ?? false)===true || $key!==self::key($type,'');
+                }
+            }
             // The browse tree is not the entire Meta search index. A cache
             // miss must still allow searching interests outside that tree.
             if (!$rows) return null;
-            return ['data'=>array_slice($rows,0,100),'checked_live'=>false,
-                'truncated'=>count($rows)>100 || ($row['truncated'] ?? false) === true,
+            return ['data'=>array_slice(array_values($rows),0,100),'checked_live'=>false,
+                'truncated'=>count($rows)>100 || $truncated,
                 'source'=>'private_meta_template_reference','template_account_bound'=>false,
-                'reference_checked_at'=>$row['checked_at'], 'reference_stale'=>$now-(int)$row['checked_at']>86400];
+                'reference_checked_at'=>$checkedAt, 'reference_stale'=>$now-$checkedAt>86400];
         });
     }
 }

@@ -24,7 +24,7 @@ try {
     $reference = new RemaskTemplateTargetingReference(dirname(ACCOUNTSFILENAME).'/template-targeting-'.hash('sha256',ACCOUNTSFILENAME).'.json');
     $cached = $reference->get($type, $query, time());
     if ($cached !== null) { MetaEndpoint::ok($cached); exit; }
-    if ($query !== '' && ($cached=$reference->search($type,$query,time())) !== null) {
+    if (($cached=$reference->search($type,$query,time())) !== null) {
         MetaEndpoint::ok($cached); exit;
     }
     $profiles = [];
@@ -38,8 +38,8 @@ try {
     $until = (int)(getenv('REMASK_DIRECT_TEST_UNTIL') ?: 0);
     $preferred = $until > time() && $until <= time()+7200 ? trim((string)(getenv('REMASK_DIRECT_TEST_PROFILE') ?: '')) : '';
     $excluded = array_values(array_filter(array_map('trim', explode(',', (string)(getenv('REMASK_TEMPLATE_LOOKUP_EXCLUDED_PROFILES') ?: '')))));
-    $excluded = array_unique(array_merge($excluded, $reference->blocked(time())));
-    $candidates = RemaskTemplateTargetingContext::candidates($profiles, [RemaskPrivateLaunchCatalog::class,'load'], $preferred, $excluded, true);
+    $candidates = $reference->available(RemaskTemplateTargetingContext::candidates($profiles,
+        [RemaskPrivateLaunchCatalog::class,'load'], $preferred, $excluded, true),time());
     // Ignore all client profile/account selectors. Launch keeps its own explicit scope.
     $attempted = []; $lastError = new RuntimeException('TEMPLATE_LOOKUP_SOURCE_UNAVAILABLE');
     foreach ($candidates as $context) {
@@ -62,7 +62,7 @@ try {
             $lastError = $error;
             // A query/schema failure says nothing about unrelated resources.
             if (RemaskTemplateTargetingContext::sourceFailure($error))
-                $reference->block($context['profile'], time());
+                $reference->block($context['profile'], time(), $error->getMessage());
         }
     }
     throw $lastError;

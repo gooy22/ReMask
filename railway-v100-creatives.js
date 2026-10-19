@@ -823,6 +823,11 @@ async function searchCreativeTargeting(kind) {
             : Array.isArray(data?.items) ? data.items
             : [];
         renderCreativeTargetResults(kind, rows, data?.truncated === true);
+        if (data?.source==='private_meta_template_reference' && data.reference_checked_at && results) {
+            const hint=document.createElement('div');hint.className='cr-target-empty';
+            hint.textContent='Сохранённые данные Meta · '+new Date(data.reference_checked_at*1000).toLocaleString('ru-RU')+
+                (data.reference_stale?' · актуальность не проверена':'');results.appendChild(hint);
+        }
     } catch (error) {
         if (error?.name === 'AbortError') return;
         if (creativeTargetingControllers[kind] !== controller) return;

@@ -41,13 +41,18 @@ if (typeof creativeTargetSearchConfig !== 'function') {
                 box.appendChild(button);
             }
             if(!rows.length)box.textContent='Ничего не найдено. Попробуйте другое название.';
+            if(data?.source==='private_meta_template_reference' && data.reference_checked_at){
+                const hint=document.createElement('div');hint.className='muted';
+                hint.textContent='Сохранённые данные Meta · '+new Date(data.reference_checked_at*1000).toLocaleString('ru-RU')+
+                    (data.reference_stale?' · актуальность не проверена':'');box.appendChild(hint);
+            }
             if(rows.length>100||data.truncated){
                 const hint=document.createElement('div');hint.className='muted';
                 hint.textContent='Введите название, чтобы сузить список.';box.appendChild(hint);
             }
         } catch(error){
             if(error?.name==='AbortError'||pickerControllers[type]!==controller)return;
-            box.textContent=error.payload?.message||error.meta?.message||'Не удалось загрузить справочник Meta. Повторите поиск.';
+            box.textContent=error.payload?.error?.message||error.payload?.message||error.meta?.message||error.message||'Не удалось загрузить справочник Meta. Повторите поиск.';
         } finally {if(pickerControllers[type]===controller)delete pickerControllers[type];}
     };
     searchTargeting=type=>runPicker(type);

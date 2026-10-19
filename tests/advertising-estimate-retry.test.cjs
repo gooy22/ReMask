@@ -19,9 +19,10 @@ function fixture(targets, failure) {
 }
 (async()=>{
   const target={profile:'28',account_id:'123456789'};
-  for(const code of ['CHECKPOINT_REQUIRED','SESSION_EXPIRED','PRIVATE_ADS_DRAFT_BOOTSTRAP_SCOPE_UNVERIFIED']) {
+  for(const code of ['CHECKPOINT_REQUIRED','SESSION_EXPIRED','BUSINESS_LOGIN_GATE','PRIVATE_ADS_DRAFT_BOOTSTRAP_SCOPE_UNVERIFIED']) {
     const f=fixture([target],code);await f.c.estimate();
     assert.equal(f.reads(),1);assert.equal(f.scheduled.length,0);assert.equal(f.c.needsRefresh,false);
+    if(code==='BUSINESS_LOGIN_GATE')assert.match(f.c.status.textContent,/требует входа/);
     await f.c.estimate(true);assert.equal(f.reads(),1); // focus/change cannot reopen the gated scope
   }
   for(const failure of ['HTTP_UNAVAILABLE',null]) {

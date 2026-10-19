@@ -29,6 +29,19 @@ reject partial pagination and conflicting nodes, return bounded selections, and
 mark truncation. Cached browse rows can answer later text queries without another
 profile read. Cache results never establish live advertising permissions.
 
+Saved text-search responses are also indexed by dictionary type, so a later
+substring search or empty picker can reuse those real rows without a complete
+browse tree. IDs are deduplicated, types remain isolated, and the existing 30-day
+expiry applies. Legacy entries acquire type metadata on an exact cache hit;
+unidentified legacy query hashes are never guessed. Both editors show the saved
+timestamp and mark stale results. A cache miss still requires Meta: captured
+sender modules do not contain the complete interest catalog.
+
+Business login responses stop automatic audience retries and cool down the read
+source. The cooldown retains the typed failure for eligible sources, so a login
+page is reported as a session problem rather than a network outage. Cached rows
+are returned before source selection, including while that source is blocked.
+
 One unreadable profile catalog no longer aborts selection of other sources.
 Authentication/proxy failures cool down that source; query-specific failures do
 not disable unrelated dictionaries. The deployment excludes profile 16 from
