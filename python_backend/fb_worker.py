@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import html
+from html.parser import HTMLParser
 import json
 import logging
 import os
@@ -18,6 +19,28 @@ from app.private_http import PrivateHttpClient
 
 
 log = logging.getLogger("remask_worker")
+
+
+class _LoginFormParser(HTMLParser):
+    """Recognize actual login forms, ignoring script text and comments."""
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.found = False
+
+    def handle_starttag(self, tag, attrs):
+        if tag.lower() != "form":
+            return
+        values = dict(attrs)
+        action = urlsplit(values.get("action") or "").path.lower()
+        self.found |= (str(values.get("id") or "").lower() == "login_form"
+                       or action == "/login.php" or action == "/login"
+                       or action.startswith("/login/"))
+
+
+def _has_login_form(body: str) -> bool:
+    parser = _LoginFormParser()
+    parser.feed(body)
+    return parser.found
 
 
 # ---------------------------------------------------------------------------
@@ -633,21 +656,21 @@ class FacebookWebSession:
                             )
                             continue
 
-                        lower_url = candidate_url.lower()
-                        lower_body = candidate_body.lower()
-
+                        parts = urlsplit(candidate_url)
+                        route = parts.path.lower()
                         if (
-                            "/login" in lower_url
-                            or "/checkpoint" in lower_url
-                            or "login_form" in lower_body
+                            "/login" in route
+                            or "/checkpoint" in route
+                            or _has_login_form(candidate_body)
                         ):
-                            route = urlsplit(candidate_url).path.lower()
                             auth_attempts.append({"auth_reason": "checkpoint_redirect" if "/checkpoint" in route
-                                else "login_redirect" if "/login" in route else "login_form"})
-                            attempts.append(
-                                f"{bootstrap_url}: login/checkpoint"
-                            )
-                            continue
+                                else "login_redirect" if "/login" in route else "login_form",
+                                "final_url": f"{parts.scheme}://{parts.hostname or ''}{parts.path}"})
+                            error = AuthenticationError("Meta requires session restoration before bootstrap.")
+                            error.meta_payload = {"business_precheck": auth_attempts}
+                            error.request_may_have_been_sent = False
+                            error.transport_stage = "bootstrap"
+                            raise error
 
                         if len(candidate_body) > len(best_authenticated_body):
                             best_authenticated_body = candidate_body
@@ -1001,10 +1024,7 @@ class FacebookWebSession:
                 exc.meta_payload = {**exc.meta_payload, "business_precheck": attempts}
                 raise
             parts = urlsplit(final_url)
-            login_form = bool(re.search(
-                r"<form\b[^>]*(?:\bid\s*=\s*['\"]login_form['\"]|\baction\s*=\s*['\"][^'\"]*/login(?:[/?'\"]))",
-                body, re.I,
-            ))
+            login_form = _has_login_form(body)
             gated = (
                 parts.hostname != "business.facebook.com"
                 or "/login" in parts.path.lower()
@@ -1085,7 +1105,7 @@ class FacebookWebSession:
                 auth_gated = (auth_parts.hostname != "www.facebook.com"
                               or "/login" in auth_parts.path.lower()
                               or "/checkpoint" in auth_parts.path.lower()
-                              or "login_form" in auth_body.lower() or auth_status in {401, 403})
+                              or _has_login_form(auth_body) or auth_status in {401, 403})
                 attempts.append({"requested_url": auth_url,
                     "final_url": f"{auth_parts.scheme}://{auth_parts.hostname or ''}{auth_parts.path}",
                     "http_status": auth_status, "body_bytes": len(auth_body.encode("utf-8")),

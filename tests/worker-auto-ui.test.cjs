@@ -95,7 +95,7 @@ for(const [tab,label] of [['businesses','Добавить RK'],['ad_accounts','�
   vm.runInContext(source.slice(filterStart,source.indexOf('\nasync function pythonWorkerStartAutoRkFanPages',filterStart)),auth);
   const createStart=source.indexOf('async function pythonWorkerStartFanPages(');
   vm.runInContext(source.slice(createStart,source.indexOf('\nwindow.pythonWorkerStartFanPages',createStart)),auth);
-  for(const code of ['CHECKPOINT_REQUIRED','SESSION_EXPIRED','TWO_FACTOR_REQUIRED','FACEBOOK_TEMPORARILY_BLOCKED']){
+  for(const code of ['CHECKPOINT_REQUIRED','SESSION_EXPIRED','BUSINESS_LOGIN_GATE','TWO_FACTOR_REQUIRED','FACEBOOK_TEMPORARILY_BLOCKED']){
     auth.result={ok:true,facebook_session_ready:false,auth_blocked:true,auth_error_code:code,
       browser_business:{error_code:code,error:'Original Facebook reason'}};
     calls.length=0;
@@ -302,6 +302,7 @@ vm.createContext(sandbox); vm.runInContext(source.slice(start,end), sandbox);
   rs.batchJobIds=[];rs.jobId='checkpoint';rs.busy=false;rs.job={items:[checkpoint]};calls.length=0;
   await rb.pythonWorkerRetryFailed();assert.equal(calls.length,0,'a direct call must also guard a blocked single Job');
   const details=Array.from(rb.pythonWorkerFailureDetails({...checkpoint,worker_job_id:'saved-job'}));
+  assert.match(rb.pythonWorkerFailureDetails({...temporary,error_code:'SESSION_EXPIRED'}).join(' '),/Обновить FB-сессию/);
   assert.deepEqual(details,['Job saved-job','CREATE не отправлен','Повтор недоступен']);
   assert.equal(details.join(' ').includes('secret'),false);
   console.log('Auto/BM/FP interface and checkpoint-safe single/mixed batch retries passed.');

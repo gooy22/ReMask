@@ -1,9 +1,19 @@
 import unittest
+from unittest.mock import AsyncMock
 
-from fb_worker import FacebookWebSession
+from fb_worker import AuthenticationError, FacebookWebSession, WebProfile, _has_login_form
 
 
 class FacebookDtsgBootstrapParserTests(unittest.TestCase):
+    def test_login_module_names_and_script_templates_are_not_login_forms(self):
+        for body in ('<script>var login_form = true;</script>',
+                     '<script>const template = `<form id="login_form">`;</script>',
+                     '<!-- <form action="/login.php"> -->',
+                     '<form action="/settings/save">'):
+            self.assertFalse(_has_login_form(body))
+        for body in ('<form id="login_form">', '<FORM ID=login_form>',
+                     '<form action="https://www.facebook.com/login.php?next=business">'):
+            self.assertTrue(_has_login_form(body))
     def extract(self, source: str) -> str:
         return FacebookWebSession._first_match(
             source,
@@ -85,6 +95,46 @@ class FacebookDtsgBootstrapParserTests(unittest.TestCase):
             FacebookWebSession._parse_dtsg_refresh_response(source),
             "NA_while_refresh",
         )
+
+
+class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
+    def session(self, body, url):
+        class Response:
+            status = 200
+            async def text(self): return body
+            async def __aenter__(self): return self
+            async def __aexit__(self, *args): return False
+        response = Response(); response.url = url
+        class Client:
+            calls = []
+            def get(self, url, **kwargs):
+                self.calls.append(url)
+                return response
+        session = FacebookWebSession(WebProfile(name='35', cookies={'c_user':'123456789'}, proxy=None, user_agent='fixture'))
+        client = Client()
+        session._ensure_session = AsyncMock(return_value=client)
+        session._fetch_dtsg_refresh_token = AsyncMock(return_value=('', ''))
+        session.refresh_reviewed_modules = AsyncMock()
+        return session, client
+
+    async def test_actual_login_redirect_stops_before_other_routes_refresh_or_post(self):
+        session, client = self.session('<form id="login_form">',
+            'https://business.facebook.com/business/loginpage/?secret=must-not-leak')
+        with self.assertRaises(AuthenticationError) as caught:
+            await session.bootstrap()
+        self.assertEqual(len(client.calls), 1)
+        session._fetch_dtsg_refresh_token.assert_not_awaited()
+        self.assertFalse(caught.exception.request_may_have_been_sent)
+        from app.private_auth import private_auth_error
+        self.assertEqual(private_auth_error(caught.exception).code, 'BUSINESS_LOGIN_GATE')
+        self.assertNotIn('must-not-leak', str(caught.exception.meta_payload))
+
+    async def test_authenticated_document_with_login_module_name_keeps_usable_session(self):
+        session, client = self.session('<script>var login_form=true;</script>'
+            '["DTSGInitialData",[],{"token":"fixture-token"}]',
+            'https://business.facebook.com/latest/home?ref=login')
+        self.assertEqual((await session.bootstrap()).fb_dtsg, 'fixture-token')
+        self.assertEqual(len(client.calls), 1)
 
 
 if __name__ == "__main__":

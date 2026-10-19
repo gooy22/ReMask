@@ -389,6 +389,9 @@ function pythonWorkerFailureDetails(item) {
   }
   if (result.phase === 'CREATE_NOT_SUBMITTED') parts.push('CREATE не отправлен');
   else if (result.phase === 'CREATE_SENT') parts.push('CREATE отправлен; результат требует проверки');
+  if (['SESSION_EXPIRED','BUSINESS_LOGIN_GATE'].includes(String(item && item.error_code || '').toUpperCase())) {
+    parts.push('Meta требует входа: выберите этот профиль → Обновить FB-сессию. Комплект продолжайте после успешного обновления сессии.');
+  }
   if (!pythonWorkerItemCanRetry(item)) parts.push('Повтор недоступен');
   return parts;
 }
@@ -653,6 +656,7 @@ function pythonWorkerIsProfileAuthBlockedCode(code) {
   return [
     'CHECKPOINT_REQUIRED',
     'SESSION_EXPIRED',
+    'BUSINESS_LOGIN_GATE',
     'TWO_FACTOR_REQUIRED',
     'FACEBOOK_TEMPORARILY_BLOCKED'
   ].indexOf(String(code || '').trim().toUpperCase()) !== -1;
