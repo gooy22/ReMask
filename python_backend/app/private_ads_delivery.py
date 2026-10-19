@@ -123,7 +123,7 @@ async def run_delivery(launch, *, profile_id, context, session, payload, task_id
         if proof["payment_selection_required"]:
             raise fail("PAYMENT_SELECTION_REQUIRED", "Choose the fresh linked payment method before activation")
     else:
-        row = await client.get("/act_" + target["ad_account_id"], {"fields": ["id", "business"]})
+        row = await client.get("/act_" + target["ad_account_id"], {"fields": ["id", "account_id", "business"]})
         if (not isinstance(row.get("id"), str) or row["id"].removeprefix("act_") != target["ad_account_id"]
                 or not isinstance(row.get("business"), dict) or row["business"].get("id") != target["business_id"]):
             raise fail("DELIVERY_SCOPE_MISMATCH", "Delivery account did not confirm its exact Business")

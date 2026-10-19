@@ -111,7 +111,7 @@ async def read_ad_account_inventory(web, business, name, expected=''):
     payload = await execute(web, 'READ_RK', business=business)
     diag = diagnostic('READ_RK', payload)
     normalized = _normalize_connected_inventory([payload], business)
-    observations, accounts = [], {}
+    observations, accounts, conflicting_aliases = [], {}, set()
     if not isinstance(payload, dict) or payload.get('errors') or payload.get('error'):
         normalized = []
     for result in normalized:
@@ -120,13 +120,20 @@ async def read_ad_account_inventory(web, business, name, expected=''):
             for account in _extract_inventory_ad_account_rows(node, request_scoped=True):
                 key = identity(account.get('id'))
                 if key and identity(account.get('business_id')) == business:
+                    if (key in accounts and identity(accounts[key].get('business_object_ui_id'))
+                            != identity(account.get('business_object_ui_id'))):
+                        conflicting_aliases.add(key)
                     accounts[key] = account
     ids = sorted(accounts)
     named = sorted(key for key, row in accounts.items() if str(row.get('name') or '').strip().casefold() == name.casefold())
     complete = bool(observations) and all(observations)
     selected = expected if expected and expected in ids else (named[0] if not expected and complete and len(named) == 1 else '')
-    diag.update(business_id=business, account_ids=ids, complete=complete)
+    asset_ui_id = (identity(accounts.get(selected, {}).get('business_object_ui_id'))
+                   if selected not in conflicting_aliases else '')
+    diag.update(business_id=business, account_ids=ids, complete=complete,
+        selected_account_id=selected, asset_ui_id=asset_ui_id,
+        alias_conflict=selected in conflicting_aliases)
     log.info('RK static inventory verification=%s', json.dumps(diag, separators=(',', ':')))
     return {'id': selected, 'ids': ids, 'named': named, 'complete': complete,
-        'asset_ui_id': identity(accounts.get(selected, {}).get('business_object_ui_id')),
+        'asset_ui_id': asset_ui_id,
         'source': 'static_http_exact_business_inventory', 'diagnostics': [diag]}

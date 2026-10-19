@@ -30,7 +30,7 @@ class _ReadClient:
         return await self.http.get(path.removeprefix("/" + self.catalog.data["api_version"]), params or {})
 
     async def account_record(self, *, require_active=True, currency=False):
-        fields = ["id", "account_status", "business", "ad_account_promotable_objects"]
+        fields = ["id", "account_id", "account_status", "business", "ad_account_promotable_objects"]
         if currency:
             fields.append("currency")
         row = await self.request("ACCOUNT_READ", params={"fields":

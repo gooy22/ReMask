@@ -194,11 +194,7 @@ class InstalledLaunchTests(unittest.TestCase):
         self.assertNotIn('forecast',self.bundles[0]['data'])
 
     def select_estimate_account(self):
-        self.page.evaluate("""() => {
-            state.targets=[];state.profile="20";
-            $("adAccount").innerHTML='<option value="act_123456" selected>Fixture RK</option>';
-            $("adAccount").dispatchEvent(new Event("change",{bubbles:true}));
-        }""")
+        self.page.evaluate('fixtureSingleTarget("act_123456")')
 
     def test_launch_audience_sidebar_tracks_budget_and_survives_saved_bundle_reload(self):
         self.page.set_viewport_size({'width':1600,'height':1000})

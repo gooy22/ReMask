@@ -120,7 +120,7 @@ class AdsManagerLaunch:
         from .static_payment_read import inspect_methods, complete_methods
         account = target["ad_account_id"]
         row = await client.get("/act_" + account,
-            {"fields": ["id", "account_status", "business", "ad_account_promotable_objects"]})
+            {"fields": ["id", "account_id", "account_status", "business", "ad_account_promotable_objects"]})
         business = row.get("business") if isinstance(row, dict) else None
         promotable = row.get("ad_account_promotable_objects") if isinstance(row, dict) else None
         pages = promotable.get("promotable_page_ids") if isinstance(promotable, dict) else None
@@ -204,7 +204,7 @@ class AdsManagerLaunch:
             raise fail("TRANSPORT_UNAVAILABLE", "Profile HTTP connection did not reach Ads Manager", True) from None
         if expected_creative is not None:
             client.read_only = True
-            row = await client.get("/act_" + target["ad_account_id"], {"fields": ["id", "business"]})
+            row = await client.get("/act_" + target["ad_account_id"], {"fields": ["id", "account_id", "business"]})
             if (not isinstance(row.get("id"), str) or row["id"].removeprefix("act_") != target["ad_account_id"]
                     or not isinstance(row.get("business"), dict) or row["business"].get("id") != target["business_id"]):
                 raise fail("ACCOUNT_SCOPE_UNVERIFIED", "Publication recovery account/Business is unconfirmed")

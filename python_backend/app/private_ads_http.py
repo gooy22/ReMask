@@ -167,6 +167,10 @@ class AdsManagerPrivateHttp:
         self.web, self.context = web, context
         self.read_only = False
         self.document_origin = 'https://adsmanager.facebook.com'
+        # Settings calls business_object_id the admarketID and returns the
+        # advertising/UI ID separately. This alias is usable only after fresh
+        # exact-Business inventory independently proves the pair below.
+        self._native_account_id = context.account_id
         self._profile_proxy = web.profile.proxy
         self._cookie_digest = self._cookies()
         self._profile_name = getattr(web.profile, "name", "")
@@ -440,7 +444,60 @@ class AdsManagerPrivateHttp:
             raise fail("HTTP_UNAVAILABLE", "Advertising HTTP request did not return a usable response", True) from None
         if not isinstance(result, dict) or result.get("error") or result.get("errors"):
             raise fail("REQUEST_REJECTED", "Meta returned an advertising request error")
-        return result
+        if method == 'GET' and path == '/act_' + self.context.account_id:
+            await self._confirm_account_alias(result)
+        return self._account_response(path, result)
+
+    async def _confirm_account_alias(self, account):
+        if self._native_account_id != self.context.account_id:
+            return
+        native, observed = account.get('account_id'), account.get('id')
+        native_id = str(native) if type(native) in (str, int) else ''
+        observed_id = str(observed).removeprefix('act_') if type(observed) in (str, int) else ''
+        if (not re.fullmatch(r'\d{5,30}', native_id)
+                or native_id == self.context.account_id or native_id != observed_id
+                or not isinstance(account.get('business'), dict)
+                or account['business'].get('id') != self.context.business_id
+                or not callable(getattr(self.web, 'graphql', None))):
+            return
+        from .static_meta_inventory import read_ad_account_inventory
+        proof = await read_ad_account_inventory(self.web, self.context.business_id, '', self.context.account_id)
+        if (proof.get('id') == self.context.account_id
+                and proof.get('asset_ui_id') == native_id and self._profile_matches()):
+            self._native_account_id = native_id
+            log.info('ads_bootstrap scope_alias_confirmed profile=%s source=exact_business_inventory requested_account=%s native_account=%s',
+                self._profile_name, self.context.account_id, native_id)
+
+    def _account_response(self, path, result):
+        """Expose the selected Settings identity consistently to scope guards.
+
+        No generic object ID is rewritten. Only account_id fields equal to the
+        independently proven native ID, and the root of an exact account read,
+        are mapped to the selected account. Foreign account values stay intact
+        so resource/draft/media verification can reject them normally.
+        """
+        if self._native_account_id == self.context.account_id:
+            return result
+        def visit(value, depth=0):
+            if depth > 32:
+                raise fail('RESPONSE_INVALID', 'Advertising account response exceeds its nesting limit')
+            if isinstance(value, dict):
+                return {key: (self.context.account_id
+                    if key == 'account_id' and type(child) in (str, int)
+                    and str(child).removeprefix('act_') == self._native_account_id
+                    else visit(child, depth+1)) for key, child in value.items()}
+            if isinstance(value, list):
+                return [visit(child, depth+1) for child in value]
+            return value
+        mapped = visit(result)
+        if (path == '/act_' + self.context.account_id and 'account_id' in mapped
+                and mapped['account_id'] != self.context.account_id):
+            raise fail('READ_SCOPE_MISMATCH', 'Account read conflicts with the proven Settings identity')
+        if (path == '/act_' + self.context.account_id
+                and type(mapped.get('id')) in (str, int)
+                and str(mapped['id']).removeprefix('act_') == self._native_account_id):
+            mapped['id'] = self.context.account_id
+        return mapped
 
     async def get(self, path, params):
         return await self.request("GET", path, params)
