@@ -42,6 +42,7 @@ RUN /opt/remask-venv/bin/python -m compileall -q /opt/remask-python \
 COPY .deploy/clean-preview-valid/runtime.b64.* /tmp/remask-parts/
 COPY railway-*.php railway-*.js /tmp/
 COPY tests/payment-card-vault.test.php /tmp/remask-tests/payment-card-vault.test.php
+COPY tests/credential-key-compat.test.php /tmp/remask-tests/credential-key-compat.test.php
 COPY tests/private-inventory-identity.test.php /tmp/remask-tests/private-inventory-identity.test.php
 COPY tests/template-targeting-context.test.php /tmp/remask-tests/template-targeting-context.test.php
 COPY tests/readiness.test.php /tmp/remask-tests/readiness.test.php
@@ -49,6 +50,7 @@ COPY docker-start.sh /tmp/docker-start.sh
 
 RUN set -eux; \
     php /tmp/remask-tests/payment-card-vault.test.php; \
+    php /tmp/remask-tests/credential-key-compat.test.php; \
     cp /tmp/railway-v100-creativeLibrary.php /tmp/remask-v100-creativeLibrary.php; \
     cp /tmp/railway-v100-creativePreview.php /tmp/remask-v100-creativePreview.php; \
     cp /tmp/railway-v100-creatives.php /tmp/remask-v100-creatives.php; \

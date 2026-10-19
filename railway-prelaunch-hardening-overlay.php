@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 $root = '/var/www/html';
-foreach (['AtomicJsonFile','RemaskRequestPolicy','RemaskLoginThrottle','FbAccountSerializer','MetaDraftStore','MediaLibraryStore','CreativePresetStore','MetaBundleStore','WorkspaceMetaStore','MetaJobStore','MetaCacheStore','MetaUsageStore','FileActivityLogStore'] as $name) {
+foreach (['AtomicJsonFile','CredentialVault','RemaskRequestPolicy','RemaskLoginThrottle','FbAccountSerializer','MetaDraftStore','MediaLibraryStore','CreativePresetStore','MetaBundleStore','WorkspaceMetaStore','MetaJobStore','MetaCacheStore','MetaUsageStore','FileActivityLogStore'] as $name) {
     if (!copy('/tmp/railway-safe-'.$name.'.php', $root.'/classes/'.$name.'.php')) throw new RuntimeException('Hardening source unavailable: '.$name);
 }
 copy('/tmp/railway-safe-checkpassword.php', $root.'/checkpassword.php');

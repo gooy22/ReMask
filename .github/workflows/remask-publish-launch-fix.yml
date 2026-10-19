@@ -8,6 +8,10 @@ on:
       - "railway-launch-private-catalog.js"
       - "tests/private-launch-completion.browser.py"
       - "tests/launch-private-catalog.test.cjs"
+      - "railway-safe-CredentialVault.php"
+      - "railway-prelaunch-hardening-overlay.php"
+      - "docker-start.sh"
+      - "tests/credential-key-compat.test.php"
   workflow_dispatch:
 
 permissions:
@@ -27,6 +31,8 @@ jobs:
         uses: actions/checkout@v4
       - name: Check Launch UI button readiness and busy guards
         run: node tests/launch-private-catalog.test.cjs
+      - name: Preserve existing credential encryption keys and envelopes
+        run: php tests/credential-key-compat.test.php
       - name: Build and test production Docker image
         run: docker build --progress=plain -t remask-launch-checked .
       - name: Authenticate GHCR
