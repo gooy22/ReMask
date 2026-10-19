@@ -691,11 +691,17 @@ validateReady=function() {
     for (const id of ['reviewLaunch','launchButton','serverDryRun','dryRunPlan']) {
         const button=$(id);
         if(!button)continue;
-        button.disabled=!readiness.ready||busy;
-        button.title=readiness.ready?remaskPrivateLaunchNotice:readiness.reason;
+        // Form-completeness failures are reported by the click handler:
+        // review-only checks locally and Launch checks before creating a job.
+        // A disabled button prevented operators from reaching either handler.
+        // Only in-flight work disables the controls to prevent duplicate jobs.
+        button.disabled=busy;
+        button.title=busy?'Подождите завершения текущей проверки.':
+            (readiness.ready?remaskPrivateLaunchNotice:
+            'Проверка при нажатии: '+readiness.reason);
     }
-    // A disabled control cannot be clicked to show its validation error.
-    // Keep all guards intact and expose the concrete reason accessibly.
+    // Keep validation visible before the click without blocking interaction.
+    // Never skip validation inside remaskPrivatePrepareConfig or server review.
     const anchor=$('reviewLaunch')||$('launchButton');
     if(anchor?.parentNode) {
         let diagnostic=$('remaskPrivateDisabledReason');
@@ -708,7 +714,8 @@ validateReady=function() {
             anchor.parentNode.appendChild(diagnostic);
         }
         diagnostic.hidden=readiness.ready||busy;
-        diagnostic.textContent=diagnostic.hidden?'':'Недоступно: '+readiness.reason;
+        diagnostic.textContent=diagnostic.hidden?'':'Перед запуском проверьте: '+readiness.reason+
+            ' Нажатие на кнопку покажет результат проверки.';
     }
 };
 validateReady();
