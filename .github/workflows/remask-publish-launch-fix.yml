@@ -5,6 +5,8 @@ on:
       - fix/launch-readiness-reasons-20261019
     paths:
       - ".github/workflows/remask-publish-launch-fix.yml"
+      - "railway-launch-private-catalog.js"
+      - "tests/private-launch-completion.browser.py"
   workflow_dispatch:
 
 permissions:
