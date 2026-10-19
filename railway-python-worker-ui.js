@@ -184,6 +184,15 @@ function pythonWorkerPageTargetPlan(inventory, tab, selected, personalScopes) {
     if (tab==='businesses') businesses.add(profile+':'+String(row.id||row.business_id||row.bm_id||''));
     if (tab==='ad_accounts') accounts.add(profile+':'+String(row.id||row.ad_account_id||row.account_id||'').replace(/^act_/i,''));
   }
+  // Name each Business's Page using all profile targets, so selecting only
+  // BM2 never renames its Page to the first bundle's name.
+  const profileBusinesses=new Map();
+  for (const row of (inventory && inventory.ad_accounts)||[]) {
+    const profile=profileOf(row), business=String(row.business_id||row.businessId||row.bm_id||'').trim();
+    if (!profiles.has(profile)||!/^\d+$/.test(business)||String((personalScopes||{})[profile]||'')===business) continue;
+    if (!profileBusinesses.has(profile)) profileBusinesses.set(profile,new Set());
+    profileBusinesses.get(profile).add(business);
+  }
   const seen=new Set(); const targets=[];
   for (const row of (inventory && inventory.ad_accounts)||[]) {
     const profile=profileOf(row), business=String(row.business_id||row.businessId||row.bm_id||'').trim();
@@ -193,8 +202,10 @@ function pythonWorkerPageTargetPlan(inventory, tab, selected, personalScopes) {
     if (tab==='businesses'&&!businesses.has(profile+':'+business)) continue;
     if (tab==='ad_accounts'&&!accounts.has(profile+':'+account)) continue;
     const key=profile+':'+business+':'+account; if (seen.has(key)) continue; seen.add(key);
+    const ordered=Array.from(profileBusinesses.get(profile)||[]).sort((a,b)=>a.length-b.length||a.localeCompare(b));
     targets.push({profile_id:profile,business_id:business,ad_account_id:account,
-      ad_account_name:String(row.name||row.account_name||account)});
+      ad_account_name:String(row.name||row.account_name||account),
+      bundle_page_name:ordered.indexOf(business)===1?'PrgsTeam':'PrgssTeam'});
   }
   return {profiles:Array.from(profiles),targets:targets};
 }
@@ -205,7 +216,7 @@ async function pythonWorkerPrepareCommonPage() {
   if (!['profiles','businesses','ad_accounts'].includes(tab)) return;
   const rows=selectedRows(tab)||[]; if (!rows.length) return;
   pythonWorkerUiState.busy=true; pythonWorkerSelectionRefresh();
-  pythonWorkerSetText('pythonPwStatus','Подготавливаю одну FP на каждый выбранный FB-профиль…');
+  pythonWorkerSetText('pythonPwStatus','Подготавливаю отдельную FP для каждого выбранного BM и доступ его РК…');
   try {
     let plan=pythonWorkerPageTargetPlan(state.inventory,tab,rows,{});
     const scopes={};
@@ -216,12 +227,12 @@ async function pythonWorkerPrepareCommonPage() {
     plan=pythonWorkerPageTargetPlan(state.inventory,tab,rows,scopes);
     const groups=new Map(plan.profiles.map(profile=>[profile,{profile_id:profile,tasks:[]}]));
     for (const target of plan.targets) {
-      const key='profile-page-'+target.business_id+'-'+target.ad_account_id;
+      const key='bundle-page-v2-'+target.business_id+'-'+target.ad_account_id;
       groups.get(target.profile_id).tasks.push({action:'provisioning',idempotency_key:key,payload:{
-        steps:['PROXY_CHECK','FAN_PAGES','PAGE_ACCESS'],scope_key:key,parameters:{
-          FAN_PAGES:{common_page:true,page_name:'PrgssTeam',count:1,policies_accepted:true},
+        steps:['PROXY_CHECK','PAGE_ACCESS'],scope_key:key,parameters:{
           PAGE_ACCESS:{existing_target:true,business_id:target.business_id,ad_account_id:target.ad_account_id,
-            ad_account_name:target.ad_account_name}}}});
+            ad_account_name:target.ad_account_name,page_topology:'ONE_PAGE_PER_BUSINESS',
+            bundle_page_name:target.bundle_page_name,policies_accepted:true}}}});
     }
     for (const [profile,group] of groups) if (!group.tasks.length) {
       if (tab!=='profiles') { groups.delete(profile); continue; }
@@ -231,12 +242,13 @@ async function pythonWorkerPrepareCommonPage() {
     }
     if (!groups.size) throw new Error('У выбранных BM нет созданных РК. Личные РК исключены.');
     const key=pythonWorkerStableKey(Array.from(groups.keys()).sort().join('|')+'|'+plan.targets.map(t=>t.profile_id+':'+t.ad_account_id).sort().join('|'));
-    const data=await pythonWorkerBridge({action:'create',idempotency_key:'profile-pages-'+key,profiles:Array.from(groups.values())});
+    const data=await pythonWorkerBridge({action:'create',idempotency_key:'bundle-pages-v2-'+key,profiles:Array.from(groups.values())});
     const job=data && data.job;
     if (!job || !job.job_id) throw new Error('Worker не вернул Job для подготовки FP.');
     pythonWorkerClearBatchState(); pythonWorkerUiState.jobId=job.job_id;
     localStorage.setItem('remask_python_worker_job_v1',job.job_id);
-    if (['FAILED','PARTIAL'].includes(String(job.status))) await pythonWorkerBridge({action:'retry_failed',job_id:job.job_id});
+    // Display retained failures. Auth gates and Meta creation limits must never
+    // be retried automatically merely because the action is opened again.
     await pythonWorkerPoll();
   } catch(error) {
     pythonWorkerUiState.busy=false; pythonWorkerSelectionRefresh();
