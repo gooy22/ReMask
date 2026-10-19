@@ -28,6 +28,8 @@ class PrivateOnlySyncTests(unittest.IsolatedAsyncioTestCase):
         session.facebook_business_browser.assert_not_awaited()
         self.assertIs(read.call_args.args[0],web)
         self.assertTrue(read.call_args.kwargs['execute_read_queries'])
+        self.assertTrue(read.call_args.kwargs['fast_sync'])
+        self.assertTrue(web.defer_module_refresh)
         self.assertFalse(read.call_args.kwargs['discover_businesses'])
         self.assertEqual(read.call_args.kwargs['known_business_ids'],{BM})
         self.assertEqual(read.call_args.kwargs['known_accounts_by_business'],{BM:{RK}})

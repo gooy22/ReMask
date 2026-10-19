@@ -283,14 +283,14 @@ def _has_complete_scoped_inventory(payload: Any) -> bool:
     return bool(observations) and all(observations)
 
 
-async def _fetch_payloads(web, url: str) -> tuple[list[Any], dict[str, Any]]:
+async def _fetch_payloads(web, url: str, *, refresh_modules: bool = True) -> tuple[list[Any], dict[str, Any]]:
     status, body, final_url = await web.fetch_text(url, max_bytes=5_000_000)
     gate = _auth_gate(final_url, body)
     payloads = _json_payloads(body)
     target, final = urlsplit(url), urlsplit(final_url)
     trusted = final.scheme == "https" and final.hostname in {"facebook.com", "www.facebook.com",
         "business.facebook.com", "adsmanager.facebook.com"}
-    if status == 200 and not gate and trusted:
+    if refresh_modules and status == 200 and not gate and trusted:
         from .contract_maintenance.module_refresh import refresh_due
         refresh = getattr(web, 'refresh_reviewed_modules', None)
         if callable(refresh) and (not hasattr(web, '_module_collection_progress') or refresh_due(web)):
@@ -316,6 +316,7 @@ async def private_inventory_snapshot(
     personal_scope_id: str = "",
     discover_businesses: bool = True,
     execute_read_queries: bool = False,
+    fast_sync: bool = False,
 ) -> dict[str, Any]:
     """Read Meta inventory without Chromium.
 
@@ -358,7 +359,7 @@ async def private_inventory_snapshot(
     ) if discover_businesses and not discovery_complete and not discovery_auth_blocked else ()
     for url in discovery_urls:
         try:
-            payloads, diag = await _fetch_payloads(web, url)
+            payloads, diag = await _fetch_payloads(web, url, refresh_modules=not fast_sync)
         except Exception as exc:
             from .private_transport_error import private_transport_error
             _, failure = private_transport_error(exc)
@@ -429,6 +430,59 @@ async def private_inventory_snapshot(
                         continue
                     account_rows[account_id] = {**account, "id": account_id, "account_id": account_id, "business_id": business_id}
 
+        # Interactive Sync prefers reviewed read-only GraphQL contracts.
+        # Never consider a partial result complete and never erase durable hints.
+        static_verified = False
+        if fast_sync and execute_read_queries and callable(getattr(web, "graphql", None)):
+            try:
+                from .static_meta_inventory import read_ad_account_inventory
+                proof = await asyncio.wait_for(
+                    read_ad_account_inventory(web, business_id, ""), timeout=6.0,
+                )
+                for item in proof.get("account_rows", []):
+                    if not isinstance(item, dict):
+                        continue
+                    account_id = _clean_id(item.get("id") or item.get("account_id"))
+                    if not account_id or _clean_id(item.get("business_id")) != business_id:
+                        continue
+                    account_rows[account_id] = {
+                        **item, "id": account_id,
+                        "account_id": account_id, "business_id": business_id,
+                    }
+                authoritative_container = proof.get("complete") is True
+                static_verified = (
+                    bool(expected) and expected.issubset(account_rows)
+                ) or (
+                    authoritative_container and (
+                        not expected or expected.issubset(account_rows)
+                    )
+                )
+                business_diags.append({
+                    "phase": "static_graphql_inventory",
+                    "source": proof.get("source", ""),
+                    "complete": authoritative_container,
+                    "confirmed_expected_account_ids": sorted(expected.intersection(account_rows)),
+                    "account_count": len(account_rows),
+                })
+            except Exception as exc:
+                from .private_auth import private_auth_error
+                from .private_transport_error import private_transport_error
+                auth = private_auth_error(exc)
+                _, failure = private_transport_error(exc)
+                business_diags.append({
+                    "phase": "static_graphql_inventory",
+                    "code": auth.code if auth else failure["code"],
+                    "auth_gate": auth.code if auth else "",
+                    "error_type": type(exc).__name__,
+                })
+                if auth:
+                    diagnostics.extend(business_diags)
+                    return {'ready': False, 'businesses': rows,
+                        'confirmed_business_ids': sorted(confirmed_businesses),
+                        'inconclusive_business_ids': sorted(targets - confirmed_businesses),
+                        'discovered_business_ids': sorted(businesses),
+                        'discovery_complete': discovery_complete, 'diagnostics': diagnostics}
+
         urls = [
             "https://business.facebook.com/latest/settings/ad_accounts/"
             f"?nav_ref=bm_settings_redirect_migration&bm_redirect_migration=true&business_id={business_id}",
@@ -446,9 +500,9 @@ async def private_inventory_snapshot(
                 "https://adsmanager.facebook.com/adsmanager/manage/campaigns"
                 f"?act={expected_id}&business_id={business_id}",
             ])
-        for url in urls:
+        for url in ([] if static_verified else urls):
             try:
-                payloads, diag = await _fetch_payloads(web, url)
+                payloads, diag = await _fetch_payloads(web, url, refresh_modules=not fast_sync)
             except Exception as exc:
                 from .private_transport_error import private_transport_error
                 _, failure = private_transport_error(exc)
@@ -472,7 +526,7 @@ async def private_inventory_snapshot(
             if (expected and expected.issubset(account_rows)) or authoritative_container:
                 break
 
-        if (execute_read_queries and settings_document and not authoritative_container
+        if (execute_read_queries and not fast_sync and settings_document and not authoritative_container
                 and not (expected and expected.issubset(account_rows))
                 and not any(row.get("auth_gate") for row in business_diags)):
             from .private_inventory_queries import read_private_inventory_queries
@@ -483,9 +537,12 @@ async def private_inventory_snapshot(
                 accept(result["payloads"], request_scoped=True, asset_scope=result["asset_scope"], has_errors=result["has_errors"])
 
         confirmed_expected = sorted(expected.intersection(account_rows))
+        # A partial collection can confirm an expected identity, but must
+        # never be treated as the complete inventory in the fast Sync path.
+        # The legacy path retains its previous reconciliation semantics.
         ready = bool(account_rows) and (
             not expected or expected.issubset(account_rows)
-        )
+        ) and (not fast_sync or authoritative_container)
         confirmed_empty = bool(authoritative_container and not account_rows and not expected)
 
         if ready or confirmed_empty:
@@ -501,7 +558,7 @@ async def private_inventory_snapshot(
             "ad_accounts_ready": bool(ready or confirmed_empty),
             "ad_accounts_partial": bool(account_rows and not authoritative_container),
             "ad_accounts_source": (
-                "private_http_relay_inventory"
+                ("static_graphql_inventory" if static_verified else "private_http_relay_inventory")
                 if ready or confirmed_empty
                 else "private_http_relay_inconclusive"
             ),

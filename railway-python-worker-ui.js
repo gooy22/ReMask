@@ -1342,7 +1342,9 @@ async function pythonWorkerRefreshSuccessfulProfiles(items) {
   const profiles = Array.from(new Set(
     (Array.isArray(items) ? items : [])
       .filter(function(item) {
-        return item && String(item.status || '').toUpperCase() === 'SUCCESS';
+        // A later bundle step may fail after BM/RK CREATE succeeded. Reload
+        // local confirmed identities for every terminal item, without Meta IO.
+        return item && ['SUCCESS', 'FAILED', 'PARTIAL'].includes(String(item.status || '').toUpperCase());
       })
       .map(function(item) {
         return String(item.profile_id || '').trim();
@@ -2182,7 +2184,7 @@ async function pythonWorkerPoll() {
           : entityFailureLabel + (errors.join(' · ') || 'неизвестная ошибка')
       );
 
-      if (status === 'PARTIAL') {
+      if (status === 'PARTIAL' || status === 'FAILED') {
         const unconfirmed = await pythonWorkerRefreshSuccessfulProfiles(items);
         if (unconfirmed.length) {
           pythonWorkerSetText(
