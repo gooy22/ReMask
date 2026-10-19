@@ -241,7 +241,7 @@ class AdsManagerPrivateHttp:
             # Before returning a usable sender, prove the requested account
             # and BM through the reviewed account READ on this same session.
             client.read_only = True
-            account = await client.get("/act_" + account_id, {"fields": ["id", "business"]})
+            account = await client.get("/act_" + account_id, {"fields": ["id", "account_id", "business"]})
             # JSON can carry an ID as an exact integer. Never accept floats,
             # booleans or rounded/coerced IDs when proving an advertising scope.
             observed = account.get("id")
@@ -249,12 +249,20 @@ class AdsManagerPrivateHttp:
                            if type(observed) in (str, int) else "")
             if not re.fullmatch(r"\d{5,30}", observed_id):
                 observed_id = ""
+            legacy = account.get("account_id")
+            legacy_id = str(legacy) if type(legacy) in (str, int) else ""
+            if not re.fullmatch(r"\d{5,30}", legacy_id):
+                legacy_id = ""
+            # Meta may return a distinct Graph object ID. Its explicit native
+            # account_id is authoritative; without it require the exact id.
+            account_matches = (legacy_id == account_id if legacy is not None
+                               else observed_id == account_id)
             business_matches = (isinstance(account.get("business"), dict)
                                 and account["business"].get("id") == business_id)
-            if observed_id != account_id or not business_matches:
-                log.warning("ads_bootstrap scope_rejected profile=%s account_matches=%s business_matches=%s requested_account=%s observed_account=%s id_type=%s",
-                    getattr(web.profile, "name", ""), observed_id == account_id,
-                    business_matches, account_id, observed_id or "invalid", type(observed).__name__)
+            if not account_matches or not business_matches:
+                log.warning("ads_bootstrap scope_rejected profile=%s account_matches=%s business_matches=%s requested_account=%s observed_account=%s native_account=%s id_type=%s",
+                    getattr(web.profile, "name", ""), account_matches,
+                    business_matches, account_id, observed_id or "invalid", legacy_id or "absent", type(observed).__name__)
                 raise fail("BOOTSTRAP_SCOPE_UNVERIFIED", "Ads Manager did not confirm the requested account and Business", True)
             client.read_only = False
             log.info("ads_bootstrap scope_confirmed profile=%s source=exact_account_read", getattr(web.profile, "name", ""))
