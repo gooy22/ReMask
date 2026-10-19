@@ -527,9 +527,12 @@ async def private_inventory_snapshot(
                 accept(result["payloads"], request_scoped=True, asset_scope=result["asset_scope"], has_errors=result["has_errors"])
 
         confirmed_expected = sorted(expected.intersection(account_rows))
+        # A partial collection can confirm an expected identity, but must
+        # never be treated as the complete inventory in the fast Sync path.
+        # The legacy path retains its previous reconciliation semantics.
         ready = bool(account_rows) and (
             not expected or expected.issubset(account_rows)
-        )
+        ) and (not fast_sync or authoritative_container)
         confirmed_empty = bool(authoritative_container and not account_rows and not expected)
 
         if ready or confirmed_empty:
