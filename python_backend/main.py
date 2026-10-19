@@ -2107,6 +2107,8 @@ async def profile_live_inventory(
             # An inconclusive read cannot switch to a renderer session.
             stage='private_inventory'
             private_started=time.monotonic()
+            # Safe rollout switch; default keeps the existing Sync behavior.
+            fast_sync = str(os.getenv('REMASK_FAST_INVENTORY_SYNC', '0')).strip().lower() in {'1', 'true', 'yes', 'on'}
             private_snapshot: dict[str,Any] = {}
             try:
                 facebook_web=await meta_transport.facebook_web()
@@ -2119,6 +2121,7 @@ async def profile_live_inventory(
                         personal_scope_id=personal_scope_id,
                         discover_businesses=not bool(requested_business_ids),
                         execute_read_queries=True,
+                        fast_sync=fast_sync,
                     ),
                     private_timeout,
                 )
@@ -2187,7 +2190,9 @@ async def profile_live_inventory(
                 try:
                     private_page_timeout=min(3.5,budget(4.0))
                     private_page_result=await hard_deadline(
-                        list_pages_via_private_graphql(facebook_web),
+                        list_pages_via_private_graphql(
+                            facebook_web, allow_runtime_discovery=not fast_sync,
+                        ),
                         private_page_timeout,
                     )
                     for page in private_page_result.pages or []:
