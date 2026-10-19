@@ -229,15 +229,15 @@ async function pythonWorkerPrepareCommonPage() {
     for (const target of plan.targets) {
       const key='bundle-page-v2-'+target.business_id+'-'+target.ad_account_id;
       groups.get(target.profile_id).tasks.push({action:'provisioning',idempotency_key:key,payload:{
-        steps:['PROXY_CHECK','PAGE_ACCESS'],scope_key:key,parameters:{
+        steps:['PROXY_CHECK','PAGE_ACCESS'],scope_key:key,transport_mode:'private_http_only',parameters:{
           PAGE_ACCESS:{existing_target:true,business_id:target.business_id,ad_account_id:target.ad_account_id,
-            ad_account_name:target.ad_account_name,page_topology:'ONE_PAGE_PER_BUSINESS',
+            ad_account_name:target.ad_account_name,page_topology:'ONE_PAGE_PER_BUSINESS',access_mode:'existing_page_full_control',
             bundle_page_name:target.bundle_page_name,policies_accepted:true}}}});
     }
     for (const [profile,group] of groups) if (!group.tasks.length) {
       if (tab!=='profiles') { groups.delete(profile); continue; }
       group.tasks.push({action:'provisioning',idempotency_key:'profile-page-'+profile,payload:{
-        steps:['PROXY_CHECK','FAN_PAGES'],scope_key:'profile-page',
+        steps:['PROXY_CHECK','FAN_PAGES'],scope_key:'profile-page',transport_mode:'private_http_only',
         parameters:{FAN_PAGES:{common_page:true,page_name:'PrgssTeam',count:1,policies_accepted:true}}}});
     }
     if (!groups.size) throw new Error('У выбранных BM нет созданных РК. Личные РК исключены.');

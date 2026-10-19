@@ -1,6 +1,6 @@
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 from app.provisioning.meta_transport import MetaTransportRouter
 from app.provisioning.service import normalize_add_bm_payload
@@ -57,6 +57,44 @@ class AddBmPayloadNormalizationTests(unittest.TestCase):
 
 
 class MetaTransportRouterTests(unittest.IsolatedAsyncioTestCase):
+    async def test_page_only_bundle_job_uses_private_transport_without_infrastructure_create(self):
+        import tempfile
+        from pathlib import Path
+        from app.provisioning.service import ProvisioningService
+        from app.provisioning.state import ProvisioningStateStore
+        from app.provisioning.models import ProvisioningStep
+        with tempfile.TemporaryDirectory() as directory:
+            state = ProvisioningStateStore(str(Path(directory)/'state.sqlite'))
+            await state.init()
+            context = SimpleNamespace(profile_id='fixture', cookies={'c_user':'123456789'})
+            session = SimpleNamespace(context=context, close_business_browser=AsyncMock(),
+                facebook_business_browser=AsyncMock(side_effect=AssertionError('Chromium must not start')))
+            async def verify_transport(session, params, snapshot, **kwargs):
+                router = kwargs['meta_transport']
+                self.assertTrue(router.private_only)
+                self.assertFalse(router.browser_available())
+                self.assertEqual(router.policy('PAGE_ACCESS').fallback,'none_private_only')
+                return {'business_id':params['business_id'],'ad_account_id':params['ad_account_id'],
+                    'page_id':'77777777','page_owned_by_business':True,
+                    'operator_full_control_verified':True,'rk_operator_full_control_verified':True,
+                    'ad_account_page_access_verified':True}
+            handler = AsyncMock(side_effect=verify_transport)
+            for index, explicit_mode in enumerate((False, True)):
+                payload = {'steps':['PAGE_ACCESS'],'scope_key':'bundle-page-v2-fixture-'+str(index),
+                    'parameters':{'PAGE_ACCESS':{'business_id':'88888888','ad_account_id':'99999999',
+                        'existing_target':True,'page_topology':'ONE_PAGE_PER_BUSINESS',
+                        'access_mode':'existing_page_full_control'}}}
+                if explicit_mode:
+                    payload['transport_mode'] = 'private_http_only'
+                with patch('app.provisioning.service.get_handler',return_value=handler), \
+                        patch('app.provisioning.service._await_profile_mutation_cooldown',AsyncMock()):
+                    result = await ProvisioningService(state).run(item_id='bundle-'+str(index),
+                        profile_id='fixture',context=context,session=session,payload=payload)
+                self.assertEqual(result['steps'][0]['status'],'SUCCESS')
+                self.assertEqual((await state.step('bundle-'+str(index),ProvisioningStep.PAGE_ACCESS))['status'],'SUCCESS')
+            self.assertEqual(handler.await_count,2)
+            session.facebook_business_browser.assert_not_awaited()
+
     async def test_business_policy_is_private_first(self):
         session = SimpleNamespace(context=SimpleNamespace(profile_id="7"))
         router = MetaTransportRouter(session)
