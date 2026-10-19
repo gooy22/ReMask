@@ -62,9 +62,46 @@ class FastPrivateSyncTests(unittest.IsolatedAsyncioTestCase):
         with patch("app.static_meta_inventory.read_ad_account_inventory",
                    new=AsyncMock(return_value=proof)):
             result = await self.snapshot()
-        self.assertTrue(result["ready"])
+        self.assertFalse(result["ready"])
+        self.assertEqual(result["inconclusive_business_ids"], ["111111"])
+        self.assertEqual(result["businesses"][0]["confirmed_expected_account_ids"], ["222222"])
         self.assertFalse(result["businesses"][0]["inventory_complete"])
         self.assertTrue(result["businesses"][0]["ad_accounts_partial"])
+        self.web.fetch_text.assert_not_awaited()
+
+    async def test_unknown_account_in_partial_collection_is_not_complete(self):
+        async def empty_html(url, **kwargs):
+            return 200, "{}", url
+        self.web.fetch_text.side_effect = empty_html
+        proof = {"account_rows": [
+            {"id": "333333", "business_id": "111111", "name": "New RK"}
+        ], "complete": False, "source": "static_http_exact_business_inventory"}
+        with patch("app.static_meta_inventory.read_ad_account_inventory",
+                   new=AsyncMock(return_value=proof)):
+            result = await private_inventory_snapshot(
+                self.web, known_accounts_by_business={},
+                known_business_ids={"111111"},
+                discover_businesses=False, execute_read_queries=True, fast_sync=True,
+            )
+        self.assertFalse(result["ready"])
+        self.assertFalse(result["businesses"][0]["ad_accounts_ready"])
+        self.assertFalse(result["businesses"][0]["inventory_complete"])
+        self.assertEqual(result["businesses"][0]["ad_accounts"][0]["id"], "333333")
+        self.web.refresh_reviewed_modules.assert_not_awaited()
+
+    async def test_unknown_account_requires_complete_collection(self):
+        proof = {"account_rows": [
+            {"id": "333333", "business_id": "111111", "name": "New RK"}
+        ], "complete": True, "source": "static_http_exact_business_inventory"}
+        with patch("app.static_meta_inventory.read_ad_account_inventory",
+                   new=AsyncMock(return_value=proof)):
+            result = await private_inventory_snapshot(
+                self.web, known_accounts_by_business={},
+                known_business_ids={"111111"},
+                discover_businesses=False, execute_read_queries=True, fast_sync=True,
+            )
+        self.assertTrue(result["ready"])
+        self.assertTrue(result["businesses"][0]["inventory_complete"])
         self.web.fetch_text.assert_not_awaited()
 
     async def test_fast_pages_do_not_trigger_script_discovery_without_contract(self):
