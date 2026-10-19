@@ -817,6 +817,10 @@ class FacebookWebSession:
         self._reviewed_module_ids = {}
 
     async def refresh_reviewed_modules(self, document: str, final_url: str) -> None:
+        # Interactive inventory reads use installed reviewed contracts. CDN
+        # maintenance must not consume their auth/bootstrap deadline.
+        if getattr(self, 'defer_module_refresh', False):
+            return
         from app.contract_maintenance.module_refresh import refresh_from_document
         self._module_refresh_attempted_at = asyncio.get_running_loop().time()
         try:

@@ -134,6 +134,7 @@ async def read_ad_account_inventory(web, business, name, expected=''):
         selected_account_id=selected, asset_ui_id=asset_ui_id,
         alias_conflict=selected in conflicting_aliases)
     log.info('RK static inventory verification=%s', json.dumps(diag, separators=(',', ':')))
-    return {'id': selected, 'ids': ids, 'named': named, 'complete': complete,
+    return {'id': selected, 'ids': ids, 'account_rows': [accounts[key] for key in ids],
+        'named': named, 'complete': complete,
         'asset_ui_id': asset_ui_id,
         'source': 'static_http_exact_business_inventory', 'diagnostics': [diag]}

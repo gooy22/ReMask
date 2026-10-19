@@ -3,6 +3,19 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const {webcrypto} = require('node:crypto');
 const source = fs.readFileSync('railway-python-worker-ui.js', 'utf8');
+// A failed final bundle step must still display locally confirmed CREATE IDs.
+(async()=>{
+  const refreshed=[];
+  const local={pythonWorkerRefreshProfile:async profile=>{refreshed.push(profile);return true;}};
+  vm.createContext(local);
+  const begin=source.indexOf('async function pythonWorkerRefreshSuccessfulProfiles(');
+  vm.runInContext(source.slice(begin,source.indexOf('\nasync function pythonWorkerStartBusiness',begin)),local);
+  await local.pythonWorkerRefreshSuccessfulProfiles([
+    {profile_id:'35',status:'FAILED'}, {profile_id:'35',status:'SUCCESS'},
+    {profile_id:'36',status:'PARTIAL'}, {profile_id:'37',status:'RUNNING'},
+  ]);
+  assert.deepEqual(refreshed,['35','36']);
+})().catch(error=>{console.error(error);process.exitCode=1;});
 // Both BM and RK context menus must expose the same automatic bulk action.
 for(const [tab,label] of [['businesses','Добавить RK'],['ad_accounts','Проверить Assets']]){
   let inserted;

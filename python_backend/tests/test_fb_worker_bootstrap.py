@@ -136,6 +136,20 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await session.bootstrap()).fb_dtsg, 'fixture-token')
         self.assertEqual(len(client.calls), 1)
 
+    async def test_inventory_bootstrap_does_not_download_cdn_modules(self):
+        from unittest.mock import patch
+        session, client = self.session(
+            '["DTSGInitialData",[],{"token":"fixture-token"}]',
+            'https://business.facebook.com/latest/home')
+        # Exercise the real method, including its implicit bootstrap call.
+        session.refresh_reviewed_modules = FacebookWebSession.refresh_reviewed_modules.__get__(session)
+        session.defer_module_refresh = True
+        with patch('app.contract_maintenance.module_refresh.refresh_from_document',
+                   new_callable=AsyncMock) as collect:
+            self.assertEqual((await session.bootstrap()).fb_dtsg, 'fixture-token')
+        collect.assert_not_awaited()
+        self.assertEqual(len(client.calls), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

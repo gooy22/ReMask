@@ -87,6 +87,23 @@ class SelectedBusinessInventoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['businesses'], [])
         self.assertEqual(fixtures[1].calls, [])
 
+    async def test_full_profile_uses_two_reviewed_reads_without_html_or_cdn(self):
+        from tests.test_private_inventory_queries import connected_response
+        from tests.test_static_meta_contracts import scopes
+        from app.static_meta_contracts import command
+        business, account = '111111111', '222222222'
+        fixtures = self.fixtures()
+        web = fixtures[1]
+        web.graphql.side_effect = [scopes([(business, 'Created BM')]),
+            connected_response(business=business, accounts=[account])]
+        result = await self.sync(fixtures)
+        self.assertTrue(result['live_ready'])
+        self.assertEqual(result['businesses'][0]['ad_accounts'][0]['id'], account)
+        self.assertEqual([call.args[0] for call in web.graphql.await_args_list],
+                         [command('READ_BM')['doc_id'], command('READ_RK', business=business)['doc_id']])
+        self.assertEqual(web.calls, [])
+        self.assertTrue(web.defer_module_refresh)
+
     async def test_unconfirmed_selected_account_hint_does_not_become_live_inventory(self):
         fixtures=self.fixtures([{'business_id':'1632909278268870','ad_account_id':'120251669477430356'}])
         result=await self.sync(fixtures,business_ids='1632909278268870')
@@ -114,24 +131,26 @@ class SelectedBusinessInventoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result['business_inventory_confirmed_empty'])
 
     async def test_query_sender_can_confirm_inventory_when_html_has_no_rows(self):
+        # Explicit rollback retains the older runtime-discovered sender path.
         from tests.test_private_inventory_queries import artifact,response
         def respond(url,business):
             return 200,'<script>'+artifact()+'</script>',url
         fixtures=self.fixtures([{'business_id':'111111111','ad_account_id':'222222222'}],respond)
         web=fixtures[1]
         web.graphql.return_value=response(business='111111111',accounts=['222222222'])
-        result=await self.sync(fixtures,business_ids='111111111')
+        with patch.dict(api.os.environ, {'REMASK_FAST_INVENTORY_SYNC': '0'}):
+            result=await self.sync(fixtures,business_ids='111111111')
         self.assertTrue(result['live_ready'])
         web.graphql.assert_awaited_once()
         self.assertEqual(web.graphql.await_args.args[1]['businessID'],'111111111')
 
-    async def test_single_live_account_is_partial_when_source_is_paginated(self):
+    async def test_paginated_inventory_does_not_finish_interactive_sync(self):
         for selected in (False,True):
             with self.subTest(selected=selected):
                 fixtures=self.fixtures([{'business_id':'111111111','ad_account_id':'222222222'}],
                     lambda url,business:self.inventory(business or '111111111',['222222222'],partial=True))
                 result=await self.sync(fixtures,business_ids='111111111' if selected else '')
-                self.assertTrue(result['live_ready'])
+                self.assertFalse(result['live_ready'])
                 self.assertTrue(result['businesses'][0]['ad_accounts_partial'])
                 self.assertFalse(result['businesses'][0]['inventory_complete'])
                 self.assertEqual(result['businesses'][0]['ad_accounts_count'],1)
