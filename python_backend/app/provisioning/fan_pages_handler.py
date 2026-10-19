@@ -300,6 +300,9 @@ async def _fresh_page_inventory(session: Any) -> list[dict[str, Any]]:
                 return rows
         except Exception as exc:
             log.info("FP private inventory inconclusive error_type=%s", type(exc).__name__)
+    if getattr(session, "private_only", False):
+        raise BrowserBusinessError('PRIVATE_PAGE_INVENTORY_INCONCLUSIVE',
+            'Private Page inventory is incomplete; no CREATE or browser fallback was attempted.', retryable=True)
     async with _browser_lease(session, timeout_seconds=60,
     ) as browser:
         # REMASK_FP_INVENTORY_UNAVAILABLE_IS_NOT_EMPTY_V1

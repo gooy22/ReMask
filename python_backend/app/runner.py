@@ -18,6 +18,7 @@ from .router import RoutePolicyError, TransparentPostRouter
 from .private_launch import PrivateLaunchService
 from .session import ProfileResolver, ProfileSession, ProfileContextError, ProxyCheckError
 from .store import JobStore
+from .work_queue import ProfileWorkQueue, WorkerInstanceLease
 
 log=logging.getLogger('remask.python_worker')
 Handler=Callable[[ProfileSession,dict[str,Any]],Awaitable[dict[str,Any]]]
@@ -109,8 +110,9 @@ class WorkerPool:
     def __init__(self, store: JobStore, mirror: SnapshotMirror | None = None, concurrency: int = 30) -> None:
         self.store=store
         self.mirror=mirror
-        self.concurrency=max(1,concurrency)
-        self.queue: asyncio.Queue[str]=asyncio.Queue()
+        self.concurrency=max(1,min(100,concurrency))
+        self.queue=ProfileWorkQueue(store)
+        self.instance_lease=WorkerInstanceLease(store.path)
         self.profile_locks: defaultdict[str,asyncio.Lock]=defaultdict(asyncio.Lock)
         self.registry=TaskRegistry()
         self.provisioning_state=ProvisioningStateStore(str(store.path))
@@ -125,6 +127,14 @@ class WorkerPool:
         self._created_businesses_lock = asyncio.Lock()
 
     async def start(self) -> None:
+        self.instance_lease.acquire()
+        try:
+            await self._start_owned()
+        except BaseException:
+            self.instance_lease.release()
+            raise
+
+    async def _start_owned(self) -> None:
         await self.provisioning_state.init()
         from .provisioning.page_intent_reset import apply_page_intent_resets
         for outcome in await apply_page_intent_resets(self.provisioning_state):
@@ -135,8 +145,6 @@ class WorkerPool:
             await self._log_recent_page_access_state()
         if str(os.getenv('REMASK_FAN_PAGE_STATE_AUDIT','0')).strip().lower() in {'1','true','yes','on'}:
             await self._log_recent_fan_page_state()
-        for item_id in recovered:
-            await self.queue.put(item_id)
         self._workers=[
             asyncio.create_task(self._worker(i),name=f'remask-worker-{i}')
             for i in range(self.concurrency)
@@ -414,12 +422,12 @@ class WorkerPool:
             task.cancel()
         await asyncio.gather(*self._workers,return_exceptions=True)
         self._workers=[]
+        self.instance_lease.release()
 
     async def enqueue_job(self, job_id: str) -> int:
-        ids=await self.store.queued_item_ids(job_id)
-        for item_id in ids:
-            await self.queue.put(item_id)
-        return len(ids)
+        count=await self.store.queued_count(job_id)
+        await self.queue.put(job_id)
+        return count
 
     async def _worker(self, index: int) -> None:
         while True:
@@ -444,7 +452,8 @@ class WorkerPool:
             item = await self.store.item(item_id)
             if not item or item['status'] != 'QUEUED':
                 return
-            await self.store.set_item_running(item_id)
+            if not await self.store.set_item_running(item_id):
+                return
             tasks=await self.store.tasks(item_id)
             try:
                 context=await self.resolver.resolve(profile_id)

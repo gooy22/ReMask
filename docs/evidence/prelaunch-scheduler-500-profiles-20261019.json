@@ -1,0 +1,1 @@
+{"profiles": 500, "executions": 500, "duplicate_execution": false, "status": "SUCCESS", "concurrency": 8, "elapsed_seconds": 9.679, "network": "mocked; no Meta requests", "purpose": "local scheduling regression; not a Meta throughput estimate"}

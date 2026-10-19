@@ -17,9 +17,25 @@ jobs:
         run: docker build --progress=plain -t remask-diagnostic .
       - name: Build Python worker preview image
         run: docker build --progress=plain -f python_backend/Dockerfile -t remask-python-preview python_backend
+      - name: Scan runtime image for fixable high and critical vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: remask-diagnostic
+          format: json
+          output: remask-image-vulnerabilities.json
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+      - name: Preserve image package inventory and vulnerability scan
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: remask-security-scan
+          path: remask-image-vulnerabilities.json
       - name: Start container
         run: |
-          docker run -d --name remask-diagnostic-run -p 18080:80             -e PORT=80             -e REMASK_E2E_SMOKE_ON_START=0             remask-diagnostic
+          docker run -d --name remask-diagnostic-run -p 18080:80             -e REMASK_PASSWORD=ci-fixture-only -e REMASK_CREDENTIALS_KEY=base64:ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY= -e PORT=80             -e REMASK_E2E_SMOKE_ON_START=0             remask-diagnostic
       - name: Verify runtime health
         run: |
           set -e
@@ -45,6 +61,11 @@ jobs:
           done
           status=$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/ajax/metaBundles.php)
           test "$status" = 401
+      - name: Assert HTTP-only runtime and encrypted profiles
+        run: |
+          docker exec remask-diagnostic-run sh -c '! command -v chromium && ! command -v chromium-browser'
+          docker exec remask-diagnostic-run /opt/remask-venv/bin/python -c "import importlib.util; assert importlib.util.find_spec('playwright') is None"
+          docker exec remask-diagnostic-run php -r 'require "/var/www/html/settings.php";require "/var/www/html/classes/AccountStoreFactory.php"; $store=AccountStoreFactory::create(ACCOUNTSFILENAME); assert(is_array($store->deserialize()));'
       - name: Container logs
         if: always()
         run: docker logs --tail 120 remask-diagnostic-run || true

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import logging
 import sys
@@ -55,8 +56,8 @@ async def run_bm_browser_canary() -> None:
     submits CREATE or Page-add.
     """
     await asyncio.sleep(3.0)
-    if not BM_CANARY_ON_START:
-        return
+    # Browser canaries are retired; production is HTTP-only.
+    return
 
     try:
         profiles=await pool.resolver.list_profiles()
@@ -735,7 +736,9 @@ async def run_live_inventory_readonly_canary() -> None:
             log.warning('page attach readonly canary profile=%s business=%s page=%s error=%s', profile_id, target_business, target_page, str(exc)[:700])
 
 async def require_key(x_remask_worker_key: str | None = Header(default=None)) -> None:
-    if API_KEY and x_remask_worker_key != API_KEY:
+    if not API_KEY or not API_KEY.strip():
+        raise HTTPException(status_code=503, detail='WORKER_KEY_NOT_CONFIGURED')
+    if not x_remask_worker_key or not hmac.compare_digest(x_remask_worker_key, API_KEY):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,detail='invalid worker key')
 
 async def run_verification_http_contract_audit() -> None:
@@ -936,21 +939,26 @@ async def run_verification_http_contract_audit() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await store.init()
-    await pool.provisioning_state.init()
-    if mirror.enabled:
-        try:
-            snapshots=await mirror.load_jobs()
-            imported=await store.import_snapshots(snapshots)
-            log.info('persistent job mirror restored snapshots=%d imported=%d',len(snapshots),imported)
-        except MirrorError as exc:
-            log.error('persistent job mirror restore failed: %s',exc)
-    await pool.start()
+    if not API_KEY or not API_KEY.strip():
+        raise RuntimeError('REMASK_WORKER_API_KEY is required')
+    pool.instance_lease.acquire()
+    try:
+        await store.init()
+        await pool.provisioning_state.init()
+        if mirror.enabled:
+            try:
+                snapshots=await mirror.load_jobs()
+                imported=await store.import_snapshots(snapshots)
+                log.info('persistent job mirror restored snapshots=%d imported=%d',len(snapshots),imported)
+            except MirrorError as exc:
+                log.error('persistent job mirror restore failed: %s',exc)
+        await pool._start_owned()
+    except BaseException:
+        pool.instance_lease.release()
+        raise
     log.info(
-        'bm browser runtime config canary=%s diagnostics=%s browser_concurrency=%s',
-        BM_CANARY_ON_START,
-        str(os.getenv('REMASK_BM_DIAGNOSTICS') or ''),
-        str(os.getenv('REMASK_BM_BROWSER_CONCURRENCY') or ''),
+        'private HTTP/2 runtime; browser transport disabled; concurrency=%s',
+        CONCURRENCY,
     )
     smoke_task=asyncio.create_task(run_startup_smoke(),name='remask-e2e-smoke')
     bm_canary_task=asyncio.create_task(
@@ -1210,6 +1218,12 @@ async def profile_preflight(profile_id: str, purpose: str = 'business'):
                     result['private_business']['contract_ready'], result['private_business']['inventory_complete'],
                     result['private_business']['error_code'], result['total_ms'])
                 return result
+        if purpose == 'fan_pages':
+            from app.private_page_preflight import private_page_preflight
+            async with ProfileSession(context) as profile_session:
+                result = await private_page_preflight(profile_session, context, clean_profile)
+            _remember_fp_auth_gate(clean_profile, result)
+            return result
         async with ProfileSession(context) as profile_session:
             preflight_started=time.monotonic()
             proxy_started=time.monotonic()

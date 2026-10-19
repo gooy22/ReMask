@@ -4,7 +4,7 @@ FROM php:8.4-apache
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libcurl4-openssl-dev libpq-dev xz-utils ca-certificates python3 python3-venv chromium \
+    && apt-get install -y --no-install-recommends libcurl4-openssl-dev libpq-dev xz-utils ca-certificates python3 python3-venv \
     && docker-php-ext-install curl pdo_pgsql \
     && a2enmod rewrite headers \
     && rm -rf /var/lib/apt/lists/*
@@ -15,8 +15,9 @@ COPY railway-web-security.conf /etc/apache2/conf-available/remask-web-security.c
 RUN a2enconf remask-web-security
 
 COPY python_backend/requirements.txt /tmp/remask-python-requirements.txt
+COPY python_backend/requirements.lock /tmp/requirements.lock
 RUN python3 -m venv /opt/remask-venv \
-    && /opt/remask-venv/bin/pip install --no-cache-dir -r /tmp/remask-python-requirements.txt
+    && /opt/remask-venv/bin/pip install --no-cache-dir --require-hashes -r /tmp/remask-python-requirements.txt
 COPY python_backend /opt/remask-python
 # The early backend schema regression also checks the installed UI routing source.
 COPY railway-private-completion-overlay.php /opt/railway-private-completion-overlay.php
@@ -347,7 +348,7 @@ RUN set -eux; \
     ! grep -q 'Добавь Cookies JSON текущей FB-сессии' /var/www/html/scripts/workspace.js; \
     ! grep -Fq "value.trim()||'[]'" /var/www/html/scripts/workspace.js; \
     grep -q 'metaProfileManager.php' /var/www/html/ajax/metaHierarchy.php; \
-    grep -q 'bak.session-safe' /var/www/html/ajax/metaProfileManager.php; \
+    grep -q 'addOrUpdateAccount' /var/www/html/ajax/metaProfileManager.php; \
     grep -q 'existing->cookies' /var/www/html/ajax/metaProfileManager.php; \
     grep -q 'setSessionCookies' /var/www/html/classes/MetaApiClient.php; \
     grep -q 'setSessionCookies($account->getCurlCookies())' /var/www/html/classes/MetaEndpoint.php; \
@@ -568,12 +569,15 @@ RUN set -eux; \
     php /tmp/railway-workflow-ui-overlay.php; \
     php -l /tmp/railway-private-completion-overlay.php; \
     php /tmp/railway-private-completion-overlay.php; \
+    php /tmp/railway-prelaunch-hardening-overlay.php; \
     php /tmp/remask-tests/private-inventory-identity.test.php; \
     php /tmp/remask-tests/template-targeting-context.test.php; \
     php /tmp/remask-tests/readiness.test.php; \
     chown -R www-data:www-data /var/lib/remask /var/www/html; \
     chmod 700 /var/lib/remask; \
-    chmod +x /var/www/html/docker-start.sh;
+    chmod +x /var/www/html/docker-start.sh; \
+    ! command -v chromium; \
+    /opt/remask-venv/bin/python -c "import importlib.util; assert importlib.util.find_spec('playwright') is None";
 
 
 ENV REMASK_META_CACHE_TTL=1800 \

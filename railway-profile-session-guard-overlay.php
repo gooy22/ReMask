@@ -326,9 +326,7 @@ try {
         }
 
         $accountsPath = (string)ACCOUNTSFILENAME;
-        if (is_file($accountsPath) && filesize($accountsPath) > 2) {
-            @copy($accountsPath, $accountsPath . '.bak.session-update.' . gmdate('YmdHis'));
-        }
+
 
         $cookieJson = json_encode(
             array_values($incomingCookies),
@@ -422,9 +420,7 @@ try {
     $cookies = RemaskCookieProfile::validate($cookies, $proxy, !$clearProxy && !$enableDirect, $name);
 
     $accountsPath = (string)ACCOUNTSFILENAME;
-    if (is_file($accountsPath) && filesize($accountsPath) > 2) {
-        @copy($accountsPath, $accountsPath . '.bak.session-safe.' . gmdate('YmdHis'));
-    }
+
 
     $cookieJson = json_encode(array_values($cookies), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
     $account = new FbAccount($name, $token, $cookieJson, $dtsg, $proxy);

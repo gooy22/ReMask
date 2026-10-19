@@ -1466,6 +1466,9 @@ class FacebookWebSession:
         not fall back to a second CREATE request after an ambiguous response.
         """
 
+        raise RemoteRequestError('This service uses private HTTP/2 only; browser transport is disabled.',
+            request_may_have_been_sent=False, transport_stage='browser_transport_disabled')
+
         if getattr(self, "private_only", False):
             raise RemoteRequestError("Prepare requires private HTTP; browser-native transport is disabled.",
                 request_may_have_been_sent=False, transport_stage="browser_transport_disabled")

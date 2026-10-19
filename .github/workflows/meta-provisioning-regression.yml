@@ -41,10 +41,16 @@ jobs:
           import unittest
           suite = unittest.defaultTestLoader.discover("tests")
           result = unittest.TextTestRunner(verbosity=1).run(suite)
-          if result.skipped:
-              print("Required regression cases were skipped:", result.skipped)
-          raise SystemExit(0 if result.wasSuccessful() and not result.skipped else 1)
+          unexpected = [(test, reason) for test, reason in result.skipped
+                        if reason not in {"No local Chromium installed", "No Chromium installed"}]
+          if unexpected:
+              print("Unexpected skipped regression cases:", unexpected)
+          raise SystemExit(0 if result.wasSuccessful() and not unexpected else 1)
           PY
+      - name: Audit exact backend dependency lock
+        run: |
+          /tmp/remask-regression/bin/pip install pip-audit==2.10.1
+          /tmp/remask-regression/bin/pip-audit -r python_backend/requirements.lock --no-deps --disable-pip
       - name: Selected Business sync scope
         run: node tests/workspace-sync-scope.test.cjs
       - name: Automatic batch interface
@@ -108,6 +114,7 @@ jobs:
         run: |
           python3 -m venv /tmp/remask-browser-regression
           /tmp/remask-browser-regression/bin/pip install -r python_backend/requirements.txt
+          /tmp/remask-browser-regression/bin/pip install -r python_backend/requirements-browser-tests.txt
           /tmp/remask-browser-regression/bin/python -m playwright install --with-deps chromium
       - name: Reproduce original stacked-dialog failure
         run: |

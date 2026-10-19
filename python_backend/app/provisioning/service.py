@@ -163,6 +163,7 @@ class ProvisioningService:
         bundle_page_access = (ProvisioningStep.PAGE_ACCESS in steps and isinstance(page_access, dict)
             and page_access.get('page_topology') == 'ONE_PAGE_PER_BUSINESS')
         meta_transport = MetaTransportRouter(session, private_only=(
+            os.getenv("REMASK_HTTP_ONLY", "0") == "1" or
             payload.get("transport_mode") == "private_http_only" or scope_key.startswith("prepare:")
             or any(step in {ProvisioningStep.BUSINESS, ProvisioningStep.AD_ACCOUNT} for step in steps)
             or bundle_page_access

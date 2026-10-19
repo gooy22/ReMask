@@ -46,7 +46,7 @@ function rmx_pwj_input(): array {
     // that creates/retries a job or changes a contract.
     if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         $requested = trim((string)($_GET['action'] ?? ''));
-        if (in_array($requested, ['private_launch_contracts','private_launch_sources'], true)) {
+        if (in_array($requested, ['csrf','health','ready','payment_status','funding_status','preflight','profile_state','docids','private_launch_contracts','private_launch_sources','status','get'], true)) {
             $input['action'] = $requested;
         }
         return $input;
@@ -113,7 +113,7 @@ function rmx_pwj_worker_request(string $method, string $path, ?array $payload = 
 
 try {
     $input = rmx_pwj_input();
-    $action = strtolower(trim((string)($input['action'] ?? $_GET['action'] ?? 'status')));
+    $action = strtolower(trim((string)($input['action'] ?? 'status')));
 
     if ($action === 'csrf') {
         if (!function_exists('remask_csrf_token')) {
