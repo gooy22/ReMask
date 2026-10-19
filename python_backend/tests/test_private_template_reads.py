@@ -99,6 +99,15 @@ class TemplateReferenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['transport'],'private_http_h2')
         self.assertFalse(result['browser_started'])
 
+    async def test_browse_cache_request_keeps_complete_tree_budget_but_typed_queries_stay_bounded(self):
+        reader=SimpleNamespace(read=AsyncMock(return_value={'checked_live':True,
+            'account_scope_verified':True,'account_id':'111111','data':[]}))
+        with patch('app.private_template_reads.AdsManagerReadCatalog',return_value=reader):
+            await self.read('interests',{'q':'','limit':20000})
+            self.assertEqual(reader.read.await_args.args[2]['limit'],20000)
+            await self.read('interests',{'q':'fitness','limit':20000})
+            self.assertEqual(reader.read.await_args.args[2]['limit'],500)
+
     async def test_owned_resources_and_mutations_are_rejected_before_network(self):
         for operation,inputs in [('preview',{}),('PUBLISH',{}),('images',{}),
                 ('audience_estimate',{'account_id':'111111'}),

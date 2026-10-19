@@ -29,8 +29,10 @@ class _ReadClient:
                 business_id=self.business, actor_id=self.actor)
         return await self.http.get(path.removeprefix("/" + self.catalog.data["api_version"]), params or {})
 
-    async def account_record(self, *, require_active=True, currency=False, pages=False):
-        fields = ["id", "account_id", "account_status", "business"]
+    async def account_record(self, *, require_active=True, currency=False, pages=False, reference=False):
+        fields = ["id", "account_id", "business"]
+        if not reference:
+            fields.append('account_status')
         if pages:
             fields.append('ad_account_promotable_objects')
         if currency:
@@ -78,7 +80,7 @@ class AdsManagerReadCatalog:
             raise fail("RESOURCE_CONTRACT_REQUIRED", "Reviewed account query is unavailable for " + name)
         client = self.client(web, values)
         reference = name in TARGETING_TYPES | {"locations","locales"}
-        account = await client.account_record(require_active=not reference, pages=name == 'pages')
+        account = await client.account_record(require_active=not reference, pages=name == 'pages', reference=reference)
         if not reference and str(account.get("account_status")) != "1":
             raise fail("ACCOUNT_INACTIVE", "The selected advertising account is not active")
         if name in TARGETING_TYPES and not str(values.get("query") or "").strip():
@@ -128,7 +130,7 @@ class AdsManagerReadCatalog:
                         "source":"account_promotable_page_ids"} for v in ids]
         else:
             route = self.rows[name]["route"]
-            fields = (["id","name","type","path","description","audience_size_lower_bound","audience_size_upper_bound"]
+            fields = (["id","name","type","path","description","valid","audience_size_lower_bound","audience_size_upper_bound"]
                 if name in TARGETING_TYPES else self.catalog.data.get("resource_fields", {}).get(name))
             if not isinstance(fields, list) or not fields:
                 raise fail("RESOURCE_CONTRACT_REQUIRED", "Source field projection is missing for " + name)
@@ -250,7 +252,7 @@ class AdsManagerReadCatalog:
             if key in seen:
                 continue
             seen.add(key); records.append(clean)
-        limit = max(1, min(500, int(values.get("limit", 100))))
+        limit = max(1, min(20000, int(values.get("limit", 100))))
         return {"data":records[:limit], "account_id":client.account, "account_scope_verified":True,
                 "checked_live":True, "checked_at":int(time.time()), "source":"private_meta_targetingbrowse",
                 "catalog_count":len(records), "truncated":len(records)>limit}
