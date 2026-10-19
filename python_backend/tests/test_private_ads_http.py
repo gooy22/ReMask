@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 import os
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from app.private_ads_http import AdsManagerPrivateHttp, context_from_document
 from app.private_ads_verify import verify_published_objects
@@ -291,6 +291,85 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
                         await AdsManagerPrivateHttp.open(self.web,
                             account_id="111111", business_id="222222", actor_id="123456")
             self.assertEqual([call[0] for call in self.web.session.calls], ["GET"])
+
+    def alias_fixture(self, *, native='999999', business='222222'):
+        from tests.test_private_inventory_queries import connected_response
+        payload = connected_response(business=business, accounts=['111111'])
+        asset = payload['data']['business']['connected_objects']['edges'][0]['nameColumn']['bizkit_settings_render_strategy_no_business_id']['business_object']
+        asset['business_object_ui_id'] = native
+        self.web.graphql = AsyncMock(return_value=payload)
+        self.web.session.response_body = json.dumps({'id':'999999', 'account_id':'999999',
+            'account_status':1, 'business':{'id':'222222'}}).encode()
+        return payload
+
+    async def test_redirect_alias_requires_fresh_exact_settings_pair(self):
+        self.alias_fixture()
+        async def redirected(url, **kwargs):
+            return 200, document(), url.replace('act=111111', 'act=999999')
+        self.web.fetch_text = redirected
+        client = await AdsManagerPrivateHttp.open(self.web,
+            account_id='111111', business_id='222222', actor_id='123456')
+        self.assertFalse(client.read_only)
+        self.assertEqual(client.context.account_id, '111111')
+        self.assertEqual(client._native_account_id, '999999')
+        self.web.graphql.assert_awaited_once()
+        self.assertEqual(self.web.graphql.call_args.kwargs['business_context_id'], '222222')
+        self.assertTrue(all(call[0] == 'GET' for call in self.web.session.calls))
+
+    async def test_exact_url_account_read_resolves_alias_for_resource_guards(self):
+        self.alias_fixture()
+        from app.private_ads_catalog import AdsManagerRouteCatalog
+        from app.private_ads_reads import _ReadClient
+        reader = _ReadClient(self.web, AdsManagerRouteCatalog(),
+            {'ad_account_id':'111111', 'business_id':'222222'})
+        row = await reader.account_record()
+        self.assertEqual(row['id'], '111111')
+        self.assertEqual(row['account_id'], '111111')
+        self.assertEqual(reader.http._native_account_id, '999999')
+        self.assertEqual(self.web.graphql.await_count, 1)
+        await reader.account_record()
+        self.assertEqual(self.web.graphql.await_count, 1)
+
+    async def test_alias_never_uses_generic_ui_ids_foreign_business_or_conflicts(self):
+        for case in ('missing', 'wrong_native', 'foreign_business', 'conflict', 'duplicate_conflict', 'errors'):
+            payload = self.alias_fixture()
+            edge = payload['data']['business']['connected_objects']['edges'][0]
+            asset = edge['nameColumn']['bizkit_settings_render_strategy_no_business_id']['business_object']
+            if case == 'missing':
+                asset.pop('business_object_ui_id'); edge['node']['id'] = '999999'
+            elif case == 'wrong_native': asset['business_object_ui_id'] = '888888'
+            elif case == 'foreign_business': payload['data']['business']['id'] = '333333'
+            elif case == 'conflict': edge['node']['business_object_ui_id'] = '888888'
+            elif case == 'duplicate_conflict':
+                other = copy.deepcopy(edge)
+                other['nameColumn']['bizkit_settings_render_strategy_no_business_id']['business_object']['business_object_ui_id'] = '888888'
+                payload['data']['business']['connected_objects']['edges'].append(other)
+            else: payload['errors'] = [{'message':'incomplete'}]
+            async def redirected(url, **kwargs):
+                return 200, document(), url.replace('act=111111', 'act=999999')
+            self.web.fetch_text = redirected
+            with self.subTest(case=case), self.assertRaises(ProvisioningError) as caught:
+                await AdsManagerPrivateHttp.open(self.web,
+                    account_id='111111', business_id='222222', actor_id='123456')
+            self.assertIn('SCOPE_UNVERIFIED', caught.exception.code)
+        self.assertEqual(self.claims, 0)
+
+    async def test_proven_alias_maps_account_fields_without_changing_object_ids(self):
+        self.alias_fixture()
+        await self.client.get('/act_111111', {'fields':['id','account_id','business']})
+        self.web.session.response_body = json.dumps({'data':[
+            {'id':'999999', 'account_id':'act_999999', 'campaign_id':'999999'},
+            {'id':'444444', 'account_id':'888888'}]}).encode()
+        result = await self.client.get('/act_111111/campaigns', {'fields':['id','account_id']})
+        self.assertEqual(result['data'][0], {'id':'999999', 'account_id':'111111', 'campaign_id':'999999'})
+        self.assertEqual(result['data'][1]['account_id'], '888888')
+        from app.private_ads_publication import AdsManagerDraftPublisher
+        AdsManagerDraftPublisher._account(result['data'][0], '111111')
+        with self.assertRaises(ProvisioningError):
+            AdsManagerDraftPublisher._account(result['data'][1], '111111')
+        with self.assertRaises(ProvisioningError):
+            await self.client.get('/act_888888/campaigns', {})
+        self.assertEqual(self.claims, 0)
 
     async def test_redirect_proof_accepts_only_lossless_numeric_id(self):
         requested = "120250985990010713"

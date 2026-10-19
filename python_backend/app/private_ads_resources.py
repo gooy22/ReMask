@@ -74,7 +74,7 @@ class AdsManagerResourceCatalog:
             return await self.base.read(web, name, values)
         client = await AdsManagerPrivateHttp.open(web, account_id=values["ad_account_id"],
             business_id=values["business_id"], actor_id=values["actor_id"])
-        row = await client.get("/act_" + client.context.account_id, {"fields": ["id", "business"]})
+        row = await client.get("/act_" + client.context.account_id, {"fields": ["id", "account_id", "business"]})
         if (not isinstance(row, dict) or row.get("id") not in
                 {client.context.account_id, "act_" + client.context.account_id}
                 or not isinstance(row.get("business"), dict)
