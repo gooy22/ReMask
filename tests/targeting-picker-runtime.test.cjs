@@ -75,6 +75,9 @@ function fixture(){
   assert.equal(box.children.length,0,'typing invalidates the old query before debounce fires');
   field.fire('keydown','Enter');requests.shift()({data:[{id:'12345'}],truncated:true});await settle();
   assert.match(box.children.at(-1).textContent,/сузить список/,'partial catalogs retain the search hint');
+  field.fire('keydown','Enter');requests.shift()({data:[{id:'12345'}],source:'private_meta_template_reference',reference_checked_at:1000,reference_stale:true});await settle();
+  assert.match(box.children.at(-1).textContent,/Сохранённые данные Meta.*актуальность не проверена/,
+    'offline choices show their saved date and do not claim a fresh Meta read');
   console.log('Creative choices: Escape, query changes and catalog truncation passed.');
 
   const launch=fixture();const replies=[];

@@ -23,14 +23,14 @@ try {
     $until=(int)(getenv('REMASK_DIRECT_TEST_UNTIL')?:0);
     $preferred=$until>time() && $until<=time()+7200 ? trim((string)(getenv('REMASK_DIRECT_TEST_PROFILE')?:'')) : '';
     $excluded=array_values(array_filter(array_map('trim',explode(',',(string)(getenv('REMASK_TEMPLATE_LOOKUP_EXCLUDED_PROFILES')?:'')))));
-    $candidates=RemaskTemplateTargetingContext::candidates($profiles,[RemaskPrivateLaunchCatalog::class,'load'],
-        $preferred,array_unique(array_merge($excluded,$reference->blocked(time()))),true);
+    $candidates=$reference->available(RemaskTemplateTargetingContext::candidates($profiles,[RemaskPrivateLaunchCatalog::class,'load'],
+        $preferred,$excluded,true),time());
     $read=static function($profile,$account,$catalog,$helper,$request) use($reference) {
         try {return $account===''
             ? RemaskTemplateTargetingContext::readReference($profile,$helper,$request)
             : RemaskAdvertisingHelperClient::read($profile,$account,$catalog,$helper,$request);}
         catch(Throwable $error) {
-            if(RemaskTemplateTargetingContext::sourceFailure($error))$reference->block($profile,time());
+            if(RemaskTemplateTargetingContext::sourceFailure($error))$reference->block($profile,time(),$error->getMessage());
             throw $error;
         }
     };
@@ -39,6 +39,5 @@ try {
     http_response_code($error instanceof InvalidArgumentException?400:409);
     header('Content-Type: application/json; charset=utf-8');header('Cache-Control: no-store');
     $failure=RemaskTemplateTargetingContext::failure($error);
-    $failure['message']='Meta не вернула рекламную оценку. Настройки можно изменить и сохранить; для чтения нужна действующая сессия с доступным транспортом.';
     echo json_encode(['ok'=>false,'error'=>$failure],JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR);
 }

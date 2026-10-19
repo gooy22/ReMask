@@ -61,10 +61,12 @@ foreach(['PRIVATE_ADS_DRAFT_CHECKPOINT_REQUIRED','PRIVATE_HTTP_PROXY_UNAVAILABLE
     expect($failure['settings_preserved']===true && $failure['template_account_bound']===false,'saving remains independent of lookup availability');
 }
 foreach(['PRIVATE_HTTP_CONNECTION_UNAVAILABLE','PRIVATE_HTTP_PROTOCOL_ERROR','PRIVATE_HTTP_READ_UNAVAILABLE',
-    'PRIVATE_HTTP_PROXY_UNAVAILABLE','PRIVATE_HTTP_READ_TIMEOUT'] as $code)
+    'PRIVATE_HTTP_PROXY_UNAVAILABLE','PRIVATE_HTTP_READ_TIMEOUT','BUSINESS_LOGIN_GATE','TWO_FACTOR_REQUIRED'] as $code)
     expect(RemaskTemplateTargetingContext::sourceFailure(new RuntimeException($code)), 'transport failure must cool down its source: '.$code);
 foreach(['INVALID_TARGETING_QUERY','TARGETING_FIELDS_UNAVAILABLE','PRIVATE_ADS_DRAFT_REQUEST_REJECTED'] as $code)
     expect(!RemaskTemplateTargetingContext::sourceFailure(new RuntimeException($code)), 'a field/query error must not disable unrelated dictionaries');
+expect(str_contains(RemaskTemplateTargetingContext::failure(new RuntimeException('BUSINESS_LOGIN_GATE'))['message'],'страницу входа'),
+    'a successful connection returning a login page must not be presented as a connection outage');
 $secret=RemaskTemplateTargetingContext::failure(new RuntimeException('proxy http://secret:password@example.com cookie=xs-sensitive'),'19');
 expect(!str_contains(json_encode($secret),'password') && !str_contains(json_encode($secret),'xs-sensitive'),'transport secrets never reach UI');
 $file=sys_get_temp_dir().'/remask-template-reference-'.bin2hex(random_bytes(8)).'.json';
@@ -82,6 +84,11 @@ try {
     expect($row['checked_live']===false && $row['template_account_bound']===false,'cache never fabricates live permission');
     expect($reference->get('locations','fixture',1001)===null,'query types isolated');
     expect($reference->get('interests','another',1001)===null,'query keys isolated');
+    expect($reference->search('interests','Fixture',1001)['data'][0]['id']==='123456',
+        'saved text-query results remain searchable without a browse tree or Meta connection');
+    expect($reference->search('interests','',1001)['data'][0]['id']==='123456',
+        'opening a picker can browse previously saved individual searches offline');
+    expect($reference->search('behaviors','Fixture',1001)===null,'saved searches never cross dictionary types');
     $reference->put('interests','',array_replace($proof,['truncated'=>true,'catalog_count'=>1200]),1000);
     $browse=$reference->get('interests','',1001);
     expect($browse['truncated']===true && $browse['catalog_count']===1200,'browse cache preserves incomplete catalog metadata');
@@ -102,6 +109,12 @@ try {
     expect($reference->get('interests','fixture',1000+2592001)===null,'over-age reference expires');
     $reference->block('16',1000); expect($reference->blocked(1001)===['16'],'failed source cooldown');
     expect($reference->blocked(1601)===[],'cooldown bounded without permanently banning healthy sources');
+    $reference->block('29',1700,'BUSINESS_LOGIN_GATE');
+    try {$reference->available([['profile'=>'29']],1701);throw new LogicException('gated source accepted');}
+    catch(RuntimeException $error){expect($error->getMessage()==='BUSINESS_LOGIN_GATE','cooldown preserves the actual login cause');}
+    expect($reference->available([['profile'=>'30']],1701)===[['profile'=>'30']], 'stored reasons never select or leak an unrelated profile');
+    expect($reference->available([['profile'=>'29']],2301)===[['profile'=>'29']], 'login cooldown remains bounded');
+    expect($reference->search('interests','Fixture',1701)!==null,'login failure never hides genuine cached query results');
     $other=new RemaskTemplateTargetingReference($file.'-other');
     expect($other->get('interests','fixture',1001)===null,'workspaces do not share private reference stores');
 } finally { foreach([$file,$file.'.lock',$file.'-other',$file.'-other.lock'] as $path) @unlink($path); }

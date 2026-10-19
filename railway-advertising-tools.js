@@ -133,7 +133,7 @@
         if(!force&&current.fingerprint===lastFingerprint)return;
         invalidate('Получаем оценку Meta…');lastFingerprint=current.fingerprint;
         const seq=generation;controller=new AbortController();const signal=controller.signal;
-        let success=0, pending=false, failed=false, blocked=false, sourceUnavailable=false;lastReadAt=Date.now();
+        let success=0, pending=false, failed=false, blocked=false, sourceUnavailable=false, loginRequired=false;lastReadAt=Date.now();
         // Bound concurrent profile reads; never reuse one account's numbers for another.
         for(const target of current.targets.slice(0,20)) {
             if(seq!==generation)return;
@@ -149,15 +149,16 @@
                 const failureText=errorCode+' '+String(error.message);
                 if(/TEMPLATE_LOOKUP_SOURCE_UNAVAILABLE|PRIVATE_HTTP_(?:PROXY|CONNECTION|PROTOCOL|READ)_UNAVAILABLE|PRIVATE_HTTP_PROTOCOL_ERROR/.test(failureText)){
                     sourceUnavailable=true;blocked=true;
-                }else if(/CHECKPOINT_REQUIRED|SESSION_EXPIRED|TWO_FACTOR_REQUIRED|LOGIN_REQUIRED|BOOTSTRAP_SCOPE_UNVERIFIED|ACTOR_MISMATCH|RESOURCE_SCOPE_MISMATCH/.test(failureText)){
+                }else if(/CHECKPOINT_REQUIRED|SESSION_EXPIRED|TWO_FACTOR_REQUIRED|LOGIN_REQUIRED|BUSINESS_LOGIN_GATE|BOOTSTRAP_SCOPE_UNVERIFIED|ACTOR_MISMATCH|RESOURCE_SCOPE_MISMATCH/.test(failureText)){
+                    loginRequired ||= /SESSION_EXPIRED|LOGIN_REQUIRED|BUSINESS_LOGIN_GATE/.test(failureText);
                     blockedTargets.add(targetKey);blocked=true;
                 }
-                failed=true;const p=document.createElement('p');p.textContent=(target.account_id?'РК '+target.account_id+': ':'')+'Размер аудитории временно недоступен.';p.title=error.message;results.appendChild(p);
+                failed=true;const p=document.createElement('p');p.textContent=(target.account_id?'РК '+target.account_id+': ':'')+(error.message||'Размер аудитории временно недоступен.');results.appendChild(p);
             }
         }
         if(seq!==generation)return;
         needsRefresh=!blocked&&attempt<2&&(pending||failed);
-        status.textContent=sourceUnavailable?'Нет доступного соединения с источником оценки аудитории.':blocked?'Доступ Meta не подтверждён. Проверьте состояние аккаунта перед повторной оценкой.':pending?'Meta готовит размер аудитории…':failed?'Данные Meta временно недоступны. Шаблон можно сохранить.':'Размер аудитории получен из Meta.';
+        status.textContent=sourceUnavailable?'Нет доступного соединения с источником оценки аудитории.':loginRequired?'Meta требует входа. Обновите Facebook-сессию для оценки аудитории.':blocked?'Доступ Meta не подтверждён. Проверьте состояние аккаунта перед повторной оценкой.':pending?'Meta готовит размер аудитории…':failed?'Данные Meta временно недоступны. Шаблон можно сохранить.':'Размер аудитории получен из Meta.';
         if(current.targets.length>20)status.textContent+=' Показаны первые 20 выбранных РК.';
         // Stop at authentication/scope gates; bound transient reads to three attempts.
         if(needsRefresh)timer=setTimeout(()=>{
