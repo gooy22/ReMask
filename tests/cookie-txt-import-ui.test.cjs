@@ -8,7 +8,7 @@ class Element {
   get id() { return this._id; }
   set innerHTML(html) {
     this.html=html;
-    for(const match of html.matchAll(/<(input|button|tbody|p|h2)[^>]*\bid="([^"]+)"[^>]*>/g)) {
+    for(const match of html.matchAll(/<(input|select|button|tbody|p|h2)[^>]*\bid="([^"]+)"[^>]*>/g)) {
       const el=new Element(match[1],this.doc); el.id=match[2]; el.disabled=match[0].includes(' disabled'); this.children.push(el);
     }
   }
@@ -63,6 +63,21 @@ vm.createContext(context);vm.runInContext(source,context);
   assert.equal(el('txtProxy').value,''); assert.equal(el('txtFile').value,''); assert.equal(reloads,0);
   assert.ok(el('txtStatus').textContent.includes('Facebook-сессии ещё не проверены'));
   await dialog.close(); assert.equal(reloads,1); assert.equal(el('txtResults').children.length,0);
+  await doc.getElementById('remaskTxtImport').fire('click');
+  el('txtFile').files=[{size:text.length,arrayBuffer:async()=>new TextEncoder().encode(text).buffer}];
+  responses.push({ok:true,total:1,ready:1,skipped:0,errors:0,
+    proxy_choices:[{source_profile:'36',label:'http://pool.example.test:10000',assigned_profiles:1}],
+    records:[{line:1,user_id:'123456789',profile_name:'10',status:'ready'}]});
+  await el('txtPreview').fire('click');
+  assert.equal(el('txtProxySource').children[1].value,'36');
+  el('txtProxySource').value='36';el('txtDirect').checked=true;
+  await el('txtCommit').fire('click');assert.equal(requests.length,3,'saved proxy and direct mode must conflict');
+  el('txtDirect').checked=false;
+  responses.push({ok:true,total:1,processed:1,imported:1,skipped:0,errors:0,
+    records:[{line:1,user_id:'123456789',profile_name:'10',status:'imported'}]});
+  await el('txtCommit').fire('click');
+  assert.equal(requests[3].body.source_profile,'36');assert.equal(requests[3].body.proxy,'');
+  assert.equal(requests[3].body.allow_direct_test,false);
   assert.equal(/localStorage|sessionStorage|console\./.test(source),false);
   console.log('TXT preview, selection, proxy validation, duplicate-click guard and secret cleanup passed.');
 })().catch(error=>{console.error(error);process.exitCode=1;});
