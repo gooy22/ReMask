@@ -697,7 +697,7 @@ async function remaskPrivatePollJob(jobId) {
             if(['SUCCESS','FAILED','PARTIAL'].includes(String(job.status||'').toUpperCase())){
                 const draftTasks=(job.items||[]).flatMap(item=>item.tasks||[]).filter(task=>task.action==='private_launch');
                 if(String(job.status).toUpperCase()==='SUCCESS'&&draftTasks.length&&draftTasks.every(task=>task.result?.draft_verified===true&&task.result?.published===false))
-                    remaskPrivateShow('Черновик подтверждён в Meta · задача '+jobId+'. Реклама не опубликована.');
+                    remaskPrivateShow('Данные черновика сохранены в Meta · задача '+jobId+'. Редактор Meta ещё не проверен. Реклама не опубликована.');
                 remaskPrivateFinalizeJob(job);
                 if(String(job.status).toUpperCase()==='SUCCESS'){
                     try{

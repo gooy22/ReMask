@@ -1,0 +1,146 @@
+{
+  "version": 1,
+  "revision": "private-ads-objectives-2026-10-21",
+  "checked_live": false,
+  "scope": "Existing ReMask creation subset; account gates remain live",
+  "objectives": {
+    "OUTCOME_TRAFFIC": {
+      "destination_type": "WEBSITE",
+      "optimization_goals": [
+        "LANDING_PAGE_VIEWS",
+        "LINK_CLICKS",
+        "IMPRESSIONS",
+        "REACH"
+      ]
+    },
+    "OUTCOME_SALES": {
+      "destination_type": "WEBSITE",
+      "optimization_goals": [
+        "OFFSITE_CONVERSIONS",
+        "VALUE",
+        "LANDING_PAGE_VIEWS",
+        "LINK_CLICKS"
+      ]
+    },
+    "OUTCOME_LEADS": {
+      "destination_type": "WEBSITE",
+      "optimization_goals": [
+        "OFFSITE_CONVERSIONS",
+        "LANDING_PAGE_VIEWS",
+        "LINK_CLICKS"
+      ]
+    },
+    "OUTCOME_ENGAGEMENT": {
+      "destination_type": null,
+      "optimization_goals": [
+        "POST_ENGAGEMENT",
+        "IMPRESSIONS",
+        "REACH"
+      ]
+    },
+    "OUTCOME_AWARENESS": {
+      "destination_type": null,
+      "optimization_goals": [
+        "REACH",
+        "IMPRESSIONS"
+      ]
+    }
+  },
+  "billing_events": {
+    "LANDING_PAGE_VIEWS": [
+      "IMPRESSIONS"
+    ],
+    "LINK_CLICKS": [
+      "IMPRESSIONS",
+      "LINK_CLICKS"
+    ],
+    "IMPRESSIONS": [
+      "IMPRESSIONS"
+    ],
+    "REACH": [
+      "IMPRESSIONS"
+    ],
+    "OFFSITE_CONVERSIONS": [
+      "IMPRESSIONS"
+    ],
+    "VALUE": [
+      "IMPRESSIONS"
+    ],
+    "POST_ENGAGEMENT": [
+      "IMPRESSIONS"
+    ]
+  },
+  "conversion_events": [
+    "LEAD",
+    "PURCHASE",
+    "COMPLETE_REGISTRATION",
+    "INITIATED_CHECKOUT",
+    "ADD_TO_CART",
+    "CONTACT",
+    "SUBMIT_APPLICATION",
+    "SUBSCRIBE",
+    "CONTENT_VIEW"
+  ],
+  "sources": [
+    {
+      "module": "AdsAPIOptimizationGoalBillingEventsStatic",
+      "module_sha256": "7b25efba354e05f6ad837de88fe3bbcd3ddba7b9193982dc86a00a71482a5da7",
+      "source_kind": "supplied_public_cdn_module_export",
+      "artifact_sha256": "c0d74e9d3c121cf531e45a69a2ed0ea3341275407723a9a27db1ddb34a6963c0"
+    },
+    {
+      "module": "AdsLinkClicksCampaignOptimizationPlugin",
+      "module_sha256": "6c01ce42e8d9c20ea539710065410f3bf973294a5a44e17e2c09c8882dff90f9",
+      "source_kind": "supplied_public_cdn_module_export",
+      "artifact_sha256": "c0d74e9d3c121cf531e45a69a2ed0ea3341275407723a9a27db1ddb34a6963c0"
+    },
+    {
+      "module": "AdsLinkClicksWebsiteCampaignOptimizationPlugin",
+      "module_sha256": "7dfaa9edb077ef3fc84e795fbdb1a5baf8f4bb2a22f8bada2be4aa190937ff0e",
+      "source_kind": "supplied_public_cdn_module_export",
+      "artifact_sha256": "c0d74e9d3c121cf531e45a69a2ed0ea3341275407723a9a27db1ddb34a6963c0"
+    },
+    {
+      "module": "AdsODAXObjectiveStrings",
+      "module_sha256": "2e6c0842712af803f90cf35e10960566aad61965396bbf5b4672fc83c2bf7dd4",
+      "public_url": "https://static.xx.fbcdn.net/rsrc.php/v4iica4/yo/l/en_US-j/rzhZTNrLA3F.js",
+      "script_sha256": "b2ca67cf0642d7a6a0b91071c67f3dddda44bd0f3cba3e216f76a905605872a7"
+    },
+    {
+      "module": "AdsODAXUtils",
+      "module_sha256": "6f9bfbbcf39a37859767b74800bd8a02fa48cf7cd34864aabe6bf790444e18b5",
+      "public_url": "https://static.xx.fbcdn.net/rsrc.php/v4ijsg4/yq/l/en_US-j/Y731TQMByU4.js",
+      "script_sha256": "3c7de32f7de0b89953b2ecd5b31ff65bf34367e671f7f9e67134f6eb2d163000"
+    },
+    {
+      "module": "AdsOutcomeAwarenessCampaignOptimizationPlugin",
+      "module_sha256": "045d049e3bd8a4610e361adf02a101261e4fa701041e991031959fb91ac4e053",
+      "source_kind": "supplied_public_cdn_module_export",
+      "artifact_sha256": "c0d74e9d3c121cf531e45a69a2ed0ea3341275407723a9a27db1ddb34a6963c0"
+    },
+    {
+      "module": "AdsOutcomeEngagementOnAdPostEngagementCampaignOptimizationPlugin",
+      "module_sha256": "eb7f81e63b43f3ec9a1d8ad37fad8ae616d92472ab845a59ad74b0cd08b6f41b",
+      "source_kind": "supplied_public_cdn_module_export",
+      "artifact_sha256": "c0d74e9d3c121cf531e45a69a2ed0ea3341275407723a9a27db1ddb34a6963c0"
+    },
+    {
+      "module": "AdsOutcomeLeadsWebsiteCampaignOptimizationPlugin",
+      "module_sha256": "81ba33c9ac4daa84b43f64d40f306ad4927a2ae6b0264206491887d19b88fc18",
+      "source_kind": "supplied_public_cdn_module_export",
+      "artifact_sha256": "c0d74e9d3c121cf531e45a69a2ed0ea3341275407723a9a27db1ddb34a6963c0"
+    },
+    {
+      "module": "AdsOutcomeSalesWebsiteCampaignOptimizationPlugin",
+      "module_sha256": "52e90e799f17632ed67440e02d6d6cf2758c36e177ef6c54336414a7727b2330",
+      "source_kind": "supplied_public_cdn_module_export",
+      "artifact_sha256": "c0d74e9d3c121cf531e45a69a2ed0ea3341275407723a9a27db1ddb34a6963c0"
+    },
+    {
+      "module": "AdsOutcomeWebsiteCampaignOptimizationPlugin",
+      "module_sha256": "ddeb727d540c0260c1297bbfa5ac130fd3fcc88633066b26a8f06178e429b880",
+      "source_kind": "supplied_public_cdn_module_export",
+      "artifact_sha256": "c0d74e9d3c121cf531e45a69a2ed0ea3341275407723a9a27db1ddb34a6963c0"
+    }
+  ]
+}

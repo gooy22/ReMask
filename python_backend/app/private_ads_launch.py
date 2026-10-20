@@ -18,6 +18,7 @@ from .private_ads_publication import AdsManagerDraftPublisher
 from .private_ads_state import AdsManagerSubmitter
 from .private_ads_verify import verify_published_objects
 from .private_ads_resources import AdsManagerResourceCatalog, read_pixels
+from .private_ads_objectives import ObjectiveContract
 from .private_launch_extensions import OperationKey
 
 SOURCE_REVISION = "ads-manager-private-2026-10-13-media-resources"
@@ -33,10 +34,12 @@ class AdsManagerLaunch:
         self.owner = owner
         from .private_ads_catalog import AdsManagerRouteCatalog
         self.catalog = AdsManagerRouteCatalog()
+        self.objectives = ObjectiveContract()
         digest = hashlib.sha256((SOURCE_REVISION + self.catalog.digest).encode())
+        digest.update(self.objectives.digest.encode())
         for name in ("private_ads_launch.py", "private_ads_http.py", "private_ads_draft.py",
                      "private_ads_state.py", "private_ads_media.py", "private_ads_publication.py",
-                     "private_ads_verify.py", "private_ads_creative.py", "private_ads_video.py", "private_ads_delivery.py", "private_ads_catalog.py", "private_ads_reads.py", "private_draft_pages.py", "private_ads_resources.py", "private_ads_helpers.py", "private_ads_preview.py"):
+                     "private_ads_verify.py", "private_ads_creative.py", "private_ads_video.py", "private_ads_delivery.py", "private_ads_catalog.py", "private_ads_reads.py", "private_draft_pages.py", "private_ads_resources.py", "private_ads_helpers.py", "private_ads_preview.py", "private_ads_objectives.py", "private_ads_inspect.py"):
             digest.update(name.encode() + b"\0" + Path(__file__).with_name(name).read_bytes())
         self.source_digest = digest.hexdigest()
 
@@ -101,6 +104,7 @@ class AdsManagerLaunch:
             raise fail('TARGETING_FIELDS_UNAVAILABLE', 'Targeting contains unreviewed or read-only fields')
         # Encode every level before media POSTs, including nested auth and
         # nonfinite/unsupported values. Invalid Ad input must not leave uploads.
+        self.objectives.validate(launch)
         placeholders = [{"image_hash": "planned-image-hash"}] * (len(creative["carousel_cards"])
                         if creative.get("format") == "CAROUSEL" else 1)
         story = resolved_creative(creative, target["page_id"], placeholders,
@@ -313,6 +317,9 @@ class AdsManagerLaunch:
             "source_revision": SOURCE_REVISION, "contracts": self.status()["contracts"]}
 
     async def run(self, *, item_id, profile_id, context, session, payload, task_idempotency_key=None):
+        if isinstance(payload, dict) and "reconcile_only" in payload:
+            from .private_ads_inspect import inspect_saved_draft
+            return await inspect_saved_draft(self, profile_id=profile_id, context=context, session=session, payload=payload)
         target, launch, references, fingerprint = self.prepare(profile_id, payload)
         key = str(payload.get("launch_key") or task_idempotency_key or
                   f"{profile_id}:{target['business_id']}:{target['ad_account_id']}").strip()
@@ -414,7 +421,8 @@ class AdsManagerLaunch:
                                      levels=levels, verify_objects=verify_published_objects, draft_only=draft_only)
         if draft_only:
             result.update({"launch_key": key, **target, "preflight": proof,
-                "source_revision": SOURCE_REVISION, "execution_mode": "DRAFT"})
+                "source_revision": SOURCE_REVISION, "execution_mode": "DRAFT",
+                "configuration": self.objectives.validate(launch)})
             return result
         result.update({"launch_key": key, **target, "preflight": proof,
             "source_revision": SOURCE_REVISION,
