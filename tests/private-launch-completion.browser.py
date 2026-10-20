@@ -142,6 +142,7 @@ class InstalledLaunchTests(unittest.TestCase):
                 data={'review':{'ready':False}}
             else:
                 self.fail('Unexpected worker operation in browser fixture: '+str(action))
+            route.fulfill(json={'ok':True,**data});return
         elif path == 'ajax/metaJobsList.php': data = {'jobs': []}
         elif path == 'ajax/creativeLibrary.php':
             data = {'items': [{'id':'preset','name':'Fixture','format':'SINGLE','media_library_id':MEDIA_ID,
