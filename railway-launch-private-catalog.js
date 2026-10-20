@@ -37,9 +37,39 @@ loadFunding=async function(force=false) {
     $('fundingStatus').textContent='Оплата считается готовой после проверки выбранного РК в Meta.';
 };
 
-const remaskPrivateLaunchNotice='Подготовьте план рекламы. При запуске ReMask проверит доступ страницы и оплату выбранных РК.';
+const remaskPrivateLaunchNotice='Подготовьте план рекламы. Выберите сохранение черновика или публикацию.';
 let remaskPrivateLaunchBusy=false;
 const remaskPrivateLaunchPendingKey='remask_private_launch_pending_v1';
+// Saving an actual Meta draft is an explicit operation, separate from publishing.
+function remaskPrivateExecutionMode(config) {
+    const mode=$('remaskPrivateExecutionMode')?.value||config?.payload?.execution_mode||'PUBLISH';
+    if(!['DRAFT','PUBLISH'].includes(mode))throw new Error('Выберите режим создания рекламы.');
+    return mode;
+}
+function remaskPrivateInstallExecutionMode(){
+if(typeof document!=='undefined'&&document.createElement){
+    const anchor=$('launchButton')||$('reviewLaunch');
+    if(anchor?.parentNode&&!$('remaskPrivateExecutionMode')){
+        const box=document.createElement('div');box.className='mb-3';
+        const label=document.createElement('label');label.htmlFor='remaskPrivateExecutionMode';label.textContent='Что создать в Meta';
+        const select=document.createElement('select');select.id='remaskPrivateExecutionMode';select.className='form-control';
+        for(const [value,text] of [['DRAFT','Черновик в Meta'],['PUBLISH','Опубликовать рекламу']]){
+            const option=document.createElement('option');option.value=value;option.textContent=text;select.appendChild(option);
+        }
+        const note=document.createElement('p');note.id='remaskPrivateExecutionNote';note.className='muted';
+        const update=()=>{
+            const draft=select.value==='DRAFT';
+            note.textContent=draft?'Сохранит кампанию, группу и объявление в черновике Meta. Без публикации и проверки карты.':
+                'Публикация требует проверки доступа страницы и оплаты. Начальный статус — PAUSED.';
+            if($('launchButton'))$('launchButton').textContent=draft?'Сохранить черновик в Meta':'Создать рекламу';
+            if(typeof invalidateLaunchReview==='function')invalidateLaunchReview();
+            validateReady();
+        };
+        select.addEventListener('change',update);box.appendChild(label);box.appendChild(select);box.appendChild(note);
+        anchor.parentNode.insertBefore(box,anchor);update();
+    }
+}
+}
 const remaskPrivatePaymentSelections={};
 let remaskPrivatePaymentRevision=0;
 
@@ -145,6 +175,12 @@ function remaskPrivateAccountId(value) {
     return /^\d{5,30}$/.test(id)?id:'';
 }
 function remaskPrivateTargetRows(config) {
+    const executionMode=remaskPrivateExecutionMode(config);
+    if(executionMode==='DRAFT'){
+        const requested=config.payload?.delivery||{};
+        if($('launchDeliverySelect')?.value==='ACTIVE'||Object.values(requested).some(value=>value!=='PAUSED'))
+            throw new Error('Для черновика выберите статус «На паузе».');
+    }
     if(Array.isArray(config?._targets))return JSON.parse(JSON.stringify(config._targets));
     const ids=Array.isArray(config?.accountIds)?config.accountIds:
         (typeof selectedAccountIds==='function'?selectedAccountIds():[]);
@@ -179,6 +215,10 @@ function remaskPrivateTargetRows(config) {
             profile,accountId
         );
         const override=JSON.parse(JSON.stringify(overrides[accountId]||overrides['act_'+accountId]||{}));
+        // Operation mode is a form-level choice, never a stale per-RK override.
+        delete override.execution_mode;
+        const base={...(config.payload||{})};delete base.execution_mode;
+        if(executionMode==='DRAFT')base.execution_mode='DRAFT';
         if(config.payload?.creative?.page_id||override.creative?.page_id)
             override.creative={...(override.creative||{}),page_id:pageId};
         if(config.payload?.adset?.promoted_object?.page_id||override.adset?.promoted_object?.page_id)
@@ -198,7 +238,7 @@ function remaskPrivateTargetRows(config) {
                 ?{selected_payment_method:selectedPaymentMethod}
                 :{}),
             launch:{
-                base:config.payload||{},
+                base,
                 override
             }
         };
@@ -338,6 +378,9 @@ async function remaskPrivatePrepareConfig() {
     // Snapshot before awaiting: Review and Job must describe the same form.
     const snapshot=remaskPrivateInputSnapshot();
     const {config,format,preset,selected,files,cards,delivery}=snapshot;
+    const executionMode=remaskPrivateExecutionMode(config);
+    delete config.payload.execution_mode;
+    if(executionMode==='DRAFT')config.payload.execution_mode='DRAFT';
     const creative=config.payload.creative||(config.payload.creative={});
     // PHP's associative JSON decode/encode turns an empty {} into []. These
     // optional maps contain no settings; omit them before the worker bridge
@@ -629,7 +672,7 @@ async function remaskPrivatePollJob(jobId) {
                 if(source){
                     const sourceTasks=(source.items||[]).flatMap(item=>item.tasks||[]);
                     if($('activateJobAds'))$('activateJobAds').disabled=!(source.items||[]).some(item=>(item.tasks||[]).some(task=>remaskPrivateCanDeliver(item,task,'ACTIVE')));
-                    if($('pauseJobAds'))$('pauseJobAds').disabled=!sourceTasks.some(task=>task.action==='private_launch');
+                    if($('pauseJobAds'))$('pauseJobAds').disabled=!(source.items||[]).some(item=>(item.tasks||[]).some(task=>remaskPrivateCanDeliver(item,task,'PAUSED')));
                     if(typeof renderJobActionMenu==='function')renderJobActionMenu();
                 }
             }
@@ -643,6 +686,9 @@ async function remaskPrivatePollJob(jobId) {
                 (publishing?' · Meta обрабатывает публикацию. Retry Failed продолжит ожидание результата.':'')
             );
             if(['SUCCESS','FAILED','PARTIAL'].includes(String(job.status||'').toUpperCase())){
+                const draftTasks=(job.items||[]).flatMap(item=>item.tasks||[]).filter(task=>task.action==='private_launch');
+                if(String(job.status).toUpperCase()==='SUCCESS'&&draftTasks.length&&draftTasks.every(task=>task.result?.draft_verified===true&&task.result?.published===false))
+                    remaskPrivateShow('Черновик подтверждён в Meta · задача '+jobId+'. Реклама не опубликована.');
                 remaskPrivateFinalizeJob(job);
                 if(String(job.status).toUpperCase()==='SUCCESS'){
                     try{
@@ -666,6 +712,7 @@ async function remaskPrivatePollJob(jobId) {
 
 function remaskPrivateCanDeliver(item,task,status){
     if(task?.action!=='private_launch')return false;
+    if((task.payload?.launch?.base?.execution_mode||task.payload?.launch?.execution_mode)==='DRAFT')return false;
     if(status==='PAUSED'||task.status==='SUCCESS')return true;
     return (item.advertising_steps||[]).some(step=>step.task_id===task.id&&step.verified===true&&
         step.status==='SUCCESS'&&['ADS_MANAGER:PUBLISH','PUBLISH_FAMILY'].includes(step.step)&&
@@ -781,6 +828,8 @@ validateReady=function() {
             (readiness.ready?remaskPrivateLaunchNotice:
             'Проверка при нажатии: '+readiness.reason);
     }
+    if($('remaskPrivateExecutionMode')&&$('launchButton'))
+        $('launchButton').textContent=$('remaskPrivateExecutionMode').value==='DRAFT'?'Сохранить черновик в Meta':'Создать рекламу';
     // Keep validation visible before the click without blocking interaction.
     // Never skip validation inside remaskPrivatePrepareConfig or server review.
     const anchor=$('reviewLaunch')||$('launchButton');
@@ -834,6 +883,8 @@ if(typeof document!=='undefined'&&document.createElement&&$('launchButton')?.par
     });
     block.appendChild(label);block.appendChild(select);$('launchButton').parentNode.insertBefore(block,$('launchButton'));
 }
+
+remaskPrivateInstallExecutionMode();
 
 // Capture before legacy handlers. Old metaLaunchReview/metaJobCreate endpoints
 // remain blocked, so no click can fall through to the token-based Graph path.

@@ -670,6 +670,22 @@ class InstalledLaunchTests(unittest.TestCase):
         self.assertNotIn('При потере ответа',self.page.locator('#launchResult').inner_text())
         self.assertFalse(any(row['action']=='create' for row in self.worker_requests))
 
+    def test_meta_draft_and_publication_are_explicit_separate_operations(self):
+        self.prepare_single_page_launch()
+        self.assertEqual(self.page.locator('#remaskPrivateExecutionMode').input_value(), 'DRAFT')
+        self.assertIn('Без публикации и проверки карты', self.page.locator('#remaskPrivateExecutionNote').inner_text())
+        self.page.locator('#launchButton').click()
+        self.page.wait_for_function('document.querySelector("#launchResult").textContent.includes("Проверка не подтвердила готовность")')
+        draft = [row for row in self.worker_requests if row['action']=='private_launch_review'][-1]
+        self.assertEqual(draft['launch']['base']['execution_mode'], 'DRAFT')
+        self.page.locator('#remaskPrivateExecutionMode').select_option('PUBLISH')
+        self.assertIn('Публикация требует', self.page.locator('#remaskPrivateExecutionNote').inner_text())
+        self.page.locator('#launchButton').click()
+        self.page.wait_for_function('document.querySelector("#launchResult").textContent.includes("Проверка не подтвердила готовность")')
+        published = [row for row in self.worker_requests if row['action']=='private_launch_review'][-1]
+        self.assertNotIn('execution_mode', published['launch']['base'])
+        self.assertFalse(any(row['action']=='create' for row in self.worker_requests))
+
     def test_single_rk_cleared_page_cannot_reuse_payload_or_create_job(self):
         self.prepare_single_page_launch()
         self.page.locator('#page').select_option('')

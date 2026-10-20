@@ -102,6 +102,71 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.client.uploads,0)
         self.assertEqual(self.client.posts,[])
 
+    async def test_real_draft_mode_verifies_fragments_without_payment_publish_or_delivery(self):
+        self.payload['launch']['execution_mode'] = 'DRAFT'
+        self.payload['launch']['adset']['targeting'] = {'geo_locations': {'countries': ['UA']},
+            'age_min': 23, 'age_max': 33, 'locales': [52],
+            'interests': [{'id': '6003139266461', 'name': 'Physical fitness'}],
+            'behaviors': [{'id': '6015548561283', 'name': 'Chrome'}]}
+        with patch('app.static_payment_read.inspect_methods',new=AsyncMock(side_effect=AssertionError('No billing read'))) as payment, \
+                patch.object(self.owner.ads_manager, '_finish_delivery',new=AsyncMock(side_effect=AssertionError('No delivery'))) as delivery:
+            review = await self.owner.review(profile_id='19',context=self.context,payload=self.payload,
+                transport=SimpleNamespace(session=self.session))
+            self.assertTrue(review['ready'])
+            self.assertEqual(review['ready_for'], 'DRAFT')
+            self.assertFalse(review['preflight']['payment_checked_live'])
+            self.assertFalse(review['preflight']['publication_ready'])
+            result = await self.launch()
+            repeated = await self.launch()
+        self.assertTrue(result['draft_verified'])
+        self.assertEqual(result['draft_id'], repeated['draft_id'])
+        self.assertFalse(result['published'])
+        self.assertFalse(result['verified'])
+        self.assertNotIn('entities', result)
+        self.assertNotIn('publication_id', result)
+        self.assertEqual(len(result['fragment_ids']), 3)
+        self.assertEqual(len(self.client.posts), 4)
+        self.assertEqual(self.client.uploads, 1)
+        self.assertFalse(any(row['step'] == 'ADS_MANAGER:PUBLISH' for row in await self.owner.state.all_steps('image-launch')))
+        payment.assert_not_awaited()
+        delivery.assert_not_awaited()
+
+    async def test_draft_mode_cannot_change_to_publication_under_the_same_key(self):
+        self.payload['launch']['execution_mode'] = 'DRAFT'
+        await self.launch()
+        self.payload['launch']['execution_mode'] = 'PUBLISH'
+        with patch('app.static_payment_read.inspect_methods',new=AsyncMock(side_effect=AssertionError('No billing read'))) as payment:
+            with self.assertRaises(ProvisioningError) as caught:
+                await self.launch()
+        self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_SAVED_OPERATION_MISMATCH')
+        self.assertEqual(len(self.client.posts), 4)
+        payment.assert_not_awaited()
+
+    async def test_draft_mode_rejects_activation_or_malformed_mode_before_live_reads(self):
+        self.client.get = AsyncMock(side_effect=AssertionError('No Meta read'))
+        for mode in ([], {}, True, 'UNKNOWN', 'DRAFT'):
+            self.payload['launch']['execution_mode'] = mode
+            if mode == 'DRAFT':
+                self.payload['launch']['delivery'] = {'campaign':'ACTIVE'}
+            with self.subTest(mode=mode), self.assertRaises(ProvisioningError):
+                await self.launch()
+        self.client.get.assert_not_awaited()
+        self.assertEqual(self.client.posts, [])
+
+    async def test_draft_mode_needs_independent_matching_fragment_values(self):
+        self.payload['launch']['execution_mode'] = 'DRAFT'
+        original = self.client.get
+        async def tampered(path, params):
+            row = await original(path, params)
+            if path.startswith('/addraftfragment_') and row.get('ad_object_type') == 'ad_set':
+                row['values'] = []
+            return row
+        self.client.get = tampered
+        with self.assertRaises(ProvisioningError) as caught:
+            await self.launch()
+        self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_READ_SPEC_MISMATCH')
+        self.assertFalse(any(path.endswith('/publish') for path, _ in self.client.posts))
+
     async def test_published_object_read_recovers_after_restart_without_draft_rows(self):
         original = self.client.get
         async def interrupted(path, params):
