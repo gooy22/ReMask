@@ -674,15 +674,18 @@ class InstalledLaunchTests(unittest.TestCase):
         self.prepare_single_page_launch()
         self.assertEqual(self.page.locator('#remaskPrivateExecutionMode').input_value(), 'DRAFT')
         self.assertIn('Без публикации и проверки карты', self.page.locator('#remaskPrivateExecutionNote').inner_text())
-        self.page.locator('#launchButton').click()
+        with self.page.expect_request(lambda request:request.url.endswith('/ajax/pythonWorkerJobs.php')
+                and request.post_data_json.get('action')=='private_launch_review') as draft_request:
+            self.page.locator('#launchButton').click()
         self.page.wait_for_function('document.querySelector("#launchResult").textContent.includes("Проверка не подтвердила готовность")')
-        draft = [row for row in self.worker_requests if row['action']=='private_launch_review'][-1]
+        draft = draft_request.value.post_data_json
         self.assertEqual(draft['launch']['base']['execution_mode'], 'DRAFT')
         self.page.locator('#remaskPrivateExecutionMode').select_option('PUBLISH')
         self.assertIn('Публикация требует', self.page.locator('#remaskPrivateExecutionNote').inner_text())
-        self.page.locator('#launchButton').click()
-        self.page.wait_for_function('document.querySelector("#launchResult").textContent.includes("Проверка не подтвердила готовность")')
-        published = [row for row in self.worker_requests if row['action']=='private_launch_review'][-1]
+        with self.page.expect_request(lambda request:request.url.endswith('/ajax/pythonWorkerJobs.php')
+                and request.post_data_json.get('action')=='private_launch_review') as publication_request:
+            self.page.locator('#launchButton').click()
+        published = publication_request.value.post_data_json
         self.assertNotIn('execution_mode', published['launch']['base'])
         self.assertFalse(any(row['action']=='create' for row in self.worker_requests))
 

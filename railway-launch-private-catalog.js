@@ -64,6 +64,7 @@ if(typeof document!=='undefined'&&document.createElement){
                 'Публикация требует проверки доступа страницы и оплаты. Начальный статус — PAUSED.';
             if($('launchButton')){
                 $('launchButton').textContent=draft?'Сохранить черновик в Meta':'Создать рекламу';
+                $('launchButton').setAttribute('aria-label',$('launchButton').textContent);
                 $('launchButton').style.whiteSpace='normal';$('launchButton').style.maxWidth='100%';
             }
             if(typeof invalidateLaunchReview==='function')invalidateLaunchReview();
@@ -838,6 +839,7 @@ validateReady=function() {
     }
     if($('remaskPrivateExecutionMode')&&$('launchButton')){
         $('launchButton').textContent=$('remaskPrivateExecutionMode').value==='DRAFT'?'Сохранить черновик в Meta':'Создать рекламу';
+        $('launchButton').setAttribute?.('aria-label',$('launchButton').textContent);
     }
     // Keep validation visible before the click without blocking interaction.
     // Never skip validation inside remaskPrivatePrepareConfig or server review.
