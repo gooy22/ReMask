@@ -62,7 +62,10 @@ if(typeof document!=='undefined'&&document.createElement){
             const draft=select.value==='DRAFT';
             note.textContent=draft?'Сохранит кампанию, группу и объявление в черновике Meta. Без публикации и проверки карты.':
                 'Публикация требует проверки доступа страницы и оплаты. Начальный статус — PAUSED.';
-            if($('launchButton'))$('launchButton').textContent=draft?'Сохранить черновик в Meta':'Создать рекламу';
+            if($('launchButton')){
+                $('launchButton').textContent=draft?'Сохранить черновик в Meta':'Создать рекламу';
+                $('launchButton').style.whiteSpace='normal';$('launchButton').style.maxWidth='100%';
+            }
             if(typeof invalidateLaunchReview==='function')invalidateLaunchReview();
             validateReady();
         };
@@ -835,7 +838,6 @@ validateReady=function() {
     }
     if($('remaskPrivateExecutionMode')&&$('launchButton')){
         $('launchButton').textContent=$('remaskPrivateExecutionMode').value==='DRAFT'?'Сохранить черновик в Meta':'Создать рекламу';
-        $('launchButton').style.whiteSpace='normal';$('launchButton').style.maxWidth='100%';
     }
     // Keep validation visible before the click without blocking interaction.
     // Never skip validation inside remaskPrivatePrepareConfig or server review.
