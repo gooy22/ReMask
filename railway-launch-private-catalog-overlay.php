@@ -657,7 +657,7 @@ OLD_BULK_PAGES;
         const executionMode = remaskPrivateExecutionMode();
         status.textContent = `Loading Pages for ${targets.length} RK...`;
         await runPool(targets, 4, async (target) => {
-            const profile = target.profile, accountId = normalizeAccountIdClient(target.account_id);
+            const profile = target.profile, accountId = remaskPrivateAccountId(target.account_id);
             const data = await apiJson('ajax/metaAssets.php', formPost({profile, resource: 'pages',
                 account_id: accountId, execution_mode: executionMode, force: force ? '1' : '0'}));
             state.targetBindingAssets.pages[`${profile}|${accountId}|${executionMode}`] = data.data || [];
@@ -666,7 +666,7 @@ OLD_BULK_PAGES;
 NEW_BULK_PAGES;
     $js=str_replace($oldPages,$newPages,$js,$pageLoaderCount);
     $js=str_replace('const pages = state.targetBindingAssets.pages[target.profile] || [];',
-        'const pages = state.targetBindingAssets.pages[`${target.profile}|${accountId}|${remaskPrivateExecutionMode()}`] || [];',
+        'const pages = state.targetBindingAssets.pages[`${target.profile}|${remaskPrivateAccountId(accountId)}|${remaskPrivateExecutionMode()}`] || [];',
         $js,$pageRendererCount);
     if ($pageLoaderCount!==1 || $pageRendererCount!==1) throw new RuntimeException('Exact-RK Page binding adapter did not match Launch');
     $js.="\n".file_get_contents('/tmp/railway-launch-private-catalog.js');
