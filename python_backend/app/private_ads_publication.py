@@ -54,48 +54,52 @@ class AdsManagerDraftPublisher:
                 or client.context.business_id != scope["business_id"]
                 or client.context.actor_id != self.submitter.actor_id):
             raise fail("SAVED_OPERATION_MISMATCH", "Draft HTTP session belongs to another target")
-        draft = await self.submitter.submit(client, operation="DRAFT",
-            path="/act_" + scope["ad_account_id"] + "/addrafts",
-            params={"name": name, "use_active_draft_if_exists": True,
-                    "use_employee_draft": False, "application_id": client.context.application_id,
-                    "ownership_type": "USER"}, receipt=lambda row: {"draft_id": identity(row.get("id"))})
-        draft_id = draft["draft_id"]
-        row = await client.get("/addraft_" + draft_id,
-                               {"fields": ["id", "account_id", "author_id", "ownership_type"]})
-        self._account(row, scope["ad_account_id"])
-        if row.get("id") != draft_id or row.get("author_id") != client.context.actor_id or row.get("ownership_type") != "USER":
-            raise fail("READ_SCOPE_MISMATCH", "Draft identity or ownership is unconfirmed")
-        await self._confirm("DRAFT", {"draft_id": draft_id})
-        fragments, objects, parent_id = [], {}, None
-        for level in LEVELS:
-            values = copy.deepcopy(levels[level])
-            if level == "ad_set":
-                values["campaign_id"] = objects["campaign"]
-            if level == "ad":
-                values.update({"campaign_id": objects["campaign"], "adset_id": objects["ad_set"]})
-            params = fragment_params(draft_id, level=level, values=values, parent_id=parent_id)
-            operation = "FRAGMENT_" + level.upper()
-            receipt = await self.submitter.submit(client, operation=operation,
-                path="/" + draft_id + "/addraft_fragments", params=params,
-                receipt=lambda row: {"fragment_id": identity(row.get("id"))})
-            fragment_id = receipt["fragment_id"]
-            row = await client.get("/addraftfragment_" + fragment_id, {"fields": FRAGMENT_FIELDS})
+        recovery = await self._saved_publication(client, name, levels)
+        if recovery is not None:
+            draft_id, fragments, objects, publication = recovery
+        else:
+            draft = await self.submitter.submit(client, operation="DRAFT",
+                path="/act_" + scope["ad_account_id"] + "/addrafts",
+                params={"name": name, "use_active_draft_if_exists": True,
+                        "use_employee_draft": False, "application_id": client.context.application_id,
+                        "ownership_type": "USER"}, receipt=lambda row: {"draft_id": identity(row.get("id"))})
+            draft_id = draft["draft_id"]
+            row = await client.get("/addraft_" + draft_id,
+                                   {"fields": ["id", "account_id", "author_id", "ownership_type"]})
             self._account(row, scope["ad_account_id"])
-            if (row.get("id") != fragment_id or row.get("ad_draft_id") != draft_id
-                    or row.get("ad_object_type") != level
-                    or (parent_id is not None and row.get("parent_ad_object_id") != parent_id)):
-                raise fail("READ_RELATION_MISMATCH", "Draft fragment identity or parent is unconfirmed")
-            if not fragment_values_match(row.get("values"), values, business_id=scope["business_id"]):
-                raise fail("READ_SPEC_MISMATCH", "Saved draft settings differ from this Launch")
-            objects[level] = identity(row.get("ad_object_id"))
-            if objects[level] in list(objects.values())[:-1]:
-                raise fail("READ_RELATION_MISMATCH", "Draft levels have duplicate object identities")
-            await self._confirm(operation, {"draft_id": draft_id, "fragment_id": fragment_id,
-                "ad_object_id": objects[level]})
-            fragments.append(fragment_id);parent_id = objects[level]
-        publication = await self.submitter.submit(client, operation="PUBLISH",
-            path="/" + draft_id + "/publish", params=publish_params(fragments),
-            receipt=publication_receipt)
+            if row.get("id") != draft_id or row.get("author_id") != client.context.actor_id or row.get("ownership_type") != "USER":
+                raise fail("READ_SCOPE_MISMATCH", "Draft identity or ownership is unconfirmed")
+            await self._confirm("DRAFT", {"draft_id": draft_id})
+            fragments, objects, parent_id = [], {}, None
+            for level in LEVELS:
+                values = copy.deepcopy(levels[level])
+                if level == "ad_set":
+                    values["campaign_id"] = objects["campaign"]
+                if level == "ad":
+                    values.update({"campaign_id": objects["campaign"], "adset_id": objects["ad_set"]})
+                params = fragment_params(draft_id, level=level, values=values, parent_id=parent_id)
+                operation = "FRAGMENT_" + level.upper()
+                receipt = await self.submitter.submit(client, operation=operation,
+                    path="/" + draft_id + "/addraft_fragments", params=params,
+                    receipt=lambda row: {"fragment_id": identity(row.get("id"))})
+                fragment_id = receipt["fragment_id"]
+                row = await client.get("/addraftfragment_" + fragment_id, {"fields": FRAGMENT_FIELDS})
+                self._account(row, scope["ad_account_id"])
+                if (row.get("id") != fragment_id or row.get("ad_draft_id") != draft_id
+                        or row.get("ad_object_type") != level
+                        or (parent_id is not None and row.get("parent_ad_object_id") != parent_id)):
+                    raise fail("READ_RELATION_MISMATCH", "Draft fragment identity or parent is unconfirmed")
+                if not fragment_values_match(row.get("values"), values, business_id=scope["business_id"]):
+                    raise fail("READ_SPEC_MISMATCH", "Saved draft settings differ from this Launch")
+                objects[level] = identity(row.get("ad_object_id"))
+                if objects[level] in list(objects.values())[:-1]:
+                    raise fail("READ_RELATION_MISMATCH", "Draft levels have duplicate object identities")
+                await self._confirm(operation, {"draft_id": draft_id, "fragment_id": fragment_id,
+                    "ad_object_id": objects[level]})
+                fragments.append(fragment_id);parent_id = objects[level]
+            publication = await self.submitter.submit(client, operation="PUBLISH",
+                path="/" + draft_id + "/publish", params=publish_params(fragments),
+                receipt=publication_receipt)
         for attempt in range(12):
             response = await client.get("/addraft_" + draft_id + "/addraft_publish_statuses",
                 {"async_request_set_ids": [publication["operation_id"]], "fields": PUBLISH_FIELDS, "date_format": "U"})
@@ -121,6 +125,64 @@ class AdsManagerDraftPublisher:
                 "publication_id": publication["operation_id"], "verified": True,
                 "effective_statuses": proof.get("effective_statuses", {}), "delivery_running_verified": False,
                 "browser_started": False, "transport": "private_ads_manager_http_h2"}
+
+    async def _saved_publication(self, client, name, levels):
+        """A publish receipt resumes only status/object READs, never draft POSTs.
+
+        Confirmed draft identities are lookup references, not current object
+        proof. They need not remain available after publication consumes them.
+        Every request fingerprint is still checked against the durable intent.
+        """
+        state, launch_key = self.submitter.state, self.submitter.launch_key
+        if not await state.step(launch_key, OperationKey("ADS_MANAGER:PUBLISH")):
+            return None
+        scope = self.submitter.target
+        confirmed = {}
+        for operation in ("DRAFT", "FRAGMENT_CAMPAIGN", "FRAGMENT_AD_SET", "FRAGMENT_AD"):
+            row = await state.step(launch_key, OperationKey("ADS_MANAGER:" + operation))
+            evidence = (row or {}).get("result", {}).get("evidence", {})
+            proof = evidence.get("verification", {})
+            if (not row or row.get("status") != "SUCCESS" or proof.get("verified") is not True
+                    or proof.get("source") != "independent_private_ads_http"
+                    or any(str(row.get(key)) != str(value) for key, value in scope.items())
+                    or evidence.get("actor_id") != self.submitter.actor_id
+                    or evidence.get("launch_fingerprint") != self.submitter.launch_fingerprint
+                    or evidence.get("source_digest") != self.submitter.source_digest):
+                raise fail("SAVED_OPERATION_MISMATCH", "Publication recovery has no confirmed matching draft hierarchy")
+            confirmed[operation] = proof
+        draft = await self.submitter.submit(client, operation="DRAFT",
+            path="/act_" + scope["ad_account_id"] + "/addrafts",
+            params={"name": name, "use_active_draft_if_exists": True,
+                    "use_employee_draft": False, "application_id": client.context.application_id,
+                    "ownership_type": "USER"}, receipt=lambda row: row, saved_only=True)
+        draft_id = identity(draft.get("draft_id"))
+        if confirmed["DRAFT"].get("draft_id") != draft_id:
+            raise fail("SAVED_OPERATION_MISMATCH", "Saved draft identity differs from its confirmation")
+        fragments, objects, parent_id = [], {}, None
+        for level in LEVELS:
+            operation = "FRAGMENT_" + level.upper()
+            proof = confirmed[operation]
+            values = copy.deepcopy(levels[level])
+            if level == "ad_set":
+                values["campaign_id"] = objects["campaign"]
+            if level == "ad":
+                values.update(campaign_id=objects["campaign"], adset_id=objects["ad_set"])
+            receipt = await self.submitter.submit(client, operation=operation,
+                path="/" + draft_id + "/addraft_fragments",
+                params=fragment_params(draft_id, level=level, values=values, parent_id=parent_id),
+                receipt=lambda row: row, saved_only=True)
+            fragment = identity(receipt.get("fragment_id"))
+            entity = identity(proof.get("ad_object_id"))
+            if (proof.get("draft_id") != draft_id or proof.get("fragment_id") != fragment
+                    or entity in objects.values() or fragment in fragments):
+                raise fail("SAVED_OPERATION_MISMATCH", "Saved publication hierarchy is inconsistent")
+            fragments.append(fragment)
+            objects[level] = parent_id = entity
+        publication = await self.submitter.submit(client, operation="PUBLISH",
+            path="/" + draft_id + "/publish", params=publish_params(fragments),
+            receipt=lambda row: row, saved_only=True)
+        identity(publication.get("operation_id"))
+        return draft_id, fragments, objects, publication
 
     async def _progress(self, progress):
         state, launch_key = self.submitter.state, self.submitter.launch_key

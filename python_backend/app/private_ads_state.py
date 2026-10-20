@@ -27,7 +27,7 @@ class AdsManagerSubmitter:
         self.actor_id = actor_id
 
     async def submit(self, client, *, operation, path, params, receipt, files=None,
-                     media_digest="", multipart=False):
+                     media_digest="", multipart=False, saved_only=False):
         if not re.fullmatch(r"[A-Z][A-Z0-9_]{0,50}(?::[a-f0-9]{64})?", operation):
             raise fail("INVALID_OPERATION", "Advertising journal operation is malformed")
         params = copy.deepcopy(params)
@@ -54,6 +54,8 @@ class AdsManagerSubmitter:
             if isinstance(diagnostic, dict):
                 raise AdsManagerResponseError(diagnostic)
             raise fail("RECONCILE_REQUIRED", "Advertising submission has no known reply; automatic replay is blocked")
+        if saved_only:
+            raise fail("RECONCILE_REQUIRED", "Publication recovery requires every saved submission; no POST was sent")
         evidence = {"operation_fingerprint": fingerprint,
                     "launch_fingerprint": self.launch_fingerprint,
                     "source_digest": self.source_digest, "actor_id": self.actor_id, "receipt": {}}

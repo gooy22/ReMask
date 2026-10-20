@@ -21,6 +21,11 @@ from .private_ads_resources import AdsManagerResourceCatalog, read_pixels
 from .private_launch_extensions import OperationKey
 
 SOURCE_REVISION = "ads-manager-private-2026-10-13-media-resources"
+# Exact source/catalog digest of reviewed main 6b7dfc139c604bd74309cb0eb774a647830c8e11.
+# Compatibility permits only fresh reads of an already accepted publication.
+READ_ONLY_PUBLICATION_PREDECESSORS = frozenset({
+    "e38dc7d32ba2ccd73d18e0b31b477be7e1d4f94624d1b1a1817efd692307a2c2",
+})
 
 class AdsManagerLaunch:
     def __init__(self, owner):
@@ -294,24 +299,48 @@ class AdsManagerLaunch:
             raise fail("INVALID_INPUT", "Advertising launch key is missing or too long")
         await self.owner.state.init()
         saved_steps = await self.owner.state.all_steps(key)
+        actor = identity(str(context.cookies.get("c_user") or ""))
+        source_digest = self.source_digest
+        saved_sources = [row.get("result", {}).get("evidence", {}).get("source_digest") for row in saved_steps]
+        if any(not isinstance(value, str) for value in saved_sources):
+            raise fail("SAVED_OPERATION_MISMATCH", "Saved publication source revision is malformed")
+        saved_sources = set(saved_sources)
+        historical_recovery = bool(saved_steps) and saved_sources != {source_digest}
+        if historical_recovery:
+            if len(saved_sources) != 1 or next(iter(saved_sources)) not in READ_ONLY_PUBLICATION_PREDECESSORS:
+                raise fail("SAVED_OPERATION_MISMATCH", "Saved publication has an unreviewed source revision")
+            source_digest = next(iter(saved_sources))
+            saved = {row["step"]: row for row in saved_steps}
+            hierarchy = {"ADS_MANAGER:DRAFT", "ADS_MANAGER:FRAGMENT_CAMPAIGN",
+                         "ADS_MANAGER:FRAGMENT_AD_SET", "ADS_MANAGER:FRAGMENT_AD"}
+            publication = saved.get("ADS_MANAGER:PUBLISH", {}).get("result", {}).get("evidence", {}).get("receipt", {})
+            if (not hierarchy <= set(saved) or not publication.get("operation_id")
+                    or any(value != "PAUSED" for value in launch.get("delivery", {}).values())):
+                raise fail("SAVED_OPERATION_MISMATCH", "Historical recovery requires an accepted publication and PAUSED delivery")
+            for name in hierarchy:
+                row = saved[name]
+                proof = row.get("result", {}).get("evidence", {}).get("verification", {})
+                if (row.get("status") != "SUCCESS" or proof.get("verified") is not True
+                        or proof.get("source") != "independent_private_ads_http"):
+                    raise fail("SAVED_OPERATION_MISMATCH", "Historical publication hierarchy is not independently confirmed")
         for prior in saved_steps:
             evidence = prior.get("result", {}).get("evidence", {})
             if (not prior["step"].startswith("ADS_MANAGER:")
                     or any(str(prior.get(name)) != str(target[name]) for name in
                            ("profile_id", "business_id", "ad_account_id"))
                     or evidence.get("launch_fingerprint") != fingerprint
-                    or evidence.get("source_digest") != self.source_digest):
+                    or evidence.get("source_digest") != source_digest
+                    or evidence.get("actor_id") != actor):
                 raise fail("SAVED_OPERATION_MISMATCH", "Launch key belongs to another protocol, target or configuration")
             if not evidence.get("receipt"):
                 if isinstance(evidence.get("response_error"), dict):
                     from .private_ads_http import AdsManagerResponseError
                     raise AdsManagerResponseError(evidence["response_error"])
                 raise fail("RECONCILE_REQUIRED", "An advertising submission has an unknown reply; replay is blocked")
-        actor = identity(str(context.cookies.get("c_user") or ""))
-        digest = hashlib.sha256((self.source_digest + actor).encode()).hexdigest()
+        digest = hashlib.sha256((source_digest + actor).encode()).hexdigest()
         await self.owner.state.bind_plan(key, target, fingerprint, digest)
         published = await self.owner.state.step(key, OperationKey("ADS_MANAGER:PUBLISH"))
-        if (launch.get("delivery") and published and published.get("status") == "SUCCESS"
+        if (not historical_recovery and launch.get("delivery") and published and published.get("status") == "SUCCESS"
                 and published.get("result", {}).get("evidence", {}).get("verification", {}).get("verified") is True):
             return await self._finish_delivery(profile_id, context, session, payload, target, launch, key,
                 {"status": "SUCCESS", "entities": published["result"]["evidence"]["verification"]["entities"],
@@ -324,6 +353,8 @@ class AdsManagerLaunch:
             candidate = saved["ADS_MANAGER:FRAGMENT_AD"].get("result", {}).get("evidence", {}).get("binding", {}).get("creative")
             if isinstance(candidate, dict):
                 expected_creative = candidate
+        if historical_recovery and expected_creative is None:
+            raise fail("SAVED_OPERATION_MISMATCH", "Historical publication has no confirmed creative binding")
         saved_media = []
         for reference in references:
             candidates = []
@@ -345,7 +376,7 @@ class AdsManagerLaunch:
             raise fail("PAYMENT_SELECTION_REQUIRED", "Choose a currently linked card before creating advertising")
         sender = AdsManagerSubmitter(self.owner.state, launch_key=key, profile_id=profile_id,
             business_id=target["business_id"], account_id=target["ad_account_id"], actor_id=actor,
-            launch_fingerprint=fingerprint, source_digest=self.source_digest)
+            launch_fingerprint=fingerprint, source_digest=source_digest)
         selection = launch["creative"]
         uploaded = []
         for row in media:
@@ -364,6 +395,12 @@ class AdsManagerLaunch:
             "steps": [{"step": name, "status": "SUCCESS", "entity_id": result["entities"][field]}
                       for name, field in (("CAMPAIGN", "campaign_id"), ("ADSET", "adset_id"),
                                           ("CREATIVE", "creative_id"), ("AD", "ad_id"))]})
+        if historical_recovery:
+            # _prepare_live made this sender read-only. Never enter a separate
+            # delivery session that could dispatch a new status mutation.
+            result.update(recovery_read_only=True, recovered_source_digest=source_digest,
+                          delivery={level:"PAUSED" for level in ("campaign", "adset", "ad")})
+            return result
         return await self._finish_delivery(profile_id, context, session, payload, target, launch, key, result)
 
     async def _finish_delivery(self, profile_id, context, session, payload, target, launch, key, result):
