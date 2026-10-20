@@ -264,12 +264,19 @@ console.log('Private Launch catalog and funding truth checks passed');
   assert.equal(storage.has('remask_private_launch_pending_v1'),false);
 
   privateCtx.creativeFormat=()=> 'CAROUSEL';
+  config.payload.creative.official_params={};
+  config.accountOverrides['111111111'].creative.official_params={};
   privateCtx.carouselFiles=()=>[];
   privateCtx.carouselCardsPayload=()=>[{headline:'First',link:'https://example.com/a'},
     {headline:'Second',link:'https://example.com/b'}];
   vm.runInContext(`let remaskSelectedCreativePreset={format:'CAROUSEL',carousel:[
     {media_library_id:'m-first'},{media_library_id:'m-second'}]}`,privateCtx);
   const carousel=await privateCtx.remaskPrivatePrepareConfig();
+  assert.equal(carousel.payload.creative.official_params,undefined,'omit empty optional maps before the associative PHP bridge');
+  assert.equal(carousel._targets[0].launch.override.creative.official_params,undefined);
+  assert.equal(JSON.stringify(config.payload.creative.official_params),'{}','preparation must preserve the original form');
+  delete config.payload.creative.official_params;
+  delete config.accountOverrides['111111111'].creative.official_params;
   assert.equal(carousel.payload.creative.format,'CAROUSEL');
   assert.equal(carousel.payload.creative.carousel_cards[1].headline,'Second');
   assert.deepEqual(Array.from(carousel.payload.creative.carousel_media_library_ids),['m-first','m-second']);
