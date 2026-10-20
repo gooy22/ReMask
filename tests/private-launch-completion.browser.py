@@ -25,6 +25,11 @@ class InstalledLaunchTests(unittest.TestCase):
         from app.editor_modules import form_schema
         from app.private_ads_catalog import AdsManagerRouteCatalog
         cls.schema = form_schema(AdsManagerRouteCatalog())
+        from app.private_launch import PrivateLaunchService, PrivateLaunchContractStore
+        from app.provisioning.state import ProvisioningStateStore
+        contracts=PrivateLaunchContractStore('{}')
+        contracts.protocol='private_ads_manager_versioned'
+        cls.planner=PrivateLaunchService(ProvisioningStateStore(str(cls.root/'browser-plan.sqlite')),contracts=contracts)
         cls.runtime = sync_playwright().start()
         cls.browser = cls.runtime.chromium.launch(headless=True)
 
@@ -132,7 +137,16 @@ class InstalledLaunchTests(unittest.TestCase):
             fields=json.loads(request.post_data or '{}');self.worker_requests.append(fields)
             action=fields.get('action')
             if action=='private_launch_plan':
-                data={'plan':{'configuration_valid':True,'checked_live':False}}
+                # Exercise the same associative JSON boundary as the installed
+                # PHP bridge, then the real Python planner (no Meta requests).
+                forwarded=json.loads(subprocess.check_output(['php','-r',
+                    'echo json_encode(json_decode(stream_get_contents(STDIN),true),JSON_THROW_ON_ERROR);'],
+                    input=json.dumps(fields),text=True))
+                try:
+                    plan=self.planner.plan(profile_id=forwarded['profile_id'],payload=forwarded)
+                except Exception as error:
+                    route.fulfill(status=422,json={'ok':False,'error':str(error)});return
+                data={'plan':plan}
             elif action=='private_launch_contracts':
                 data={'contracts':{step:{'configured':True,'active':True,'verification_configured':True}
                                    for step in ('CAMPAIGN','ADSET','CREATIVE','AD')}}
@@ -625,6 +639,7 @@ class InstalledLaunchTests(unittest.TestCase):
         plan=next(row for row in self.worker_requests if row['action']=='private_launch_plan')
         self.assertEqual((plan['profile_id'],plan['ad_account_id'],plan['page_id']),('20','123456','345678'))
         self.assertEqual(plan['launch']['base']['creative']['page_id'],'345678')
+        self.assertNotIn('official_params',plan['launch']['base']['creative'])
         self.page.locator('#launchButton').click()
         self.page.wait_for_function('document.querySelector("#launchResult").textContent.includes("Проверка не подтвердила готовность")')
         review=next(row for row in self.worker_requests if row['action']=='private_launch_review')

@@ -335,6 +335,14 @@ async function remaskPrivatePrepareConfig() {
     const snapshot=remaskPrivateInputSnapshot();
     const {config,format,preset,selected,files,cards,delivery}=snapshot;
     const creative=config.payload.creative||(config.payload.creative={});
+    // PHP's associative JSON decode/encode turns an empty {} into []. These
+    // optional maps contain no settings; omit them before the worker bridge
+    // rather than relaxing Python's managed creative-field validation.
+    for(const row of [creative,...Object.values(config.accountOverrides||{}).map(value=>value?.creative)]){
+        const options=row?.official_params;
+        if(options&&typeof options==='object'&&!Array.isArray(options)&&!Object.keys(options).length)
+            delete row.official_params;
+    }
     creative.format=format;
     if(delivery==='ACTIVE'||delivery==='PAUSED')config.payload.delivery={campaign:delivery,adset:delivery,ad:delivery};
     if(format==='CAROUSEL'){
