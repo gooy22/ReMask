@@ -517,7 +517,7 @@ console.log('Private Launch catalog and funding truth checks passed');
 (async()=>{
   const mode={value:'DRAFT'};
   const requests=[];
-  const ctx={...context,$:id=>id==='remaskPrivateExecutionMode'?mode:controls[id],
+  const ctx={...context,URLSearchParams,$:id=>id==='remaskPrivateExecutionMode'?mode:controls[id],
     apiJson:async(url,options)=>{requests.push({url,body:options.body});return {ok:true};}};
   vm.createContext(ctx);vm.runInContext(source,ctx);
   for(const executionMode of ['DRAFT','PUBLISH']){
@@ -528,9 +528,14 @@ console.log('Private Launch catalog and funding truth checks passed');
     assert.equal(body.get('profile'),'38');
     assert.equal(body.get('account_id'),'120249912222240685');
   }
+  mode.value='DRAFT';
+  await ctx.apiJson('ajax/metaAssets.php',{body:'profile=38&account_id=120249912222240685&resource=pages'});
+  const encoded=new URLSearchParams(requests.at(-1).body);
+  assert.equal(encoded.get('execution_mode'),'DRAFT');
+  assert.equal(encoded.get('account_id'),'120249912222240685');
   const body=new URLSearchParams({resource:'images'});
   await ctx.apiJson('ajax/metaAssets.php',{body});
   assert.equal(body.has('execution_mode'),false);
-  assert.equal(requests.length,3);
+  assert.equal(requests.length,4);
   console.log('The Page picker carries the explicit draft/publication mode with unchanged exact profile/RK scope.');
 })().catch(e=>{console.error(e);process.exitCode=1;});

@@ -624,6 +624,12 @@ class InstalledLaunchTests(unittest.TestCase):
         pages=[fields for fields in self.asset_requests if fields['resource']==['pages']]
         self.assertEqual(pages[-1]['profile'],['20'])
         self.assertEqual(pages[-1]['account_id'],['act_123456'])
+        self.assertEqual(pages[-1].get('execution_mode'),['DRAFT'])
+        self.page.locator('#remaskPrivateExecutionMode').select_option('PUBLISH')
+        self.page.evaluate('loadPages(true)')
+        pages=[fields for fields in self.asset_requests if fields['resource']==['pages']]
+        self.assertEqual(pages[-1].get('execution_mode'),['PUBLISH'])
+        self.assertEqual(pages[-1]['account_id'],['act_123456'])
 
     def test_page_access_failure_keeps_profile_pages_for_local_drafts(self):
         self.page.wait_for_function('fixtureLaunch.ready()')
