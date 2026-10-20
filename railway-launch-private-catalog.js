@@ -50,9 +50,10 @@ function remaskPrivateInstallExecutionMode(){
 if(typeof document!=='undefined'&&document.createElement){
     const anchor=$('launchButton')||$('reviewLaunch');
     if(anchor?.parentNode&&!$('remaskPrivateExecutionMode')){
-        const box=document.createElement('div');box.className='mb-3';
+        const box=document.createElement('div');box.className='mb-3';box.style.minWidth='0';
         const label=document.createElement('label');label.htmlFor='remaskPrivateExecutionMode';label.textContent='Что создать в Meta';
         const select=document.createElement('select');select.id='remaskPrivateExecutionMode';select.className='form-control';
+        select.style.maxWidth='100%';
         for(const [value,text] of [['DRAFT','Черновик в Meta'],['PUBLISH','Опубликовать рекламу']]){
             const option=document.createElement('option');option.value=value;option.textContent=text;select.appendChild(option);
         }
@@ -66,7 +67,11 @@ if(typeof document!=='undefined'&&document.createElement){
             validateReady();
         };
         select.addEventListener('change',update);box.appendChild(label);box.appendChild(select);box.appendChild(note);
-        anchor.parentNode.insertBefore(box,anchor);update();
+        // Keep this full-width field outside the existing inline action row.
+        const card=anchor.closest?.('.launch-card');
+        if(card)card.insertBefore(box,card.firstChild);
+        else anchor.parentNode.insertBefore(box,anchor);
+        update();
     }
 }
 }
@@ -828,8 +833,10 @@ validateReady=function() {
             (readiness.ready?remaskPrivateLaunchNotice:
             'Проверка при нажатии: '+readiness.reason);
     }
-    if($('remaskPrivateExecutionMode')&&$('launchButton'))
+    if($('remaskPrivateExecutionMode')&&$('launchButton')){
         $('launchButton').textContent=$('remaskPrivateExecutionMode').value==='DRAFT'?'Сохранить черновик в Meta':'Создать рекламу';
+        $('launchButton').style.whiteSpace='normal';$('launchButton').style.maxWidth='100%';
+    }
     // Keep validation visible before the click without blocking interaction.
     // Never skip validation inside remaskPrivatePrepareConfig or server review.
     const anchor=$('reviewLaunch')||$('launchButton');
