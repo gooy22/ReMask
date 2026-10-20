@@ -147,7 +147,22 @@ class PrivateLaunchCatalogTests(unittest.TestCase):
         root = Path(self.tmp.name)/'web'
         for folder in ['classes','ajax','scripts']:
             (root/folder).mkdir(parents=True,exist_ok=True)
-        (root/'scripts/launch.js').write_text('function validateReady(){}\n')
+        # The installer now verifies that the actual bulk Page reader and
+        # renderer were adapted. Retain their original shapes in this small
+        # lint/idempotency fixture; complete runtime/browser tests execute them.
+        (root/'scripts/launch.js').write_text('''function validateReady(){}
+async function loadTargetBindings() {
+        const profiles = [...new Set(targets.map((t) => t.profile))];
+        status.textContent = `Loading Pages for ${profiles.length} FB profile(s)...`;
+        await runPool(profiles, 4, async (profile) => {
+            const data = await apiJson('ajax/metaAssets.php', formPost({profile, resource: 'pages', force: force ? '1' : '0'}));
+            state.targetBindingAssets.pages[profile] = data.data || [];
+        });
+}
+function renderTargetBindings() {
+    const pages = state.targetBindingAssets.pages[target.profile] || [];
+}
+''')
         (root/'scripts/workspace.js').write_text(
             'async function fetchAsset(resource){return null;}\nfunction fillSelect(){}\n'
             'async function checkAssetsSelection(){ }\nasync function showFunding(){}\n')
