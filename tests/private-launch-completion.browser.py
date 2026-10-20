@@ -121,6 +121,8 @@ class InstalledLaunchTests(unittest.TestCase):
             fields=parse_qs(request.post_data or '');self.asset_requests.append(fields)
             resource=fields['resource'][0];account=fields.get('account_id',[''])[0]
             if resource=='pages':
+                if self._testMethodName=='test_page_access_failure_keeps_profile_pages_for_local_drafts' and account:
+                    route.fulfill(status=409,json={'ok':False,'error':{'message':'Page access not confirmed'}});return
                 if self._testMethodName=='test_old_page_read_cannot_overwrite_new_selected_account' and account=='act_123456':
                     self.waiting_pages.append(route);return
                 data={'data':[{'id':'345678' if account=='act_123456' else '567890','name':'Scoped Page'}]}
@@ -622,6 +624,23 @@ class InstalledLaunchTests(unittest.TestCase):
         pages=[fields for fields in self.asset_requests if fields['resource']==['pages']]
         self.assertEqual(pages[-1]['profile'],['20'])
         self.assertEqual(pages[-1]['account_id'],['act_123456'])
+
+    def test_page_access_failure_keeps_profile_pages_for_local_drafts(self):
+        self.page.wait_for_function('fixtureLaunch.ready()')
+        self.page.locator('#creativeLibrarySelect').select_option('preset')
+        self.page.evaluate('fixtureSingleTarget("act_123456")')
+        self.page.locator('#page option[value="567890"]').wait_for(state='attached')
+        self.assertIn('доступ не проверен',self.page.locator('#page option[value="567890"]').inner_text())
+        self.page.locator('#page').select_option('567890')
+        self.page.evaluate('fixtureLaunch.geo()')
+        self.page.locator('#reviewLaunch').click()
+        self.page.wait_for_function('document.querySelector("#launchResult").textContent.includes("План подготовлен для 1 РК")')
+        self.page.locator('#launchButton').click()
+        self.page.wait_for_function('document.querySelector("#launchResult").textContent.includes("Проверка не подтвердила готовность")')
+        self.assertEqual(next(row for row in self.worker_requests if row['action']=='private_launch_review')['page_id'],'567890')
+        self.assertFalse(any(row['action']=='create' for row in self.worker_requests))
+        self.save_and_reload()
+        self.assertEqual(self.bundles[0]['data']['assets']['page'],'567890')
 
     def prepare_single_page_launch(self):
         self.page.wait_for_function('fixtureLaunch.ready()')

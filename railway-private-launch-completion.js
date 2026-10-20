@@ -25,16 +25,31 @@ loadPages=async function(force=false) {
     if (targetMode()) return;
     const profile=state.profile,account=accounts.length===1 ? accounts[0] : '',selection=accounts.join(','),
         wanted=$('page').value || state.pendingBundleAssets.page;
-    const data=await loadCachedAsset('pages',account,force);
+    let data,liveError;
+    try {data=await loadCachedAsset('pages',account,force);}
+    catch(error) {
+        if (generation!==remaskPrivatePagesGeneration || profile!==state.profile
+                || selectedAccountIds().join(',')!==selection) return;
+        if (!account) throw error;
+        liveError=error;
+        // A failed permission read must not prevent saving local settings.
+        // This profile's cached identities remain explicitly unverified;
+        // publishing still requires the independent server-side Page check.
+        data=await loadCachedAsset('pages','',false);
+        data={...data,data:(data.data||[]).map(row=>({...row,
+            ad_account_page_access_verified:false,source:'cached_profile_page'}))};
+    }
     if (generation!==remaskPrivatePagesGeneration || profile!==state.profile
             || selectedAccountIds().join(',')!==selection) return;
     const prior=new Map(state.pages.map(row=>[String(row.id),row]));
     state.pages=(data.data || []).map(row=>({...prior.get(String(row.id)),...row}));
     $('page').replaceChildren(new Option('Выберите страницу',''));
-    for (const row of state.pages) $('page').appendChild(new Option(`${row.name || row.id} — ${row.id}`,String(row.id)));
+    for (const row of state.pages) $('page').appendChild(new Option(`${row.name || row.id} — ${row.id}`+
+        (liveError?' · сохранена, доступ не проверен':''),String(row.id)));
     $('page').disabled=!state.pages.length;
     if (wanted && hasOptionValue($('page'),String(wanted))) $('page').value=String(wanted);
     refreshInstagram(); invalidateLaunchReview(); validateReady();
+    if (liveError) throw liveError;
 };
 $('adAccount')?.addEventListener('change',()=>{
     if (targetMode() || selectedAccountIds().length!==1) {remaskPrivatePagesGeneration++;return;}
