@@ -39,6 +39,39 @@ class CookieTxtImportTests(unittest.TestCase):
         self.assertEqual(profiles[0]['name'], result['records'][0]['profile_name'])
         self.assertFalse(result['session_verified'])
 
+    def test_saved_proxy_choices_and_import_never_expose_credentials(self):
+        self.create(name='7')
+        preview=self.run_import(self.row(),preview=True,proxy='')
+        choice=preview['proxy_choices'][0]
+        self.assertEqual(choice,{'source_profile':'7','label':'http://127.0.0.1:8080','assigned_profiles':1})
+        self.assertNotIn('fixture',json.dumps(preview))
+        result=self.run_import(self.row(),proxy='',source_profile='7')
+        self.assertEqual(result['imported'],1,result)
+        self.assertEqual(self.saved()[0]['proxy'],self.saved()[1]['proxy'])
+        self.assertFalse(result['session_verified'])
+        self.assertEqual(result['proxy_choices'],[])
+        for secret in ('txt-session-fixture','shop-password-fixture',self.proxy):
+            self.assertNotIn(secret,json.dumps(result))
+
+    def test_saved_proxy_rejects_missing_source_and_conflicting_modes_without_import(self):
+        self.create(name='7')
+        before=self.saved()
+        for extra in ({'proxy':'','source_profile':'missing'},
+                      {'proxy':self.proxy,'source_profile':'7'},
+                      {'proxy':'','source_profile':'7','allow_direct_test':True}):
+            result=self.run_import(self.row(),**extra)
+            self.assertFalse(result['ok'],result)
+            self.assertEqual(self.saved(),before)
+
+    def test_proxy_choices_count_exact_sessions_and_sort_by_assignment_count(self):
+        self.create(name='7')
+        self.create(name='8',cookies=[{'name':'c_user','value':'345678901'},{'name':'xs','value':'other-session'}])
+        self.create(name='9',cookies=[{'name':'c_user','value':'456789012'},{'name':'xs','value':'third-session'}],
+                    proxy='http:127.0.0.1:8081:another:secret')
+        choices=self.run_import(self.row(),preview=True)['proxy_choices']
+        self.assertEqual([(r['source_profile'],r['assigned_profiles']) for r in choices],[('9',1),('7',2)])
+        self.assertNotIn('secret',json.dumps(choices))
+
     def test_direct_import_rejects_multiple_accounts_and_proxy(self):
         for text, proxy in [(self.row()+'\n'+self.row('345678901'), ''), (self.row(), self.proxy)]:
             result = self.run_import(text, proxy=proxy, allow_direct_test=True)

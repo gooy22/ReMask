@@ -178,6 +178,24 @@ function rmx_pm_sequence_save(array $profiles, string $path): void {
         || !rename($temporary, $path)) throw new RuntimeException('PROFILE_NUMBER_SAVE_FAILED');
 }
 
+function rmx_pm_proxy_choices(array $profiles): array {
+    $groups = [];
+    foreach ($profiles as $profile) {
+        if (!$profile instanceof FbAccount || $profile->proxy === null) continue;
+        // Credentials distinguish proxy sessions internally, but never leave
+        // the server in the choice value, label, response or diagnostic.
+        $key = json_encode($profile->proxy->toArray(), JSON_THROW_ON_ERROR);
+        if (!isset($groups[$key])) $groups[$key] = ['source_profile'=>(string)$profile->name,
+            'label'=>(string)$profile->proxy->type.'://'.(string)$profile->proxy->ip.':'.(int)$profile->proxy->port,
+            'assigned_profiles'=>0];
+        $groups[$key]['assigned_profiles']++;
+    }
+    $choices = array_values($groups);
+    usort($choices, static fn($a,$b) => ($a['assigned_profiles'] <=> $b['assigned_profiles'])
+        ?: strnatcmp($b['source_profile'],$a['source_profile']));
+    return $choices;
+}
+
 function rmx_pm_txt_import(array $input, mixed $store, bool $preview): array {
     $text = $input['text'] ?? null;
     if (!is_string($text)) throw new InvalidArgumentException('TXT_REQUIRED: выберите TXT файл.');
@@ -194,11 +212,16 @@ function rmx_pm_txt_import(array $input, mixed $store, bool $preview): array {
     }
     if (!$preview && !$records) throw new InvalidArgumentException('TXT_SELECTION_EMPTY: нет выбранных записей.');
     $proxy = null;
+    $sourceProfile = rmx_pm_find_scalar($input, ['source_profile']);
+    $rawProxy = rmx_pm_find_scalar($input, ['proxy']);
     $enableDirect = !$preview && rmx_pm_find_bool($input, ['allow_direct_test'], false);
-    if ($enableDirect && (count($records) !== 1 || rmx_pm_find_scalar($input, ['proxy']) !== '')) {
+    if (!$preview && $sourceProfile !== '' && ($rawProxy !== '' || $enableDirect)) {
+        throw new InvalidArgumentException('TXT_PROXY_SOURCE_CONFLICT: выберите один способ назначения прокси.');
+    }
+    if ($enableDirect && (count($records) !== 1 || $rawProxy !== '' || $sourceProfile !== '')) {
         throw new InvalidArgumentException('TXT_DIRECT_SINGLE_ACCOUNT_REQUIRED: выберите один аккаунт без прокси.');
     }
-    if (!$preview && !$enableDirect && count(array_filter($records, fn($r)=>$r['status'] === 'ready'))) {
+    if (!$preview && !$enableDirect && $sourceProfile === '' && count(array_filter($records, fn($r)=>$r['status'] === 'ready'))) {
         try {
             $raw = rmx_pm_find_scalar($input, ['proxy']);
             if ($raw === '') throw new InvalidArgumentException();
@@ -210,6 +233,12 @@ function rmx_pm_txt_import(array $input, mixed $store, bool $preview): array {
     [$lock, $sequencePath] = rmx_pm_sequence_open($preview ? LOCK_SH : LOCK_EX);
     try {
         $profiles = $store->deserialize();
+        if (!$preview && $sourceProfile !== '') {
+            $source = $store->getAccountByName($sourceProfile);
+            if (!$source instanceof FbAccount || $source->proxy === null)
+                throw new InvalidArgumentException('TXT_PROXY_SOURCE_UNAVAILABLE: сохранённый прокси недоступен.');
+            $proxy = $source->proxy;
+        }
         $known = [];
         foreach ($profiles as $profile) {
             $uid = RemaskCookieTxt::userId((array)$profile->cookies);
@@ -257,7 +286,8 @@ function rmx_pm_txt_import(array $input, mixed $store, bool $preview): array {
         return ['ok'=>true,'success'=>true,'preview'=>$preview,'records'=>$result,'total'=>count($records),
             'ready'=>$ready,'imported'=>$imported,'skipped'=>$skipped,'errors'=>$errors,
             'processed'=>count($result),'session_verified'=>false,'next_number'=>$next,
-            'count'=>count($store->deserialize())];
+            'count'=>count($store->deserialize()),
+            'proxy_choices'=>$preview ? rmx_pm_proxy_choices($profiles) : []];
     } finally { fclose($lock); }
 }
 
