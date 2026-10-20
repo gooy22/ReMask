@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import copy
+from functools import lru_cache
+import json
 import re
 
 from .private_ads_draft import FRAGMENT_FIELDS, LEVELS, fail, fragment_values_match, identity
@@ -13,6 +15,76 @@ from .private_launch import _launch_fingerprint
 READ_ONLY_DRAFT_PREDECESSORS = frozenset({
     "f9f8e21841da2cf174bc516941a5581fe1c5b65642783ab84ed2b03ede68c218",
 })
+
+
+_ERROR_TERMS = frozenset("objective discontinued unsupported optimization billing destination promoted conversion attribution targeting placement budget schedule campaign adset creative permission ownership account restricted disabled invalid required missing incompatible duplicate parent image video page pixel currency name field validation status".split())
+_ERROR_CODES = frozenset({"code", "error_code", "error_subcode", "subcode", "exception_code"})
+_SECRET_KEYS = re.compile(r"cookie|token|secret|password|credential|authorization|dtsg|lsd|session", re.I)
+
+
+@lru_cache(maxsize=1)
+def _validation_fields():
+    from .private_ads_catalog import AdsManagerRouteCatalog
+    fields = {key for values in AdsManagerRouteCatalog().data["object_fields"].values() for key in values}
+    return frozenset(fields | {"object_story_spec", "link_data", "page_id", "image_hash", "video_id"})
+
+
+def validation_diagnostic(value, *, observed):
+    """Bounded typed evidence, never raw Meta messages or credential-bearing data.
+
+    Error strings can echo requests. Keep numeric Meta codes, reviewed field
+    names and an allowlisted vocabulary; do not persist arbitrary strings or URLs.
+    Parse an encoded error collection only within the same bounded budget.
+    """
+    fields = _validation_fields()
+    terms, names, codes = set(), set(), set()
+    visited, truncated = 0, False
+
+    def walk(node, key="", depth=0):
+        nonlocal visited, truncated
+        visited += 1
+        if visited > 256 or depth > 8:
+            truncated = True
+            return
+        if _SECRET_KEYS.search(key):
+            return
+        if key in fields:
+            names.add(key)
+        if key in _ERROR_CODES:
+            if type(node) is int and 0 <= node <= 2_147_483_647:
+                codes.add((key, node))
+            elif isinstance(node, str) and re.fullmatch(r"[0-9]{1,10}", node) and int(node) <= 2_147_483_647:
+                codes.add((key, int(node)))
+        if isinstance(node, dict):
+            if len(node) > 64:
+                truncated = True
+            for child_key, child in list(node.items())[:64]:
+                if isinstance(child_key, str):
+                    walk(child, child_key, depth + 1)
+        elif isinstance(node, list):
+            if len(node) > 64:
+                truncated = True
+            for child in node[:64]:
+                walk(child, key, depth + 1)
+        elif isinstance(node, str):
+            if len(node) > 16000:
+                truncated = True
+            text = node[:16000]
+            words = set(re.findall(r"[a-z_]+", text.casefold()))
+            terms.update(words & _ERROR_TERMS)
+            names.update(words & fields)
+            if text.lstrip().startswith(("{", "[")) and len(node) <= 16000:
+                try:
+                    decoded = json.loads(text)
+                except (ValueError, RecursionError):
+                    return
+                if isinstance(decoded, (dict, list)):
+                    walk(decoded, key, depth + 1)
+
+    walk(value)
+    return {"observed": observed, "has_errors": bool(value),
+        "codes": [{"field": key, "value": number} for key, number in sorted(codes)],
+        "terms": sorted(terms), "field_names": sorted(names), "truncated": truncated}
 
 
 async def inspect_saved_draft(adapter, *, profile_id, context, session, payload):
@@ -93,12 +165,63 @@ async def inspect_saved_draft(adapter, *, profile_id, context, session, payload)
             "submitted_values": values, "settings_match": True,
             "fresh_values": {entry["field"]: copy.deepcopy(entry.get("new_value")) for entry in row["values"]},
             "validation_status": row.get("validation_status"), "active_errors_present": bool(row.get("active_errors")),
+            "active_errors_observed": "active_errors" in row,
+            "active_error_diagnostic": validation_diagnostic(row.get("active_errors"), observed="active_errors" in row),
             "publish_status": row.get("publish_status"), "status": row.get("status")})
+    # Draft fragments do not prove that Graph exposes a corresponding object.
+    # Read exact retained IDs using the already reviewed published-object READ
+    # projections. A received permission/unsupported-object rejection is recorded
+    # as unavailable evidence, never interpreted as absence or publication.
+    from .private_ads_http import AdsManagerResponseError
+    from .private_ads_verify import _same, _scope
+    object_reads = []
+    for fragment in reads:
+        level, entity = fragment["level"], fragment["ad_object_id"]
+        expected = copy.deepcopy(fragment["submitted_values"])
+        expected.pop("creative", None)
+        fields = sorted({"id", "account_id", "status", "effective_status", *expected,
+                         *({"creative{id}"} if level == "ad" else set())})
+        try:
+            row = await client.get("/" + entity, {"fields": fields})
+        except AdsManagerResponseError as exc:
+            if exc.diagnostic.get("code") in {102, 190}:
+                raise  # Do not repeat reads after an explicit session refusal.
+            object_reads.append({"level": level, "id": entity, "available": False,
+                "diagnostic": exc.diagnostic, "publication_verified": False})
+            continue
+        _scope(row, target["ad_account_id"], entity)
+        object_reads.append({"level": level, "id": entity, "available": True,
+            "values": {field: copy.deepcopy(row[field]) for field in expected if field in row},
+            "settings_match": all(field in row and _same(row[field], value, field)
+                                  for field, value in expected.items()),
+            "missing_fields": sorted(set(expected) - set(row)),
+            "effective_status": row.get("effective_status"), "publication_verified": False})
+        if level == "ad":
+            creative = row.get("creative")
+            if isinstance(creative, dict) and isinstance(creative.get("id"), str):
+                creative_id = identity(creative["id"])
+                spec = fragment["submitted_values"]["creative"]
+                try:
+                    actual = await client.get("/" + creative_id, {"fields": sorted({"id", "account_id", *spec})})
+                except AdsManagerResponseError as exc:
+                    if exc.diagnostic.get("code") in {102, 190}:
+                        raise
+                    object_reads.append({"level": "creative", "id": creative_id, "available": False,
+                        "diagnostic": exc.diagnostic, "publication_verified": False})
+                    continue
+                _scope(actual, target["ad_account_id"], creative_id)
+                object_reads.append({"level": "creative", "id": creative_id, "available": True,
+                    "settings_match": all(field in actual and _same(actual[field], value, field)
+                                          for field, value in spec.items()),
+                    "missing_fields": sorted(set(spec) - set(actual)), "publication_verified": False})
     # The job result persists this evidence. Original mutation receipts and
     # fingerprints remain untouched, even if Meta reports a validation error.
     return {"status": "SUCCESS", "execution_mode": "DRAFT_INSPECT", **target, "launch_key": key,
         "draft_id": draft_id, "draft_objects": objects, "fragment_reads": reads,
-        "fragment_storage_verified": True, "relationships_confirmed": True,
+        "fragment_storage_verified": True, "relationships_confirmed": True, "object_reads": object_reads,
+        "missing_direct_objects": [level for level in (*LEVELS, "creative")
+            if not any(row["level"] == level and row["available"] for row in object_reads)],
+        "launch_fingerprint_verified": True, "actor_verified": True,
         "editor_verified": False, "published": None, "payment_checked_live": False,
         "mutation_posts": 0, "source": "independent_private_ads_http", "recovered_source_digest": next(iter(sources))}
 
