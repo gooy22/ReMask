@@ -101,6 +101,53 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result['ready'])
         self.assertEqual(self.client.uploads,0)
         self.assertEqual(self.client.posts,[])
+
+    async def test_published_object_read_recovers_after_restart_without_draft_rows(self):
+        original = self.client.get
+        async def interrupted(path, params):
+            if path == '/777771':
+                raise ConnectionError('object read interrupted after publication')
+            return await original(path, params)
+        self.client.get = interrupted
+        with self.assertRaises(ConnectionError):
+            await self.launch()
+        self.assertEqual(len(self.client.posts), 5)
+        reads = []
+        async def consumed(path, params):
+            reads.append(path)
+            if path == '/addraft_555555' or path.startswith('/addraftfragment_'):
+                raise AssertionError('consumed draft row cannot be required for recovery')
+            return await original(path, params)
+        self.client.get = consumed
+        contracts = PrivateLaunchContractStore('{}')
+        contracts.protocol = 'private_ads_manager_versioned'
+        self.owner = PrivateLaunchService(self.state, contracts=contracts)
+        with patch('app.static_payment_read.inspect_methods', new=AsyncMock()) as payment:
+            result = await self.launch()
+        self.assertTrue(result['verified'])
+        self.assertEqual(result['entities'], {'campaign_id':'777771', 'adset_id':'777772',
+            'ad_id':'777773', 'creative_id':'777774'})
+        self.assertTrue({'/777771','/777772','/777773','/777774'} <= set(reads))
+        self.assertEqual(len(self.client.posts), 5)
+        self.assertEqual(self.client.uploads, 1)
+        self.assertTrue(self.client.read_only)
+        payment.assert_not_awaited()
+
+    async def test_page_permission_is_required_before_payment_upload_or_draft(self):
+        original = self.client.get
+        async def denied(path, params):
+            row = await original(path, params)
+            if path == '/act_111111':
+                row['ad_account_promotable_objects']['promotable_page_ids'] = []
+            return row
+        self.client.get = denied
+        with patch('app.static_payment_read.inspect_methods', new=AsyncMock()) as payment:
+            with self.assertRaises(ProvisioningError) as caught:
+                await self.launch()
+        self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_PAGE_UNVERIFIED')
+        payment.assert_not_awaited()
+        self.assertEqual(self.client.uploads, 0)
+        self.assertEqual(self.client.posts, [])
     async def test_offline_plan_never_resolves_profile_or_marks_live_ready(self):
         result = self.owner.plan(profile_id='19',payload=self.payload)
         self.assertFalse(result['ready'])

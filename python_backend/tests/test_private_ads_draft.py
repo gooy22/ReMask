@@ -200,6 +200,16 @@ class JournalTests(unittest.IsolatedAsyncioTestCase):
                 params={}, receipt=lambda row: {"draft_id": row["id"]})
         self.assertEqual(await self.state.all_steps("launch"), [])
 
+    async def test_saved_only_missing_receipt_never_creates_an_intent_or_dispatches(self):
+        class NoPost:
+            async def post(inner, *args, **kwargs):
+                raise AssertionError('Recovery cannot create a new submission')
+        with self.assertRaises(ProvisioningError) as caught:
+            await self.sender.submit(NoPost(), operation='DRAFT', path='/act_111111/addrafts',
+                params={'name':'test'}, receipt=lambda row: row, saved_only=True)
+        self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_RECONCILE_REQUIRED')
+        self.assertEqual(await self.state.all_steps('launch'), [])
+
 
 class DraftClient:
     def __init__(self):
@@ -282,6 +292,68 @@ class PublisherTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.client.posts), 5)
         self.client.pending = False
         await self.launch();self.assertEqual(len(self.client.posts), 5)
+
+    async def test_publication_recovery_does_not_require_consumed_draft_rows(self):
+        async def unavailable(*args):
+            raise ConnectionError('independent object read interrupted')
+        with self.assertRaises(ConnectionError):
+            await self.launch(verify=unavailable)
+        self.assertEqual(len(self.client.posts), 5)
+        original = self.client.get
+        reads = []
+        async def consumed(path, params):
+            reads.append(path)
+            if path == '/addraft_555555' or path.startswith('/addraftfragment_'):
+                raise AssertionError('Published draft rows are no longer an object-proof dependency')
+            return await original(path, params)
+        self.client.get = consumed
+        self.sender.state = PrivateLaunchStateStore(Path(self.tmp.name)/'state.sqlite')
+        self.publisher = AdsManagerDraftPublisher(self.sender)
+        result = await self.launch()
+        self.assertTrue(result['verified'])
+        self.assertIn('/addraft_555555/addraft_publish_statuses', reads)
+        self.assertEqual(len(self.client.posts), 5)
+
+    async def test_recovery_with_changed_fragment_values_stops_before_any_read_or_post(self):
+        await self.launch()
+        self.levels['ad']['name'] = 'another ad'
+        original = self.client.get
+        reads = []
+        async def observed(path, params):
+            reads.append(path)
+            return await original(path, params)
+        self.client.get = observed
+        with self.assertRaises(ProvisioningError) as caught:
+            await self.launch()
+        self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_SAVED_OPERATION_MISMATCH')
+        self.assertEqual(reads, [])
+        self.assertEqual(len(self.client.posts), 5)
+
+    async def test_incomplete_saved_confirmation_cannot_fall_back_to_creation(self):
+        await self.launch()
+        with self.state._connect() as con:
+            con.execute("UPDATE private_launch_steps SET status='RECONCILE_REQUIRED' "
+                        "WHERE launch_key=? AND step=?", ('launch','ADS_MANAGER:FRAGMENT_AD'))
+        with self.assertRaises(ProvisioningError) as caught:
+            await self.launch()
+        self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_SAVED_OPERATION_MISMATCH')
+        self.assertEqual(len(self.client.posts), 5)
+
+    async def test_recovery_cannot_confirm_foreign_published_objects(self):
+        async def unavailable(*args):
+            return {'verified':False}
+        with self.assertRaises(ProvisioningError):
+            await self.launch(verify=unavailable)
+        async def foreign(*args):
+            row = await self.verify(*args)
+            row['entities']['adset_id'] = '999999'
+            return row
+        with self.assertRaises(ProvisioningError) as caught:
+            await self.launch(verify=foreign)
+        self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_READ_RELATION_MISMATCH')
+        self.assertEqual(len(self.client.posts), 5)
+        row = await self.state.step('launch', OperationKey('ADS_MANAGER:PUBLISH'))
+        self.assertNotEqual(row['status'], 'SUCCESS')
 
     async def test_foreign_fragment_stops_before_other_fragments_or_publish(self):
         self.client.foreign = True
