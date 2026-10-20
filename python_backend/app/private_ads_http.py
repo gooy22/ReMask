@@ -458,6 +458,9 @@ class AdsManagerPrivateHttp:
                     raise AdsManagerResponseError({"http_status": response.status})
         except Exception as exc:
             if isinstance(exc, ProvisioningError):
+                log.warning('ads_request_failed profile=%s method=%s route_kind=%s alias_edge=%s code=%s',
+                    self._profile_name, method, path.rsplit('/', 1)[-1] if path.count('/') > 1 else 'object',
+                    wire_path != path, exc.code)
                 raise
             # Exception strings and URLs can include the session credential.
             raise fail("HTTP_UNAVAILABLE", "Advertising HTTP request did not return a usable response", True) from None
@@ -497,7 +500,11 @@ class AdsManagerPrivateHttp:
         if native == selected:
             return path, params
         root, *edge = path.lstrip('/').split('/')
-        wire_path = '/act_' + native + ('/' + edge[0] if edge else '') if root == 'act_' + selected else path
+        # Keep the exact account lookup that established the alias. Meta's
+        # Settings object and advertising edge IDs are distinct: proving the
+        # relation does not prove that /act_<native> accepts the root lookup.
+        # Only advertising edges and their account selectors use the native ID.
+        wire_path = '/act_' + native + '/' + edge[0] if root == 'act_' + selected and edge else path
         values = dict(params)
         # AdsUnifiedFlexibleTargetingDataSource spells its account selector
         # accountId. It must agree with the proven native advertising edge.
