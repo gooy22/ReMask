@@ -26,9 +26,9 @@ class DraftPageTests(unittest.IsolatedAsyncioTestCase):
         self.page = {'data':{'page':{'id':'555555','name':'Page',
             'ownerBusiness':{'id':'222222'}}}}
         self.rights = {}
-        for asset,task in [('555555','100001'),('111111','100002')]:
+        for asset,task in [('555555','100001'),('999999','100002')]:
             self.rights[asset] = {'data':{'business_object_rendered_in_ui':{'user_assigned_permissions':{
-                'asset':{'business_object_id':'999999' if asset == '111111' else asset},
+                'asset':{'business_object_id':'111111' if asset == '999999' else asset},
                 'user':{'id':'666666'},'current_business':{'id':'222222'},
                 'assigned_permission_task_ids':[task]}}}}
         self.calls = []
@@ -58,7 +58,7 @@ class DraftPageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.calls), 4)
         self.assertTrue(self.web.private_only)
         self.assertEqual([v['assetID'] for f,v in self.calls if f == contract_metadata('RIGHTS')['friendly_name']],
-            ['555555','111111'])
+            ['555555','999999'])
 
     async def test_wrong_actor_stops_before_graphql(self):
         self.web.bootstrap.return_value.actor_id = '888888'
@@ -107,9 +107,9 @@ class DraftPageTests(unittest.IsolatedAsyncioTestCase):
                 with self.subTest(asset=asset,case=case), self.assertRaises(ProvisioningError):
                     await self.verify()
 
-    async def test_settings_id_does_not_substitute_for_confirmed_native_account(self):
-        record = self.rights['111111']['data']['business_object_rendered_in_ui']['user_assigned_permissions']
-        record['asset']['business_object_id'] = '111111'
+    async def test_ui_asset_id_does_not_substitute_for_canonical_settings_account(self):
+        record = self.rights['999999']['data']['business_object_rendered_in_ui']['user_assigned_permissions']
+        record['asset']['business_object_id'] = '999999'
         with self.assertRaises(ProvisioningError):
             await self.verify()
 

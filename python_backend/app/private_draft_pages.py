@@ -40,8 +40,9 @@ async def verify_draft_page(web, *, target, client):
     """Require current owner and effective full-control grants on Page and RK.
 
     No claim, assignment, billing, advertising publication or delivery request.
-    Settings UI IDs are used only for the rights query; its returned canonical
-    account must match the separately proven advertising identity.
+    The Settings UI asset ID is used only for the rights query; its returned
+    business_object_id must match the exact selected Settings account. The
+    advertising sender separately proves the Settings/UI alias relation.
     """
     actor = await _actor(web)
     business, page, account = (identity(target[k]) for k in ("business_id", "page_id", "ad_account_id"))
@@ -67,7 +68,7 @@ async def verify_draft_page(web, *, target, client):
     proofs = {}
     for kind, asset, canonical, variant in (
             ("PAGE", page, page, page_node.get("business_object_asset_type_variant")),
-            ("AD_ACCOUNT", account, native, None)):
+            ("AD_ACCOUNT", native, account, None)):
         plan = full_control_plan(config, kind, variant=variant)
         response = await execute(web, "RIGHTS", business=business, asset=asset, user=user)
         proof = assignment_proof(response, asset_id=canonical, user_id=user, business_id=business,
