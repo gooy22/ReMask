@@ -57,6 +57,7 @@ class InstalledLaunchTests(unittest.TestCase):
         self.estimate_failure=False
         self.asset_requests=[]
         self.waiting_pages=[]
+        self.worker_requests=[]
         self.page = self.browser.new_page()
         self.page.set_default_timeout(5000)
         self.page.on('pageerror', lambda e: self.errors.append(str(e)))
@@ -87,7 +88,7 @@ class InstalledLaunchTests(unittest.TestCase):
         if file.is_file() and not path.endswith('.php'):
             body = file.read_bytes()
             if path == 'scripts/launch.js':
-                body += b'\nwindow.fixtureSingleTarget=account=>{state.profile="20";state.targets=[];$("adAccount").innerHTML=`<option value="${account}" selected>${account}</option>`;$("adAccount").disabled=false;$("adAccount").dispatchEvent(new Event("change",{bubbles:true}));};'
+                body += b'\nwindow.fixtureSingleTarget=account=>{state.profile="20";state.targets=[];state.accounts=[{id:account,business_id:"654321"}];$("adAccount").innerHTML=`<option value="${account}" selected>${account}</option>`;$("adAccount").disabled=false;$("adAccount").dispatchEvent(new Event("change",{bubbles:true}));};'
                 body += b'\nwindow.fixtureLaunch={payload:()=>buildPayload(),effective:()=>remaskApplySavedMetaBuilderToPayload(buildPayload()),capture:()=>bundleFormState(),restore:applyBundleData,config:loadLaunchConfig,ready:()=>Boolean(state.launchConfig),geo:()=>{state.geo=[{type:"country",key:"US",country_code:"US",name:"United States"}];$("geoQuery").dispatchEvent(new Event("change",{bubbles:true}));},instagramTargets:()=>{state.targets=[{profile:"20",account_id:"act_123456",business_id:"654321"},{profile:"21",account_id:"act_234567",business_id:"765432"}];state.profile="20";state.targetBindingAssets.pages={"20":[{id:"345678",instagram_business_account:{id:"456789"}}],"21":[{id:"567890",instagram_business_account:{id:"678901"}}]};$("adAccount").innerHTML=state.targets.map(t=>`<option value="${t.account_id}" selected>${t.account_id}</option>`).join("");$("creativeFormat").value="INSTAGRAM_POST";renderTargetBindings();},binding:account=>({...bindingFor(account)})};'
             route.fulfill(body=body, content_type='application/javascript' if path.endswith('.js') else 'text/css'); return
         data = {}
@@ -126,6 +127,21 @@ class InstalledLaunchTests(unittest.TestCase):
                 'resource':'instagram_media','checked_live':True,'account_scope_verified':True,'data':[
                     {'id':'789012','caption':'Fixture owned post','instagram_actor_id':actor},
                     {'id':'890123','caption':'Foreign actor post','instagram_actor_id':'999999'}]}
+        elif path == 'ajax/pythonWorkerJobs.php':
+            self.assertEqual(request.headers.get('x-remask-csrf'),'fixture-csrf')
+            fields=json.loads(request.post_data or '{}');self.worker_requests.append(fields)
+            action=fields.get('action')
+            if action=='private_launch_plan':
+                data={'plan':{'configuration_valid':True,'checked_live':False}}
+            elif action=='private_launch_contracts':
+                data={'contracts':{step:{'configured':True,'active':True,'verification_configured':True}
+                                   for step in ('CAMPAIGN','ADSET','CREATIVE','AD')}}
+            elif action=='private_launch_review':
+                # A deliberate independent server refusal proves the fixed UI
+                # reaches review with its selected Page, without creating ads.
+                data={'review':{'ready':False}}
+            else:
+                self.fail('Unexpected worker operation in browser fixture: '+str(action))
         elif path == 'ajax/metaJobsList.php': data = {'jobs': []}
         elif path == 'ajax/creativeLibrary.php':
             data = {'items': [{'id':'preset','name':'Fixture','format':'SINGLE','media_library_id':MEDIA_ID,
@@ -591,6 +607,40 @@ class InstalledLaunchTests(unittest.TestCase):
         pages=[fields for fields in self.asset_requests if fields['resource']==['pages']]
         self.assertEqual(pages[-1]['profile'],['20'])
         self.assertEqual(pages[-1]['account_id'],['act_123456'])
+
+    def prepare_single_page_launch(self):
+        self.page.wait_for_function('fixtureLaunch.ready()')
+        self.page.locator('#creativeLibrarySelect').select_option('preset')
+        self.page.evaluate('fixtureSingleTarget("act_123456")')
+        self.page.locator('#page option[value="345678"]').wait_for(state='attached')
+        self.page.locator('#page').select_option('345678')
+        self.page.evaluate('fixtureLaunch.geo()')
+        self.page.locator('#launchDeliverySelect').select_option('PAUSED')
+
+    def test_single_rk_selected_page_reaches_plan_and_independent_review(self):
+        self.prepare_single_page_launch()
+        self.page.locator('#reviewLaunch').click()
+        self.page.wait_for_function('document.querySelector("#launchResult").textContent.includes("План подготовлен для 1 РК")')
+        plan=next(row for row in self.worker_requests if row['action']=='private_launch_plan')
+        self.assertEqual((plan['profile_id'],plan['ad_account_id'],plan['page_id']),('20','123456','345678'))
+        self.assertEqual(plan['launch']['base']['creative']['page_id'],'345678')
+        self.page.locator('#launchButton').click()
+        self.page.wait_for_function('document.querySelector("#launchResult").textContent.includes("Проверка не подтвердила готовность")')
+        review=next(row for row in self.worker_requests if row['action']=='private_launch_review')
+        self.assertEqual(review['page_id'],'345678')
+        self.assertNotIn('При потере ответа',self.page.locator('#launchResult').inner_text())
+        self.assertFalse(any(row['action']=='create' for row in self.worker_requests))
+
+    def test_single_rk_cleared_page_cannot_reuse_payload_or_create_job(self):
+        self.prepare_single_page_launch()
+        self.page.locator('#page').select_option('')
+        self.worker_requests.clear()
+        self.page.locator('#launchButton').click()
+        self.page.wait_for_function('document.querySelector("#launchResult").textContent.includes("Выберите страницу для РК 123456")')
+        message=self.page.locator('#launchResult').inner_text()
+        self.assertNotIn('..',message)
+        self.assertNotIn('При потере ответа',message)
+        self.assertEqual(self.worker_requests,[])
 
     def test_old_page_read_cannot_overwrite_new_selected_account(self):
         self.page.evaluate('fixtureSingleTarget("act_123456")')

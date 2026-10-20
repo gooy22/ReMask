@@ -64,6 +64,43 @@ assert.match(controls.reviewStatus.textContent,/Подготовьте план 
 assert.equal(controls.preflight.textContent,'Загрузить сохранённые РК');
 console.log('Private Launch catalog and funding truth checks passed');
 
+// Direct Launch uses the visible Page control; even an old per-RK binding
+// must never override it. Workspace/bulk Launch uses exact target bindings.
+{
+  const ids=['120254071182230729'];
+  const page={value:'1421882841009910'};
+  let perTarget=false;
+  const binding={page_id:'999999999',source_instagram_media_id:'888888888'};
+  const ctx={...context,$:id=>id==='page'?page:controls[id],
+    state:{profile:'36',accounts:[{id:ids[0],business_id:'1449666707266277'}]},
+    targetMode:()=>perTarget,bindingFor:()=>binding};
+  vm.createContext(ctx);vm.runInContext(source,ctx);
+  const config={accountIds:ids,payload:{creative:{page_id:page.value}}};
+  assert.equal(ctx.remaskPrivateTargetRows(config)[0].page_id,page.value,
+    'single RK must submit the selected visible Page, not a stale/empty bulk binding');
+  config.payload.creative.format='INSTAGRAM_POST';
+  config.payload.creative.source_instagram_media_id='123456789';
+  assert.equal(ctx.remaskPrivateTargetRows(config)[0].launch.override.creative.source_instagram_media_id,'123456789');
+  delete config.payload.creative.format;
+  delete config.payload.creative.source_instagram_media_id;
+  delete binding.page_id;
+  assert.equal(ctx.remaskPrivateTargetRows(config)[0].page_id,page.value);
+  page.value='';
+  assert.throws(()=>ctx.remaskPrivateTargetRows(config),/Выберите страницу/,
+    'a saved payload must not supply a Page after the user clears the selector');
+  page.value='1421882841009910';perTarget=true;
+  assert.throws(()=>ctx.remaskPrivateTargetRows(config),/Выберите страницу/,
+    'even a one-RK workspace target must not borrow the hidden single Page');
+  binding.page_id='777777777';
+  assert.equal(ctx.remaskPrivateTargetRows(config)[0].page_id,'777777777');
+  ids.push('120254071182230730');
+  ctx.bindingFor=id=>id===ids[0]?binding:{};
+  ctx.state.accounts.push({id:ids[1],business_id:'1449666707266277'});
+  assert.throws(()=>ctx.remaskPrivateTargetRows(config),/120254071182230730/,
+    'bulk targets with a missing Page must fail rather than reuse another RK Page');
+  console.log('Direct and bulk Launch Page sources stay separate, including one-RK workspace mode.');
+}
+
 (async()=>{
   const buttons=Object.fromEntries(
     ['preflight','syncMeta','loadFunding','fundingStatus','reviewLaunch','launchButton','serverDryRun','dryRunPlan','reviewStatus','launchResult','adAccount']
@@ -106,6 +143,7 @@ console.log('Private Launch catalog and funding truth checks passed');
     },
     selectedAccountIds:()=>config.accountIds,
     currentLaunchConfigForRequest:()=>config,
+    targetMode:()=>true,
     targetForAccount:id=>{
       const clean=String(id).replace(/^act_/,'');
       return clean==='111111111'
