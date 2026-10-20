@@ -148,6 +148,111 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
         payment.assert_not_awaited()
         self.assertEqual(self.client.uploads, 0)
         self.assertEqual(self.client.posts, [])
+
+    async def accepted_predecessor_publication(self, source=None):
+        from app.private_ads_launch import READ_ONLY_PUBLICATION_PREDECESSORS
+        self.owner.ads_manager.source_digest = source or next(iter(READ_ONLY_PUBLICATION_PREDECESSORS))
+        original = self.client.get
+        async def interrupted(path, params):
+            if path == '/777771':
+                raise ConnectionError('interrupted after accepted publication')
+            return await original(path, params)
+        self.client.get = interrupted
+        with self.assertRaises(ConnectionError):
+            await self.launch()
+        self.client.get = original
+        contracts = PrivateLaunchContractStore('{}')
+        contracts.protocol = 'private_ads_manager_versioned'
+        self.owner = PrivateLaunchService(self.state, contracts=contracts)
+        return original
+
+    async def test_reviewed_predecessor_resumes_only_fresh_publication_reads(self):
+        original = await self.accepted_predecessor_publication()
+        reads = []
+        async def observed(path, params):
+            reads.append(path)
+            if path == '/addraft_555555' or path.startswith('/addraftfragment_'):
+                raise AssertionError('Consumed draft rows cannot be read')
+            return await original(path, params)
+        self.client.get = observed
+        with patch.object(self.owner.ads_manager, '_finish_delivery', new=AsyncMock()) as delivery:
+            result = await self.launch()
+        self.assertTrue(result['verified'])
+        self.assertTrue(result['recovery_read_only'])
+        self.assertTrue(self.client.read_only)
+        self.assertEqual(result['delivery'], {'campaign':'PAUSED','adset':'PAUSED','ad':'PAUSED'})
+        self.assertTrue({'/777771','/777772','/777773','/777774'} <= set(reads))
+        self.assertEqual(len(self.client.posts), 5)
+        self.assertEqual(self.client.uploads, 1)
+        delivery.assert_not_awaited()
+
+    async def test_unknown_predecessor_is_rejected_before_live_reads(self):
+        await self.accepted_predecessor_publication('f' * 64)
+        self.client.get = AsyncMock(side_effect=AssertionError('No Meta read allowed'))
+        with self.assertRaises(ProvisioningError) as caught:
+            await self.launch()
+        self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_SAVED_OPERATION_MISMATCH')
+        self.client.get.assert_not_awaited()
+        self.assertEqual(len(self.client.posts), 5)
+
+    async def test_predecessor_cannot_resume_activation_or_another_actor(self):
+        await self.accepted_predecessor_publication()
+        self.client.get = AsyncMock(side_effect=AssertionError('No Meta read allowed'))
+        self.context.cookies['c_user'] = '999999'
+        with self.assertRaises(ProvisioningError):
+            await self.launch()
+        self.context.cookies['c_user'] = '123456'
+        self.payload['launch']['delivery'] = {'campaign':'ACTIVE','adset':'ACTIVE','ad':'ACTIVE'}
+        with self.assertRaises(ProvisioningError):
+            await self.launch()
+        self.client.get.assert_not_awaited()
+        self.assertEqual(len(self.client.posts), 5)
+
+    async def test_predecessor_without_publish_receipt_cannot_create_a_new_intent(self):
+        await self.accepted_predecessor_publication()
+        with self.owner.state._connect() as con:
+            row = con.execute("SELECT result_json FROM private_launch_steps WHERE launch_key=? AND step=?",
+                ('image-launch','ADS_MANAGER:PUBLISH')).fetchone()
+            saved = json.loads(row['result_json'])
+            saved['evidence']['receipt'] = {}
+            con.execute("UPDATE private_launch_steps SET result_json=? WHERE launch_key=? AND step=?",
+                (json.dumps(saved),'image-launch','ADS_MANAGER:PUBLISH'))
+        self.client.get = AsyncMock(side_effect=AssertionError('No Meta read allowed'))
+        with self.assertRaises(ProvisioningError):
+            await self.launch()
+        self.client.get.assert_not_awaited()
+        self.assertEqual(len(self.client.posts), 5)
+
+    async def test_predecessor_recovery_rejects_fresh_active_object_without_mutating(self):
+        original = await self.accepted_predecessor_publication()
+        async def changed(path, params):
+            row = await original(path, params)
+            if path == '/777771':
+                row['status'] = 'ACTIVE'
+            return row
+        self.client.get = changed
+        with self.assertRaises(ProvisioningError) as caught:
+            await self.launch()
+        self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_OBJECT_SPEC_MISMATCH')
+        self.assertTrue(self.client.read_only)
+        self.assertEqual(len(self.client.posts), 5)
+        self.assertEqual(self.client.uploads, 1)
+
+    async def test_predecessor_recovery_rejects_mixed_source_journal_before_reads(self):
+        await self.accepted_predecessor_publication()
+        with self.owner.state._connect() as con:
+            row = con.execute("SELECT result_json FROM private_launch_steps WHERE launch_key=? AND step=?",
+                ('image-launch','ADS_MANAGER:PUBLISH')).fetchone()
+            saved = json.loads(row['result_json'])
+            saved['evidence']['source_digest'] = self.owner.ads_manager.source_digest
+            con.execute("UPDATE private_launch_steps SET result_json=? WHERE launch_key=? AND step=?",
+                (json.dumps(saved),'image-launch','ADS_MANAGER:PUBLISH'))
+        self.client.get = AsyncMock(side_effect=AssertionError('No Meta read allowed'))
+        with self.assertRaises(ProvisioningError):
+            await self.launch()
+        self.client.get.assert_not_awaited()
+        self.assertEqual(len(self.client.posts), 5)
+
     async def test_offline_plan_never_resolves_profile_or_marks_live_ready(self):
         result = self.owner.plan(profile_id='19',payload=self.payload)
         self.assertFalse(result['ready'])
