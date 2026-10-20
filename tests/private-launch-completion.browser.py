@@ -94,7 +94,7 @@ class InstalledLaunchTests(unittest.TestCase):
             body = file.read_bytes()
             if path == 'scripts/launch.js':
                 body += b'\nwindow.fixtureSingleTarget=account=>{state.profile="20";state.targets=[];state.accounts=[{id:account,business_id:"654321"}];$("adAccount").innerHTML=`<option value="${account}" selected>${account}</option>`;$("adAccount").disabled=false;$("adAccount").dispatchEvent(new Event("change",{bubbles:true}));};'
-                body += b'\nwindow.fixtureLaunch={payload:()=>buildPayload(),effective:()=>remaskApplySavedMetaBuilderToPayload(buildPayload()),capture:()=>bundleFormState(),restore:applyBundleData,config:loadLaunchConfig,ready:()=>Boolean(state.launchConfig),geo:()=>{state.geo=[{type:"country",key:"US",country_code:"US",name:"United States"}];$("geoQuery").dispatchEvent(new Event("change",{bubbles:true}));},instagramTargets:()=>{state.targets=[{profile:"20",account_id:"act_123456",business_id:"654321"},{profile:"21",account_id:"act_234567",business_id:"765432"}];state.profile="20";state.targetBindingAssets.pages={"20":[{id:"345678",instagram_business_account:{id:"456789"}}],"21":[{id:"567890",instagram_business_account:{id:"678901"}}]};$("adAccount").innerHTML=state.targets.map(t=>`<option value="${t.account_id}" selected>${t.account_id}</option>`).join("");$("creativeFormat").value="INSTAGRAM_POST";renderTargetBindings();},binding:account=>({...bindingFor(account)})};'
+                body += b'\nwindow.fixtureLaunch={payload:()=>buildPayload(),effective:()=>remaskApplySavedMetaBuilderToPayload(buildPayload()),capture:()=>bundleFormState(),restore:applyBundleData,config:loadLaunchConfig,ready:()=>Boolean(state.launchConfig),geo:()=>{state.geo=[{type:"country",key:"US",country_code:"US",name:"United States"}];$("geoQuery").dispatchEvent(new Event("change",{bubbles:true}));},instagramTargets:()=>{state.targets=[{profile:"20",account_id:"act_123456",business_id:"654321"},{profile:"21",account_id:"act_234567",business_id:"765432"}];state.profile="20";state.targetBindingAssets.pages={"20":[{id:"345678",instagram_business_account:{id:"456789"}}],"21":[{id:"567890",instagram_business_account:{id:"678901"}}]};$("adAccount").innerHTML=state.targets.map(t=>`<option value="${t.account_id}" selected>${t.account_id}</option>`).join("");$("creativeFormat").value="INSTAGRAM_POST";renderTargetBindings();},reloadPages:force=>loadPages(force),binding:account=>({...bindingFor(account)})};'
             route.fulfill(body=body, content_type='application/javascript' if path.endswith('.js') else 'text/css'); return
         data = {}
         status = 200
@@ -623,6 +623,12 @@ class InstalledLaunchTests(unittest.TestCase):
         self.assertTrue(self.page.locator('#page').is_enabled())
         pages=[fields for fields in self.asset_requests if fields['resource']==['pages']]
         self.assertEqual(pages[-1]['profile'],['20'])
+        self.assertEqual(pages[-1]['account_id'],['act_123456'])
+        self.assertEqual(pages[-1].get('execution_mode'),['DRAFT'])
+        self.page.locator('#remaskPrivateExecutionMode').select_option('PUBLISH')
+        self.page.evaluate('fixtureLaunch.reloadPages(true)')
+        pages=[fields for fields in self.asset_requests if fields['resource']==['pages']]
+        self.assertEqual(pages[-1].get('execution_mode'),['PUBLISH'])
         self.assertEqual(pages[-1]['account_id'],['act_123456'])
 
     def test_page_access_failure_keeps_profile_pages_for_local_drafts(self):
