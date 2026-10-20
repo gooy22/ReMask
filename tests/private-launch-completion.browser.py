@@ -94,7 +94,8 @@ class InstalledLaunchTests(unittest.TestCase):
             body = file.read_bytes()
             if path == 'scripts/launch.js':
                 body += b'\nwindow.fixtureSingleTarget=account=>{state.profile="20";state.targets=[];state.accounts=[{id:account,business_id:"654321"}];$("adAccount").innerHTML=`<option value="${account}" selected>${account}</option>`;$("adAccount").disabled=false;$("adAccount").dispatchEvent(new Event("change",{bubbles:true}));};'
-                body += b'\nwindow.fixtureLaunch={payload:()=>buildPayload(),effective:()=>remaskApplySavedMetaBuilderToPayload(buildPayload()),capture:()=>bundleFormState(),restore:applyBundleData,config:loadLaunchConfig,ready:()=>Boolean(state.launchConfig),geo:()=>{state.geo=[{type:"country",key:"US",country_code:"US",name:"United States"}];$("geoQuery").dispatchEvent(new Event("change",{bubbles:true}));},instagramTargets:()=>{state.targets=[{profile:"20",account_id:"act_123456",business_id:"654321"},{profile:"21",account_id:"act_234567",business_id:"765432"}];state.profile="20";state.targetBindingAssets.pages={"20":[{id:"345678",instagram_business_account:{id:"456789"}}],"21":[{id:"567890",instagram_business_account:{id:"678901"}}]};$("adAccount").innerHTML=state.targets.map(t=>`<option value="${t.account_id}" selected>${t.account_id}</option>`).join("");$("creativeFormat").value="INSTAGRAM_POST";renderTargetBindings();},reloadPages:force=>loadPages(force),binding:account=>({...bindingFor(account)})};'
+                body += b'\nwindow.fixtureBulkTargets=()=>{state.targets=[{profile:"20",account_id:"act_123456",business_id:"654321"},{profile:"20",account_id:"act_234567",business_id:"765432"}];state.profile="20";state.targetBindingAssets.pages={};$("adAccount").innerHTML=state.targets.map(t=>`<option value="${t.account_id}" selected>${t.account_id}</option>`).join("");renderTargetBindings();};'
+                body += b'\nwindow.fixtureLaunch={payload:()=>buildPayload(),effective:()=>remaskApplySavedMetaBuilderToPayload(buildPayload()),capture:()=>bundleFormState(),restore:applyBundleData,config:loadLaunchConfig,ready:()=>Boolean(state.launchConfig),geo:()=>{state.geo=[{type:"country",key:"US",country_code:"US",name:"United States"}];$("geoQuery").dispatchEvent(new Event("change",{bubbles:true}));},instagramTargets:()=>{state.targets=[{profile:"20",account_id:"act_123456",business_id:"654321"},{profile:"21",account_id:"act_234567",business_id:"765432"}];state.profile="20";state.targetBindingAssets.pages={"20|123456|DRAFT":[{id:"345678",instagram_business_account:{id:"456789"}}],"21|234567|DRAFT":[{id:"567890",instagram_business_account:{id:"678901"}}]};$("adAccount").innerHTML=state.targets.map(t=>`<option value="${t.account_id}" selected>${t.account_id}</option>`).join("");$("creativeFormat").value="INSTAGRAM_POST";renderTargetBindings();},reloadPages:force=>loadPages(force),binding:account=>({...bindingFor(account)})};'
             route.fulfill(body=body, content_type='application/javascript' if path.endswith('.js') else 'text/css'); return
         data = {}
         status = 200
@@ -125,7 +126,7 @@ class InstalledLaunchTests(unittest.TestCase):
                     route.fulfill(status=409,json={'ok':False,'error':{'message':'Page access not confirmed'}});return
                 if self._testMethodName=='test_old_page_read_cannot_overwrite_new_selected_account' and account=='act_123456':
                     self.waiting_pages.append(route);return
-                data={'data':[{'id':'345678' if account=='act_123456' else '567890','name':'Scoped Page'}]}
+                data={'data':[{'id':'345678' if account.removeprefix('act_')=='123456' else '567890','name':'Scoped Page'}]}
             else:data={'data':[]}
         elif path == 'ajax/metaAssetManager.php':
             fields=parse_qs(request.post_data or '');self.instagram_requests.append(fields)
@@ -630,6 +631,24 @@ class InstalledLaunchTests(unittest.TestCase):
         pages=[fields for fields in self.asset_requests if fields['resource']==['pages']]
         self.assertEqual(pages[-1].get('execution_mode'),['PUBLISH'])
         self.assertEqual(pages[-1]['account_id'],['act_123456'])
+
+    def test_workspace_bulk_pages_use_exact_rk_and_mode_on_the_same_profile(self):
+        self.page.wait_for_function('fixtureLaunch.ready()')
+        self.page.evaluate('fixtureBulkTargets()')
+        self.page.locator('#loadTargetBindings').click()
+        self.page.locator('#targetBindingRows tr').nth(0).locator('select').first.locator('option[value="345678"]').wait_for(state='attached')
+        self.page.locator('#targetBindingRows tr').nth(1).locator('select').first.locator('option[value="567890"]').wait_for(state='attached')
+        pages = [fields for fields in self.asset_requests if fields['resource'] == ['pages']]
+        self.assertEqual({row['account_id'][0] for row in pages}, {'123456','234567'})
+        self.assertTrue(all(row['profile'] == ['20'] and row['execution_mode'] == ['DRAFT'] for row in pages))
+        self.assertEqual(self.page.locator('#targetBindingRows tr').nth(0).locator('option[value="567890"]').count(), 0)
+        self.assertEqual(self.page.locator('#targetBindingRows tr').nth(1).locator('option[value="345678"]').count(), 0)
+        self.page.locator('#remaskPrivateExecutionMode').select_option('PUBLISH')
+        self.page.locator('#loadTargetBindings').click()
+        self.page.wait_for_function('!document.querySelector("#loadTargetBindings").disabled')
+        pages = [fields for fields in self.asset_requests if fields['resource'] == ['pages']]
+        self.assertEqual([row['execution_mode'] for row in pages[-2:]], [['PUBLISH'], ['PUBLISH']])
+        self.assertEqual({row['account_id'][0] for row in pages[-2:]}, {'123456','234567'})
 
     def test_page_access_failure_keeps_profile_pages_for_local_drafts(self):
         self.page.wait_for_function('fixtureLaunch.ready()')

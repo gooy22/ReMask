@@ -642,8 +642,33 @@ if (!is_string($js)) throw new RuntimeException('launch.js is missing');
 if (strpos($js,'REMASK_PRIVATE_LAUNCH_CATALOG_V1')===false) {
     $js=str_replace("statusReady ? 'READY' :", "statusReady ? 'SELECTED / ACCESS NOT CHECKED' :", $js);
     $js=str_replace('Bindings loaded: ${ready}/${targets.length} RK READY.', 'Выбраны страницы: ${ready}/${targets.length}. Доступ FP для рекламы не проверен.', $js);
-    // Render the confirmed Page catalog even when optional Pixel lookup fails.
-    $js=str_replace("state.targetBindingAssets.pages[profile] = data.data || [];", "state.targetBindingAssets.pages[profile] = data.data || []; renderTargetBindings();", $js);
+    // Workspace Launch must use the same exact RK/mode read as direct Launch.
+    // A profile-only request returns the legacy snapshot and may have no Pages;
+    // it also cannot separate two Businesses selected on the same profile.
+    $oldPages=<<<'OLD_BULK_PAGES'
+        const profiles = [...new Set(targets.map((t) => t.profile))];
+        status.textContent = `Loading Pages for ${profiles.length} FB profile(s)...`;
+        await runPool(profiles, 4, async (profile) => {
+            const data = await apiJson('ajax/metaAssets.php', formPost({profile, resource: 'pages', force: force ? '1' : '0'}));
+            state.targetBindingAssets.pages[profile] = data.data || [];
+        });
+OLD_BULK_PAGES;
+    $newPages=<<<'NEW_BULK_PAGES'
+        const executionMode = remaskPrivateExecutionMode();
+        status.textContent = `Loading Pages for ${targets.length} RK...`;
+        await runPool(targets, 4, async (target) => {
+            const profile = target.profile, accountId = normalizeAccountIdClient(target.account_id);
+            const data = await apiJson('ajax/metaAssets.php', formPost({profile, resource: 'pages',
+                account_id: accountId, execution_mode: executionMode, force: force ? '1' : '0'}));
+            state.targetBindingAssets.pages[`${profile}|${accountId}|${executionMode}`] = data.data || [];
+            renderTargetBindings();
+        });
+NEW_BULK_PAGES;
+    $js=str_replace($oldPages,$newPages,$js,$pageLoaderCount);
+    $js=str_replace('const pages = state.targetBindingAssets.pages[target.profile] || [];',
+        'const pages = state.targetBindingAssets.pages[`${target.profile}|${accountId}|${remaskPrivateExecutionMode()}`] || [];',
+        $js,$pageRendererCount);
+    if ($pageLoaderCount!==1 || $pageRendererCount!==1) throw new RuntimeException('Exact-RK Page binding adapter did not match Launch');
     $js.="\n".file_get_contents('/tmp/railway-launch-private-catalog.js');
 }
 file_put_contents($jsPath,$js);
