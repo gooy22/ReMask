@@ -60,6 +60,14 @@ function rmx_pwj_input(): array {
     return $input;
 }
 
+final class RmxPwjWorkerHttpError extends RuntimeException {
+    public array $detail;
+    public function __construct(string $message, array $detail) {
+        parent::__construct($message);
+        $this->detail = $detail;
+    }
+}
+
 function rmx_pwj_worker_request(string $method, string $path, ?array $payload = null, int $timeoutSeconds = 20): array {
     $base = rtrim(trim((string)(getenv('REMASK_PYTHON_WORKER_URL') ?: 'http://127.0.0.1:8081')), '/');
 
@@ -106,7 +114,8 @@ function rmx_pwj_worker_request(string $method, string $path, ?array $payload = 
         $detail = is_scalar($detailValue)
             ? trim((string)$detailValue)
             : json_encode($detailValue, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-        throw new RuntimeException('PYTHON_WORKER_HTTP_' . $status . ': ' . ($detail ?: ('HTTP ' . $status)));
+        throw new RmxPwjWorkerHttpError('PYTHON_WORKER_HTTP_' . $status . ': ' . ($detail ?: ('HTTP ' . $status)),
+            is_array($detailValue) ? $detailValue : []);
     }
     return $decoded;
 }
@@ -412,6 +421,9 @@ try {
             }
             $reviewPayload['selected_payment_method'] = ['type'=>$brand,'last4'=>(string)$selector['last4']];
         }
+        // Auth and CSRF have already been checked. A read-only Meta review
+        // must not hold the operator's PHP session lock while awaiting HTTP.
+        if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
         $review = rmx_pwj_worker_request(
             'POST',
             '/api/v1/profiles/' . rawurlencode($profileId) . '/private-launch-review',
@@ -501,6 +513,14 @@ try {
 } catch (Throwable $e) {
     error_log('[python-worker-jobs] ' . get_class($e) . ': ' . $e->getMessage());
     $message = $e->getMessage();
+    if (($action ?? '') === 'private_launch_review' && $e instanceof RmxPwjWorkerHttpError
+        && preg_match('/^[A-Z0-9_]{1,100}$/D', (string)($e->detail['code'] ?? ''))) {
+        // Preserve the typed readiness failure across PHP. Do not make the
+        // browser recover control flow from JSON embedded in an error string.
+        rmx_pwj_out(['ok'=>false, 'error'=>$e->detail['code'], 'code'=>$e->detail['code'],
+            'message'=>is_string($e->detail['message'] ?? null) ? $e->detail['message'] : $message,
+            'retryable'=>($e->detail['retryable'] ?? false) === true], 502);
+    }
     if (str_starts_with($message, 'PYTHON_WORKER_NOT_CONFIGURED')) {
         rmx_pwj_out(['ok'=>false,'error'=>'PYTHON_WORKER_NOT_CONFIGURED'], 503);
     }

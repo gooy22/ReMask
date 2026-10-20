@@ -423,10 +423,10 @@ console.log('Private Launch catalog and funding truth checks passed');
     throw new Error('unexpected worker call');
   };
   const oneConfig={...config,accountIds:['111111111']};
-  await assert.rejects(
-    ()=>privateCtx.remaskPrivateReviewConfig(oneConfig,{render:false}),
-    /Выберите карту для РК 111111111/
-  );
+  const waiting=await privateCtx.remaskPrivateReviewConfig(oneConfig,{render:false});
+  assert.equal(waiting[0].status,'WAITING_FOR_SELECTION');
+  assert.equal(waiting[0].review.ready,false);
+  assert.match(waiting[0].error,/Выберите карту для РК 111111111/);
   assert.equal(paymentHost.children.length,1);
   const selectorBlock=paymentHost.children[0].children[0];
   const selector=selectorBlock.children.find(node=>node.dataset?.paymentSelect==='1');

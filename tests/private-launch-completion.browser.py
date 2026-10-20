@@ -639,6 +639,10 @@ class InstalledLaunchTests(unittest.TestCase):
         self.page.wait_for_function('document.querySelector("#launchResult").textContent.includes("Проверка не подтвердила готовность")')
         self.assertEqual(next(row for row in self.worker_requests if row['action']=='private_launch_review')['page_id'],'567890')
         self.assertFalse(any(row['action']=='create' for row in self.worker_requests))
+
+        summary=self.page.locator('#remaskPrivateAccountReviews').inner_text()
+        self.assertIn('123456',summary)
+        self.assertIn('ACCOUNT_NOT_READY',summary)
         self.save_and_reload()
         self.assertEqual(self.bundles[0]['data']['assets']['page'],'567890')
 
