@@ -31,6 +31,62 @@ class SavedDraftInspectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['fragment_reads'][0]['submitted_values']['objective'], 'OUTCOME_TRAFFIC')
         self.assertEqual(await self.owner.state.all_steps('image-launch'), before)
 
+    async def test_exact_native_objects_and_creative_are_read_separately_from_fragments(self):
+        await self.saved()
+        result = await self.launch()
+        self.assertEqual([row['level'] for row in result['object_reads']], ['campaign','ad_set','ad','creative'])
+        self.assertTrue(all(row['available'] and row['settings_match'] for row in result['object_reads']))
+        self.assertEqual(result['missing_direct_objects'], [])
+        self.assertTrue(result['launch_fingerprint_verified'])
+        self.assertTrue(result['actor_verified'])
+        self.assertFalse(result['editor_verified'])
+        self.assertIsNone(result['published'])
+        self.assertEqual(len(self.client.posts), 4)
+
+    async def test_unavailable_object_read_records_exact_rejection_without_claiming_absence(self):
+        from app.private_ads_http import AdsManagerResponseError
+        await self.saved()
+        original = self.client.get
+        async def unavailable(path, params):
+            if path == '/777772':
+                raise AdsManagerResponseError({'code':100,'error_subcode':33,'http_status':200})
+            return await original(path,params)
+        self.client.get = unavailable
+        result = await self.launch()
+        row = next(row for row in result['object_reads'] if row['level'] == 'ad_set')
+        self.assertFalse(row['available'])
+        self.assertEqual(row['diagnostic']['error_subcode'],33)
+        self.assertEqual(result['missing_direct_objects'], ['ad_set'])
+        self.assertIsNone(result['published'])
+        self.assertEqual(len(self.client.posts),4)
+
+    async def test_direct_object_foreign_account_fails_closed(self):
+        await self.saved()
+        original = self.client.get
+        async def foreign(path,params):
+            row = await original(path,params)
+            if path == '/777771': row['account_id'] = '888888'
+            return row
+        self.client.get = foreign
+        with self.assertRaises(ProvisioningError):
+            await self.launch()
+        self.assertEqual(len(self.client.posts),4)
+
+    async def test_direct_read_session_rejection_stops_later_reads(self):
+        from app.private_ads_http import AdsManagerResponseError
+        await self.saved()
+        original, calls = self.client.get, []
+        async def expired(path,params):
+            calls.append(path)
+            if path == '/777771':
+                raise AdsManagerResponseError({'code':190,'http_status':200})
+            return await original(path,params)
+        self.client.get = expired
+        with self.assertRaises(AdsManagerResponseError):
+            await self.launch()
+        self.assertNotIn('/777772',calls)
+        self.assertEqual(len(self.client.posts),4)
+
     async def test_invalid_scope_actor_configuration_or_missing_key_fails_before_open(self):
         await self.saved()
         original = copy.deepcopy(self.payload)
@@ -80,6 +136,8 @@ class SavedDraftInspectionTests(unittest.IsolatedAsyncioTestCase):
         self.client.fragments['222222']['validation_status'] = 'unrecognized-status'
         result = await self.launch()
         self.assertTrue(result['fragment_reads'][1]['active_errors_present'])
+        self.assertEqual(result['fragment_reads'][1]['active_error_diagnostic']['codes'], [{'field':'code','value':100}])
+        self.assertTrue(result['fragment_reads'][1]['active_errors_observed'])
         self.assertFalse(result['editor_verified'])
         self.assertIsNone(result['published'])
         self.assertEqual(len(self.client.posts), 4)
@@ -91,3 +149,38 @@ class SavedDraftInspectionTests(unittest.IsolatedAsyncioTestCase):
             await self.launch()
         self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_READ_RELATION_MISMATCH')
         self.assertEqual(len(self.client.posts), 4)
+
+
+class ValidationDiagnosticTests(unittest.TestCase):
+    def test_nested_and_encoded_codes_keep_reviewed_fields_without_raw_messages(self):
+        from app.private_ads_inspect import validation_diagnostic
+        source = {'data': [{'error': {'error_code': '1815706', 'error_subcode': 100,
+            'message': 'Unsupported campaign objective for optimization_goal. access_token=DO_NOT_EXPOSE; https://private.invalid/?secret=DO_NOT_EXPOSE',
+            'blame_field_specs': [['optimization_goal']]}}]}
+        import json
+        result = validation_diagnostic(json.dumps(source), observed=True)
+        self.assertEqual(result['codes'], [{'field':'error_code','value':1815706}, {'field':'error_subcode','value':100}])
+        self.assertIn('objective', result['terms'])
+        self.assertIn('optimization_goal', result['field_names'])
+        self.assertNotIn('DO_NOT_EXPOSE', repr(result))
+        self.assertNotIn('private.invalid', repr(result))
+
+    def test_credentials_and_boolean_or_unbounded_codes_are_never_exported(self):
+        from app.private_ads_inspect import validation_diagnostic
+        value = {'credentials': {'code': 77}, 'access_token': {'code': 88},
+            'errors':[{'code':True}, {'code':999999999999999999}, {'code':'not-a-code'}]}
+        self.assertEqual(validation_diagnostic(value, observed=True)['codes'], [])
+
+    def test_absent_and_explicit_empty_validation_are_distinct(self):
+        from app.private_ads_inspect import validation_diagnostic
+        missing = validation_diagnostic(None, observed=False)
+        empty = validation_diagnostic([], observed=True)
+        self.assertFalse(missing['observed'])
+        self.assertTrue(empty['observed'])
+        self.assertFalse(empty['has_errors'])
+
+    def test_oversized_or_deep_diagnostic_is_bounded(self):
+        from app.private_ads_inspect import validation_diagnostic
+        result = validation_diagnostic([{'message':'objective ' * 3000}] * 1000, observed=True)
+        self.assertTrue(result['truncated'])
+        self.assertLess(len(repr(result)), 1000)
