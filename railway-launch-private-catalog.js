@@ -239,7 +239,11 @@ async function remaskPrivateWorker(payload) {
     try{data=await response.json();}catch(_){}
     if(!response.ok||data?.ok===false){
         const detail=data?.message||data?.error||data?.detail||('HTTP '+response.status);
-        throw new Error(typeof detail==='string'?detail:JSON.stringify(detail));
+        const error=new Error(typeof detail==='string'?detail:JSON.stringify(detail));
+        const code=data?.code||data?.error?.code||data?.detail?.code;
+        if(typeof code==='string'&&/^[A-Z0-9_]{1,100}$/.test(code))error.code=code;
+        error.httpStatus=response.status;
+        throw error;
     }
     return data;
 }
@@ -412,7 +416,36 @@ function remaskPrivatePendingWrite(fingerprint,request) {
 function remaskPrivatePendingClear() {
     try{localStorage.removeItem(remaskPrivateLaunchPendingKey);}catch(_){}
 }
+function remaskPrivateRenderReviewResults(results,render=true) {
+    const targets=results.map(entry=>({profile_id:entry.row.profile,
+        business_id:entry.row.business_id,ad_account_id:entry.row.ad_account_id,
+        page_id:entry.row.page_id,status:entry.status,
+        error_code:entry.error_code||'',message:entry.error||'',
+        review_attempted:entry.review_attempted!==false}));
+    if(typeof state!=='undefined')state.privateLaunchReadiness={admission_policy:'all_required',targets};
+    if(!render||typeof document==='undefined'||!document.createElement)return;
+    const anchor=$('launchResult')||$('reviewStatus');
+    if(!anchor?.parentNode)return;
+    let box=$('remaskPrivateAccountReviews');
+    if(!box){
+        box=document.createElement('div');box.id='remaskPrivateAccountReviews';
+        box.className='mt-2';box.setAttribute('aria-label','Последняя проверка рекламных кабинетов');
+        anchor.parentNode.insertBefore(box,anchor.nextSibling);
+    }
+    box.replaceChildren();
+    const heading=document.createElement('p');heading.textContent='Результаты последней проверки РК';
+    box.appendChild(heading);
+    const list=document.createElement('ul');
+    for(const target of targets){
+        const item=document.createElement('li');
+        item.textContent='Профиль '+target.profile_id+' · РК '+target.ad_account_id+' · '+
+            (target.status==='READY'?'ГОТОВ':target.error_code+': '+target.message);
+        list.appendChild(item);
+    }
+    box.appendChild(list);
+}
 async function remaskPrivateReviewConfig(config,{render=true}={}) {
+    remaskPrivateRenderReviewResults([],render);
     const contractStatus=await remaskPrivateContractStatus({render,config});
     if(!contractStatus.ready){
         const missing=contractStatus.missing.map(row=>row.step).join(', ');
@@ -420,58 +453,81 @@ async function remaskPrivateReviewConfig(config,{render=true}={}) {
     }
     const rows=remaskPrivateTargetRows(config);
     const results=[];
+    const authBlockedProfiles=new Map();
+    let localAuthFailure=null;
     for(let index=0;index<rows.length;index++){
         const row=rows[index];
+        const prior=localAuthFailure||authBlockedProfiles.get(row.profile);
+        if(prior){
+            results.push({row,review:{ready:false},status:'AUTH_REQUIRED',
+                error_code:prior.code,error:prior.message,review_attempted:false});
+            continue;
+        }
         if(render)remaskPrivateShow('Проверка рекламы '+(index+1)+'/'+rows.length+' · РК '+row.ad_account_id+'…');
-        const response=await remaskPrivateWorker({
-            action:'private_launch_review',
-            profile_id:row.profile,
-            business_id:row.business_id,
-            ad_account_id:row.ad_account_id,
-            page_id:row.page_id,
-            ...(row.selected_payment_method
-                ?{selected_payment_method:row.selected_payment_method}
-                :{}),
-            launch:row.launch
-        });
-        const review=response?.review||{};
-        const preflight=review?.preflight||{};
-        if(
-            review.ready!==true
-            && preflight.payment_selection_required===true
-        ){
-            remaskPrivateRenderPaymentSelector(
-                row,
-                preflight.payment_methods||[]
-            );
-            throw new Error(
-                'Выберите карту для РК '+
-                row.ad_account_id+' и повторите проверку.'
-            );
+        try{
+            const response=await remaskPrivateWorker({
+                action:'private_launch_review',
+                profile_id:row.profile,
+                business_id:row.business_id,
+                ad_account_id:row.ad_account_id,
+                page_id:row.page_id,
+                ...(row.selected_payment_method
+                    ?{selected_payment_method:row.selected_payment_method}
+                    :{}),
+                launch:row.launch
+            });
+            const review=response?.review||{};
+            const preflight=review?.preflight||{};
+            if(
+                review.ready!==true
+                && preflight.payment_selection_required===true
+            ){
+                remaskPrivateRenderPaymentSelector(
+                    row,
+                    preflight.payment_methods||[]
+                );
+                results.push({row,review,status:'WAITING_FOR_SELECTION',
+                    error_code:'PAYMENT_SELECTION_REQUIRED',
+                    error:'Выберите карту для РК '+row.ad_account_id+' и повторите проверку.'});
+                continue;
+            }
+            if(review.ready!==true){
+                results.push({row,review,status:'BLOCKED',error_code:'ACCOUNT_NOT_READY',
+                    error:'Проверка не подтвердила готовность РК '+row.ad_account_id+'.'});
+                continue;
+            }
+            const selected=preflight.selected_payment_method;
+            if(selected&&/^\d{4}$/.test(String(selected.last4||''))){
+                remaskPrivatePaymentSelections[
+                    remaskPrivatePaymentKey(row.profile,row.ad_account_id)
+                ]={
+                    type:String(selected.type||''),
+                    last4:String(selected.last4)
+                };
+                row.selected_payment_method={
+                    type:String(selected.type||''),
+                    last4:String(selected.last4)
+                };
+            }
+            results.push({row,review,status:'READY'});
+        }catch(error){
+            const message=String(error?.message||error);
+            const gate=(String(error?.code||'')+' '+message).match(/(?:\b|_)(CHECKPOINT_REQUIRED|TWO_FACTOR_REQUIRED|SESSION_EXPIRED|BUSINESS_LOGIN_GATE)\b/)?.[1];
+            const code=error?.code||gate||'REVIEW_FAILED';
+            if(gate)authBlockedProfiles.set(row.profile,{code:gate,message});
+            if(error?.httpStatus===401||error?.httpStatus===403)
+                localAuthFailure={code:'REMASK_AUTH_REQUIRED',message};
+            results.push({row,review:{ready:false},status:(gate||localAuthFailure)?'AUTH_REQUIRED':'BLOCKED',
+                error_code:localAuthFailure?.code||code,error:message});
         }
-        if(review.ready!==true)throw new Error(
-            'Проверка не подтвердила готовность РК '+
-            row.ad_account_id+'.'
-        );
-        const selected=preflight.selected_payment_method;
-        if(selected&&/^\d{4}$/.test(String(selected.last4||''))){
-            remaskPrivatePaymentSelections[
-                remaskPrivatePaymentKey(row.profile,row.ad_account_id)
-            ]={
-                type:String(selected.type||''),
-                last4:String(selected.last4)
-            };
-            row.selected_payment_method={
-                type:String(selected.type||''),
-                last4:String(selected.last4)
-            };
-        }
-        results.push({row,review});
     }
+    const ready=results.filter(entry=>entry.review?.ready===true).length;
+    remaskPrivateRenderReviewResults(results,render);
     if(render)remaskPrivateShow(
-        'Настройки проверены: '+results.length+'/'+rows.length+
-        ' РК. После создания будет применён выбранный статус.',
-        'ready'
+        'Настройки проверены: '+ready+'/'+rows.length+' РК готовы.'+
+        (ready===rows.length?' После создания будет применён выбранный статус.':
+            ' Причины по каждому РК показаны ниже. Задача не создана.'),
+        ready===rows.length?'ready':'failed'
     );
     return results;
 }
@@ -676,6 +732,9 @@ async function remaskPrivateCreateJob() {
         const reviewed=await remaskPrivateReviewConfig(config,{render:true});
         remaskPrivateAssertCurrentConfig(config);
         if(!reviewed?.length)return null;
+        const blocked=reviewed.filter(entry=>entry.review?.ready!==true);
+        if(blocked.length)throw new Error('Готовы '+(reviewed.length-blocked.length)+'/'+reviewed.length+
+            ' РК. Проверка не пройдена: '+blocked.map(entry=>entry.row.ad_account_id+': '+entry.error).join(' · '));
         const planned=remaskPrivateJobRequest(config,reviewed);
         remaskPrivateShow((planned.reused?'Повторяю сохранённую отправку':'Создаю')+
             ' задачу для '+reviewed.length+' РК…');

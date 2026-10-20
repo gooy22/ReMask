@@ -15,7 +15,7 @@
 
 ReMask's initial local Workspace load displayed 19 saved BM and 18 saved RK across 20 profiles. Saved counts are not live authorization evidence.
 
-One read-only Sync was initiated through ReMask for profile 35, current actor `61595268505592`, preserving its configured proxy. Meta returned `CHECKPOINT_REQUIRED`; the saved 1 BM / 1 RK remained visible. No additional Meta reads or creation/publication attempts are authorized by this observation. Resume live acceptance for this actor only after legitimate session restoration is independently established. No account switching is used to work around this restriction.
+One read-only Sync was initiated through ReMask for profile 35, current actor `61595268505592`, preserving its configured proxy. Meta returned `CHECKPOINT_REQUIRED`; the saved 1 BM / 1 RK remained visible. No additional Meta reads or creation/publication attempts were performed for this actor. Resume live acceptance only after legitimate session restoration is independently established. No account switching is used to work around this restriction.
 
 A separate retained production log at 2026-10-20 07:15:48 UTC records a received advertising read rejection: code 10, HTTP 200, OAuthException, permission/business/account terms. This establishes a permission failure, not a transport outage or successful Page authorization. It does not establish the current state of another account.
 
@@ -40,8 +40,16 @@ The PHP response adds `sync_timings_ms` for worker-bridge wall time, PHP reconci
 
 - Legitimate restoration and independent live readiness for the selected test actor; no successful publication is claimed.
 - Page advertising permission and complete payment readiness must remain publication gates. A cached selectable Page does not satisfy either gate.
-- `remaskPrivateReviewConfig` still stops at the first blocked account. Independent per-target review and explicit batch-admission behavior are the next separate correction; existing worker target jobs already retain their identities and idempotency journals.
+- Independent review outcomes are now collected for every locally valid selected target, including blocked and payment-selection states. Auth gates stop further reads for that profile; a ReMask 401/403 stops remaining requests globally. The UI shows the last per-target result with exact scope. The existing batch admission policy remains `all_required`: a blocked target does not silently disappear from the requested batch, no mixed batch is enqueued and the existing durable idempotency request is unchanged. Partial admission requires a separate explicit policy and per-target replay design before enabling it.
 - Full background contract-maintenance scheduling, standalone serialization/rendering measurements, production replay/restart acceptance and controlled 1/3/5/10/30-target validation remain separate milestones.
 - This report covers the traced execution paths, not a claim that every captured Facebook module implements an application feature.
 
-Deployment and live acceptance of this correction must be recorded separately from source integration and CI success.
+## Release evidence
+
+The Sync correction was integrated in PR 211: source `d30f5ccad3db80c6ba997ec92c094362d3d160b7`, merge `df41295fdff4b95afc505ff6e63febbbe785a5e4`. The final local backend suite ran 1,912 cases successfully with 83 approved development-renderer skips. The main CI regression, browser, payment-guard and immutable image jobs passed.
+
+Production deployment `7a0ebb31-f55e-4bbb-8082-7608574e36cc` reached Active / Deployment successful with image `ghcr.io/gooy22/remask@sha256:f84bdf55c01906c7c80af6efd8fb88ef9cb085a8a71bfb52c15c42bdffca976f`. ReMask subsequently reported READY, revision `df41295fdff4`, 20 profiles and mounted volume; profile 35 still displayed its saved 1 BM / 1 RK. `REMASK_DEPLOY_REV` was updated with the matching merge SHA. Fast-Sync overrides were absent, so installed defaults apply. Startup Meta canary/audit profile settings were empty and BM/E2E startup checks were disabled; deployment did not initiate another attempt against the gated actor.
+
+The separate batch-review correction has deterministic 1/3/5/10/30-target tests. These cover preserved ordering and exact Page/Business scope, account-local denials, per-profile auth stop, global ReMask auth stop, waiting for payment selection, refusal to admit a mixed batch, and one 30-target PAUSED job with distinct existing idempotency keys. They are fixture results, not live scale or publication evidence. The read-only review bridge releases the authenticated PHP session after validation so one slow review cannot block the operator's other local requests. No authentication or CSRF checks are removed. Typed Python readiness codes now survive the PHP boundary instead of being hidden inside a generic error string. A real local HTTP/PHP integration test confirms exact target forwarding, the typed error response and that the session file is unlocked while PHP waits for the worker.
+
+Source integration, CI, deployment and live acceptance of the batch-review correction must be recorded separately. Actual advertising publication remains unverified.
