@@ -80,10 +80,43 @@ async function run(activeTab, rows) {
   return JSON.parse(JSON.stringify(calls));
 }
 
+async function stalledReconciliation() {
+  const calls=[], elements=new Map(); let now=0, timerId=0;
+  const timers=new Map();
+  const sandbox={state:{running:false,activeTab:'profiles'},selectedRows:()=>[{name:'35'}],
+    $:id=>{if(!elements.has(id))elements.set(id,{});return elements.get(id);},
+    updateSelectionUi(){},setProgress(){},render(){},
+    Date:{now:()=>now},Math,post:value=>value,
+    setTimeout(callback,ms){const id=++timerId;timers.set(id,{callback,ms});return id;},
+    clearTimeout:id=>timers.delete(id),
+    applySnapshot(){throw Error('Failed reconciliation cannot replace inventory');},
+    apiJson:async(url,payload)=>{
+      calls.push(payload);
+      if(payload.action==='sync_profile')throw Error('Failed to fetch');
+      return new Promise(()=>{});
+    },
+    concurrent:async(items,limit,fn)=>Promise.all(items.map(fn)),
+  };
+  vm.createContext(sandbox);vm.runInContext(source,sandbox);
+  const completion=sandbox.syncSelection();
+  // Let the failed initial request reach its local-result reconciliation.
+  for(let i=0;i<20&&!calls.some(call=>call.action==='sync_result');i++)await Promise.resolve();
+  assert.equal(calls.filter(call=>call.action==='sync_profile').length,1);
+  assert.equal(calls.filter(call=>call.action==='sync_result').length,1);
+  const [id,timer]=Array.from(timers).find(([,value])=>value.ms<=3000)||[];
+  assert.ok(timer,'local reconciliation requires a bounded timer');
+  now+=timer.ms;timers.delete(id);timer.callback();
+  await completion;
+  assert.equal(sandbox.state.running,false);
+  assert.equal(calls.length,2,'a hung status read must not queue further requests');
+  assert.match(elements.get('workspaceStatus').textContent,/Failed to fetch/);
+}
+
 (async()=>{
   snapshotPreservation();
   businessOnlySnapshot();
   await sessionRefreshOutcome();
+  await stalledReconciliation();
   const bm = await run('businesses',[{profile:'8',id:'1632909278268870'}]);
   assert.equal(bm.length,1);
   assert.equal(bm[0].profile,'8');
