@@ -68,11 +68,12 @@ class SelectedBusinessInventoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(fixtures[1].calls),1)
         self.assertIn('business_id=1632909278268870',fixtures[1].calls[0])
 
-    async def test_full_profile_discovers_businesses_even_with_old_account_binding(self):
+    async def test_legacy_profile_discovery_does_not_hide_new_businesses_behind_old_bindings(self):
         def respond(url,business):
             return self.inventory(business or '333333333',['222222222'] if business=='111111111' else ['444444444'])
         fixtures=self.fixtures([{'business_id':'111111111','ad_account_id':'222222222'}],respond)
-        result=await self.sync(fixtures)
+        with patch.dict(api.os.environ, {'REMASK_FAST_INVENTORY_SYNC': '0'}):
+            result=await self.sync(fixtures)
         self.assertTrue(result['live_ready'])
         self.assertEqual({row['id'] for row in result['businesses']},{'111111111','333333333'})
         self.assertTrue(any('/latest/home' in url for url in fixtures[1].calls))
@@ -159,7 +160,7 @@ class SelectedBusinessInventoryTests(unittest.IsolatedAsyncioTestCase):
         fixtures=self.fixtures([{'business_id':'111111111','ad_account_id':'222222222'}],
             lambda url,business:self.inventory(business or '999999999999',['222222222']))
         result=await self.sync(fixtures)
-        self.assertTrue(result['live_ready'])
+        self.assertFalse(result['live_ready'])
         self.assertEqual([row['id'] for row in result['businesses']],['111111111'])
         self.assertFalse(any('business_id=999999999999' in url for url in fixtures[1].calls))
 

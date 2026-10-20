@@ -41,6 +41,10 @@ class PrivateOnlySyncTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result['browser_started'])
         self.assertFalse(result['business_inventory_confirmed_empty'])
         self.assertEqual(result['warnings'],['PRIVATE_INCONCLUSIVE'])
+        self.assertNotIn('page_enrichment',result['timings_ms'])
+        for phase in ('profile_context','durable_state','http_session','inventory','total'):
+            self.assertIs(type(result['timings_ms'][phase]),int)
+            self.assertGreaterEqual(result['timings_ms'][phase],0)
 
     async def test_auth_wall_remains_auth_failure_without_other_transport(self):
         result=await self.run_sync({'ready':False,'businesses':[{'id':BM,'diagnostics':[{'auth_gate':'CHECKPOINT_REQUIRED'}]}]})
@@ -63,3 +67,5 @@ class PrivateOnlySyncTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result['live_ready'])
         self.assertFalse(result['pages_live_verified'])
         self.assertEqual(result['businesses'][0]['ad_accounts'][0]['id'],RK)
+        self.assertGreaterEqual(result['timings_ms']['page_enrichment'],0)
+        self.assertGreaterEqual(result['timings_ms']['total'],result['timings_ms']['inventory'])

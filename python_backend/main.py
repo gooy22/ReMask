@@ -1755,6 +1755,8 @@ async def profile_live_inventory(
             detail=f'PROFILE_CONTEXT_ERROR: {exc}',
         ) from exc
 
+    sync_timings={'profile_context':int((time.monotonic()-started)*1000)}
+    state_started=time.monotonic()
     warnings: list[str] = []
     personal_scope_id=str(context.cookies.get('c_user') or '').strip()
 
@@ -2114,6 +2116,8 @@ async def profile_live_inventory(
 
     try:
         stage='profile_session'
+        sync_timings['durable_state']=int((time.monotonic()-state_started)*1000)
+        session_started=time.monotonic()
         async with ProfileSession(context) as profile_session:
             meta_transport=MetaTransportRouter(profile_session, private_only=True)
             # REMASK_PRIVATE_FIRST_SYNC_V1
@@ -2121,6 +2125,7 @@ async def profile_live_inventory(
             # An inconclusive read cannot switch to a renderer session.
             stage='private_inventory'
             private_started=time.monotonic()
+            sync_timings['http_session']=int((private_started-session_started)*1000)
             # Normal Sync reads reviewed contracts without doing CDN maintenance.
             # Keep a scoped rollback switch for the older discovery path.
             fast_sync_requested = str(os.getenv('REMASK_FAST_INVENTORY_SYNC', '1')).strip().lower() in {'1', 'true', 'yes', 'on'}
@@ -2156,6 +2161,9 @@ async def profile_live_inventory(
                 private_snapshot={'diagnostics':[{'auth_gate':auth_error.code if auth_error else '',
                     'code':auth_error.code if auth_error else transport_error['code']}]}
 
+            sync_timings['inventory']=int((time.monotonic()-private_started)*1000)
+            if isinstance(private_snapshot.get('timings_ms'),dict):
+                sync_timings['meta_reads']=private_snapshot['timings_ms']
             if private_snapshot.get('ready'):
                 private_businesses=[
                     row for row in (private_snapshot.get('businesses') or [])
@@ -2205,6 +2213,7 @@ async def profile_live_inventory(
                     if private_pages else ''
                 )
                 private_page_diag=''
+                pages_started=time.monotonic()
                 try:
                     private_page_timeout=min(3.5,budget(4.0))
                     private_page_result=await hard_deadline(
@@ -2242,6 +2251,8 @@ async def profile_live_inventory(
                     )
                 except Exception as exc:
                     private_page_diag=f'{exc.__class__.__name__}: {exc}'[:900]
+                sync_timings['page_enrichment']=int((time.monotonic()-pages_started)*1000)
+                sync_timings['total']=int((time.monotonic()-started)*1000)
 
                 private_warnings=list(warnings)
                 if not private_snapshot.get('discovery_complete'):
@@ -2280,16 +2291,18 @@ async def profile_live_inventory(
                     'pages_source':private_pages_source,
                     'pages_diagnostic':private_page_diag,
                     'warnings':private_warnings,
+                    'timings_ms':sync_timings,
                 }
                 log.info(
                     'live inventory profile=%s private-first complete ms=%d live_ready=%s '
-                    'live_businesses=%d pages=%d pages_live_verified=%s',
+                    'live_businesses=%d pages=%d pages_live_verified=%s timings_ms=%s',
                     clean_profile,
                     int((time.monotonic()-private_started)*1000),
                     bool(result['live_ready']),
                     len(private_live_business_ids),
                     len(private_pages),
                     private_pages_live_verified,
+                    json.dumps(sync_timings,separators=(',',':')),
                 )
                 return result
 
@@ -2307,8 +2320,11 @@ async def profile_live_inventory(
                 connection_codes={row.get('code') for row in diagnostics}
                 error_code=blocked_code or next((code for code in ('PRIVATE_HTTP_PROXY_UNAVAILABLE',
                     'PRIVATE_HTTP_READ_TIMEOUT','PRIVATE_HTTP_CONNECTION_UNAVAILABLE','PRIVATE_HTTP_PROTOCOL_ERROR',
-                    'PRIVATE_HTTP_READ_UNAVAILABLE') if code in connection_codes),'PRIVATE_INCONCLUSIVE')
+                    'PRIVATE_HTTP_READ_UNAVAILABLE','PRIVATE_BM_INVENTORY_INCOMPLETE') if code in connection_codes),'PRIVATE_INCONCLUSIVE')
                 blocked={business:blocked_code for business in known_business_ids} if blocked_code else {}
+                sync_timings['total']=int((time.monotonic()-started)*1000)
+                log.info('live inventory profile=%s private-first incomplete code=%s timings_ms=%s',
+                    clean_profile,error_code,json.dumps(sync_timings,separators=(',',':')))
                 return {'ok':True,'profile_id':clean_profile,'live_ready':False,
                     'sync_error_kind':error_code,
                     'session_ready':not bool(blocked_code) and any(row.get('usable') is True for row in diagnostics),
@@ -2322,7 +2338,7 @@ async def profile_live_inventory(
                     'pages':[],'pages_count':0,'pages_ready':False,'pages_live_verified':False,
                     'pages_source':'','pages_diagnostic':'',
                     'warnings':[error_code],
-                    'browser_started':False,'transport':'private_http_h2'}
+                    'browser_started':False,'transport':'private_http_h2','timings_ms':sync_timings}
 
             log.info(
                 'live inventory profile=%s private-first inconclusive ms=%d businesses=%s; falling back to Chromium',

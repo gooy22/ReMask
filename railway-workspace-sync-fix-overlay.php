@@ -350,7 +350,10 @@ async function syncSelection(){
     try{
       return await Promise.race([
         promise,
-        new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('Private Meta sync timeout after '+ms+'ms')),ms);})
+        new Promise((_,reject)=>{timer=setTimeout(()=>{
+          const error=new Error('Private Meta sync timeout after '+ms+'ms');
+          error.code='SYNC_TIMEOUT';reject(error);
+        },ms);})
       ]);
     }finally{
       if(timer!==null)clearTimeout(timer);
@@ -375,13 +378,16 @@ async function syncSelection(){
   };
 
   const reconcileDroppedSync=async(profile,requestId)=>{
+    const deadline=Date.now()+16000;
     for(let attempt=0;attempt<12;attempt++){
       if(attempt>0)await new Promise(resolve=>setTimeout(resolve,1250));
+      const remaining=deadline-Date.now();
+      if(remaining<=0)break;
       try{
-        const d=await syncApiJson(
+        const d=await withTimeout(syncApiJson(
           'ajax/metaHierarchy.php',
           post({action:'sync_result',profile,request_id:requestId})
-        );
+        ),Math.min(3000,remaining));
         if(!d||d.pending===true)continue;
         if(d.sync_complete===true){
           const applied=applySnapshot(d);
@@ -399,7 +405,8 @@ async function syncSelection(){
           error_kind:String(d.sync_error_kind||'PRIVATE_SYNC'),
           profile
         };
-      }catch(_){
+      }catch(error){
+        if(error?.code==='SYNC_TIMEOUT')break;
         // The status request itself is intentionally retried; it is read-only
         // and does not start another Meta sync.
       }
@@ -797,6 +804,26 @@ function hierarchy_worker_live_inventory(
         );
     }
     return $json;
+}
+
+function hierarchy_profile_sync_lock(string $profile)
+{
+    // One live Sync per profile across PHP workers/users. A busy request never
+    // launches another Meta read or changes the last confirmed inventory.
+    $file = '/var/lib/remask/workspace-sync-' . hash('sha256', $profile) . '.lock';
+    $fp = @fopen($file, 'c');
+    if (!$fp) throw new RuntimeException('SYNC_COORDINATION_UNAVAILABLE');
+    @chmod($file, 0600);
+    $wouldBlock = 0;
+    if (!@flock($fp, LOCK_EX | LOCK_NB, $wouldBlock)) {
+        fclose($fp);
+        if ($wouldBlock) return false;
+        throw new RuntimeException('SYNC_COORDINATION_UNAVAILABLE');
+    }
+    register_shutdown_function(static function () use ($fp): void {
+        if (is_resource($fp)) { @flock($fp, LOCK_UN); @fclose($fp); }
+    });
+    return $fp;
 }
 
 function hierarchy_sync_result_file(): string
@@ -1475,6 +1502,15 @@ $syncProfileReplacement = <<<'PHP'
         // Workspace sync is sourced only from the profile-bound Business Suite
         // browser worker. Official Graph /me, me/adaccounts and BM Graph edges
         // are deliberately not part of this path.
+        $syncLock = hierarchy_profile_sync_lock($profile);
+        if ($syncLock === false) {
+            $busy = ['profile_name' => $profile, 'request_id' => $requestId,
+                'sync_complete' => false, 'sync_error_kind' => 'SYNC_IN_PROGRESS',
+                'sync_error' => 'Синхронизация этого профиля уже выполняется.'];
+            hierarchy_sync_result_put($requestId, $profile, $busy);
+            MetaEndpoint::ok($busy);
+        }
+        $syncStarted = microtime(true);
         $syncWarnings = [];
         $existingSnapshot = hierarchy_profile_snapshot($profile);
 
@@ -1571,6 +1607,7 @@ $syncProfileReplacement = <<<'PHP'
             ? [$requestedBusinessId]
             : [];
 
+        $workerStarted = microtime(true);
         try {
             $liveInventory = hierarchy_worker_live_inventory(
                 $profile,
@@ -1613,6 +1650,8 @@ $syncProfileReplacement = <<<'PHP'
             throw new RuntimeException('PRIVATE_SYNC_FAILED: ' . $message, 0, $liveInventoryError);
         }
 
+        $workerElapsedMs = (int)((microtime(true) - $workerStarted) * 1000);
+        $reconcileStarted = microtime(true);
         $businessRows = [];
         $adAccountRows = [];
         $seenBusiness = [];
@@ -1846,6 +1885,10 @@ $syncProfileReplacement = <<<'PHP'
         $snapshot['confirmed_worker_bindings'] = $workerConfirmedCount;
         $snapshot['graph_preflight_available'] = false;
         $snapshot['sync_complete'] = $syncComplete;
+        $snapshot['sync_timings_ms'] = [
+            'worker_bridge' => $workerElapsedMs,
+            'worker' => is_array($liveInventory['timings_ms'] ?? null) ? $liveInventory['timings_ms'] : [],
+        ];
         $snapshot['sync_partial'] = ($syncComplete && (!$pagesLiveVerified || $rkPartial));
         unset($snapshot['sync_error_kind'], $snapshot['sync_error']);
 
@@ -2001,6 +2044,8 @@ $syncProfileReplacement = <<<'PHP'
             );
         }
 
+        $snapshot['sync_timings_ms']['php_reconciliation'] = (int)((microtime(true) - $reconcileStarted) * 1000);
+        $snapshot['sync_timings_ms']['php_total'] = (int)((microtime(true) - $syncStarted) * 1000);
         MetaEndpoint::ok($snapshot);
     }
 PHP;

@@ -4,6 +4,7 @@ import html
 import asyncio
 import json
 import re
+import time
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -284,6 +285,7 @@ def _has_complete_scoped_inventory(payload: Any) -> bool:
 
 
 async def _fetch_payloads(web, url: str, *, refresh_modules: bool = True) -> tuple[list[Any], dict[str, Any]]:
+    started = time.monotonic()
     status, body, final_url = await web.fetch_text(url, max_bytes=5_000_000)
     gate = _auth_gate(final_url, body)
     payloads = _json_payloads(body)
@@ -303,6 +305,7 @@ async def _fetch_payloads(web, url: str, *, refresh_modules: bool = True) -> tup
         "bytes": len(body.encode("utf-8")),
         "usable": 200 <= int(status) < 300 and not gate and trusted,
         "payload_count": len(payloads),
+        "elapsed_ms": int((time.monotonic() - started) * 1000),
         "inventory_shape": _inventory_shape(payloads) if trusted and not gate else [],
         "_document": body if trusted and not gate and 200 <= int(status) < 300 else "",
     }
@@ -325,6 +328,7 @@ async def private_inventory_snapshot(
     the same structural inventory parsers as the browser observer.
     """
 
+    started = time.monotonic()
     diagnostics: list[dict[str, Any]] = []
     businesses: dict[str, str] = {}
     discovery_complete = False
@@ -342,6 +346,7 @@ async def private_inventory_snapshot(
             discovery_complete = proof.get('complete') is True
             diagnostics.append({'phase': 'business_discovery_query', 'operation_kind': 'query',
                 'usable': True, 'complete': discovery_complete, 'business_count': len(businesses),
+                'code': '' if discovery_complete else 'PRIVATE_BM_INVENTORY_INCOMPLETE',
                 'source': proof.get('source', ''), 'queries': proof.get('diagnostics', [])})
         except Exception as exc:
             from .private_auth import private_auth_error
@@ -356,7 +361,7 @@ async def private_inventory_snapshot(
     discovery_urls = (
         "https://business.facebook.com/latest/home",
         "https://business.facebook.com/latest/overview",
-    ) if discover_businesses and not discovery_complete and not discovery_auth_blocked else ()
+    ) if discover_businesses and not fast_sync and not discovery_complete and not discovery_auth_blocked else ()
     for url in discovery_urls:
         try:
             payloads, diag = await _fetch_payloads(web, url, refresh_modules=not fast_sync)
@@ -383,16 +388,20 @@ async def private_inventory_snapshot(
     targets = set(known_business_ids)
     targets.update(businesses)
     targets.discard(str(personal_scope_id or ""))
+    discovery_ms = int((time.monotonic() - started) * 1000)
+    timings = {'business_discovery': discovery_ms, 'account_inventory': []}
     if discovery_auth_blocked:
         return {'ready': False, 'businesses': [], 'confirmed_business_ids': [],
             'inconclusive_business_ids': sorted(targets), 'discovered_business_ids': [],
-            'discovery_complete': False, 'diagnostics': diagnostics}
+            'discovery_complete': False, 'diagnostics': diagnostics,
+            'timings_ms': {**timings, 'total': int((time.monotonic() - started) * 1000)}}
 
     rows: list[dict[str, Any]] = []
     confirmed_businesses: set[str] = set()
     inconclusive_businesses: set[str] = set()
 
     for business_id in sorted(targets)[:25]:
+        account_started = time.monotonic()
         expected = {
             _clean_id(value)
             for value in known_accounts_by_business.get(business_id, set())
@@ -477,11 +486,14 @@ async def private_inventory_snapshot(
                 })
                 if auth:
                     diagnostics.extend(business_diags)
+                    timings['account_inventory'].append({'business_id': business_id,
+                        'elapsed_ms': int((time.monotonic() - account_started) * 1000)})
                     return {'ready': False, 'businesses': rows,
                         'confirmed_business_ids': sorted(confirmed_businesses),
                         'inconclusive_business_ids': sorted(targets - confirmed_businesses),
                         'discovered_business_ids': sorted(businesses),
-                        'discovery_complete': discovery_complete, 'diagnostics': diagnostics}
+                        'discovery_complete': discovery_complete, 'diagnostics': diagnostics,
+                        'timings_ms': {**timings, 'total': int((time.monotonic() - started) * 1000)}}
 
         urls = [
             "https://business.facebook.com/latest/settings/ad_accounts/"
@@ -550,6 +562,8 @@ async def private_inventory_snapshot(
         else:
             inconclusive_businesses.add(business_id)
 
+        timings['account_inventory'].append({'business_id': business_id,
+            'elapsed_ms': int((time.monotonic() - account_started) * 1000)})
         rows.append({
             "id": business_id,
             "name": businesses.get(business_id, business_id),
@@ -579,6 +593,11 @@ async def private_inventory_snapshot(
     required_targets = known_targets | set(businesses)
     confirmed_empty = discovery_complete and not required_targets
     ready = confirmed_empty or (bool(required_targets) and required_targets.issubset(confirmed_businesses))
+    # Positive proof for every known target cannot establish that unobserved
+    # portfolios do not exist. A full interactive Sync needs complete BM scope
+    # enumeration too; selected-BM reads retain their explicit limited scope.
+    if fast_sync and discover_businesses and not discovery_complete:
+        ready = False
 
     return {
         "ready": ready,
@@ -587,9 +606,11 @@ async def private_inventory_snapshot(
         "confirmed_business_ids": sorted(confirmed_businesses),
         "inconclusive_business_ids": sorted(inconclusive_businesses),
         "discovered_business_ids": sorted(businesses),
-        "discovery_complete": discovery_complete or bool(businesses),
+        "discovery_complete": discovery_complete,
+        "inventory_scope": "profile" if discover_businesses else "selected_businesses",
         "business_inventory_confirmed_empty": confirmed_empty,
         "source": "private_http_relay_inventory",
         "diagnostics": diagnostics,
+        "timings_ms": {**timings, 'total': int((time.monotonic() - started) * 1000)},
     }
 

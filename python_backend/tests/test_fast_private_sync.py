@@ -127,3 +127,40 @@ class FastPrivateSyncTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result['ready'])
         self.assertEqual(result['diagnostics'][-1]['auth_gate'], 'CHECKPOINT_REQUIRED')
         self.web.fetch_text.assert_not_awaited()
+
+    async def test_partial_bm_prefix_does_not_complete_a_full_profile_sync(self):
+        self.web.fetch_text.return_value = (200, '{}', 'https://business.facebook.com/latest/home')
+        business = {'rows': {'111111': 'BM'}, 'complete': False}
+        accounts = {'account_rows': [{'id': '222222', 'business_id': '111111'}], 'complete': True}
+        with patch('app.static_meta_inventory.read_business_inventory',
+                   new=AsyncMock(return_value=business)), patch(
+                   'app.static_meta_inventory.read_ad_account_inventory',
+                   new=AsyncMock(return_value=accounts)):
+            result = await private_inventory_snapshot(self.web,
+                known_accounts_by_business={'111111': {'222222'}},
+                known_business_ids={'111111'}, execute_read_queries=True, fast_sync=True)
+        self.assertFalse(result['ready'])
+        self.assertFalse(result['discovery_complete'])
+        self.assertEqual(result['confirmed_business_ids'], ['111111'])
+        self.assertTrue(result['businesses'][0]['ad_accounts_ready'])
+        self.web.fetch_text.assert_not_awaited()
+        self.assertEqual(result['inventory_scope'],'profile')
+        self.assertIs(type(result['timings_ms']['business_discovery']),int)
+        self.assertEqual(result['timings_ms']['account_inventory'][0]['business_id'],'111111')
+
+    async def test_authenticated_html_rows_do_not_prove_bm_enumeration_complete(self):
+        from tests.test_private_inventory import inventory, account
+        import json
+        payload = inventory([account()])
+        self.web.fetch_text.return_value = (200, json.dumps(payload),
+            'https://business.facebook.com/latest/home')
+        with patch('app.static_meta_inventory.read_business_inventory',
+                   new=AsyncMock(return_value={'rows': {}, 'complete': False})), patch(
+                   'app.static_meta_inventory.read_ad_account_inventory',
+                   new=AsyncMock(return_value={'account_rows': [], 'complete': False})):
+            result = await private_inventory_snapshot(self.web,
+                known_accounts_by_business={}, known_business_ids={'111111'},
+                execute_read_queries=True, fast_sync=True)
+        self.assertFalse(result['ready'])
+        self.assertFalse(result['discovery_complete'])
+        self.assertEqual(result['businesses'][0]['ad_accounts'][0]['id'], '222222')
