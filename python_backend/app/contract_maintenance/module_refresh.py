@@ -17,6 +17,7 @@ from pathlib import Path
 import re
 import time
 from urllib.parse import urlsplit
+from weakref import WeakValueDictionary
 
 from .ads_sources import deferred_script_urls, module_records, public_script_url
 from ..private_contract_discovery import _script_urls
@@ -37,6 +38,7 @@ SCRIPT_ATTEMPTS = 3
 PROOF_BYTES = 8_000_000
 CACHE_PROOF_BYTES = 16_000_000
 _cache = OrderedDict()
+_collection_locks = WeakValueDictionary()
 
 
 def fingerprint(row, doc_id):
@@ -123,6 +125,15 @@ async def refresh_from_document(web, document, final_url):
     route = str(getattr(profile, 'proxy', '') or '')
     key = hashlib.sha256(json.dumps([getattr(profile, 'name', ''), profile.cookies.get('c_user', ''), route,
         parts.hostname, parts.path, sorted(urls)], separators=(',', ':')).encode()).hexdigest()
+    # Concurrent form reads may create separate profile sessions. Serialize
+    # the same evidence window so every waiter sees the completed cache entry
+    # instead of downloading it again. Scope and source fingerprints are unchanged.
+    lock = _collection_locks.setdefault(key, asyncio.Lock())
+    async with lock:
+        await _refresh_window(web, final_url, references, wanted, urls, key)
+
+
+async def _refresh_window(web, final_url, references, wanted, urls, key):
     now = time.monotonic()
     previous = _cache.get(key)
     if previous and previous['until'] > now:
