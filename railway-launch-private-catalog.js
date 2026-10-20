@@ -148,6 +148,11 @@ function remaskPrivateTargetRows(config) {
     if(Array.isArray(config?._targets))return JSON.parse(JSON.stringify(config._targets));
     const ids=Array.isArray(config?.accountIds)?config.accountIds:
         (typeof selectedAccountIds==='function'?selectedAccountIds():[]);
+    // Direct single-RK Launch and workspace/bulk Launch have different Page
+    // controls. bindingFor() creates an empty bulk row even in direct mode.
+    // Match buildPayload(): never borrow a hidden selector across modes.
+    const perTarget=typeof targetMode==='function'?targetMode():
+        (ids.length>1||(typeof state!=='undefined'&&Array.isArray(state.targets)&&state.targets.length>0));
     const overrides=config?.accountOverrides&&typeof config.accountOverrides==='object'
         ?config.accountOverrides:{};
     return ids.map(rawId=>{
@@ -166,7 +171,7 @@ function remaskPrivateTargetRows(config) {
         const profile=String(target?.profile||option?.dataset?.profile||account?._profile||
             (typeof state!=='undefined'?state.profile:'')||'').trim();
         const businessId=String(target?.business_id||account?.business_id||account?.business?.id||'').trim();
-        const pageId=String(binding?.page_id||'').trim();
+        const pageId=String((perTarget?binding?.page_id:$('page')?.value)||'').trim();
         if(!profile)throw new Error('Для РК не выбран профиль Facebook: '+accountId+'.');
         if(!/^\d{5,30}$/.test(businessId))throw new Error('Для РК не указан BM: '+accountId+'.');
         if(!/^\d{5,30}$/.test(pageId))throw new Error('Выберите страницу для РК '+accountId+'.');
@@ -179,7 +184,8 @@ function remaskPrivateTargetRows(config) {
         if(config.payload?.adset?.promoted_object?.page_id||override.adset?.promoted_object?.page_id)
             override.adset={...(override.adset||{}),promoted_object:{...(override.adset?.promoted_object||{}),page_id:pageId}};
         if(config.payload?.creative?.format==='INSTAGRAM_POST'){
-            const mediaId=String(binding?.source_instagram_media_id||config.payload.creative.source_instagram_media_id||'').trim();
+            const mediaId=String((perTarget?binding?.source_instagram_media_id:
+                config.payload.creative.source_instagram_media_id)||'').trim();
             if(!/^\d{5,40}$/.test(mediaId))throw new Error('Выберите публикацию Instagram для РК '+accountId+'.');
             override.creative={...(override.creative||{}),source_instagram_media_id:mediaId};
         }
@@ -655,6 +661,7 @@ if(typeof document!=='undefined'){
 async function remaskPrivateCreateJob() {
     if(remaskPrivateLaunchBusy)return null;
     remaskPrivateLaunchBusy=true;validateReady();
+    let submitting=false;
     try{
         const config=await remaskPrivatePrepareConfig();
         remaskPrivateAssertCurrentConfig(config);
@@ -664,6 +671,7 @@ async function remaskPrivateCreateJob() {
         const planned=remaskPrivateJobRequest(config,reviewed);
         remaskPrivateShow((planned.reused?'Повторяю сохранённую отправку':'Создаю')+
             ' задачу для '+reviewed.length+' РК…');
+        submitting=true;
         const accepted=await remaskPrivateWorker(planned.request);
         const jobId=String(accepted?.job?.job_id||'').trim();
         if(!jobId)throw new Error('Сервер не вернул номер задачи.');
@@ -674,8 +682,9 @@ async function remaskPrivateCreateJob() {
         remaskPrivatePollJob(jobId);
         return accepted;
     }catch(error){
-        remaskPrivateShow('Создание рекламы недоступно: '+String(error?.message||error)+
-            '. При потере ответа повторная отправка использует сохранённую задачу.','failed');
+        const message=String(error?.message||error).replace(/[.!?]+$/,'');
+        remaskPrivateShow('Создание рекламы недоступно: '+message+'.'+
+            (submitting?' При потере ответа повторная отправка использует сохранённую задачу.':''),'failed');
         return null;
     }finally{
         remaskPrivateLaunchBusy=false;validateReady();
