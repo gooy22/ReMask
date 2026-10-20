@@ -36,7 +36,7 @@ class AdsManagerLaunch:
         digest = hashlib.sha256((SOURCE_REVISION + self.catalog.digest).encode())
         for name in ("private_ads_launch.py", "private_ads_http.py", "private_ads_draft.py",
                      "private_ads_state.py", "private_ads_media.py", "private_ads_publication.py",
-                     "private_ads_verify.py", "private_ads_creative.py", "private_ads_video.py", "private_ads_delivery.py", "private_ads_catalog.py", "private_ads_reads.py", "private_ads_resources.py", "private_ads_helpers.py", "private_ads_preview.py"):
+                     "private_ads_verify.py", "private_ads_creative.py", "private_ads_video.py", "private_ads_delivery.py", "private_ads_catalog.py", "private_ads_reads.py", "private_draft_pages.py", "private_ads_resources.py", "private_ads_helpers.py", "private_ads_preview.py"):
             digest.update(name.encode() + b"\0" + Path(__file__).with_name(name).read_bytes())
         self.source_digest = digest.hexdigest()
 

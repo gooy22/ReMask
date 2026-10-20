@@ -513,3 +513,24 @@ console.log('Private Launch catalog and funding truth checks passed');
   assert.doesNotMatch(output.assetReadinessRows.html,/Existing Page/);
   console.log('Private Workspace Assets scope and unverified access checks passed');
 })().catch(e=>{console.error(e);process.exitCode=1;});
+
+(async()=>{
+  const mode={value:'DRAFT'};
+  const requests=[];
+  const ctx={...context,$:id=>id==='remaskPrivateExecutionMode'?mode:controls[id],
+    apiJson:async(url,options)=>{requests.push({url,body:options.body});return {ok:true};}};
+  vm.createContext(ctx);vm.runInContext(source,ctx);
+  for(const executionMode of ['DRAFT','PUBLISH']){
+    mode.value=executionMode;
+    const body=new URLSearchParams({profile:'38',account_id:'120249912222240685',resource:'pages'});
+    await ctx.apiJson('ajax/metaAssets.php',{body});
+    assert.equal(body.get('execution_mode'),executionMode);
+    assert.equal(body.get('profile'),'38');
+    assert.equal(body.get('account_id'),'120249912222240685');
+  }
+  const body=new URLSearchParams({resource:'images'});
+  await ctx.apiJson('ajax/metaAssets.php',{body});
+  assert.equal(body.has('execution_mode'),false);
+  assert.equal(requests.length,3);
+  console.log('The Page picker carries the explicit draft/publication mode with unchanged exact profile/RK scope.');
+})().catch(e=>{console.error(e);process.exitCode=1;});
