@@ -77,6 +77,8 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
                 'verification_tasks':[], 'card_confirmation_status':'CLEAR',
                 'is_expired':False}]}
         contexts = [
+            patch('app.private_draft_pages.verify_draft_page', new=AsyncMock(return_value={
+                'page_id':'555555', 'checked_live':True, 'publication_access_verified':False})),
             patch('app.private_ads_launch.AdsManagerPrivateHttp.open',new=AsyncMock(return_value=self.client)),
             patch('app.private_launch_media.LaunchMediaResolver.resolve',new=AsyncMock(return_value=[self.media])),
             patch('app.static_payment_read.inspect_methods',new=AsyncMock(return_value=self.funding))]
@@ -130,6 +132,24 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any(row['step'] == 'ADS_MANAGER:PUBLISH' for row in await self.owner.state.all_steps('image-launch')))
         payment.assert_not_awaited()
         delivery.assert_not_awaited()
+
+    async def test_draft_never_requests_promotable_projection_and_denied_owned_page_stops_posts(self):
+        self.payload['launch']['execution_mode'] = 'DRAFT'
+        original = self.client.get
+        account_reads = []
+        async def projected(path, params):
+            if path == '/act_111111':
+                account_reads.append(params['fields'])
+                self.assertNotIn('ad_account_promotable_objects', params['fields'])
+            return await original(path, params)
+        self.client.get = projected
+        with patch('app.private_draft_pages.verify_draft_page', new=AsyncMock(
+                side_effect=ProvisioningError('DRAFT_PAGE_DENIED', 'Denied'))):
+            with self.assertRaises(ProvisioningError):
+                await self.launch()
+        self.assertTrue(account_reads)
+        self.assertEqual(self.client.posts, [])
+        self.assertEqual(self.client.uploads, 0)
 
     async def test_draft_mode_cannot_change_to_publication_under_the_same_key(self):
         self.payload['launch']['execution_mode'] = 'DRAFT'

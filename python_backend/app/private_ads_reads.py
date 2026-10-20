@@ -80,7 +80,12 @@ class AdsManagerReadCatalog:
             raise fail("RESOURCE_CONTRACT_REQUIRED", "Reviewed account query is unavailable for " + name)
         client = self.client(web, values)
         reference = name in TARGETING_TYPES | {"locations","locales"}
-        account = await client.account_record(require_active=not reference, pages=name == 'pages', reference=reference)
+        draft_pages = name == "pages" and values.get("execution_mode") == "DRAFT"
+        account = await client.account_record(require_active=not reference, pages=name == 'pages' and not draft_pages, reference=reference)
+        if draft_pages:
+            from .private_draft_pages import read_draft_pages
+            return await read_draft_pages(web, account=client.account, business=client.business,
+                query=values.get("query", ""))
         if not reference and str(account.get("account_status")) != "1":
             raise fail("ACCOUNT_INACTIVE", "The selected advertising account is not active")
         if name in TARGETING_TYPES and not str(values.get("query") or "").strip():
@@ -258,4 +263,5 @@ class AdsManagerReadCatalog:
                 "catalog_count":len(records), "truncated":len(records)>limit}
 
     async def pages(self, web, values):
-        return {**await self.read(web, "pages", values), "ad_account_page_access_verified":True}
+        result = await self.read(web, "pages", values)
+        return {**result, "ad_account_page_access_verified": values.get("execution_mode") != "DRAFT"}

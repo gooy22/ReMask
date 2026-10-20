@@ -36,7 +36,7 @@ class AdsManagerLaunch:
         digest = hashlib.sha256((SOURCE_REVISION + self.catalog.digest).encode())
         for name in ("private_ads_launch.py", "private_ads_http.py", "private_ads_draft.py",
                      "private_ads_state.py", "private_ads_media.py", "private_ads_publication.py",
-                     "private_ads_verify.py", "private_ads_creative.py", "private_ads_video.py", "private_ads_delivery.py", "private_ads_catalog.py", "private_ads_reads.py", "private_ads_resources.py", "private_ads_helpers.py", "private_ads_preview.py"):
+                     "private_ads_verify.py", "private_ads_creative.py", "private_ads_video.py", "private_ads_delivery.py", "private_ads_catalog.py", "private_ads_reads.py", "private_draft_pages.py", "private_ads_resources.py", "private_ads_helpers.py", "private_ads_preview.py"):
             digest.update(name.encode() + b"\0" + Path(__file__).with_name(name).read_bytes())
         self.source_digest = digest.hexdigest()
 
@@ -132,9 +132,13 @@ class AdsManagerLaunch:
     async def _preflight(self, client, web, payload, target):
         from .private_launch import _payment_selector, _safe_payment_methods, _select_payment_method
         from .static_payment_read import inspect_methods, complete_methods
+        from .private_launch import _effective_launch_payload
+        draft_only = _effective_launch_payload(payload.get("launch")).get("execution_mode") == "DRAFT"
         account = target["ad_account_id"]
-        row = await client.get("/act_" + account,
-            {"fields": ["id", "account_id", "account_status", "business", "ad_account_promotable_objects"]})
+        fields = ["id", "account_id", "account_status", "business"]
+        if not draft_only:
+            fields.append("ad_account_promotable_objects")
+        row = await client.get("/act_" + account, {"fields": fields})
         business = row.get("business") if isinstance(row, dict) else None
         promotable = row.get("ad_account_promotable_objects") if isinstance(row, dict) else None
         pages = promotable.get("promotable_page_ids") if isinstance(promotable, dict) else None
@@ -144,14 +148,15 @@ class AdsManagerLaunch:
             raise fail("ACCOUNT_SCOPE_UNVERIFIED", "Live account read did not confirm the selected Business relation")
         if type(row.get("account_status")) not in {int, str} or str(row["account_status"]) != "1":
             raise fail("ACCOUNT_NOT_ACTIVE", "Selected advertising account is not active")
+        if draft_only:
+            from .private_draft_pages import verify_draft_page
+            page_proof = await verify_draft_page(web, target=target, client=client)
+            return {**target, "account_status": 1, "browser_started": False,
+                "transport": "private_http_h2", "page_access_checked_live": False,
+                "draft_page": page_proof, "draft_ready": True, "publication_ready": False,
+                "payment_checked_live": False, "payment_selection_required": False}
         if not isinstance(pages, list) or target["page_id"] not in pages:
             raise fail("PAGE_UNVERIFIED", "Live account response did not confirm advertising access to this Page")
-        from .private_launch import _effective_launch_payload
-        if _effective_launch_payload(payload.get("launch")).get("execution_mode") == "DRAFT":
-            return {**target, "account_status": 1, "browser_started": False,
-                "transport": "private_http_h2", "page_access_checked_live": True,
-                "draft_ready": True, "publication_ready": False,
-                "payment_checked_live": False, "payment_selection_required": False}
         funding = await inspect_methods(web, account=account, business_id=target["business_id"])
         if (funding.get("account_scope_verified") is True
                 and funding.get("business_scope_verified") is True

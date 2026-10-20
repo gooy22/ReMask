@@ -193,7 +193,8 @@ class AdvertisingResourceTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(cached['checked_live'])
             self.assertFalse(cached['account_scope_verified'])
             self.assertNotIn('ad_account_page_access_verified',cached['data'][0])
-            for actor,values in [('222222222',self.values()),('111111111',{**self.values(),'limit':500})]:
+            for actor,values in [('222222222',self.values()),('111111111',{**self.values(),'limit':500}),
+                    ('111111111',{**self.values(),'execution_mode':'DRAFT'})]:
                 result=await store.get(name='pages',values=values,actor_id=actor)
                 self.assertEqual(result['data'],[])
             self.assertEqual(web.graphql.await_count,1)
