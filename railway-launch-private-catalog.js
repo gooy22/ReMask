@@ -454,12 +454,12 @@ async function remaskPrivateReviewConfig(config,{render=true}={}) {
     const rows=remaskPrivateTargetRows(config);
     const results=[];
     const authBlockedProfiles=new Map();
-    let localAuthFailure=null;
+    let batchStop=null;
     for(let index=0;index<rows.length;index++){
         const row=rows[index];
-        const prior=localAuthFailure||authBlockedProfiles.get(row.profile);
+        const prior=batchStop||authBlockedProfiles.get(row.profile);
         if(prior){
-            results.push({row,review:{ready:false},status:'AUTH_REQUIRED',
+            results.push({row,review:{ready:false},status:prior.status||'AUTH_REQUIRED',
                 error_code:prior.code,error:prior.message,review_attempted:false});
             continue;
         }
@@ -516,9 +516,14 @@ async function remaskPrivateReviewConfig(config,{render=true}={}) {
             const code=error?.code||gate||'REVIEW_FAILED';
             if(gate)authBlockedProfiles.set(row.profile,{code:gate,message});
             if(error?.httpStatus===401||error?.httpStatus===403)
-                localAuthFailure={code:'REMASK_AUTH_REQUIRED',message};
-            results.push({row,review:{ready:false},status:(gate||localAuthFailure)?'AUTH_REQUIRED':'BLOCKED',
-                error_code:localAuthFailure?.code||code,error:message});
+                batchStop={code:'REMASK_AUTH_REQUIRED',message,status:'AUTH_REQUIRED'};
+            // A quota failure is not an account-local readiness failure.
+            // Stop the original batch rather than reading through other RKs.
+            if(error?.httpStatus===429||/(?:^|_)(?:RATE_LIMIT(?:ED)?|THROTTLED)(?:_|$)/.test(code)||
+                (/Meta rejected the advertising request/.test(message)&&/\bcode=(?:4|17|32|613)\b/.test(message)))
+                batchStop={code:'META_RATE_LIMITED',message,status:'RATE_LIMITED'};
+            results.push({row,review:{ready:false},status:batchStop?.status||(gate?'AUTH_REQUIRED':'BLOCKED'),
+                error_code:batchStop?.code||code,error:message});
         }
     }
     const ready=results.filter(entry=>entry.review?.ready===true).length;

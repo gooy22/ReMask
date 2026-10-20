@@ -82,6 +82,19 @@ function fixture(size=30) {
     assert.ok(results.every(row=>row.status==='AUTH_REQUIRED'&&row.error_code==='REMASK_AUTH_REQUIRED'));
   }
 
+  for(const failure of [
+    {message:'Quota rejected',httpStatus:429},
+    {message:'Quota rejected',code:'PRIVATE_HTTP_RATE_LIMITED'},
+    {message:'Meta rejected the advertising request (code=613, http_status=200)'},
+  ]){
+    const {ctx,config,requests}=fixture();
+    ctx.review=async()=>{throw Object.assign(Error(failure.message),failure);};
+    const results=await ctx.remaskPrivateReviewConfig(config,{render:false});
+    assert.equal(requests.filter(row=>row.action==='private_launch_review').length,1);
+    assert.ok(results.every(row=>row.status==='RATE_LIMITED'&&row.error_code==='META_RATE_LIMITED'));
+    assert.equal(results[1].review_attempted,false,'quota refusal must not redirect reads to another selected account');
+  }
+
   {
     const {ctx,config,rows,requests,storage}=fixture();
     ctx.review=async payload=>payload.ad_account_id===rows[0].ad_account_id
