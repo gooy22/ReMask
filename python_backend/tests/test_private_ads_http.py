@@ -411,6 +411,22 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         _, other = self.client._account_request('/555555', {'target_id':'111111'})
         self.assertEqual(other, {'target_id':'111111'})
 
+    async def test_proven_alias_preserves_the_exact_root_lookup_for_repeated_scope_reads(self):
+        self.alias_fixture()
+        fields = ['id','account_id','business','account_status','ad_account_promotable_objects']
+        await self.client.get('/act_111111', {'fields':['id','account_id','business']})
+        self.web.session.response_body = json.dumps({'id':'999999','account_id':'999999',
+            'business':{'id':'222222'},'account_status':1,
+            'ad_account_promotable_objects':{'promotable_page_ids':['333333']}}).encode()
+        result = await self.client.get('/act_111111', {'fields':fields})
+        self.assertTrue(self.web.session.calls[-1][1].endswith('/act_111111'))
+        self.assertEqual(result['id'],'111111')
+        self.assertEqual(result['account_id'],'111111')
+        self.assertEqual(result['ad_account_promotable_objects']['promotable_page_ids'],['333333'])
+        self.assertEqual(json.loads(self.web.session.calls[-1][2]['params']['fields']),fields)
+        self.assertEqual(self.web.graphql.await_count,1)
+        self.assertEqual(self.claims,0)
+
     async def test_redirect_proof_accepts_only_lossless_numeric_id(self):
         requested = "120250985990010713"
         async def redirected(url, **kwargs):
