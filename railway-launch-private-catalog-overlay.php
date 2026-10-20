@@ -333,7 +333,8 @@ final class RemaskAdvertisingAssetBridge
         if (strlen($query)>200) throw new InvalidArgumentException('ADVERTISING_QUERY_TOO_LONG');
         if (session_status()===PHP_SESSION_ACTIVE) session_write_close();
         $params=http_build_query(['resource'=>$resource,'account_id'=>$account,'force'=>$force?'true':'false',
-            'query'=>$query,'limit'=>max(1,min(500,(int)($input['limit'] ?? 100)))],'','&',PHP_QUERY_RFC3986);
+            'query'=>$query,'limit'=>max(1,min(500,(int)($input['limit'] ?? 100))),
+            'execution_mode'=>(string)($input['execution_mode'] ?? 'PUBLISH')],'','&',PHP_QUERY_RFC3986);
         $context=stream_context_create(['http'=>['method'=>'GET','timeout'=>85,'ignore_errors'=>true,
             'follow_location'=>0,'header'=>"Accept: application/json\r\nX-Remask-Worker-Key: ".$key."\r\n"]]);
         $raw=@file_get_contents($base.'/api/v1/profiles/'.rawurlencode($profile).'/advertising-resources?'.$params,false,$context);

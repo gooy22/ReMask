@@ -3669,13 +3669,15 @@ async def private_launch_plan(payload: dict = Body(...)):
 
 @app.get('/api/v1/profiles/{profile_id}/advertising-resources',dependencies=[Depends(require_key)])
 async def private_advertising_resources(profile_id: str, resource: str, account_id: str,
-                                        force: bool = False, query: str = '', limit: int = 100):
+                                        force: bool = False, query: str = '', limit: int = 100,
+                                        execution_mode: str = 'PUBLISH'):
     from app.private_advertising_reads import RESOURCE_FIELDS
     from app.private_auth import private_auth_error
     from fb_worker import AuthenticationError, RemoteRequestError, ProxyError
     from app.private_transport_error import private_transport_error
     profile = str(profile_id or '').strip()
-    if not profile or len(profile) > 160 or resource not in RESOURCE_FIELDS or len(query) > 200:
+    if (not profile or len(profile) > 160 or resource not in RESOURCE_FIELDS or len(query) > 200
+            or execution_mode not in {'DRAFT', 'PUBLISH'}):
         raise HTTPException(status_code=400,detail='INVALID_ADVERTISING_RESOURCE_REQUEST')
     try:
         account = pool.private_launch._id(account_id, 'account_id')
@@ -3688,6 +3690,7 @@ async def private_advertising_resources(profile_id: str, resource: str, account_
                                    'Exact advertising account context is unavailable',retryable=False)
         values = {'profile_id':profile,'business_id':next(iter(businesses)),'ad_account_id':account,
                   'query':query,'limit':max(1,min(limit,500)),
+                  'execution_mode':execution_mode if resource == 'pages' else 'PUBLISH',
                   'actor_id':str(context.cookies.get('c_user') or '')}
         actor = str(context.cookies.get('c_user') or '')
         cached = None

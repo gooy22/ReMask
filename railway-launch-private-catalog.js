@@ -869,6 +869,9 @@ if(typeof apiJson==='function'){
     const originalAdvertisingApiJson=apiJson;
     apiJson=async function(url,options={}){
         const body=options.body;
+        if(String(url).includes('metaAssets.php')&&typeof body?.get==='function'&&body.get('resource')==='pages'){
+            body.set('execution_mode',remaskPrivateExecutionMode());
+        }
         if(String(url).includes('metaTargetingSearch.php')&&typeof body?.get==='function'&&!body.get('account_id')){
             const profile=String(body.get('profile')||'');
             const ids=typeof selectedAccountIds==='function'?selectedAccountIds():[];
