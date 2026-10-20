@@ -1075,6 +1075,13 @@ function pythonWorkerRenderJob(job) {
         }
 
         const advertisingSteps=Array.isArray(item.advertising_steps)?item.advertising_steps:[];
+        for(const task of item.tasks||[]){
+          if(task.action==='private_launch'&&task.result?.draft_verified===true&&task.result?.published===false){
+            const draft=document.createElement('div');
+            draft.textContent='Черновик Meta '+String(task.result.draft_id||'')+' подтверждён. Реклама не опубликована.';
+            errorTd.appendChild(draft);
+          }
+        }
         if(advertisingSteps.length){
           const labels={IMAGE_UPLOAD:'Загрузка изображения',VIDEO_UPLOAD:'Загрузка видео',
             PUBLISH_FAMILY:'Публикация рекламы',CAMPAIGN:'Кампания',ADSET:'Группа объявлений',

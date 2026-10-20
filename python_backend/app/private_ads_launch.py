@@ -21,10 +21,11 @@ from .private_ads_resources import AdsManagerResourceCatalog, read_pixels
 from .private_launch_extensions import OperationKey
 
 SOURCE_REVISION = "ads-manager-private-2026-10-13-media-resources"
-# Exact source/catalog digest of reviewed main 6b7dfc139c604bd74309cb0eb774a647830c8e11.
+# Exact source/catalog digests of reviewed main 6b7dfc1 and 7b6a985.
 # Compatibility permits only fresh reads of an already accepted publication.
 READ_ONLY_PUBLICATION_PREDECESSORS = frozenset({
     "e38dc7d32ba2ccd73d18e0b31b477be7e1d4f94624d1b1a1817efd692307a2c2",
+    "cc0d9d896c67b95db8bdef3fce77279ba9d9446302f0bd0f1c10a1e62ba92645",
 })
 
 class AdsManagerLaunch:
@@ -47,6 +48,11 @@ class AdsManagerLaunch:
         target = {"profile_id": str(profile_id), **{key: identity(payload.get(key))
                   for key in ("business_id", "ad_account_id", "page_id")}}
         launch = _effective_launch_payload(payload.get("launch"))
+        mode = launch.get("execution_mode", "PUBLISH")
+        if not isinstance(mode, str) or mode not in {"DRAFT", "PUBLISH"}:
+            raise fail("INVALID_INPUT", "Choose DRAFT or PUBLISH execution")
+        if mode == "DRAFT" and any(value != "PAUSED" for value in launch.get("delivery", {}).values()):
+            raise fail("INVALID_INPUT", "A Meta draft cannot request active delivery")
         for section in ("campaign", "adset"):
             for field in ("daily_budget", "lifetime_budget"):
                 value = launch[section].get(field)
@@ -109,13 +115,16 @@ class AdsManagerLaunch:
 
     def plan(self, *, profile_id, payload):
         target, launch, references, fingerprint = self.prepare(profile_id, payload)
+        draft_only = launch.get("execution_mode") == "DRAFT"
         return {"configuration_valid": True, "ready": False, "checked_live": False,
             "mutation_posts": 0, "target": target, "creative_format": launch["creative"].get("format", "SINGLE"),
             "delivery": launch.get("delivery", {key: "PAUSED" for key in ("campaign", "adset", "ad")}),
             "steps": [{"stage": stage, "label": label} for stage, label in
                 (("MEDIA", "Медиа рекламы"), ("DRAFT", "Черновик рекламы"),
                  ("CAMPAIGN", "Кампания"), ("ADSET", "Группа объявлений"),
-                 ("AD", "Объявление"), ("PUBLISH", "Публикация"), ("VERIFY", "Проверка объектов"))],
+                 ("AD", "Объявление"), ("PUBLISH", "Публикация"), ("VERIFY", "Проверка объектов"))
+                if not (draft_only and stage == "PUBLISH")],
+            "execution_mode": "DRAFT" if draft_only else "PUBLISH",
             "local_media": references, "media_resolution_required": bool(references),
             "missing_contracts": [], "protocol": "private_ads_manager_versioned",
             "launch": launch, "launch_fingerprint": fingerprint, "source_revision": SOURCE_REVISION}
@@ -137,6 +146,12 @@ class AdsManagerLaunch:
             raise fail("ACCOUNT_NOT_ACTIVE", "Selected advertising account is not active")
         if not isinstance(pages, list) or target["page_id"] not in pages:
             raise fail("PAGE_UNVERIFIED", "Live account response did not confirm advertising access to this Page")
+        from .private_launch import _effective_launch_payload
+        if _effective_launch_payload(payload.get("launch")).get("execution_mode") == "DRAFT":
+            return {**target, "account_status": 1, "browser_started": False,
+                "transport": "private_http_h2", "page_access_checked_live": True,
+                "draft_ready": True, "publication_ready": False,
+                "payment_checked_live": False, "payment_selection_required": False}
         funding = await inspect_methods(web, account=account, business_id=target["business_id"])
         if (funding.get("account_scope_verified") is True
                 and funding.get("business_scope_verified") is True
@@ -288,6 +303,7 @@ class AdsManagerLaunch:
         target, launch, fingerprint, actor, client, media, proof = await self._prepare_live(
             profile_id=profile_id, context=context, session=transport.session, payload=payload)
         return {"ready": not proof["payment_selection_required"], **target, "launch": launch,
+            "ready_for": launch.get("execution_mode", "PUBLISH"),
             "preflight": proof, "protocol": "private_ads_manager_versioned",
             "source_revision": SOURCE_REVISION, "contracts": self.status()["contracts"]}
 
@@ -388,8 +404,13 @@ class AdsManagerLaunch:
         levels = {"campaign": copy.deepcopy(launch["campaign"]), "ad_set": copy.deepcopy(launch["adset"]),
                   "ad": {**copy.deepcopy(launch["ad"]), "creative": creative}}
         publisher = AdsManagerDraftPublisher(sender)
+        draft_only = launch.get("execution_mode") == "DRAFT"
         result = await publisher.run(client, name=launch["campaign"]["name"],
-                                     levels=levels, verify_objects=verify_published_objects)
+                                     levels=levels, verify_objects=verify_published_objects, draft_only=draft_only)
+        if draft_only:
+            result.update({"launch_key": key, **target, "preflight": proof,
+                "source_revision": SOURCE_REVISION, "execution_mode": "DRAFT"})
+            return result
         result.update({"launch_key": key, **target, "preflight": proof,
             "source_revision": SOURCE_REVISION,
             "steps": [{"step": name, "status": "SUCCESS", "entity_id": result["entities"][field]}

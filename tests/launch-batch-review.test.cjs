@@ -36,6 +36,29 @@ function fixture(size=30) {
 }
 
 (async()=>{
+  {
+    const {ctx,config,requests,controls}=fixture(1);
+    controls.remaskPrivateExecutionMode={value:'DRAFT'};
+    config.payload.execution_mode='PUBLISH';
+    config.accountOverrides={[config.accountIds[0]]:{execution_mode:'PUBLISH'}};
+    const rows=ctx.remaskPrivateTargetRows(config);
+    assert.equal(rows[0].launch.base.execution_mode,'DRAFT');
+    assert.equal(rows[0].launch.override.execution_mode,undefined,'a stale target override cannot request publication');
+    await ctx.remaskPrivateCreateJob();
+    const created=requests.find(row=>row.action==='create');
+    assert.equal(created.profiles[0].tasks[0].payload.launch.base.execution_mode,'DRAFT');
+    const task={action:'private_launch',status:'SUCCESS',payload:created.profiles[0].tasks[0].payload};
+    assert.equal(ctx.remaskPrivateCanDeliver({},task,'ACTIVE'),false);
+    assert.equal(ctx.remaskPrivateCanDeliver({},task,'PAUSED'),false);
+    const draftFingerprint=ctx.remaskPrivateFingerprint(rows);
+    controls.remaskPrivateExecutionMode.value='PUBLISH';
+    const publicationRows=ctx.remaskPrivateTargetRows(config);
+    assert.equal(publicationRows[0].launch.base.execution_mode,undefined);
+    assert.notEqual(ctx.remaskPrivateFingerprint(publicationRows),draftFingerprint,'draft and publication must not share an intent');
+    controls.remaskPrivateExecutionMode.value='DRAFT';
+    config.payload.delivery.ad='ACTIVE';
+    assert.throws(()=>ctx.remaskPrivateTargetRows(config),/На паузе/);
+  }
   for(const size of [1,3,5,10,30]){
     const {ctx,config,requests,rows}=fixture(size);
     ctx.review=async payload=>{

@@ -39,7 +39,7 @@ class AdsManagerDraftPublisher:
                 or row["account_id"].removeprefix("act_") != account_id):
             raise fail("READ_SCOPE_MISMATCH", "Draft response belongs to another advertising account")
 
-    async def run(self, client, *, name, levels, verify_objects):
+    async def run(self, client, *, name, levels, verify_objects, draft_only=False):
         if not isinstance(levels, dict) or set(levels) != set(LEVELS):
             raise fail("INVALID_INPUT", "Publication requires Campaign, AdSet and Ad draft values")
         # Validate every level before the first create. Do not let malformed
@@ -54,6 +54,8 @@ class AdsManagerDraftPublisher:
                 or client.context.business_id != scope["business_id"]
                 or client.context.actor_id != self.submitter.actor_id):
             raise fail("SAVED_OPERATION_MISMATCH", "Draft HTTP session belongs to another target")
+        if draft_only and await self.submitter.state.step(self.submitter.launch_key, OperationKey("ADS_MANAGER:PUBLISH")):
+            raise fail("SAVED_OPERATION_MISMATCH", "An accepted publication cannot be relabelled as an unpublished draft")
         recovery = await self._saved_publication(client, name, levels)
         if recovery is not None:
             draft_id, fragments, objects, publication = recovery
@@ -97,6 +99,12 @@ class AdsManagerDraftPublisher:
                 await self._confirm(operation, {"draft_id": draft_id, "fragment_id": fragment_id,
                     "ad_object_id": objects[level]})
                 fragments.append(fragment_id);parent_id = objects[level]
+            if draft_only:
+                return {"status": "SUCCESS", "draft_id": draft_id, "fragment_ids": fragments,
+                    "draft_objects": objects, "draft_verified": True, "published": False,
+                    "verified": False, "delivery_running_verified": False, "browser_started": False,
+                    "verification_source": "independent_private_ads_http",
+                    "transport": "private_ads_manager_http_h2"}
             publication = await self.submitter.submit(client, operation="PUBLISH",
                 path="/" + draft_id + "/publish", params=publish_params(fragments),
                 receipt=publication_receipt)

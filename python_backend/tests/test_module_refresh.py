@@ -1,3 +1,4 @@
+import asyncio
 import copy
 import json
 from pathlib import Path
@@ -135,6 +136,57 @@ class AutomaticReadsTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('BizKitSettingsCreateAdAccountMutation', self.web._reviewed_module_ids['accepted'])
         self.assertEqual(self.web.fetch_text.call_args.args, (self.cdn,))
         self.assertEqual(self.web.fetch_text.call_args.kwargs['referer'], self.url)
+
+    async def test_concurrent_profile_sessions_share_one_collection_window(self):
+        source = (ROOT / 'tests/fixtures/meta_create_rk_observed_20261008.js').read_text()
+        entered, release = asyncio.Event(), asyncio.Event()
+        async def fetch(url, **kwargs):
+            entered.set()
+            await release.wait()
+            return 200, source, url
+        self.web.fetch_text.side_effect = fetch
+        peers = [self.web] + [SimpleNamespace(profile=copy.deepcopy(self.web.profile),
+            fetch_text=AsyncMock(side_effect=AssertionError('Duplicate CDN request'))) for _ in range(3)]
+        first = asyncio.create_task(refresh.refresh_from_document(peers[0], self.document, self.url))
+        await entered.wait()
+        others = [asyncio.create_task(refresh.refresh_from_document(peer, self.document, self.url)) for peer in peers[1:]]
+        await asyncio.sleep(0)
+        self.assertTrue(all(not task.done() for task in others))
+        release.set()
+        await asyncio.gather(first, *others)
+        self.assertEqual(self.web.fetch_text.await_count, 1)
+        for peer in peers:
+            self.assertIn('BizKitSettingsCreateAdAccountMutation', peer._reviewed_module_ids['accepted'])
+        self.assertTrue(all(peer.fetch_text.await_count == 0 for peer in peers[1:]))
+
+    async def test_cancelled_waiter_does_not_cancel_collection_or_duplicate_it(self):
+        entered, release = asyncio.Event(), asyncio.Event()
+        async def fetch(url, **kwargs):
+            entered.set()
+            await release.wait()
+            return 200, '__d("FixtureModule",[],function(){return {};});', url
+        self.web.fetch_text.side_effect = fetch
+        owner = asyncio.create_task(refresh.refresh_from_document(self.web, self.document, self.url))
+        await entered.wait()
+        waiter = asyncio.create_task(refresh.refresh_from_document(self.web, self.document, self.url))
+        await asyncio.sleep(0)
+        waiter.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await waiter
+        release.set()
+        await owner
+        await refresh.refresh_from_document(self.web, self.document, self.url)
+        self.assertEqual(self.web.fetch_text.await_count, 1)
+
+    async def test_distinct_profiles_never_share_collection_or_proxy(self):
+        other = SimpleNamespace(profile=SimpleNamespace(name='other', proxy='http://other.test:8080',
+            cookies={'c_user':'222222222'}), fetch_text=AsyncMock())
+        source = '__d("FixtureModule",[],function(){return {};});'
+        self.web.fetch_text.return_value = other.fetch_text.return_value = (200, source, self.cdn)
+        await asyncio.gather(refresh.refresh_from_document(self.web, self.document, self.url),
+            refresh.refresh_from_document(other, self.document, self.url))
+        self.assertEqual(self.web.fetch_text.await_count, 1)
+        self.assertEqual(other.fetch_text.await_count, 1)
 
     async def test_all_modules_and_later_script_windows_are_collected(self):
         import os,tempfile
