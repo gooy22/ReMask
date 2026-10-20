@@ -17,7 +17,7 @@ PUBLISH_FIELDS = ["async_request_set_id", "canceled_count", "error_count",
     "in_progress_count", "initial_count", "publish_error", "status",
     "success_count", "total_count", "fragment_statuses"]
 FRAGMENT_FIELDS = ["account_id", "ad_draft_id", "ad_object_id", "ad_object_type",
-    "id", "parent_ad_object_id", "publish_status", "status", "values"]
+    "id", "parent_ad_object_id", "publish_status", "status", "values", "active_errors", "validation_status"]
 
 
 def fail(code, message, retryable=False):
@@ -62,7 +62,8 @@ def fragment_params(draft_id, *, level, values, parent_id=None, object_id=None,
             raise fail("INITIAL_STATUS", "New advertising objects must be created PAUSED")
         entries.append({"field": field, "old_value": None, "new_value": copy.deepcopy(value)})
     output = {"ad_draft_id": draft_id, "ad_object_type": level, "action": action,
-              "source": source, "values": entries, "is_delete": False, "is_archive": False}
+              "source": source, "values": entries, "is_delete": False, "is_archive": False,
+              "validate": True}
     # Check serialization before any journal claim, preserving original types.
     flatten_params(output)
     if parent_id is not None:

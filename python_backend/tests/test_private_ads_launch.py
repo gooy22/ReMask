@@ -63,7 +63,9 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
         path.write_bytes(data)
         self.media = LocalMedia('m-'+sha[:24],sha,len(data),'image','image/png',path)
         self.payload = {'business_id':'222222','ad_account_id':'111111','page_id':'555555','launch_key':'image-launch',
-            'launch':{'campaign':{'name':'campaign','daily_budget':2000},'adset':{'name':'adset'},
+            'launch':{'campaign':{'name':'campaign','daily_budget':2000,'objective':'OUTCOME_TRAFFIC'},
+                      'adset':{'name':'adset','optimization_goal':'LINK_CLICKS','billing_event':'IMPRESSIONS',
+                               'destination_type':'WEBSITE','targeting':{'geo_locations':{'countries':['UA']}}},
                       'ad':{'name':'ad'},'creative':{'name':'creative','message':'text',
                           'link':'https://example.com','headline':'headline','format':'SINGLE',
                           'media_library_id':self.media.id}}}
@@ -463,6 +465,8 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.client.posts),1)
 
     async def test_selected_account_pixel_publishes_and_verifies_without_duplicate_post(self):
+        self.payload['launch']['campaign']['objective'] = 'OUTCOME_LEADS'
+        self.payload['launch']['adset']['optimization_goal'] = 'OFFSITE_CONVERSIONS'
         self.payload['launch']['adset']['promoted_object'] = {'pixel_id':'888881','custom_event_type':'LEAD'}
         plan = self.owner.plan(profile_id='19', payload=self.payload)
         self.assertTrue(plan['configuration_valid'])
@@ -475,7 +479,9 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.client.posts),5)
 
     async def test_absent_or_unavailable_pixel_stops_before_upload_and_draft(self):
-        self.payload['launch']['adset']['promoted_object'] = {'pixel_id':'888881'}
+        self.payload['launch']['campaign']['objective'] = 'OUTCOME_LEADS'
+        self.payload['launch']['adset']['optimization_goal'] = 'OFFSITE_CONVERSIONS'
+        self.payload['launch']['adset']['promoted_object'] = {'pixel_id':'888881','custom_event_type':'LEAD'}
         for rows in ([], [{'id':'888881','name':'Pixel','is_unavailable':True}]):
             self.client.pixels = rows
             with self.subTest(rows=rows), self.assertRaises(ProvisioningError) as caught:

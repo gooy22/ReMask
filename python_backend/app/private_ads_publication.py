@@ -93,15 +93,22 @@ class AdsManagerDraftPublisher:
                     raise fail("READ_RELATION_MISMATCH", "Draft fragment identity or parent is unconfirmed")
                 if not fragment_values_match(row.get("values"), values, business_id=scope["business_id"]):
                     raise fail("READ_SPEC_MISMATCH", "Saved draft settings differ from this Launch")
+                if row.get("active_errors"):
+                    raise fail("VALIDATION_ERRORS", "Meta returned active validation errors for the " + level + " draft")
                 objects[level] = identity(row.get("ad_object_id"))
                 if objects[level] in list(objects.values())[:-1]:
                     raise fail("READ_RELATION_MISMATCH", "Draft levels have duplicate object identities")
                 await self._confirm(operation, {"draft_id": draft_id, "fragment_id": fragment_id,
-                    "ad_object_id": objects[level]})
+                    "ad_object_id": objects[level], "fragment_saved": True,
+                    "relationships_confirmed": True, "editor_verified": False,
+                    "meta_validation_status": row.get("validation_status"),
+                    "active_errors_observed": "active_errors" in row})
                 fragments.append(fragment_id);parent_id = objects[level]
             if draft_only:
                 return {"status": "SUCCESS", "draft_id": draft_id, "fragment_ids": fragments,
                     "draft_objects": objects, "draft_verified": True, "published": False,
+                    "fragment_storage_verified": True, "relationships_confirmed": True,
+                    "editor_verified": False,
                     "verified": False, "delivery_running_verified": False, "browser_started": False,
                     "verification_source": "independent_private_ads_http",
                     "transport": "private_ads_manager_http_h2"}

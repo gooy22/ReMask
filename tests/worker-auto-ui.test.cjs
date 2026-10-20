@@ -3,6 +3,30 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const {webcrypto} = require('node:crypto');
 const source = fs.readFileSync('railway-python-worker-ui.js', 'utf8');
+// A draft inspection must address the retained intent and never become a new Launch.
+(async()=>{
+  const calls=[];let polls=0;
+  const scope={pythonWorkerUiState:{},localStorage:{setItem(){}},
+    pythonWorkerClearBatchState(){},pythonWorkerSetText(){},
+    async pythonWorkerPoll(){polls++;},
+    async pythonWorkerBridge(payload){calls.push(JSON.parse(JSON.stringify(payload)));return {job:{job_id:'read-job'}};}};
+  vm.createContext(scope);
+  const begin=source.indexOf('async function pythonWorkerInspectDraft(');
+  vm.runInContext(source.slice(begin,source.indexOf('\nfunction pythonWorkerSchedulePoll',begin)),scope);
+  const task={id:'original-task',payload:{business_id:'222222',ad_account_id:'111111',page_id:'555555',
+    launch:{execution_mode:'DRAFT',campaign:{objective:'OUTCOME_TRAFFIC'},adset:{optimization_goal:'LINK_CLICKS'}}},
+    result:{launch_key:'original-durable-intent'}};
+  const before=JSON.stringify(task);
+  const button={disabled:false};
+  await scope.pythonWorkerInspectDraft({profile_id:'38'},task,button);
+  await scope.pythonWorkerInspectDraft({profile_id:'38'},task,button);
+  assert.equal(calls.length,1);assert.equal(polls,1);
+  const submitted=calls[0].profiles[0];assert.equal(submitted.profile_id,'38');
+  const payload=submitted.tasks[0].payload;
+  assert.equal(payload.launch_key,'original-durable-intent');assert.equal(payload.reconcile_only,true);
+  assert.deepEqual(payload.launch,task.payload.launch);assert.equal(JSON.stringify(task),before);
+  console.log('Saved draft inspection preserves exact profile, configuration and original intent; double click cannot create another job.');
+})().catch(error=>{console.error(error);process.exitCode=1;});
 // A failed final bundle step must still display locally confirmed CREATE IDs.
 (async()=>{
   const refreshed=[];

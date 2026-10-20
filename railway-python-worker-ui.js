@@ -1078,8 +1078,28 @@ function pythonWorkerRenderJob(job) {
         for(const task of item.tasks||[]){
           if(task.action==='private_launch'&&task.result?.draft_verified===true&&task.result?.published===false){
             const draft=document.createElement('div');
-            draft.textContent='Черновик Meta '+String(task.result.draft_id||'')+' подтверждён. Реклама не опубликована.';
+            draft.textContent='Данные черновика Meta '+String(task.result.draft_id||'')+' сохранены. Редактор Meta ещё не проверен. Реклама не опубликована.';
             errorTd.appendChild(draft);
+            const identities=document.createElement('div');
+            identities.textContent=['Campaign '+String(task.result.draft_objects?.campaign||'—'),
+              'Ad Set '+String(task.result.draft_objects?.ad_set||'—'),
+              'Ad '+String(task.result.draft_objects?.ad||'—')].join(' · ');
+            errorTd.appendChild(identities);
+            if(task.payload&&task.result.launch_key){
+              const inspect=document.createElement('button');inspect.type='button';
+              inspect.textContent='Проверить сохранённый черновик';
+              inspect.addEventListener('click',()=>pythonWorkerInspectDraft(item,task,inspect));
+              errorTd.appendChild(inspect);
+            }
+          }
+          if(task.action==='private_launch'&&task.result?.execution_mode==='DRAFT_INSPECT'){
+            const inspection=document.createElement('details');
+            const summary=document.createElement('summary');
+            summary.textContent='Свежие чтения Meta: '+String(task.result.draft_id||'')+'. Редактор не проверен. POST: 0.';
+            inspection.appendChild(summary);
+            const evidence=document.createElement('pre');
+            evidence.textContent=JSON.stringify(task.result,null,2);
+            inspection.appendChild(evidence);errorTd.appendChild(inspection);
           }
         }
         if(advertisingSteps.length){
@@ -1167,6 +1187,28 @@ function pythonWorkerRenderJob(job) {
 
   const retry = pythonWorkerEl('pythonProvisionRetry');
   if (retry) retry.disabled = pythonWorkerUiState.busy || counts.FAILED === 0;
+}
+
+async function pythonWorkerInspectDraft(item,task,button){
+  if(button.disabled)return;
+  button.disabled=true;
+  try{
+    const original=JSON.parse(JSON.stringify(task.payload));
+    const sourceKey=String(task.result.launch_key||'');
+    const inspectKey='draft-inspect-'+String(task.id)+'-'+Date.now();
+    const data=await pythonWorkerBridge({action:'create',idempotency_key:inspectKey,
+      profiles:[{profile_id:String(item.profile_id),tasks:[{action:'private_launch',
+        idempotency_key:inspectKey,payload:{...original,launch_key:sourceKey,reconcile_only:true}}]}]});
+    const id=String(data?.job?.job_id||'');
+    if(!id)throw new Error('Worker не вернул задачу проверки черновика.');
+    pythonWorkerClearBatchState();pythonWorkerUiState.jobId=id;
+    localStorage.setItem('remask_python_worker_job_v1',id);
+    pythonWorkerUiState.busy=true;
+    await pythonWorkerPoll();
+  }catch(error){
+    button.disabled=false;
+    pythonWorkerSetText('pythonPwStatus',String(error.message||error));
+  }
 }
 
 function pythonWorkerSchedulePoll(delay) {
