@@ -141,7 +141,9 @@ fi
 if [ "$USE_EXTERNAL_PYTHON_WORKER" != "1" ]; then
   (
     cd /opt/remask-python
-    exec /opt/remask-venv/bin/uvicorn main:app --host 127.0.0.1 --port "$PYTHON_WORKER_PORT" --workers 1
+    # PHP and Python share private 0600 files. Use the volume owner so atomic
+    # worker replacements remain readable by PHP without broadening modes.
+    exec runuser -u www-data -- /opt/remask-venv/bin/uvicorn main:app --host 127.0.0.1 --port "$PYTHON_WORKER_PORT" --workers 1
   ) &
   PYTHON_WORKER_PID="$!"
   echo "$PYTHON_WORKER_PID" > "$DATA_DIR/python-worker.pid"
@@ -227,7 +229,7 @@ PY
       echo "[$(date -u +%FT%TZ)] restarting embedded Python worker after health failure" >&2
       (
         cd /opt/remask-python
-        exec /opt/remask-venv/bin/uvicorn main:app --host 127.0.0.1 --port "$PYTHON_WORKER_PORT" --workers 1
+        exec runuser -u www-data -- /opt/remask-venv/bin/uvicorn main:app --host 127.0.0.1 --port "$PYTHON_WORKER_PORT" --workers 1
       ) &
       echo "$!" > "$DATA_DIR/python-worker.pid"
       FAIL_COUNT=0

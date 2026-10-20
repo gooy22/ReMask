@@ -74,6 +74,25 @@ jobs:
           docker exec remask-diagnostic-run sh -c '! command -v chromium && ! command -v chromium-browser'
           docker exec remask-diagnostic-run /opt/remask-venv/bin/python -c "import importlib.util; assert importlib.util.find_spec('playwright') is None"
           docker exec remask-diagnostic-run php -r 'require "/var/www/html/settings.php";require "/var/www/html/classes/AccountStoreFactory.php"; $store=AccountStoreFactory::create(ACCOUNTSFILENAME); assert(is_array($store->deserialize()));'
+      - name: Private worker state remains readable by the PHP account
+        run: |
+          docker exec -u www-data remask-diagnostic-run php -r '$p="/var/lib/remask/workspace-created-businesses.json";if(!is_readable($p)||!is_array(json_decode(file_get_contents($p),true)))exit(1);if((fileperms($p)&0777)!==0600)exit(2);'
+          docker exec -i remask-diagnostic-run /opt/remask-venv/bin/python - <<'PY'
+          import os, pathlib, pwd
+          uid=pwd.getpwnam('www-data').pw_uid
+          workers=[]
+          for process in pathlib.Path('/proc').glob('[0-9]*'):
+              try:
+                  command=(process/'cmdline').read_bytes().split(b'\0')
+                  if len(command)<2 or not command[0].rsplit(b'/',1)[-1].startswith(b'python') or not command[1].endswith(b'/uvicorn'):
+                      continue
+                  ids=next(line.split()[1:] for line in (process/'status').read_text().splitlines() if line.startswith('Uid:'))
+                  workers.append([int(value) for value in ids])
+              except (FileNotFoundError,ProcessLookupError):
+                  continue
+          assert len(workers)==1 and all(value==uid for value in workers[0]),workers
+          print('Embedded worker and PHP use the same private volume identity; mirror mode remains 0600.')
+          PY
       - name: Container logs
         if: always()
         run: docker logs --tail 120 remask-diagnostic-run || true
