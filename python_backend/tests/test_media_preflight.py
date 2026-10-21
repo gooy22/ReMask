@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from PIL import Image
@@ -189,3 +190,55 @@ class NativeMediaPreflightTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(case.client.uploads, 1)
             await case.launch()
             self.assertEqual(case.client.uploads, 1)
+
+
+class MediaInspectionEndpointTests(unittest.IsolatedAsyncioTestCase):
+    async def test_launch_payload_uses_exact_effective_per_target_targeting(self):
+        import main
+        media_id = 'm-' + 'a' * 24
+        facts = {'media_type':'image','encoding':'PNG','mime_type':'image/png',
+                 'width':1080,'height':1920,'aspect_ratio':0.5625,'size_bytes':1024,
+                 'requires_conversion':False}
+        media = SimpleNamespace(id=media_id, inspection=facts,
+            public=lambda:{'id':media_id,'media_type':'image','mime_type':'image/png','size_bytes':1024})
+        payload = {'launch':{
+            'base':{
+                'campaign':{'name':'Campaign'},
+                'adset':{'name':'Ad Set','targeting':{
+                    'publisher_platforms':['facebook'],'facebook_positions':['feed']}},
+                'creative':{'format':'SINGLE','media_library_id':media_id},
+                'ad':{'name':'Ad'}
+            },
+            'override':{'adset':{'targeting':{
+                'publisher_platforms':['instagram'],'instagram_positions':['story']}}}
+        }}
+        with patch('app.private_launch_media.LaunchMediaResolver.resolve',
+                   new=AsyncMock(return_value=[media])):
+            with patch('app.media_preflight.compatibility',
+                       return_value={'locally_valid':True,'warnings':[],'facts':facts}) as checked:
+                result = await main.private_launch_media_inspect(payload)
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['media'][0]['id'], media_id)
+        checked.assert_called_once()
+        args, kwargs = checked.call_args
+        self.assertEqual(args[1], {
+            'publisher_platforms':['instagram'],'instagram_positions':['story']})
+        self.assertEqual(kwargs['creative_format'], 'SINGLE')
+
+    async def test_conversion_required_is_a_structured_block_before_meta(self):
+        import main
+        media_id = 'm-' + 'b' * 24
+        facts = {'media_type':'image','encoding':'WEBP','mime_type':'image/webp',
+                 'width':640,'height':480,'aspect_ratio':4/3,'size_bytes':1024,
+                 'requires_conversion':True}
+        media = SimpleNamespace(id=media_id, inspection=facts,
+            public=lambda:{'id':media_id,'media_type':'image','mime_type':'image/webp','size_bytes':1024})
+        payload = {'creative':{'format':'SINGLE','media_library_id':media_id},'targeting':{}}
+        with patch('app.private_launch_media.LaunchMediaResolver.resolve',
+                   new=AsyncMock(return_value=[media])):
+            with patch('app.media_preflight.compatibility') as checked:
+                result = await main.private_launch_media_inspect(payload)
+        self.assertFalse(result['media'][0]['compatibility']['locally_valid'])
+        self.assertEqual(result['media'][0]['compatibility']['code'],'MEDIA_PREPARATION_REQUIRED')
+        self.assertFalse(result['media'][0]['compatibility']['meta_acceptance_verified'])
+        checked.assert_not_called()
