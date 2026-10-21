@@ -68,6 +68,13 @@ if(strpos($js,'REMASK_FULL_META_LAUNCH_V1')===false){
 let remaskLaunchMetaSchema = null;
 let remaskLaunchMetaPendingBuilder = null;
 
+// The official SDK schema is broader than the reviewed native Ads Manager
+// serializer. Do not offer fields the Python catalog will reject at preflight.
+// Keep this exception list synchronized with ads_manager_http_20261012.json.
+const remaskLaunchUnsupportedNativeFields = {
+    targeting:new Set(['country','excluded_publisher_categories','radius','regions'])
+};
+
 const remaskLaunchCoveredFields = {
     campaign:new Set([
         'name','objective','special_ad_categories','daily_budget','lifetime_budget'
@@ -140,7 +147,9 @@ function remaskRenderLaunchMetaFields() {
         const spec=remaskLaunchMetaSchema[group]||{};
         const fields=spec.fields||{};
         const enums=spec.enums||{};
-        const names=Object.keys(fields).filter(field=>!remaskLaunchCoveredFields[group]?.has(field));
+        const names=Object.keys(fields).filter(field=>
+            !remaskLaunchCoveredFields[group]?.has(field) &&
+            !remaskLaunchUnsupportedNativeFields[group]?.has(field));
 
         const details=document.createElement('details');
         details.dataset.launchMetaGroup=group;

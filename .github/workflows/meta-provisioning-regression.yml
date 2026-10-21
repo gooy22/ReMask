@@ -62,6 +62,8 @@ jobs:
           node tests/launch-batch-review.test.cjs
       - name: Installed Launch UI to PHP targeting bridge
         run: node tests/launch-ui-php-targeting-bridge.test.cjs
+      - name: Installed Launch fields match native Ads serializer
+        run: node tests/launch-native-field-availability.test.cjs
       - name: Bundle media snapshots and delayed restore guards
         run: node --test tests/bundle-media-runtime.test.cjs
       - name: Cookie-only profile interface
