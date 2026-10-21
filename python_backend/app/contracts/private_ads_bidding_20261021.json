@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "revision": "private-ads-bidding-2026-10-21",
+  "checked_live": false,
+  "scope": "Budget-owner and legacy-field serialization, not editor acceptance or account eligibility",
+  "roll_down_fields": [
+    "bid_strategy",
+    "is_autobid",
+    "is_average_price_pacing",
+    "pacing_type"
+  ],
+  "strategies": {
+    "LOWEST_COST_WITHOUT_CAP": {
+      "campaign": {
+        "is_autobid": true,
+        "is_average_price_pacing": false
+      },
+      "adset": {
+        "is_autobid": true,
+        "is_average_price_pacing": false
+      }
+    },
+    "LOWEST_COST_WITH_BID_CAP": {
+      "campaign": {
+        "is_autobid": false,
+        "is_average_price_pacing": false
+      },
+      "adset": {
+        "is_autobid": false,
+        "is_average_price_pacing": false
+      }
+    },
+    "COST_CAP": {
+      "campaign": {
+        "is_autobid": false,
+        "is_average_price_pacing": true
+      },
+      "adset": {
+        "is_autobid": false,
+        "is_average_price_pacing": false
+      }
+    }
+  },
+  "sources": [
+    {
+      "module": "AdsCampaignGroupUtils",
+      "module_sha256": "6b30b7c623049cef4346ec9f41c46740eae2cdced6e1f1c69154f637ea987f13",
+      "source_kind": "supplied_public_cdn_module_export",
+      "artifact_sha256": "c0d74e9d3c121cf531e45a69a2ed0ea3341275407723a9a27db1ddb34a6963c0"
+    },
+    {
+      "module": "AdsCostStrategyUtils",
+      "module_sha256": "4077931cd15b1f89d4c11d56318173f3fb1bff4b664b064e379f2234af1c0c6e",
+      "source_kind": "supplied_public_cdn_module_export",
+      "artifact_sha256": "c0d74e9d3c121cf531e45a69a2ed0ea3341275407723a9a27db1ddb34a6963c0"
+    },
+    {
+      "module": "AdsCampaignGroupBudgetMutationUtils",
+      "module_sha256": "36bc9e44a93e8f9509e7e22546cb6886410bbbfcdc674ccaf6919187e78b721e",
+      "source_kind": "supplied_public_cdn_module_export",
+      "artifact_sha256": "c0d74e9d3c121cf531e45a69a2ed0ea3341275407723a9a27db1ddb34a6963c0"
+    },
+    {
+      "module": "AdsUEditorCampaignDeliverySelectors",
+      "module_sha256": "817edc95d0ba95b01ed4b05239d426e32b44ecb3e6fdcb17c1ebf39ab78eb883",
+      "source_kind": "supplied_public_cdn_module_export",
+      "artifact_sha256": "c0d74e9d3c121cf531e45a69a2ed0ea3341275407723a9a27db1ddb34a6963c0"
+    },
+    {
+      "module": "AdsLiveCreationDataManager",
+      "module_sha256": "9143a8b8d4e4f7f1a904bcafadda13c2aa70bb065a08b341ff2cf1717a9dbf92",
+      "source_kind": "supplied_public_cdn_module_export",
+      "artifact_sha256": "c0d74e9d3c121cf531e45a69a2ed0ea3341275407723a9a27db1ddb34a6963c0"
+    }
+  ]
+}

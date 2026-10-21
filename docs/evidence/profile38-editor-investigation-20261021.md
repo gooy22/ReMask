@@ -188,3 +188,63 @@ Local validation: 176 private-advertising tests passed, including the exact
 1815857/bid_amount rejection, missing error details, unsettled reads, no POST
 replay, and unchanged selected objective/bid strategy; worker UI JS tests passed.
 These are regression tests, not live editor or publication acceptance.
+
+
+### Budget-owner bidding serialization correction (continuation)
+
+Current GitHub baseline was refreshed to main
+`90f0f49ef2ec3c1b55b32aeaea7901624a7b9289` (PR #221). The previously prepared
+local diagnostic changes were superseded by PRs #220/#221 and were not replayed.
+No new Meta mutation was sent in this continuation.
+
+A confirmed implementation mismatch is now covered: ObjectiveContract validated
+only Ad Set.bid_strategy, including for Campaign-budget configurations. The
+creation serializer sent that Ad Set choice but no Campaign strategy or legacy
+booleans. The retained profile-38 intent has Campaign.daily_budget=500 and only
+Ad Set.bid_strategy=LOWEST_COST_WITHOUT_CAP. The previous real native validation
+error 1815857 names bid_amount. That error is evidence to investigate bidding;
+it does not prove that the correction clears Meta validation or the separate
+unsupported-objective editor error.
+
+Reviewed supplied Meta editor source provides the exact model rules:
+
+- AdsUEditorCampaignDeliverySelectors selects CampaignGroup fields when
+  hasBudget_LEGACY is true; otherwise it selects Campaign (Ad Set) fields.
+- AdsCampaignGroupUtils enumerates bid_strategy, is_autobid,
+  is_average_price_pacing and pacing_type as rolled-down fields.
+- AdsCampaignGroupBudgetMutationUtils.setCampaignGroupBidStrategyAndLegacyFlags
+  sets the Campaign strategy and booleans together. For WITHOUT_CAP: true/false;
+  WITH_BID_CAP: false/false; COST_CAP: false/true.
+- Its resetCampaignWhenCampaignGroupBudgetEnabled removes these fields from the
+  Ad Set. A capped bid_amount stays on the Ad Set; WITHOUT_CAP deletes it.
+- AdsLiveCreationDataManager.__createCampaignGroup passes bid_strategy, is_autobid
+  and is_average_price_pacing directly into createFragment("campaign", values).
+  This connects the reviewed model fields to the actual draft-creation path.
+- AdsCostStrategyUtils.getBidLegacyFieldsValueByBidStrategy supplies the separate
+  Ad Set booleans (COST_CAP uses false/false there). These contexts are not merged.
+
+The versioned private_ads_bidding_20261021.json and offline source fixture pin all
+five complete module factories and the supplied export artifact hash. The new
+serializer copies the original selection, transfers strategy/pacing to its
+budget-owning level, writes the exact reviewed legacy booleans, and never inserts
+an arbitrary bid amount. Contradictory explicit strategies/flags/pacing fail
+before bootstrap or media. Objective, optimization, budget, targeting, Page and
+creative remain unchanged. The original Launch fingerprint is unchanged; the
+native submitted binding and new serializer/manifest digest remain journaled.
+Historical accepted publication recovery retains its predecessor's original
+serializer and read-only restriction. Existing retained drafts are not rewritten
+or resubmitted by this change.
+
+Local verification: 185 private-advertising tests passed, including 9 new bidding
+cases, replay/restart recovery, fresh native-binding reads and DRAFT payment/POST
+guards. Launch catalog, multi-account batch-review and worker UI JS tests passed.
+These tests are offline; live editor acceptance and live error clearance remain
+UNVERIFIED. OUTCOME_TRAFFIC was not replaced and no ODAX flag was added.
+
+Current external access limitation: the local Browser tool reports that it
+requires the originating browser context. Both connected Railway identities
+return no required viewer role for the exact existing service. The operator's
+personal Facebook session is prohibited and is not used. No alternative account,
+secret extraction, browser-auth bypass, deployment or Meta mutation was attempted
+through those denied paths. Current production revision after PR #221 remains
+unconfirmed until authorized service/browser access returns.

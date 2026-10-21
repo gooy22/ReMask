@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 
 from .private_ads_draft import fail, identity
+from .private_ads_bidding import native_bidding
 
 MANIFEST = Path(__file__).with_name("contracts") / "private_ads_objectives_20261021.json"
 
@@ -53,15 +54,7 @@ class ObjectiveContract:
                 identity(promoted["custom_conversion_id"])
         elif promoted:
             raise fail("PROMOTED_OBJECT_INCOMPATIBLE", "Selected promoted object is unsupported for this optimization; review it explicitly")
-        strategy = adset.get("bid_strategy", "LOWEST_COST_WITHOUT_CAP")
-        if strategy not in {"LOWEST_COST_WITHOUT_CAP", "LOWEST_COST_WITH_BID_CAP", "COST_CAP"}:
-            raise fail("BID_STRATEGY_UNSUPPORTED", "Selected bid strategy is unsupported in this creation flow")
-        amount = adset.get("bid_amount")
-        if strategy in {"LOWEST_COST_WITH_BID_CAP", "COST_CAP"}:
-            if type(amount) is not int or amount <= 0:
-                raise fail("BID_AMOUNT_REQUIRED", "Selected bid strategy requires a positive integer bid amount")
-        elif amount is not None:
-            raise fail("BID_AMOUNT_INCOMPATIBLE", "Selected bid amount requires a capped bid strategy")
+        _, _, bidding = native_bidding(campaign, adset)
         targeting = adset.get("targeting")
         if not isinstance(targeting, dict) or not isinstance(targeting.get("geo_locations"), dict) or not targeting["geo_locations"]:
             raise fail("GEO_REQUIRED", "Select advertising geography before creation")
@@ -70,4 +63,5 @@ class ObjectiveContract:
             raise fail("AGE_INVALID", "Advertising ages must be ordered integers between 18 and 65")
         return {"revision": self.data["revision"], "compatible": True,
                 "selected_objective": objective,
+                "bidding": bidding,
                 "account_eligibility_verified": False, "editor_verified": False}
