@@ -91,4 +91,3 @@ class PublicationUpgradeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_SAVED_OPERATION_MISMATCH')
         self.assertEqual(len(self.client.posts), before)
         self.assertEqual(before, 4)
-
