@@ -144,11 +144,14 @@ class AdsManagerLaunch:
             "missing_contracts": [], "protocol": "private_ads_manager_versioned",
             "launch": launch, "launch_fingerprint": fingerprint, "source_revision": SOURCE_REVISION}
 
-    async def _preflight(self, client, web, payload, target):
+    async def _preflight(self, client, web, payload, target, *, publication_required=False):
         from .private_launch import _payment_selector, _safe_payment_methods, _select_payment_method
         from .static_payment_read import inspect_methods, complete_methods
         from .private_launch import _effective_launch_payload
-        draft_only = _effective_launch_payload(payload.get("launch")).get("execution_mode") == "DRAFT"
+        # Status-only delivery requests need no creation configuration. An
+        # activation always requires publication gates, even if its caller
+        # includes a stale DRAFT label in the original Launch configuration.
+        draft_only = not publication_required and _effective_launch_payload(payload.get("launch")).get("execution_mode") == "DRAFT"
         account = target["ad_account_id"]
         fields = ["id", "account_id", "account_status", "business"]
         if not draft_only:

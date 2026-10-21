@@ -119,7 +119,7 @@ async def run_delivery(launch, *, profile_id, context, session, payload, task_id
     if launch.owner._inventory_row(context, target["business_id"], target["ad_account_id"]) is None:
         raise fail("ACCOUNT_CONTEXT_UNAVAILABLE", "Delivery account is absent from profile inventory")
     if "ACTIVE" in desired.values():
-        proof = await launch._preflight(client, web, payload, target)
+        proof = await launch._preflight(client, web, payload, target, publication_required=True)
         if proof["payment_selection_required"]:
             raise fail("PAYMENT_SELECTION_REQUIRED", "Choose the fresh linked payment method before activation")
     else:
@@ -137,6 +137,9 @@ async def run_delivery(launch, *, profile_id, context, session, payload, task_id
     for section in order:
         operation = "DELIVERY_" + section.upper()
         prior = await state.step(key, OperationKey("ADS_MANAGER:" + operation + "_FRAGMENT"))
+        published = await state.step(key, OperationKey("ADS_MANAGER:" + operation + "_PUBLISH"))
+        if published is not None and prior is None:
+            raise fail("SAVED_OPERATION_MISMATCH", "Delivery publication has no saved status fragment")
         saved = (prior or {}).get("result", {}).get("evidence", {}).get("receipt", {})
         old = saved.get("old_status") if prior else rows[section]["status"]
         if not prior and old == desired[section]:
@@ -149,19 +152,36 @@ async def run_delivery(launch, *, profile_id, context, session, payload, task_id
         params["values"][0]["old_value"] = old
         receipt = await sender.submit(client, operation=operation + "_FRAGMENT",
             path="/" + draft_id + "/addraft_fragments", params=params,
-            receipt=lambda row: {"fragment_id": identity(row.get("id")), "old_status": old})
-        fragment = await client.get("/addraftfragment_" + receipt["fragment_id"], {"fields": FRAGMENT_FIELDS})
-        if (fragment.get("id") != receipt["fragment_id"] or fragment.get("account_id") != target["ad_account_id"]
-                or fragment.get("ad_draft_id") != draft_id or fragment.get("ad_object_id") != entities[section + "_id"]
-                or fragment.get("ad_object_type") != level):
-            raise fail("DELIVERY_FRAGMENT_MISMATCH", "Status fragment does not belong to the saved advertising object")
-        if not fragment_values_match(fragment.get("values"), {"status": desired[section]},
-                business_id=target["business_id"], old_values={"status": old}):
-            raise fail("DELIVERY_FRAGMENT_MISMATCH", "Status fragment differs from the requested delivery")
-        await publisher._confirm(operation + "_FRAGMENT", {"fragment_id": receipt["fragment_id"]})
+            receipt=lambda row: {"fragment_id": identity(row.get("id")), "old_status": old},
+            saved_only=published is not None)
+        if published is not None:
+            # Accepted publication may consume the temporary fragment. Its
+            # confirmed journal binds the exact request; current proof comes
+            # from publication status and independent object reads below.
+            verified = (prior or {}).get("result", {}).get("evidence", {}).get("verification", {})
+            if (not prior or prior.get("status") != "SUCCESS" or verified.get("verified") is not True
+                    or verified.get("source") != "independent_private_ads_http"
+                    or verified.get("fragment_id") != receipt["fragment_id"]
+                    or verified.get("meta_validation_status") != "VALIDATED"):
+                raise fail("SAVED_OPERATION_MISMATCH", "Delivery publication has no validated matching status fragment")
+        else:
+            fragment = await client.get("/addraftfragment_" + receipt["fragment_id"], {"fields": FRAGMENT_FIELDS})
+            if (fragment.get("id") != receipt["fragment_id"] or fragment.get("account_id") != target["ad_account_id"]
+                    or fragment.get("ad_draft_id") != draft_id or fragment.get("ad_object_id") != entities[section + "_id"]
+                    or fragment.get("ad_object_type") != level):
+                raise fail("DELIVERY_FRAGMENT_MISMATCH", "Status fragment does not belong to the saved advertising object")
+            if not fragment_values_match(fragment.get("values"), {"status": desired[section]},
+                    business_id=target["business_id"], old_values={"status": old}):
+                raise fail("DELIVERY_FRAGMENT_MISMATCH", "Status fragment differs from the requested delivery")
+            if fragment.get("active_errors") or fragment.get("validation_status") == "HAS_ERRORS":
+                raise fail("VALIDATION_ERRORS", "Meta rejected the " + section + " delivery fragment")
+            if fragment.get("validation_status") != "VALIDATED":
+                raise fail("VALIDATION_PENDING", "Meta has not validated the " + section + " delivery fragment; resume its saved read", True)
+            await publisher._confirm(operation + "_FRAGMENT", {"fragment_id": receipt["fragment_id"],
+                "meta_validation_status": "VALIDATED"})
         publication = await sender.submit(client, operation=operation + "_PUBLISH",
             path="/" + draft_id + "/publish", params=publish_params([receipt["fragment_id"]]),
-            receipt=publication_receipt)
+            receipt=publication_receipt, saved_only=published is not None)
         for attempt in range(12):
             response = await client.get("/addraft_" + draft_id + "/addraft_publish_statuses",
                 {"async_request_set_ids": [publication["operation_id"]], "fields": PUBLISH_FIELDS, "date_format": "U"})
