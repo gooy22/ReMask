@@ -811,6 +811,116 @@ class InstalledLaunchTests(unittest.TestCase):
         self.assertNotIn('execution_mode', published['launch']['base'])
         self.assertFalse(any(row['action']=='create' for row in self.worker_requests))
 
+    def test_installed_video_ui_native_draft_publish_recovery(self):
+        """Installed Media Library video -> native upload, thumbnail, Ad and restart."""
+        import asyncio
+        from concurrent.futures import ThreadPoolExecutor
+        from unittest.mock import AsyncMock, patch
+        from app.private_launch import PrivateLaunchStateStore
+        from app.private_launch_media import LocalMedia
+        from tests import test_private_ads_launch as image_fixture
+
+        self.page.wait_for_function('fixtureLaunch.ready()')
+        self.page.locator('#creativeLibrarySelect').select_option('preset')
+        snapshot=self.page.evaluate('fixtureLaunch.capture()')
+        snapshot['fields'].update(creativeFormat='SINGLE',message='Video creative text',
+            headline='Video headline',description='Video description',
+            destinationUrl='https://example.com/video',cta='LEARN_MORE')
+        snapshot['media']={'format':'SINGLE','media_library_id':MEDIA_ID}
+        self.page.evaluate('(data)=>fixtureLaunch.restore(data)',snapshot)
+        self.page.evaluate('fixtureSingleTarget("act_111111","222222")')
+        self.page.locator('#page option[value="555555"]').wait_for(state='attached')
+        self.page.locator('#page').select_option('555555')
+        self.page.evaluate('fixtureLaunch.geo()')
+        self.page.locator('#remaskPrivateExecutionMode').select_option('DRAFT')
+        rows=self.page.evaluate('fixtureLaunch.preparedRows()')
+        self.assertEqual(len(rows),1)
+        row=rows[0]
+        self.assertEqual((row['profile'],row['business_id'],row['ad_account_id'],row['page_id']),
+            ('20','222222','111111','555555'))
+        creative=row['launch']['base']['creative']
+        self.assertEqual(creative['format'],'SINGLE')
+        self.assertEqual(creative['media_library_id'],MEDIA_ID)
+        payload={key:row[key] for key in ('business_id','ad_account_id','page_id')}
+        payload.update(launch_key='ui-video-draft',launch=row['launch'])
+
+        class NativeVideoClient(image_fixture.ImageClient):
+            def __init__(self):
+                super().__init__()
+                self.video_phases=[]
+                self.video_size=0
+            async def post(self,path,params,*,before_submit,files=None,multipart=False):
+                if not path.endswith('/advideos'):
+                    return await super().post(path,params,before_submit=before_submit,files=files)
+                await before_submit()
+                phase=params['upload_phase']
+                self.video_phases.append(phase)
+                if phase=='start':
+                    self.video_size=int(params['file_size'])
+                    return {'upload_session_id':'888888','video_id':'999999',
+                            'start_offset':'0','end_offset':str(self.video_size)}
+                if phase=='transfer':
+                    self.assert_video_bytes=files['video_file_chunk'][1]
+                    return {'start_offset':str(self.video_size),'end_offset':str(self.video_size)}
+                if phase=='finish':
+                    return {'video_id':'999999'}
+                raise AssertionError('Unexpected video upload phase')
+            async def get(self,path,params):
+                if path=='/act_111111/advideos':
+                    return {'data':[{'id':'999999'}]}
+                if path=='/999999':
+                    return {'id':'999999','status':{'video_status':'ready'},
+                            'thumbnails':{'data':[{'uri':'https://example.com/video-thumb.jpg',
+                                                  'is_preferred':True}]}}
+                return await super().get(path,params)
+
+        async def execute_native():
+            case=image_fixture.LaunchTests('test_existing_launch_entrypoint_uploads_image_publishes_and_verifies')
+            await case.asyncSetUp()
+            try:
+                original=case.media
+                local=LocalMedia(MEDIA_ID,original.sha256,original.size_bytes,
+                                 'video','video/mp4',original.path)
+                case.payload=payload
+                case.client=NativeVideoClient()
+                with patch('app.private_ads_launch.AdsManagerPrivateHttp.open',
+                           new=AsyncMock(return_value=case.client)), \
+                     patch('app.private_launch_media.LaunchMediaResolver.resolve',
+                           new=AsyncMock(return_value=[local])):
+                    async def run():
+                        return await case.owner.run(item_id='browser-video',profile_id='20',
+                            context=case.context,session=case.session,payload=case.payload)
+                    draft=await run()
+                    self.assertTrue(draft['draft_verified'])
+                    self.assertFalse(draft['published'])
+                    self.assertEqual(case.client.video_phases,['start','transfer','finish'])
+                    self.assertEqual(case.client.assert_video_bytes,local.path.read_bytes())
+                    self.assertEqual(len(case.client.posts),4)
+                    ad=next(row for row in case.client.fragments.values() if row['ad_object_type']=='ad')
+                    creative_spec=next(value['new_value'] for value in ad['values'] if value['field']=='creative')
+                    story=creative_spec['object_story_spec']
+                    self.assertEqual(story['page_id'],'555555')
+                    video=story['video_data']
+                    self.assertEqual(video['video_id'],'999999')
+                    self.assertEqual(video['image_url'],'https://example.com/video-thumb.jpg')
+                    self.assertEqual(video['message'],creative['message'])
+                    self.assertEqual(video['call_to_action']['value']['link'],creative['link'])
+                    case.payload['publish_saved_draft']=True
+                    published=await run()
+                    self.assertTrue(published['published'])
+                    self.assertTrue(published['verified'])
+                    self.assertFalse(published['delivery_running_verified'])
+                    self.assertEqual(published['draft_id'],draft['draft_id'])
+                    self.assertEqual(len(case.client.posts),5)
+                    case.owner.state=PrivateLaunchStateStore(case.owner.state.path)
+                    self.assertTrue((await run())['verified'])
+                    self.assertEqual(case.client.video_phases,['start','transfer','finish'])
+                    self.assertEqual(len(case.client.posts),5)
+            finally:
+                case.doCleanups()
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pool.submit(lambda: asyncio.run(execute_native())).result(timeout=90)
+
     def test_installed_carousel_ui_native_draft_publish_recovery(self):
         """Installed carousel control -> selected ordered media -> native draft/publish."""
         import asyncio
