@@ -809,6 +809,143 @@ class InstalledLaunchTests(unittest.TestCase):
         self.assertNotIn('execution_mode', published['launch']['base'])
         self.assertFalse(any(row['action']=='create' for row in self.worker_requests))
 
+    def test_installed_ui_php_python_draft_publish_and_sqlite_restart(self):
+        """Actual installed Launch form -> PHP bridge -> Python native drafts.
+
+        Browser and PHP/worker are real application components. Only HTTP
+        responses from external Meta and the local worker listener are fake.
+        No advertising delivery or payment authorization can be dispatched.
+        """
+        import asyncio
+        import os
+        import socket
+        import threading
+        import time
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        from unittest.mock import AsyncMock, patch
+        from app.private_launch import PrivateLaunchStateStore
+        from app.private_launch_media import LocalMedia
+        from tests import test_private_ads_launch as launch_fixtures
+
+        received=[]
+        class LocalWorker(BaseHTTPRequestHandler):
+            def log_message(self,*args): pass
+            def do_POST(self):
+                self_server=self.server
+                if self.path!='/api/v1/jobs':
+                    self.send_error(404);return
+                n=int(self.headers.get('Content-Length','0'))
+                received.append(json.loads(self.rfile.read(n)))
+                body=json.dumps({'job_id':'offline-e2e-job'}).encode()
+                self.send_response(200);self.send_header('Content-Type','application/json')
+                self.send_header('Content-Length',str(len(body)))
+                self.end_headers();self.wfile.write(body)
+
+        worker=ThreadingHTTPServer(('127.0.0.1',0),LocalWorker)
+        threading.Thread(target=worker.serve_forever,daemon=True).start()
+        with socket.socket() as sock:
+            sock.bind(('127.0.0.1',0));php_port=sock.getsockname()[1]
+        env=os.environ.copy()
+        env.update(REMASK_INTERNAL_KEY='remask-fixture-only',
+            REMASK_PYTHON_WORKER_URL='http://127.0.0.1:'+str(worker.server_port))
+        php=subprocess.Popen(['php','-S','127.0.0.1:'+str(php_port),'-t',str(self.root)],
+            env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        try:
+            for _ in range(70):
+                try:
+                    with socket.create_connection(('127.0.0.1',php_port),timeout=.1):
+                        break
+                except OSError:
+                    if php.poll() is not None:
+                        self.fail('Installed PHP worker bridge did not start')
+                    time.sleep(.05)
+            else:self.fail('Installed PHP worker bridge startup timeout')
+            self.e2e_php_url='http://127.0.0.1:'+str(php_port)+'/ajax/pythonWorkerJobs.php'
+            self.page.wait_for_function('fixtureLaunch.ready()')
+            self.page.locator('#creativeLibrarySelect').select_option('preset')
+            self.page.evaluate('fixtureSingleTarget("act_111111","222222")')
+            self.page.locator('#page option[value="555555"]').wait_for(state='attached')
+            self.page.locator('#page').select_option('555555')
+            self.page.evaluate('fixtureLaunch.geo()')
+            self.page.locator('#launchDeliverySelect').select_option('PAUSED')
+            self.review_ready=True
+            self.page.locator('#launchButton').click()
+            self.page.wait_for_function('document.querySelector("#launchResult").textContent.includes("Задача принята")')
+            self.assertEqual(len(received),1,'PHP must forward exactly one worker batch')
+            body=received[0]
+            self.assertEqual(len(body['profiles']),1)
+            task=body['profiles'][0]['tasks'][0]
+            self.assertEqual(task['action'],'private_launch')
+            self.assertEqual(body['profiles'][0]['profile_id'],'20')
+            target=task['payload']
+            self.assertEqual([target['business_id'],target['ad_account_id'],target['page_id']],
+                ['222222','111111','555555'])
+            self.assertEqual(target['launch']['base']['campaign']['objective'],'OUTCOME_TRAFFIC')
+            self.assertEqual(target['launch']['base']['execution_mode'],'DRAFT')
+            self.assertEqual(target['launch']['base']['delivery'],
+                {'campaign':'PAUSED','adset':'PAUSED','ad':'PAUSED'})
+
+            async def through_python():
+                case=launch_fixtures.LaunchTests(
+                    'test_existing_launch_entrypoint_uploads_image_publishes_and_verifies')
+                await case.asyncSetUp()
+                try:
+                    original_media=case.media
+                    local=LocalMedia(MEDIA_ID,original_media.sha256,original_media.size_bytes,
+                        original_media.media_type,original_media.mime_type,original_media.path)
+                    case.payload=target
+                    case.payload['launch_key']=task['idempotency_key']
+                    source_intent=json.loads(json.dumps(case.payload))
+                    with patch('app.private_launch_media.LaunchMediaResolver.resolve',
+                               new=AsyncMock(return_value=[local])):
+                        async def execute():
+                            return await case.owner.run(item_id='offline-e2e',profile_id='20',
+                                context=case.context,session=case.session,payload=case.payload)
+                        draft=await execute()
+                        self.assertTrue(draft['draft_verified'])
+                        self.assertFalse(draft['published'])
+                        self.assertEqual(len(case.client.posts),4)
+                        self.assertEqual(case.client.uploads,1)
+                        self.assertEqual(case.payload,source_intent)
+                        self.assertEqual(set(row['ad_object_type'] for row in case.client.fragments.values()),
+                            {'campaign','ad_set','ad'})
+                        ad=next(row for row in case.client.fragments.values()
+                                if row['ad_object_type']=='ad')
+                        story=next(value['new_value'] for value in ad['values']
+                                   if value['field']=='creative')
+                        self.assertEqual(story['object_story_spec']['page_id'],'555555')
+                        self.assertEqual(story['object_story_spec']['link_data']['message'],
+                                         source_intent['launch']['base']['creative']['message'])
+                        self.assertEqual(story['object_story_spec']['link_data']['link'],
+                                         source_intent['launch']['base']['creative']['link'])
+                        case.payload['publish_saved_draft']=True
+                        published=await execute()
+                        self.assertTrue(published['published'])
+                        self.assertTrue(published['verified'])
+                        self.assertFalse(published['delivery_running_verified'])
+                        self.assertEqual(published['draft_id'],draft['draft_id'])
+                        self.assertEqual(published['entities']['campaign_id'],draft['draft_objects']['campaign'])
+                        self.assertEqual(published['entities']['adset_id'],draft['draft_objects']['ad_set'])
+                        self.assertEqual(published['entities']['ad_id'],draft['draft_objects']['ad'])
+                        self.assertEqual(published['entities']['creative_id'],'777774')
+                        count=len(case.client.posts)
+                        case.owner.state=PrivateLaunchStateStore(case.owner.state.path)
+                        recovered=await execute()
+                        self.assertTrue(recovered['verified'])
+                        self.assertEqual(len(case.client.posts),count)
+                        self.assertEqual(case.client.uploads,1)
+                finally:
+                    case.doCleanups()
+            asyncio.run(through_python())
+        finally:
+            if php.poll() is None:
+                php.terminate()
+                try:php.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    php.kill();php.wait(timeout=5)
+            worker.shutdown();worker.server_close()
+            self.e2e_php_url=None
+
     def test_single_rk_cleared_page_cannot_reuse_payload_or_create_job(self):
         self.prepare_single_page_launch()
         self.page.locator('#page').select_option('')
