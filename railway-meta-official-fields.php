@@ -127,7 +127,9 @@ final class MetaOfficialFields
         );
 
         $targeting = is_array($payload['adset']['targeting'] ?? null) ? $payload['adset']['targeting'] : [];
-        $payload['adset']['targeting'] = array_replace_recursive($targeting, $builder['targeting']);
+        // Each targeting field is one selected value. Recursive array merges
+        // retain stale flexible_spec groups, placements and geo subconditions.
+        $payload['adset']['targeting'] = array_replace($targeting, $builder['targeting']);
 
         $payload['creative'] = is_array($payload['creative'] ?? null) ? $payload['creative'] : [];
         foreach ($builder['identity'] as $key => $value) {
