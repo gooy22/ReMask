@@ -3,6 +3,27 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const {webcrypto} = require('node:crypto');
 const source = fs.readFileSync('railway-python-worker-ui.js', 'utf8');
+// Read-only inspection must show Meta rejection independently of job SUCCESS.
+{
+  const scope={};vm.createContext(scope);
+  const begin=source.indexOf('function pythonWorkerDraftValidationMessages(');
+  vm.runInContext(source.slice(begin,source.indexOf('\nfunction pythonWorkerEl',begin)),scope);
+  const result={fragment_reads:[{level:'campaign',validation_status:'VALIDATED'},
+    ...['ad_set','ad'].map(level=>({level,validation_status:'HAS_ERRORS',
+      active_error_diagnostic:{codes:[{field:'error_code',value:1815857},{value:1815857},
+        {value:'SECRET'},{value:true},{value:-1}],field_names:['bid_amount','<script>SECRET</script>']}}))],
+    object_reads:[{level:'campaign',available:false,diagnostic:{code:10}}]};
+  const messages=scope.pythonWorkerDraftValidationMessages(result);
+  assert.equal(messages.length,3);
+  assert.match(messages[0],/Группа объявлений.*1815857.*bid_amount/);
+  assert.match(messages[1],/Объявление.*1815857.*bid_amount/);
+  assert.match(messages[2],/не доказывает их отсутствие или публикацию/);
+  assert.equal(messages.join('').includes('SECRET'),false);
+  assert.equal(messages[0].split('1815857').length,2);
+  assert.equal(scope.pythonWorkerDraftValidationMessages({}).length,0);
+  assert.equal(scope.pythonWorkerDraftValidationMessages({fragment_reads:[
+    {level:'__proto__',validation_status:'HAS_ERRORS'}]}).length,0);
+}
 // A draft inspection must address the retained intent and never become a new Launch.
 (async()=>{
   const calls=[];let polls=0;

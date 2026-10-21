@@ -93,8 +93,14 @@ class AdsManagerDraftPublisher:
                     raise fail("READ_RELATION_MISMATCH", "Draft fragment identity or parent is unconfirmed")
                 if not fragment_values_match(row.get("values"), values, business_id=scope["business_id"]):
                     raise fail("READ_SPEC_MISMATCH", "Saved draft settings differ from this Launch")
-                if row.get("active_errors"):
+                # Meta can expose HAS_ERRORS before returning its error list.
+                # A stored fragment is not a settled, valid configuration.
+                if row.get("active_errors") or row.get("validation_status") == "HAS_ERRORS":
                     raise fail("VALIDATION_ERRORS", "Meta returned active validation errors for the " + level + " draft")
+                if row.get("validation_status") != "VALIDATED":
+                    # Keep the accepted receipt. A retry reads this exact
+                    # fragment through the original intent, without POST replay.
+                    raise fail("VALIDATION_PENDING", "Meta has not confirmed validation of the " + level + " draft; resume its saved read", True)
                 objects[level] = identity(row.get("ad_object_id"))
                 if objects[level] in list(objects.values())[:-1]:
                     raise fail("READ_RELATION_MISMATCH", "Draft levels have duplicate object identities")
