@@ -1339,12 +1339,25 @@ class PrivateLaunchService:
             add("conversion_goals",promoted.get("custom_conversion_id"))
         targeting = launch["adset"].get("targeting") or {}
         if isinstance(targeting,dict):
-            for field in ("custom_audiences","excluded_custom_audiences"):
-                items = targeting.get(field) or []
-                if not isinstance(items,list):
-                    raise ProvisioningError("PRIVATE_LAUNCH_ASSET_INVALID", "Audience selection must be a list",retryable=False)
-                for item in items:
-                    add("custom_audiences",item.get("id") if isinstance(item,dict) else item)
+            # Account-owned selections also occur inside logical groups and
+            # exclusions. Collect their IDs without flattening or rewriting
+            # targeting; every ID needs the same exact-account inventory read.
+            pending, seen = [targeting], set()
+            while pending:
+                node = pending.pop()
+                if not isinstance(node, (dict, list)) or id(node) in seen:
+                    continue
+                seen.add(id(node))
+                if isinstance(node, list):
+                    pending.extend(node)
+                    continue
+                for field in ("custom_audiences", "excluded_custom_audiences"):
+                    items = node.get(field) or []
+                    if not isinstance(items, list):
+                        raise ProvisioningError("PRIVATE_LAUNCH_ASSET_INVALID", "Audience selection must be a list", retryable=False)
+                    for item in items:
+                        add("custom_audiences", item.get("id") if isinstance(item, dict) else item)
+                pending.extend(node.values())
         return selected
 
     async def _verify_assets(self, web, selections, values):

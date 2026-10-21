@@ -8,10 +8,11 @@ from app.private_launch_extensions import OperationKey
 from app.provisioning.models import ProvisioningError
 from tests import test_private_ads_launch as fixtures
 
-# Computed from exact main b23917a and PR #229 head 638d773 source trees.
+# Computed from the reviewed source trees; only accepted-publication READs.
 REVIEWED_NATIVE_SENDERS = (
     'cb9b5fd76c6b9079d9584818a085848df404239437989499cd27f284f11e9353',
     '0ddf56b2f696365f7cad55886598a7dc95a1a89ba021839f0fb669df4add2c62',
+    '55cf50aa8acfb55401f75100085b8a41eeb9fc02e4b81458d311e10807f235c3',
 )
 
 
