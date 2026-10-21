@@ -49,8 +49,9 @@ class AdsManagerLaunch:
         digest.update(self.objective_wire.digest.encode())
         digest.update(BIDDING_MANIFEST.read_bytes())
         digest.update(Path(__file__).with_name('contracts').joinpath('media_layout_20261021.json').read_bytes())
+        digest.update(Path(__file__).with_name('contracts').joinpath('private_ads_cta_20261021.json').read_bytes())
         for name in ("private_ads_launch.py", "private_ads_http.py", "private_ads_draft.py",
-                     "private_ads_state.py", "private_ads_media.py", "private_ads_publication.py", "private_launch_media.py", "media_preflight.py",
+                     "private_ads_state.py", "private_ads_media.py", "private_ads_publication.py", "private_launch_media.py", "media_preflight.py", "private_ads_cta.py",
                      "private_ads_verify.py", "private_ads_creative.py", "private_ads_video.py", "private_ads_delivery.py", "private_ads_catalog.py", "private_ads_reads.py", "private_draft_pages.py", "private_ads_resources.py", "private_ads_helpers.py", "private_ads_preview.py", "private_ads_objectives.py", "private_ads_inspect.py", "private_ads_bidding.py", "private_ads_objective_wire.py", "private_ads_objective_repair.py"):
             digest.update(name.encode() + b"\0" + Path(__file__).with_name(name).read_bytes())
         self.source_digest = digest.hexdigest()
@@ -119,6 +120,8 @@ class AdsManagerLaunch:
         self.objectives.validate(launch)
         campaign_values, adset_values, _ = native_bidding(launch["campaign"], launch["adset"])
         self.catalog.validate_values(launch)
+        from .private_ads_cta import validate_cta
+        validate_cta(launch)
         campaign_values = self.objective_wire.campaign(campaign_values)
         placeholders = [{"image_hash": "planned-image-hash"}] * (len(creative["carousel_cards"])
                         if creative.get("format") == "CAROUSEL" else 1)

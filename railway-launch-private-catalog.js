@@ -427,6 +427,9 @@ async function remaskPrivatePrepareConfig() {
             if(key)creative[key]=String(selected[selected.type]||'');
         }
     }else if(format==='INSTAGRAM_POST'){
+        // Existing post identity includes its CTA; the disabled local control
+        // is a preference for other formats, not an override for that post.
+        delete creative.call_to_action;
         const mediaId=String($('instagramMediaId')?.value||creative.source_instagram_media_id||'').trim();
         if(mediaId)creative.source_instagram_media_id=mediaId;
     }

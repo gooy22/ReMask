@@ -155,7 +155,8 @@ try {
 
         $format = cl100_format((string)($_POST['format'] ?? 'SINGLE'));
         $cta = strtoupper(cl100_string('cta', 50));
-        $allowedCta = ['LEARN_MORE','SIGN_UP','APPLY_NOW','CONTACT_US','SHOP_NOW','GET_OFFER'];
+        // Templates may retain an unavailable saved CTA. Launch validates its
+        // executable Creative/destination policy before any remote mutation.
         if (!preg_match('/^[A-Z][A-Z0-9_]{0,49}$/D', $cta)) throw new InvalidArgumentException('Invalid call-to-action type.');
 
         $destination = cl100_string('destination_url', 2000);
