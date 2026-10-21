@@ -51,4 +51,18 @@ $validated=MetaOfficialFields::validateAndNormalizePayload($fromUi);
 assert_budget($validated['campaign']['daily_budget']===1500, 'Selected UI budget lost in PHP builder');
 assert_budget($validated['adset']['targeting']['exclusions']['interests'][0]['id']==='123456',
     'Selected targeting lost during budget normalization');
+// Empty advanced creative options must not become a JSON list at the PHP
+// boundary. The native Python adapter requires an object if present.
+$withEmptyCreative=MetaOfficialFields::applyBuilderToPayload(
+    fixture_budget('campaign','daily_budget',1200),
+    ['creative'=>[]]
+);
+assert_budget(!array_key_exists('official_params',$withEmptyCreative['creative']),
+    'Empty advanced Creative controls must not become a PHP [] / JSON array.');
+$withCreative=MetaOfficialFields::applyBuilderToPayload(
+    fixture_budget('campaign','daily_budget',1200),
+    ['creative'=>['degrees_of_freedom_spec'=>['creative_features_spec'=>[]]]]
+);
+assert_budget(isset($withCreative['creative']['official_params']['degrees_of_freedom_spec']),
+    'Valid advanced Creative controls must retain their selected object.');
 echo "Meta official Launch budget parser preserves exact integers and rejects lossy inputs.\n";
