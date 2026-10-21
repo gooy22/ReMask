@@ -101,6 +101,8 @@ jobs:
       - name: Worker and persistent storage readiness
         run: php tests/readiness.test.php
 
+      - name: Exact UI to PHP advertising budget values
+        run: php tests/meta-official-budget-bridge.test.php
       - name: Private advertising template helper scope
         run: php tests/advertising-helper.test.php
 
