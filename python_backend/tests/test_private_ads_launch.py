@@ -79,6 +79,12 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
                 'verification_tasks':[], 'card_confirmation_status':'CLEAR',
                 'is_expired':False}]}
         contexts = [
+            # These existing cases test transport/journal behavior with synthetic
+            # bytes. Real byte acceptance is exercised in test_media_preflight.
+            patch('app.media_preflight.inspect_managed', new=AsyncMock(return_value={
+                'media_type':'image', 'mime_type':'image/png', 'width':1080, 'height':1080,
+                'aspect_ratio':1.0, 'requires_conversion':False,
+                'integrity_verified':False, 'meta_acceptance_verified':False})),
             patch('app.private_draft_pages.verify_draft_page', new=AsyncMock(return_value={
                 'page_id':'555555', 'checked_live':True, 'publication_access_verified':False})),
             patch('app.private_ads_launch.AdsManagerPrivateHttp.open',new=AsyncMock(return_value=self.client)),

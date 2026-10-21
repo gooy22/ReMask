@@ -49,7 +49,7 @@ final class MediaLibraryStore implements MediaLibraryStoreInterface
         if (!is_file($sourcePath) || !is_readable($sourcePath)) throw new InvalidArgumentException('Uploaded media file is unavailable.');
         $size = filesize($sourcePath);
         if ($size === false || $size <= 0) throw new InvalidArgumentException('Uploaded media file is empty.');
-        if ($size > $this->maxBytes) throw new InvalidArgumentException('Media file exceeds the configured Media Library size limit.');
+        if ($size > $this->maxBytes) throw new InvalidArgumentException('MEDIA_LOCAL_FILE_LIMIT: file exceeds the configured Media Library per-file limit.');
         $mime = function_exists('mime_content_type') ? (mime_content_type($sourcePath) ?: '') : '';
         $type = str_starts_with($mime, 'image/') ? 'image' : (str_starts_with($mime, 'video/') ? 'video' : '');
         if ($type === '') throw new InvalidArgumentException("Unsupported media MIME type: {$mime}");

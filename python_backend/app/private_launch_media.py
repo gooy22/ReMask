@@ -22,6 +22,7 @@ class LocalMedia:
     media_type: str
     mime_type: str
     path: Path
+    inspection: dict | None = None
 
     def public(self):
         return {"id": self.id, "sha256": self.sha256, "size_bytes": self.size_bytes,
@@ -89,6 +90,30 @@ class LaunchMediaResolver:
             output.append(item)
         return output
 
+    async def persist(self, path, filename):
+        """Only processor-owned output; reuse PHP's quota/locking/PG store."""
+        if not self.key:
+            raise invalid('Internal media bridge authentication is unavailable')
+        form = aiohttp.FormData()
+        form.add_field('action', 'private_launch_media')
+        try:
+            with path.open('rb') as handle:
+                form.add_field('media', handle, filename=filename)
+                async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=180), trust_env=False) as client:
+                    async with client.post(self.url, headers={'X-Remask-Internal-Key':self.key},
+                                           data=form, allow_redirects=False) as response:
+                        payload = await response.json()
+                        if response.status != 200 or payload.get('ok') is not True:
+                            message = str(payload.get('error') or '')
+                            code = 'MEDIA_LIBRARY_QUOTA_EXCEEDED' if 'QUOTA_EXCEEDED' in message else 'MEDIA_LOCAL_PERSIST_FAILED'
+                            raise ProvisioningError(code, 'Prepared media could not be saved in the managed library', retryable=False)
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as exc:
+            raise ProvisioningError('MEDIA_LOCAL_PERSIST_FAILED', 'Prepared media persistence was not confirmed', retryable=False) from exc
+        record = payload.get('media')
+        if not isinstance(record, dict):
+            raise invalid('Prepared media persistence returned no identity')
+        return (await self.resolve([{'id':record.get('id')}]))[0]
+
     def _validate(self, row):
         path = Path(str(row.get("path") or "")).resolve(strict=True)
         root = self.root.resolve(strict=True)
@@ -109,7 +134,9 @@ class LaunchMediaResolver:
                 or not isinstance(mime, str) or not re.fullmatch(r"(?:image|video)/[a-zA-Z0-9.+-]+", mime)
                 or not mime.startswith(kind + "/")):
             raise invalid("Media bytes, type or checksum do not match the saved library record")
-        return LocalMedia(row["id"], sha, size, kind, mime, path)
+        from .media_preflight import inspect_media
+        inspection = inspect_media(path, expected_kind=kind, declared_mime=mime)
+        return LocalMedia(row["id"], sha, size, kind, mime, path, inspection)
 
 
 def local_references(creative):

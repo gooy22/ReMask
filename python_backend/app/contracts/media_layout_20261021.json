@@ -1,0 +1,22 @@
+{
+  "revision": "local-layout-2026-10-21-v1",
+  "classification": "application_layout_recommendations",
+  "checked_live": false,
+  "meta_requirements_verified": false,
+  "source_status": "Meta Ads Guide returned a login wall on 2026-10-21; no hard platform restriction inferred",
+  "sources": [
+    "https://www.facebook.com/business/ads-guide/update/image/facebook-feed",
+    "https://www.facebook.com/business/ads-guide/image/instagram-story",
+    "https://pillow.readthedocs.io/en/stable/reference/Image.html",
+    "https://www.ffmpeg.org/ffprobe-all.html"
+  ],
+  "single_layouts": {
+    "facebook:feed": [4, 5],
+    "instagram:stream": [4, 5],
+    "facebook:story": [9, 16],
+    "instagram:story": [9, 16],
+    "facebook:facebook_reels": [9, 16],
+    "instagram:reels": [9, 16]
+  },
+  "carousel_layout": [1, 1]
+}

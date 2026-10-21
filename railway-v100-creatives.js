@@ -3,6 +3,7 @@ let items = [];
 let editing = null;
 let previewUrl = '';
 let carouselFiles = [];
+let remaskPreparedLibraryMedia = null;
 let carouselPreviewUrls = [];
 let metaSdkSchema = null;
 let pendingMetaBuilder = null;
@@ -1415,6 +1416,7 @@ function currentCarouselMeta() {
         headline: row.querySelector('.car-headline')?.value.trim() || '',
         description: row.querySelector('.car-description')?.value.trim() || '',
         link: row.querySelector('.car-link')?.value.trim() || '',
+        call_to_action: row.querySelector('.car-cta')?.value.trim() || '',
     }));
 }
 function clearMetaPreview() {
@@ -1458,6 +1460,7 @@ function renderCarousel() {
             headline: oldCard.headline || defaults.headline,
             description: oldCard.description || defaults.description,
             link: oldCard.link || defaults.link,
+            call_to_action: oldCard.call_to_action || '',
         } : row;
         const name = useNewFiles ? row.name : (row.media?.original_name || ('Card ' + (index + 1)));
         const preview = useNewFiles ? carouselPreviewUrls[index] : (row.preview_url || '');
@@ -1471,6 +1474,7 @@ function renderCarousel() {
             '<input class="form-control car-headline" placeholder="Headline" value="' + esc(meta.headline || '') + '">' +
             '<input class="form-control car-description" placeholder="Description" value="' + esc(meta.description || '') + '">' +
             '<input class="form-control car-link" placeholder="Link" value="' + esc(meta.link || '') + '">' +
+            '<input class="form-control car-cta" placeholder="CTA (или общий CTA)" value="' + esc(meta.call_to_action || '') + '">' +
         '</div>';
     }).join('');
 }
@@ -1493,6 +1497,7 @@ function resetBuilderDefaults() {
 function openEditor(item = null) {
     clearObjectUrls();
     editing = item;
+    remaskPreparedLibraryMedia = null;
     carouselFiles = [];
     $('creativeForm').reset();
     resetBuilderDefaults();
@@ -1601,11 +1606,12 @@ async function save(event) {
         format,
     };
     for (const [key, value] of Object.entries(values)) form.append(key, value);
+    if(remaskPreparedLibraryMedia)form.append('prepared_media',JSON.stringify(remaskPreparedLibraryMedia.map(row=>row.id)));
 
     if (format === 'SINGLE') {
         const file = $('presetMedia').files[0];
         if (file) form.append('media', file, file.name);
-        if (!id && !file) {
+        if (!id && !file && !remaskPreparedLibraryMedia) {
             setStatus('Выбери image или video.', 'bad');
             switchTab('creative');
             return;
@@ -1780,3 +1786,39 @@ loadMetaSdkSchema().catch((error) => {
 loadPlacementCapabilities(false);
 
 // Template targeting uses an automatic server-side read context, never a publishing RK.
+
+if(globalThis.remaskMediaTools){
+    function remaskCreativeMediaSnapshot(){
+        const files=$('presetFormat').value==='CAROUSEL'?Array.from(carouselFiles):Array.from($('presetMedia').files||[]);
+        return {files,signature:JSON.stringify({format:$('presetFormat').value,id:$('creativeId').value,
+            values:Array.from(document.querySelectorAll('#creativeForm input,#creativeForm select,#creativeForm textarea')).map(el=>[el.id,el.value,el.checked]),
+            cards:currentCarouselMeta(),prepared:remaskPreparedLibraryMedia})};
+    }
+    globalThis.remaskMediaTools.install($('singleSection'),async()=>{
+        const snapshot=remaskCreativeMediaSnapshot();
+        const assertCurrent=()=>{const now=remaskCreativeMediaSnapshot();
+            if(now.signature!==snapshot.signature||now.files.length!==snapshot.files.length||now.files.some((f,i)=>f!==snapshot.files[i]))
+                throw new Error('Медиа или настройки изменились. Повторите проверку');};
+        const format=$('presetFormat').value;
+        const rows=snapshot.files.length?await Promise.all(snapshot.files.map(globalThis.remaskMediaTools.stage)):
+            (remaskPreparedLibraryMedia||(format==='CAROUSEL'?editing?.carousel?.map(card=>({...card.media,id:card.media_library_id})):
+                (editing?.media?[{...editing.media,id:editing.media_library_id}]:[])))||[];
+        assertCurrent();
+        return {assertCurrent,creative:format==='CAROUSEL'?{format,carousel_media_library_ids:rows.map(row=>row.id)}:
+            {format,media_library_id:rows[0]?.id},targeting:buildMetaBuilder().targeting||{},cards:currentCarouselMeta()};
+    },async(media,index,captured)=>{
+        captured.assertCurrent();
+        const rows=captured.media.map(row=>({...row}));rows[index]=media;
+        remaskPreparedLibraryMedia=rows;
+        $('presetMedia').value='';$('presetCarousel').value='';carouselFiles=[];
+        if(captured.creative.format==='CAROUSEL'){
+            editing={...(editing||{}),format:'CAROUSEL',carousel:rows.map((row,i)=>({...captured.cards[i],media_library_id:row.id,media:row,
+                preview_url:'ajax/pythonWorkerJobs.php?action=private_launch_media_preview&id='+encodeURIComponent(row.id)}))};
+            renderCarousel();
+        }else{
+            editing={...(editing||{}),format:'SINGLE',media_library_id:media.id,media};
+            $('singlePreview').innerHTML=mediaHtml('ajax/pythonWorkerJobs.php?action=private_launch_media_preview&id='+encodeURIComponent(media.id),media.media_type);
+        }
+    });
+    for(const id of ['presetMedia','presetCarousel','presetFormat'])$(id).addEventListener('change',()=>{remaskPreparedLibraryMedia=null;});
+}

@@ -205,10 +205,22 @@ class InstalledLaunchTests(unittest.TestCase):
                     {'id':'789012','caption':'Fixture owned post','instagram_actor_id':actor},
                     {'id':'890123','caption':'Foreign actor post','instagram_actor_id':'999999'}]}
         elif path == 'ajax/pythonWorkerJobs.php':
+            if parse_qs(url.query).get('action')==['private_launch_media_preview']:
+                import base64
+                route.fulfill(body=base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='),content_type='image/png');return
             self.assertEqual(request.headers.get('x-remask-csrf'),'fixture-csrf')
             fields=json.loads(request.post_data or '{}');self.worker_requests.append(fields)
             action=fields.get('action')
-            if action=='private_launch_plan':
+            if action=='private_launch_media_inspect':
+                self.assertEqual(fields['creative']['media_library_id'], MEDIA_ID)
+                data={'media':[{**MEDIA,'inspection':{'encoding':'PNG','width':64,'height':48,
+                    'size_bytes':120,'requires_conversion':False},'compatibility':{'warnings':[]}}]}
+            elif action=='private_launch_media_prepare':
+                self.assertEqual(fields['reference']['id'], MEDIA_ID)
+                self.assertEqual(fields['options']['mode'], 'pad')
+                data={'media':{**MEDIA,'id':'m-'+'c'*24,'sha256':'c'*64},
+                    'inspection':{'width':1080,'height':1920}}
+            elif action=='private_launch_plan':
                 # Exercise the same associative JSON boundary as the installed
                 # PHP bridge, then the real Python planner (no Meta requests).
                 forwarded=json.loads(subprocess.check_output(['php','-r',
@@ -286,6 +298,9 @@ class InstalledLaunchTests(unittest.TestCase):
                 data = {'media':[{**MEDIA,'id':id, 'media_type':
                     'video' if video_test else ('image' if carousel_test else ('video' if i else 'image'))}
                     for i,id in enumerate(ids)]}
+                if self._testMethodName=='test_installed_local_media_preparation_requires_explicit_variant_selection':
+                    for row in data['media']:
+                        if row['id']=='m-'+'c'*24: row['sha256']='c'*64
                 if self.foreign_bundle_media:
                     data['media'][0]['id'] = 'm-' + 'f' * 24
         route.fulfill(status=status, json={'ok':status==200,'data':data,'error':{'message':'MEDIA_LIBRARY_ITEM_UNAVAILABLE'}})
@@ -771,6 +786,23 @@ class InstalledLaunchTests(unittest.TestCase):
         self.page.locator('#page').select_option('345678')
         self.page.evaluate('fixtureLaunch.geo()')
         self.page.locator('#launchDeliverySelect').select_option('PAUSED')
+
+    def test_installed_local_media_preparation_requires_explicit_variant_selection(self):
+        self.prepare_single_page_launch()
+        self.page.locator('#remaskMediaInspect').click()
+        self.page.wait_for_function('document.querySelector("#remaskMediaTools").textContent.includes("файл декодирован")')
+        self.page.locator('#remaskMediaMode').select_option('pad')
+        self.page.locator('#remaskMediaHeight').fill('1920')
+        self.page.locator('#remaskMediaPrepare').click()
+        self.page.wait_for_function('document.querySelector("#remaskMediaTools").textContent.includes("Вариант готов")')
+        rows=self.page.evaluate('fixtureLaunch.preparedRows()')
+        self.assertEqual(rows[0]['launch']['base']['creative']['media_library_id'], MEDIA_ID,
+                         'preparation alone must not change the selected original')
+        self.page.locator('#remaskMediaUse').click()
+        self.page.wait_for_function('document.querySelector("#remaskMediaTools").textContent.includes("Выбран подготовленный")')
+        rows=self.page.evaluate('fixtureLaunch.preparedRows()')
+        self.assertEqual(rows[0]['launch']['base']['creative']['media_library_id'], 'm-'+'c'*24)
+        self.assertFalse(any(row['action'] in {'create','private_launch_review'} for row in self.worker_requests))
 
     def test_selected_rk_searches_fresh_multiple_interests_and_preserves_ids_in_worker_plan(self):
         self.prepare_single_page_launch()

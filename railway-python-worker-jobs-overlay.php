@@ -46,8 +46,9 @@ function rmx_pwj_input(): array {
     // that creates/retries a job or changes a contract.
     if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         $requested = trim((string)($_GET['action'] ?? ''));
-        if (in_array($requested, ['csrf','health','ready','payment_status','funding_status','preflight','profile_state','docids','private_launch_contracts','private_launch_sources','status','get'], true)) {
+        if (in_array($requested, ['csrf','health','ready','payment_status','funding_status','preflight','profile_state','docids','private_launch_contracts','private_launch_sources','status','get','private_launch_media_preview'], true)) {
             $input['action'] = $requested;
+            if ($requested === 'private_launch_media_preview') $input['id'] = $_GET['id'] ?? '';
         }
         return $input;
     }
@@ -121,6 +122,8 @@ function rmx_pwj_worker_request(string $method, string $path, ?array $payload = 
 }
 
 try {
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && (int)($_SERVER['CONTENT_LENGTH'] ?? 0) > 167772160)
+        rmx_pwj_out(['ok'=>false,'error'=>'MEDIA_UPLOAD_TRANSPORT_LIMIT'], 413);
     $input = rmx_pwj_input();
     $action = strtolower(trim((string)($input['action'] ?? 'status')));
 
@@ -307,6 +310,23 @@ try {
         rmx_pwj_out($result);
     }
 
+    if ($action === 'private_launch_media_preview') {
+        if ($_SERVER['REQUEST_METHOD'] !== 'GET') rmx_pwj_out(['ok'=>false,'error'=>'GET_REQUIRED'], 405);
+        $id = $input['id'] ?? '';
+        if (!is_string($id) || !preg_match('/^m-[a-f0-9]{24}$/D', $id)) rmx_pwj_out(['ok'=>false,'error'=>'INVALID_MEDIA_REFERENCE'], 400);
+        require_once __DIR__ . '/../classes/MediaLibraryStoreFactory.php';
+        $library = MediaLibraryStoreFactory::create(REMASK_MEDIA_LIBRARY_DIR, REMASK_MEDIA_LIBRARY_MAX_BYTES);
+        $row = $library->getInternal($id);
+        $root = realpath(REMASK_MEDIA_LIBRARY_DIR);
+        $path = is_array($row) ? realpath((string)($row['path'] ?? '')) : false;
+        $mime = $row['mime_type'] ?? '';
+        if ($root === false || $path === false || !in_array(dirname($path), [$root.'/files',$root.'/pg-cache'], true)
+            || !in_array($mime, ['image/png','image/jpeg','video/mp4'], true)) rmx_pwj_out(['ok'=>false,'error'=>'MEDIA_PREVIEW_UNAVAILABLE'], 404);
+        header('Content-Type: '.$mime); header('X-Content-Type-Options: nosniff');
+        header("Content-Security-Policy: default-src 'none'; sandbox");
+        header('Content-Length: '.filesize($path)); readfile($path); exit;
+    }
+
     if ($action === 'private_launch_media_resolve') {
         // Filesystem paths are an internal worker capability, never a UI API.
         if (!$internalAuthorized) rmx_pwj_out(['ok'=>false,'error'=>'INTERNAL_MEDIA_ACCESS_REQUIRED'], 403);
@@ -335,6 +355,15 @@ try {
         rmx_pwj_out(['ok'=>true,'media'=>$records]);
     }
 
+    if (in_array($action, ['private_launch_media_inspect','private_launch_media_prepare'], true)) {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') rmx_pwj_out(['ok'=>false,'error'=>'POST_REQUIRED'], 405);
+        $path = $action === 'private_launch_media_inspect' ? 'media-inspect' : 'media-prepare';
+        $request = $path === 'media-inspect'
+            ? ['creative'=>$input['creative'] ?? null,'targeting'=>$input['targeting'] ?? []]
+            : ['reference'=>$input['reference'] ?? null,'options'=>$input['options'] ?? null];
+        rmx_pwj_out(rmx_pwj_worker_request('POST', '/api/v1/private-launch/'.$path, $request, 180));
+    }
+
     if ($action === 'private_launch_plan') {
         if ($_SERVER['REQUEST_METHOD'] !== 'POST') rmx_pwj_out(['ok'=>false,'error'=>'POST_REQUIRED'], 405);
         $profileId = trim((string)($input['profile_id'] ?? ''));
@@ -354,6 +383,8 @@ try {
         require_once __DIR__ . '/../classes/MediaLibraryStoreFactory.php';
         $library = MediaLibraryStoreFactory::create(REMASK_MEDIA_LIBRARY_DIR, REMASK_MEDIA_LIBRARY_MAX_BYTES);
         $upload = $_FILES['media'] ?? null;
+        if (is_array($upload) && in_array(($upload['error'] ?? null), [UPLOAD_ERR_INI_SIZE,UPLOAD_ERR_FORM_SIZE], true))
+            rmx_pwj_out(['ok'=>false,'error'=>'MEDIA_UPLOAD_TRANSPORT_LIMIT'], 413);
         if (!is_array($upload) || ($upload['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK
             || !is_uploaded_file((string)($upload['tmp_name'] ?? ''))) {
             rmx_pwj_out(['ok'=>false,'error'=>'PRIVATE_LAUNCH_MEDIA_UPLOAD_INVALID'], 400);

@@ -86,7 +86,7 @@ class WorkflowTests(unittest.TestCase):
                     self.assertEqual(self.page.evaluate('window.fixtureStorage.remask_python_worker_job_v1'), 'retained-job')
         self.assertEqual(self.page.evaluate('window.fixtureRequests.map(x=>x.action)'), ['status'] * 3)
 
-    def creative(self, enhanced=True, context=False, preferred="", modules=False, tools_first=False):
+    def creative(self, enhanced=True, context=False, preferred="", modules=False, tools_first=False, media_tools=False):
         html = re.sub(r'<\?php.*?\?>', '', (ROOT / 'railway-v100-creatives.php').read_text(), flags=re.S)
         html = re.sub(r'<script\b.*?</script>', '', html, flags=re.S)
         html = re.sub(r'<link\b[^>]*>', '', html)
@@ -142,6 +142,7 @@ class WorkflowTests(unittest.TestCase):
         else:
             self.page.add_script_tag(content='window.fetch=async url=>({ok:true,status:200,text:async()=>JSON.stringify('+json.dumps({'ok':True,'data':{'schema':SCHEMA,'items':[]}})+')});')
         if modules:self.page.add_script_tag(content=(ROOT/'railway-meta-module-controls.js').read_text())
+        if media_tools:self.page.add_script_tag(content=(ROOT/'railway-media-tools.js').read_text())
         source = (ROOT / 'railway-v100-creatives.js').read_text()
         self.page.add_script_tag(content=source+'\nwindow.testCreative={build:buildMetaBuilder,populate:populateMetaBuilder,open:openEditor,primary:populatePrimaryMetaControls};')
         self.page.wait_for_function("document.getElementById('mbObjective').options.length===2", timeout=5000)
@@ -155,6 +156,45 @@ class WorkflowTests(unittest.TestCase):
         self.creative(context=True,modules=True)
         self.page.evaluate('testCreative.open({id:"fixture",name:"Estimate",meta_builder:{campaign:{objective:"OUTCOME_TRAFFIC"},adset:{daily_budget:200},targeting:{geo_locations:{countries:["US"]},age_min:21,age_max:55}}})')
         self.page.get_by_role('button',name='Аудитория',exact=True).click()
+
+    def test_prepared_carousel_card_preserves_order_copy_destination_and_individual_ctas(self):
+        self.creative(context=True, media_tools=True)
+        first='m-'+'a'*24; second='m-'+'b'*24; prepared='m-'+'c'*24
+        cards=[{'media_library_id':first,'media':{'id':first,'media_type':'image','original_name':'one.png'},
+                'headline':'First','description':'First copy','link':'https://example.com/one','call_to_action':'LEARN_MORE'},
+               {'media_library_id':second,'media':{'id':second,'media_type':'image','original_name':'two.png'},
+                'headline':'Second','description':'Second copy','link':'https://example.com/two','call_to_action':'SHOP_NOW'}]
+        self.page.evaluate('''({cards,first,second,prepared})=>{
+            const previous=window.fetch;
+            window.fetch=async(url,options={})=>{
+                if(!String(url).includes('pythonWorkerJobs.php'))return previous(url,options);
+                const body=JSON.parse(options.body);
+                const media=(id)=>({id,sha256:id.slice(2)[0].repeat(64),media_type:'image',mime_type:'image/png'});
+                const data=body.action==='private_launch_media_inspect'?{media:[first,second].map(id=>({
+                    ...media(id),inspection:{encoding:'PNG',width:80,height:40,size_bytes:100,requires_conversion:false},
+                    compatibility:{warnings:[]}}))}:{media:media(prepared),inspection:{width:80,height:80}};
+                return {ok:true,status:200,json:async()=>({ok:true,...data})};
+            };
+            testCreative.open({id:'fixture',name:'Carousel',format:'CAROUSEL',carousel:cards,
+                message:'Primary',destination_url:'https://example.com/',cta:'LEARN_MORE',
+                meta_builder:{campaign:{objective:'OUTCOME_TRAFFIC'},adset:{daily_budget:200},targeting:{geo_locations:{countries:['US']}}}});
+        }''', {'cards':cards,'first':first,'second':second,'prepared':prepared})
+        self.assertEqual(self.page.locator('.car-cta').nth(1).input_value(),'SHOP_NOW')
+        self.page.locator('#remaskMediaInspect').click()
+        self.page.wait_for_function('document.querySelector("#remaskMediaCard").options.length===2')
+        self.page.locator('#remaskMediaMode').select_option('pad')
+        self.page.locator('#remaskMediaPrepare').click()
+        self.page.wait_for_function('document.querySelector("#remaskMediaTools").textContent.includes("Вариант готов")')
+        self.assertIsNone(self.page.evaluate('remaskPreparedLibraryMedia'))
+        self.page.locator('#remaskMediaUse').click()
+        self.page.wait_for_function('document.querySelector("#remaskMediaTools").textContent.includes("Выбран подготовленный")')
+        self.page.locator('#saveCreative').click()
+        self.page.wait_for_function('fixtureSaves.length===1')
+        saved=self.page.evaluate('fixtureSaves[0]')
+        self.assertEqual(json.loads(saved['prepared_media']),[prepared,second])
+        result=json.loads(saved['carousel_cards'])
+        for key in ('headline','description','link','call_to_action'):
+            self.assertEqual([row[key] for row in result],[row[key] for row in cards])
 
     def test_audience_sidebar_is_visible_from_every_tab_when_workflow_loads_last(self):
         self.creative(context=True,tools_first=True)

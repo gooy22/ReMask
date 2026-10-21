@@ -189,12 +189,25 @@ try {
             'meta_asset' => [],
         ];
 
+        $preparedRaw = trim((string)($_POST['prepared_media'] ?? ''));
+        $prepared = $preparedRaw !== '' ? json_decode($preparedRaw, true, 32, JSON_THROW_ON_ERROR) : [];
+        if (!is_array($prepared) || !array_is_list($prepared) || count($prepared) > 10) throw new InvalidArgumentException('INVALID_PREPARED_MEDIA');
+        foreach ($prepared as $mediaId) {
+            if (!is_string($mediaId) || !preg_match('/^m-[a-f0-9]{24}$/D', $mediaId) || $library->get($mediaId) === null)
+                throw new InvalidArgumentException('PREPARED_MEDIA_UNAVAILABLE');
+        }
+
         if ($format === 'SINGLE') {
             $upload = isset($_FILES['media']) && is_array($_FILES['media']) ? $_FILES['media'] : null;
             $hasUpload = $upload !== null && (($upload['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_NO_FILE);
             if ($hasUpload) {
+                if ($prepared !== []) throw new InvalidArgumentException('AMBIGUOUS_PREPARED_MEDIA');
                 $media = cl100_add_upload($library, $upload, 'creative');
                 $record['media_library_id'] = (string)$media['id'];
+            } elseif (count($prepared) === 1) {
+                $record['media_library_id'] = $prepared[0];
+            } elseif ($prepared !== []) {
+                throw new InvalidArgumentException('SINGLE_PREPARED_MEDIA_COUNT');
             } elseif ($current && strtoupper((string)($current['format'] ?? 'SINGLE')) === 'SINGLE') {
                 $record['media_library_id'] = trim((string)($current['media_library_id'] ?? ''));
             }
@@ -211,6 +224,7 @@ try {
             $hasUpload = count(array_filter($names, static fn($v) => trim((string)$v) !== '')) > 0;
 
             if ($hasUpload) {
+                if ($prepared !== []) throw new InvalidArgumentException('AMBIGUOUS_PREPARED_MEDIA');
                 if (count($names) < 2 || count($names) > 10) throw new InvalidArgumentException('Carousel requires 2 to 10 images.');
                 if (count($cardsMeta) !== count($names)) throw new InvalidArgumentException('Carousel card metadata count must match images.');
                 $tmpNames = array_values((array)($upload['tmp_name'] ?? []));
@@ -229,13 +243,15 @@ try {
                         'headline' => trim((string)($meta['headline'] ?? '')),
                         'description' => trim((string)($meta['description'] ?? '')),
                         'link' => trim((string)($meta['link'] ?? '')),
+                        'call_to_action' => trim((string)($meta['call_to_action'] ?? '')),
                     ];
                 }
             } else {
-                $existing = ($current && strtoupper((string)($current['format'] ?? '')) === 'CAROUSEL')
+                $existing = $prepared !== [] ? array_map(static fn($id) => ['media_library_id'=>$id], $prepared) : (($current && strtoupper((string)($current['format'] ?? '')) === 'CAROUSEL')
                     ? array_values((array)($current['carousel'] ?? []))
-                    : [];
+                    : []);
                 if (count($existing) < 2 || count($existing) > 10) throw new InvalidArgumentException('Select 2 to 10 carousel images.');
+                if (count($cardsMeta) !== count($existing)) throw new InvalidArgumentException('Carousel metadata count must match media');
                 foreach ($existing as $index => $card) {
                     if (!is_array($card)) continue;
                     $meta = is_array($cardsMeta[$index] ?? null) ? $cardsMeta[$index] : $card;
@@ -244,6 +260,7 @@ try {
                         'headline' => trim((string)($meta['headline'] ?? '')),
                         'description' => trim((string)($meta['description'] ?? '')),
                         'link' => trim((string)($meta['link'] ?? '')),
+                        'call_to_action' => trim((string)($meta['call_to_action'] ?? '')),
                     ];
                 }
             }
