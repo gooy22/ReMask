@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "revision": "private-campaign-objective-wire-2026-10-21",
+  "checked_live": false,
+  "editor_verified": false,
+  "campaign_objectives": {
+    "OUTCOME_TRAFFIC": {
+      "objective": "LINK_CLICKS",
+      "is_odax_campaign_group": true
+    }
+  },
+  "scope": "New private draft creation only; saved Launch selections and historical journals remain unchanged",
+  "evidence": [
+    "AdsODAXObjectiveStrings names CampaignGroup LINK_CLICKS Traffic; this does not select an Ad Set optimization goal.",
+    "AdsODAXUtils.isODAXTrafficCampaignGroup recognizes exactly is_odax_campaign_group === true and CampaignGroup objective LINK_CLICKS.",
+    "AdsEditorUnsupportedReasonUtils rejects OUTCOME_TRAFFIC while allowing LINK_CLICKS in the Campaign and Ad Set editor checks.",
+    "AdsCampaignGroupRecordAccessors exposes objective and is_odax_campaign_group through the writable basicFieldAccessorFactory, whose .set writes the named field via setIn.",
+    "AdsLiveCreationDataManager.__createCampaignGroup writes objective:n.objective and is_odax_campaign_group:n.isODAXCampaignGroup||null into the same Campaign draft passed to AdsDraftFragmentUtils.createFragment. This confirms the field role in actual creation, separately from editor display/read models.",
+    "AdsCampaignGroupDraftFragmentsApplyChangesReducerPlugin merges changed CampaignGroup records into the draft; AdsDraftFragmentDataManager.getAPIParams and create pass typed values through to addraft_fragments without translating objectives.",
+    "This establishes a source-backed private editor-record representation. No current-account response or real editor acceptance is claimed; EDITOR_UNVERIFIED remains required."
+  ],
+  "sources": [
+    {
+      "module": "AdsEditorUnsupportedReasonUtils",
+      "module_sha256": "27952b1a6679e1da3f15973d67e56d70fd6bb71e381c9efb6c7eedc8e02993f4",
+      "script_sha256": "e2c3d08281745a87850fa38194b220686a2fc3abe8afa239713724eb91add185",
+      "public_url": "https://static.xx.fbcdn.net/rsrc.php/v4ieqh4/y6/l/en_US-j/lbrF6LM6frL.js",
+      "module_hash_kind": "module_wrapper"
+    },
+    {
+      "module": "AdsODAXObjectiveStrings",
+      "module_sha256": "9ae2cc914ab7a809841c86be2fece61191cf40e78db9f7d59ba97b8e522bc544",
+      "script_sha256": "b2ca67cf0642d7a6a0b91071c67f3dddda44bd0f3cba3e216f76a905605872a7",
+      "public_url": "https://static.xx.fbcdn.net/rsrc.php/v4iica4/yo/l/en_US-j/rzhZTNrLA3F.js",
+      "module_hash_kind": "module_wrapper"
+    },
+    {
+      "module": "AdsODAXUtils",
+      "module_sha256": "7e24fdb7bd77bee533c4105a9ae63b6436ab9c5dcc6fe0a6d1b58e8cb8203d90",
+      "script_sha256": "3c7de32f7de0b89953b2ecd5b31ff65bf34367e671f7f9e67134f6eb2d163000",
+      "public_url": "https://static.xx.fbcdn.net/rsrc.php/v4ijsg4/yq/l/en_US-j/Y731TQMByU4.js",
+      "module_hash_kind": "module_wrapper"
+    },
+    {
+      "module": "AdsCampaignGroupRecordAccessors",
+      "module_sha256": "9773051ddf34edab510aca8a0f4cb5503530ffd5973da57095eca7ec6dc43bff",
+      "script_sha256": "7a06217f05ff63510dd5aee8cad75cbed2ec5ba584c80fc1240d5243333d4881",
+      "public_url": "https://static.xx.fbcdn.net/rsrc.php/v4i2V74/y4/l/en_US-j/LDUsMHrnl_w.js",
+      "module_hash_kind": "module_wrapper"
+    },
+    {
+      "module": "AdsAdObjectsAccessorUtils",
+      "module_sha256": "48db7909bbe6ef87fde7c96b1cb400a7c8041e00ebf0bbaa5f48c771db3398d5",
+      "script_sha256": "3c7de32f7de0b89953b2ecd5b31ff65bf34367e671f7f9e67134f6eb2d163000",
+      "public_url": "https://static.xx.fbcdn.net/rsrc.php/v4ijsg4/yq/l/en_US-j/Y731TQMByU4.js",
+      "module_hash_kind": "module_wrapper"
+    },
+    {
+      "module": "AdsCampaignGroupDraftFragmentsApplyChangesReducerPlugin",
+      "module_sha256": "7bce96b5728f3d6e7ec774507ce23ae497264b81aecae95e11ea5f941e128d1b",
+      "script_sha256": "9d1d6460fe8fa8c59a08d94684ba93a9dbde100920a9d21dadb1bce13b61f68d",
+      "public_url": "https://static.xx.fbcdn.net/rsrc.php/v4iYk24/yK/l/en_US-j/gOIwLxm93rK.js",
+      "module_hash_kind": "module_wrapper"
+    },
+    {
+      "module": "AdsDraftFragmentDataManager",
+      "module_sha256": "016f45add0c818d7df000c0c4c431fd2d7facde170f7de832e4ba271f5f9d123",
+      "script_sha256": "d97d0f9ea8269a5219aa8dba1358d77e3c3756e1615b82e4b71987f7c65967e2",
+      "public_url": "https://static.xx.fbcdn.net/rsrc.php/v4idcd4/y0/l/en_US-j/f2UtWoV9xoS.js",
+      "module_hash_kind": "module_wrapper"
+    },
+    {
+      "module": "AdsLiveCreationDataManager",
+      "module_sha256": "9143a8b8d4e4f7f1a904bcafadda13c2aa70bb065a08b341ff2cf1717a9dbf92",
+      "source_kind": "supplied_public_cdn_module_export",
+      "artifact_sha256": "c0d74e9d3c121cf531e45a69a2ed0ea3341275407723a9a27db1ddb34a6963c0",
+      "module_hash_kind": "factory_source"
+    }
+  ]
+}

@@ -19,6 +19,7 @@ from .private_ads_state import AdsManagerSubmitter
 from .private_ads_verify import verify_published_objects
 from .private_ads_resources import AdsManagerResourceCatalog, read_pixels
 from .private_ads_objectives import ObjectiveContract
+from .private_ads_objective_wire import ObjectiveWireContract
 from .private_ads_bidding import MANIFEST as BIDDING_MANIFEST, native_bidding
 from .private_launch_extensions import OperationKey
 
@@ -36,12 +37,14 @@ class AdsManagerLaunch:
         from .private_ads_catalog import AdsManagerRouteCatalog
         self.catalog = AdsManagerRouteCatalog()
         self.objectives = ObjectiveContract()
+        self.objective_wire = ObjectiveWireContract()
         digest = hashlib.sha256((SOURCE_REVISION + self.catalog.digest).encode())
         digest.update(self.objectives.digest.encode())
+        digest.update(self.objective_wire.digest.encode())
         digest.update(BIDDING_MANIFEST.read_bytes())
         for name in ("private_ads_launch.py", "private_ads_http.py", "private_ads_draft.py",
                      "private_ads_state.py", "private_ads_media.py", "private_ads_publication.py",
-                     "private_ads_verify.py", "private_ads_creative.py", "private_ads_video.py", "private_ads_delivery.py", "private_ads_catalog.py", "private_ads_reads.py", "private_draft_pages.py", "private_ads_resources.py", "private_ads_helpers.py", "private_ads_preview.py", "private_ads_objectives.py", "private_ads_inspect.py", "private_ads_bidding.py"):
+                     "private_ads_verify.py", "private_ads_creative.py", "private_ads_video.py", "private_ads_delivery.py", "private_ads_catalog.py", "private_ads_reads.py", "private_draft_pages.py", "private_ads_resources.py", "private_ads_helpers.py", "private_ads_preview.py", "private_ads_objectives.py", "private_ads_inspect.py", "private_ads_bidding.py", "private_ads_objective_wire.py", "private_ads_objective_repair.py"):
             digest.update(name.encode() + b"\0" + Path(__file__).with_name(name).read_bytes())
         self.source_digest = digest.hexdigest()
 
@@ -108,6 +111,7 @@ class AdsManagerLaunch:
         # nonfinite/unsupported values. Invalid Ad input must not leave uploads.
         self.objectives.validate(launch)
         campaign_values, adset_values, _ = native_bidding(launch["campaign"], launch["adset"])
+        campaign_values = self.objective_wire.campaign(campaign_values)
         placeholders = [{"image_hash": "planned-image-hash"}] * (len(creative["carousel_cards"])
                         if creative.get("format") == "CAROUSEL" else 1)
         story = resolved_creative(creative, target["page_id"], placeholders,
@@ -124,6 +128,10 @@ class AdsManagerLaunch:
         target, launch, references, fingerprint = self.prepare(profile_id, payload)
         draft_only = launch.get("execution_mode") == "DRAFT"
         return {"configuration_valid": True, "ready": False, "checked_live": False,
+            "objective_representation": {"selected": launch["campaign"].get("objective"),
+                "private_campaign": {key: value for key, value in self.objective_wire.campaign(launch["campaign"]).items()
+                    if key in {"objective", "is_odax_campaign_group"}},
+                "editor_state": "EDITOR_UNVERIFIED"},
             "mutation_posts": 0, "target": target, "creative_format": launch["creative"].get("format", "SINGLE"),
             "delivery": launch.get("delivery", {key: "PAUSED" for key in ("campaign", "adset", "ad")}),
             "steps": [{"stage": stage, "label": label} for stage, label in
@@ -320,6 +328,9 @@ class AdsManagerLaunch:
             "source_revision": SOURCE_REVISION, "contracts": self.status()["contracts"]}
 
     async def run(self, *, item_id, profile_id, context, session, payload, task_idempotency_key=None):
+        if isinstance(payload, dict) and "repair_objective" in payload:
+            from .private_ads_objective_repair import repair_saved_objective
+            return await repair_saved_objective(self, profile_id=profile_id, context=context, session=session, payload=payload)
         if isinstance(payload, dict) and "reconcile_only" in payload:
             from .private_ads_inspect import inspect_saved_draft
             return await inspect_saved_draft(self, profile_id=profile_id, context=context, session=session, payload=payload)
@@ -421,6 +432,7 @@ class AdsManagerLaunch:
         campaign_values, adset_values = (copy.deepcopy(launch["campaign"]), copy.deepcopy(launch["adset"]))
         if not historical_recovery:
             campaign_values, adset_values, _ = native_bidding(campaign_values, adset_values)
+            campaign_values = self.objective_wire.campaign(campaign_values)
         levels = {"campaign": campaign_values, "ad_set": adset_values,
                   "ad": {**copy.deepcopy(launch["ad"]), "creative": creative}}
         publisher = AdsManagerDraftPublisher(sender)

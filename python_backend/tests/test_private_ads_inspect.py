@@ -28,7 +28,7 @@ class SavedDraftInspectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result['fragment_storage_verified'])
         self.assertFalse(result['editor_verified'])
         self.assertIsNone(result['published'])
-        self.assertEqual(result['fragment_reads'][0]['submitted_values']['objective'], 'OUTCOME_TRAFFIC')
+        self.assertEqual(result['fragment_reads'][0]['submitted_values']['objective'], 'LINK_CLICKS')
         self.assertEqual(await self.owner.state.all_steps('image-launch'), before)
 
     async def test_exact_native_objects_and_creative_are_read_separately_from_fragments(self):
@@ -142,6 +142,30 @@ class SavedDraftInspectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_SAVED_OPERATION_MISMATCH')
         self.assertEqual(len(self.client.posts), 4)
 
+    async def test_controlled_1359188_predecessor_keeps_original_objective_and_never_replays(self):
+        predecessor = '9b2b414e40aa4d6a1d69dfdfefee07341a45fa18b4328a72f185e63c28d00c44'
+        current = self.owner.ads_manager.source_digest
+        self.owner.ads_manager.source_digest = predecessor
+        with patch.object(self.owner.ads_manager.objective_wire, 'campaign', side_effect=copy.deepcopy):
+            await self.saved()
+        before = copy.deepcopy(await self.owner.state.all_steps('image-launch'))
+        self.owner.ads_manager.source_digest = current
+        with patch.object(self.client, 'post', new=AsyncMock(side_effect=AssertionError('No mutation'))) as post:
+            result = await self.launch()
+            self.assertEqual(result['recovered_source_digest'], predecessor)
+            campaign = result['fragment_reads'][0]['submitted_values']
+            self.assertEqual(campaign['objective'], 'OUTCOME_TRAFFIC')
+            self.assertNotIn('is_odax_campaign_group', campaign)
+            self.assertTrue(campaign['is_autobid'])
+            self.assertFalse(result['editor_verified'])
+            self.assertEqual(result['mutation_posts'], 0)
+            self.assertEqual(await self.owner.state.all_steps('image-launch'), before)
+            self.payload.pop('reconcile_only')
+            with self.assertRaises(ProvisioningError) as caught:
+                await self.launch()
+            self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_SAVED_OPERATION_MISMATCH')
+        post.assert_not_called()
+
     async def test_changed_or_foreign_fresh_fragment_cannot_pass(self):
         await self.saved()
         self.client.foreign = True
@@ -188,6 +212,18 @@ class ValidationDiagnosticTests(unittest.TestCase):
         self.assertIn('optimization_goal', result['field_names'])
         self.assertNotIn('DO_NOT_EXPOSE', repr(result))
         self.assertNotIn('private.invalid', repr(result))
+
+    def test_payment_terms_are_evidence_only_without_exporting_card_or_credentials(self):
+        from app.private_ads_inspect import validation_diagnostic
+        result = validation_diagnostic({'error_code':1359188,
+            'message':'Billing: payment method card funding confirmation required. Card 4111111111111111; private-person@example.invalid; access_token=DO_NOT_EXPOSE',
+            'credentials': {'message':'secret payment method', 'code':1234},
+            'cookie': 'session=DO_NOT_EXPOSE'}, observed=True)
+        self.assertTrue({'billing','payment','method','card','funding','confirmation','required'} <= set(result['terms']))
+        self.assertEqual(result['codes'], [{'field':'error_code','value':1359188}])
+        self.assertEqual(result['field_names'], [])
+        for private in ('4111111111111111', 'private-person', 'example.invalid', 'DO_NOT_EXPOSE', '1234'):
+            self.assertNotIn(private, repr(result))
 
     def test_credentials_and_boolean_or_unbounded_codes_are_never_exported(self):
         from app.private_ads_inspect import validation_diagnostic
