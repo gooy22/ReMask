@@ -10,14 +10,15 @@ from .private_ads_draft import FRAGMENT_FIELDS, LEVELS, fail, fragment_values_ma
 from .private_ads_http import AdsManagerPrivateHttp
 from .private_launch import _launch_fingerprint
 
-# Exact reviewed sender at main 2f5444324d8e. This permits inspection only;
+# Exact reviewed senders at main 2f5444324d8e and 3a225cf6dac8. Inspection only;
 # it does not authorize a current sender to resume an old mutation.
 READ_ONLY_DRAFT_PREDECESSORS = frozenset({
     "f9f8e21841da2cf174bc516941a5581fe1c5b65642783ab84ed2b03ede68c218",
+    "9b2b414e40aa4d6a1d69dfdfefee07341a45fa18b4328a72f185e63c28d00c44",
 })
 
 
-_ERROR_TERMS = frozenset("objective discontinued unsupported optimization billing destination promoted conversion attribution targeting placement budget schedule campaign adset creative permission ownership account restricted disabled invalid required missing incompatible duplicate parent image video page pixel currency name field validation status".split())
+_ERROR_TERMS = frozenset("objective discontinued unsupported optimization billing payment method card funding confirmation destination promoted conversion attribution targeting placement budget schedule campaign adset creative permission ownership account restricted disabled invalid required missing incompatible duplicate parent image video page pixel currency name field validation status".split())
 _ERROR_CODES = frozenset({"code", "error_code", "error_subcode", "subcode", "exception_code"})
 _SECRET_KEYS = re.compile(r"cookie|token|secret|password|credential|authorization|dtsg|lsd|session", re.I)
 
@@ -87,9 +88,8 @@ def validation_diagnostic(value, *, observed):
         "terms": sorted(terms), "field_names": sorted(names), "truncated": truncated}
 
 
-async def inspect_saved_draft(adapter, *, profile_id, context, session, payload):
-    if payload.get("reconcile_only") is not True:
-        raise fail("INVALID_INPUT", "Saved draft inspection must be explicitly read-only")
+async def saved_draft_intent(adapter, *, profile_id, context, payload):
+    """Verify the original immutable journal before any saved-draft operation."""
     target = {"profile_id": str(profile_id), **{key: identity(payload.get(key))
               for key in ("business_id", "ad_account_id", "page_id")}}
     key = payload.get("launch_key")
@@ -130,6 +130,14 @@ async def inspect_saved_draft(adapter, *, profile_id, context, session, payload)
         if confirmed_object is not None:
             identity(confirmed_object)
         fragments.append((level, fragment_id, copy.deepcopy(values), confirmed_object))
+    return target, key, fingerprint, actor, next(iter(sources)), draft_id, fragments
+
+
+async def inspect_saved_draft(adapter, *, profile_id, context, session, payload):
+    if payload.get("reconcile_only") is not True or "repair_objective" in payload:
+        raise fail("INVALID_INPUT", "Saved draft inspection must be explicitly read-only")
+    target, key, fingerprint, actor, source, draft_id, fragments = await saved_draft_intent(
+        adapter, profile_id=profile_id, context=context, payload=payload)
     web = await session.facebook_web()
     client = await AdsManagerPrivateHttp.open(web, account_id=target["ad_account_id"],
         business_id=target["business_id"], actor_id=actor)
@@ -223,7 +231,7 @@ async def inspect_saved_draft(adapter, *, profile_id, context, session, payload)
             if not any(row["level"] == level and row["available"] for row in object_reads)],
         "launch_fingerprint_verified": True, "actor_verified": True,
         "editor_verified": False, "published": None, "payment_checked_live": False,
-        "mutation_posts": 0, "source": "independent_private_ads_http", "recovered_source_digest": next(iter(sources))}
+        "mutation_posts": 0, "source": "independent_private_ads_http", "recovered_source_digest": source}
 
 
 def adapter_scope(row, account):

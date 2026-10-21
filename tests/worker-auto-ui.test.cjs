@@ -56,6 +56,20 @@ const source = fs.readFileSync('railway-python-worker-ui.js', 'utf8');
   assert.equal(calls.length,callsBefore+1);
   assert.equal(calls.at(-1).profiles[0].tasks[0].payload.launch_key,'retained-failed-intent');
   assert.equal(calls.at(-1).profiles[0].tasks[0].payload.reconcile_only,true);
+  const repairBefore=calls.length;
+  const repairButton={disabled:false};
+  await scope.pythonWorkerRepairDraftObjective(retained,failed,repairButton);
+  await scope.pythonWorkerRepairDraftObjective(retained,failed,repairButton);
+  assert.equal(calls.length,repairBefore+1);
+  const repair=calls.at(-1).profiles[0].tasks[0];
+  assert.equal(repair.payload.launch_key,'retained-failed-intent');
+  assert.equal(repair.payload.repair_objective,true);
+  assert.equal(repair.payload.reconcile_only,undefined);
+  assert.deepEqual(repair.payload.launch,failed.payload.launch);
+  assert.equal(repair.idempotency_key,'draft-objective-repair-original-task');
+  assert.equal(calls.at(-1).profiles[0].profile_id,'38');
+  assert.equal(scope.pythonWorkerDraftInspectionKey(retained,
+    {...failed,payload:{...failed.payload,repair_objective:true}}),'');
   for(const [item,candidate] of [
     [{...retained,advertising_steps:steps.slice(0,3)},failed],
     [{...retained,advertising_steps:steps.map(step=>({...step,task_id:'other'}))},failed],

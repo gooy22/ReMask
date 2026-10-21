@@ -249,6 +249,7 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
         # fields under an old source digest. Recovery must retain old bindings.
         with patch('app.private_ads_launch.native_bidding',
                    side_effect=lambda campaign, adset: (copy.deepcopy(campaign), copy.deepcopy(adset), {})), \
+                patch.object(self.owner.ads_manager.objective_wire, 'campaign', side_effect=copy.deepcopy), \
                 self.assertRaises(ConnectionError):
             await self.launch()
         self.client.get = original

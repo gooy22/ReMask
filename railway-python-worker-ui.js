@@ -1,4 +1,4 @@
-/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 REMASK_PYTHON_WORKER_UI_V145 REMASK_PYTHON_WORKER_UI_V146 REMASK_PYTHON_WORKER_UI_V147 REMASK_PYTHON_WORKER_UI_V148 REMASK_PYTHON_WORKER_UI_V149 REMASK_PYTHON_WORKER_UI_V150 REMASK_PYTHON_WORKER_UI_V151 REMASK_PYTHON_WORKER_UI_V152 REMASK_PYTHON_WORKER_UI_V153 REMASK_PYTHON_WORKER_UI_V154 REMASK_PYTHON_WORKER_UI_V155 REMASK_PYTHON_WORKER_UI_V156 REMASK_PYTHON_WORKER_UI_V157 REMASK_PYTHON_WORKER_UI_V158 REMASK_PYTHON_WORKER_UI_V159 REMASK_PYTHON_WORKER_UI_V160 REMASK_PYTHON_WORKER_UI_V161 REMASK_PYTHON_WORKER_UI_V164 REMASK_PYTHON_WORKER_UI_V166 REMASK_PYTHON_WORKER_UI_V169 REMASK_PYTHON_WORKER_UI_V170 REMASK_PYTHON_WORKER_UI_V171 REMASK_PYTHON_WORKER_UI_V172 REMASK_PYTHON_WORKER_UI_V173 REMASK_PYTHON_WORKER_UI_V174 REMASK_PYTHON_WORKER_UI_V175 REMASK_PYTHON_WORKER_UI_V176 REMASK_PYTHON_WORKER_UI_V177 REMASK_PYTHON_WORKER_UI_V178 REMASK_PYTHON_WORKER_UI_V179 */
+/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 REMASK_PYTHON_WORKER_UI_V145 REMASK_PYTHON_WORKER_UI_V146 REMASK_PYTHON_WORKER_UI_V147 REMASK_PYTHON_WORKER_UI_V148 REMASK_PYTHON_WORKER_UI_V149 REMASK_PYTHON_WORKER_UI_V150 REMASK_PYTHON_WORKER_UI_V151 REMASK_PYTHON_WORKER_UI_V152 REMASK_PYTHON_WORKER_UI_V153 REMASK_PYTHON_WORKER_UI_V154 REMASK_PYTHON_WORKER_UI_V155 REMASK_PYTHON_WORKER_UI_V156 REMASK_PYTHON_WORKER_UI_V157 REMASK_PYTHON_WORKER_UI_V158 REMASK_PYTHON_WORKER_UI_V159 REMASK_PYTHON_WORKER_UI_V160 REMASK_PYTHON_WORKER_UI_V161 REMASK_PYTHON_WORKER_UI_V164 REMASK_PYTHON_WORKER_UI_V166 REMASK_PYTHON_WORKER_UI_V169 REMASK_PYTHON_WORKER_UI_V170 REMASK_PYTHON_WORKER_UI_V171 REMASK_PYTHON_WORKER_UI_V172 REMASK_PYTHON_WORKER_UI_V173 REMASK_PYTHON_WORKER_UI_V174 REMASK_PYTHON_WORKER_UI_V175 REMASK_PYTHON_WORKER_UI_V176 REMASK_PYTHON_WORKER_UI_V177 REMASK_PYTHON_WORKER_UI_V178 REMASK_PYTHON_WORKER_UI_V179 REMASK_PYTHON_WORKER_UI_V180 */
 const linkedPythonWorkerJobId = new URLSearchParams(window.location.search).get('job') || '';
 const restoredPythonWorkerJobId = /^[a-zA-Z0-9_-]{8,160}$/.test(linkedPythonWorkerJobId)
   ? linkedPythonWorkerJobId : localStorage.getItem('remask_python_worker_job_v1') || '';
@@ -487,10 +487,10 @@ function pythonWorkerSelectionRefresh() {
       profiles.length
         ? (
             pythonWorkerUiState.workerOnline === true
-              ? 'Worker UI v177 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
-              : 'Worker UI v177 · Выбрано FB-профилей: ' + profiles.length + '. Жду READY от worker.'
+              ? 'Worker UI v180 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
+              : 'Worker UI v180 · Выбрано FB-профилей: ' + profiles.length + '. Жду READY от worker.'
           )
-        : 'Worker UI v177 · Выберите FB-профили в Workspace.'
+        : 'Worker UI v180 · Выберите FB-профили в Workspace.'
     );
   }
 }
@@ -1115,6 +1115,13 @@ function pythonWorkerRenderJob(job) {
             inspect.textContent='Проверить сохранённый черновик';
             inspect.addEventListener('click',()=>pythonWorkerInspectDraft(item,task,inspect));
             errorTd.appendChild(inspect);
+            const selected=task.payload.launch?.base||task.payload.launch||{};
+            if(selected.execution_mode==='DRAFT'&&selected.campaign?.objective==='OUTCOME_TRAFFIC'){
+              const repair=document.createElement('button');repair.type='button';
+              repair.textContent='Исправить Traffic в этом черновике';
+              repair.addEventListener('click',()=>pythonWorkerRepairDraftObjective(item,task,repair));
+              errorTd.appendChild(repair);
+            }
           }
           if(task.action==='private_launch'&&task.result?.execution_mode==='DRAFT_INSPECT'){
             for(const message of pythonWorkerDraftValidationMessages(task.result)){
@@ -1128,6 +1135,19 @@ function pythonWorkerRenderJob(job) {
             const evidence=document.createElement('pre');
             evidence.textContent=JSON.stringify(task.result,null,2);
             inspection.appendChild(evidence);errorTd.appendChild(inspection);
+          }
+          if(task.action==='private_launch'&&task.result?.execution_mode==='DRAFT_OBJECTIVE_REPAIR'){
+            const repaired=document.createElement('div');
+            repaired.textContent='Представление Traffic исправлено в существующей кампании. Новые объекты не создавались. Редактор Meta не проверен; реклама не опубликована.';
+            errorTd.appendChild(repaired);
+            for(const message of pythonWorkerDraftValidationMessages(task.result)){
+              const warning=document.createElement('div');warning.className='pw-error';
+              warning.textContent=message;errorTd.appendChild(warning);
+            }
+            const details=document.createElement('details');
+            const summary=document.createElement('summary');summary.textContent='Проверки исправленного черновика';
+            const evidence=document.createElement('pre');evidence.textContent=JSON.stringify(task.result,null,2);
+            details.appendChild(summary);details.appendChild(evidence);errorTd.appendChild(details);
           }
         }
         if(advertisingSteps.length){
@@ -1218,7 +1238,7 @@ function pythonWorkerRenderJob(job) {
 }
 
 function pythonWorkerDraftInspectionKey(item,task){
-  if(task.action!=='private_launch'||!task.payload||task.payload.reconcile_only)return '';
+  if(task.action!=='private_launch'||!task.payload||task.payload.reconcile_only||task.payload.repair_objective)return '';
   const steps=(item.advertising_steps||[]).filter(step=>step.task_id===task.id);
   if(steps.some(step=>step.step==='ADS_MANAGER:PUBLISH'))return '';
   const saved=task.result?.draft_verified===true&&task.result?.published===false;
@@ -1249,6 +1269,29 @@ async function pythonWorkerInspectDraft(item,task,button){
   }catch(error){
     button.disabled=false;
     pythonWorkerSetText('pythonPwStatus',String(error.message||error));
+  }
+}
+
+async function pythonWorkerRepairDraftObjective(item,task,button){
+  if(button.disabled)return;
+  const sourceKey=pythonWorkerDraftInspectionKey(item,task);
+  const selected=task.payload?.launch?.base||task.payload?.launch||{};
+  if(!sourceKey||selected.execution_mode!=='DRAFT'||selected.campaign?.objective!=='OUTCOME_TRAFFIC')return;
+  button.disabled=true;
+  try{
+    const original=JSON.parse(JSON.stringify(task.payload));
+    const repairKey='draft-objective-repair-'+String(task.id);
+    const data=await pythonWorkerBridge({action:'create',idempotency_key:repairKey,
+      profiles:[{profile_id:String(item.profile_id),tasks:[{action:'private_launch',
+        idempotency_key:repairKey,payload:{...original,launch_key:sourceKey,repair_objective:true}}]}]});
+    const id=String(data?.job?.job_id||'');
+    if(!id)throw new Error('Worker не вернул задачу исправления Traffic.');
+    pythonWorkerClearBatchState();pythonWorkerUiState.jobId=id;
+    localStorage.setItem('remask_python_worker_job_v1',id);
+    pythonWorkerUiState.busy=true;
+    await pythonWorkerPoll();
+  }catch(error){
+    button.disabled=false;pythonWorkerSetText('pythonPwStatus',String(error.message||error));
   }
 }
 

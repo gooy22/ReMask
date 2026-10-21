@@ -111,14 +111,24 @@ class ObjectiveLaunchTests(unittest.IsolatedAsyncioTestCase):
         self.payload['launch']['campaign'].update(selected['campaign'])
         self.payload['launch']['adset'].update(selected['adset'])
         before = copy.deepcopy(self.payload)
+        plan = self.owner.ads_manager.plan(profile_id='19', payload=self.payload)
+        self.assertEqual(plan['objective_representation'], {
+            'selected': 'OUTCOME_TRAFFIC', 'private_campaign': {
+                'objective': 'LINK_CLICKS', 'is_odax_campaign_group': True},
+            'editor_state': 'EDITOR_UNVERIFIED'})
         result = await self.launch()
         campaign = next(row for row in self.client.fragments.values() if row['ad_object_type'] == 'campaign')
         values = {row['field']: row['new_value'] for row in campaign['values']}
-        self.assertEqual(values['objective'], 'OUTCOME_TRAFFIC')
-        self.assertNotIn('is_odax_campaign_group', values)
+        self.assertEqual(values['objective'], 'LINK_CLICKS')
+        self.assertIs(values['is_odax_campaign_group'], True)
+        self.assertEqual(values['bid_strategy'], 'LOWEST_COST_WITHOUT_CAP')
+        self.assertIs(values['is_autobid'], True)
         adset = next(row for row in self.client.fragments.values() if row['ad_object_type'] == 'ad_set')
         actual = {row['field']: row['new_value'] for row in adset['values']}
         self.assertEqual(actual['targeting'], selected['adset']['targeting'])
+        self.assertEqual(actual['optimization_goal'], selected['adset']['optimization_goal'])
+        self.assertEqual(actual['billing_event'], selected['adset']['billing_event'])
+        self.assertEqual(result['configuration']['selected_objective'], 'OUTCOME_TRAFFIC')
         self.assertEqual(self.payload, before)
         self.assertTrue(result['fragment_storage_verified'])
         self.assertFalse(result['editor_verified'])
@@ -129,6 +139,22 @@ class ObjectiveLaunchTests(unittest.IsolatedAsyncioTestCase):
         await self.launch()
         self.assertEqual(self.client.uploads, 1)
         self.assertEqual(len(self.client.posts), 4)
+
+    async def test_traffic_private_campaign_does_not_replace_landing_page_optimization(self):
+        self.payload['launch']['execution_mode'] = 'DRAFT'
+        self.payload['launch']['adset']['optimization_goal'] = 'LANDING_PAGE_VIEWS'
+        before = copy.deepcopy(self.payload)
+        result = await self.launch()
+        wire = {row['ad_object_type']: {item['field']: item['new_value'] for item in row['values']}
+                for row in self.client.fragments.values()}
+        self.assertEqual(wire['campaign']['objective'], 'LINK_CLICKS')
+        self.assertIs(wire['campaign']['is_odax_campaign_group'], True)
+        self.assertEqual(wire['ad_set']['optimization_goal'], 'LANDING_PAGE_VIEWS')
+        self.assertEqual(wire['ad_set']['billing_event'], 'IMPRESSIONS')
+        self.assertEqual(wire['ad_set']['destination_type'], 'WEBSITE')
+        self.assertEqual(wire['campaign']['daily_budget'], before['launch']['campaign']['daily_budget'])
+        self.assertEqual(self.payload, before)
+        self.assertFalse(result['editor_verified'])
 
     async def test_incompatible_effective_override_cannot_bootstrap_upload_or_submit(self):
         base = copy.deepcopy(self.payload['launch'])

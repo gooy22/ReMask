@@ -132,7 +132,7 @@ class BiddingLaunchTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(self.payload, before)
             wire = {row['ad_object_type']:{field['field']:field['new_value'] for field in row['values']}
                     for row in self.client.fragments.values()}
-            self.assertEqual(wire['campaign']['objective'],'OUTCOME_TRAFFIC')
+            self.assertEqual(wire['campaign']['objective'],'LINK_CLICKS')
             self.assertTrue(wire['campaign']['is_autobid'])
             self.assertEqual(wire['campaign']['daily_budget'],500)
             self.assertNotIn('bid_strategy',wire['ad_set'])
