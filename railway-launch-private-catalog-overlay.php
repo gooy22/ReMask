@@ -674,7 +674,7 @@ NEW_BULK_PAGES;
 file_put_contents($jsPath,$js);
 $phpPath=$root.'/launch.php';
 $php=file_get_contents($phpPath);
-$php=preg_replace('#scripts/launch\\.js(?:\\?[^"\\\']*)?#','scripts/launch.js?v=20261012-advertising-pipeline-v4',$php,1);
+$php=preg_replace('#scripts/launch\\.js(?:\\?[^"\\\']*)?#','scripts/launch.js?v=20261021-advertising-pipeline-v223',$php,1);
 $php=str_replace('official API, read only','состояние оплаты, read only',$php);
 $php=str_replace('Одна настройка → много FB-профилей и RK. Каждая цель использует свой token, proxy и account-specific assets.',
     'Сохранённые РК и FP доступны без новой синхронизации. Доступ FP для рекламы и привязку карты ещё нужно проверить.',$php);
@@ -689,7 +689,7 @@ $workspacePath=$root.'/workspace.php';
 if (is_file($workspacePath)) {
     $workspace=file_get_contents($workspacePath);
     $workspace=preg_replace('#scripts/workspace\\.js(?:\\?[^"\\\']*)?#',
-        'scripts/workspace.js?v=20261012-python-worker-ui-v221-private-assets-v5',$workspace,1);
+        'scripts/workspace.js?v=20261021-python-worker-ui-v223-private-assets-v5',$workspace,1);
     file_put_contents($workspacePath,$workspace);
 }
 fwrite(STDERR,"[launch-private-catalog] local RK/Page reads installed; live advertising/payment permissions remain unverified\n");
