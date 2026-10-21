@@ -973,18 +973,27 @@ def _extract_entity_id(payload: Any, paths: tuple[str, ...]) -> tuple[str, str]:
     return "", ""
 
 
-def _deep_merge(base: Any, override: Any) -> Any:
-    """Merge a per-RK Launch override without mutating the saved base payload."""
+def _deep_merge(base: Any, override: Any, path: tuple[str, ...] = ()) -> Any:
+    """Merge an RK override, replacing each selected targeting value atomically.
+
+    An override may select an entirely new nested exclusion, geo object or
+    logical targeting group. Merging within that field retains stale audience
+    conditions from another form/account even though the draft matches the
+    resulting (incorrect) merged intent. Other independent targeting fields
+    and ordinary per-RK overrides still inherit the shared configuration.
+    """
     if not isinstance(base, dict):
         return override
     if not isinstance(override, dict):
         return dict(base)
     out = dict(base)
     for key, value in override.items():
-        if isinstance(out.get(key), dict) and isinstance(value, dict):
-            out[key] = _deep_merge(out[key], value)
-        else:
+        if (path == ("adset", "targeting")
+                or not isinstance(out.get(key), dict)
+                or not isinstance(value, dict)):
             out[key] = value
+        else:
+            out[key] = _deep_merge(out[key], value, (*path, key))
     return out
 
 

@@ -72,6 +72,37 @@ class ExactAdvertisingSettingsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.client.uploads, 1)
         self.assertEqual(before, 5)
 
+    async def test_per_account_override_replaces_nested_audience_conditions_in_real_draft(self):
+        self.configure()
+        self.payload['launch']['execution_mode'] = 'DRAFT'
+        base = copy.deepcopy(self.payload['launch'])
+        base['adset']['targeting']['exclusions'] = {
+            'interests': [{'id': '111111'}], 'behaviors': [{'id': '222222'}]}
+        override_targeting = {
+            'exclusions': {'interests': [{'id': '333333'}]},
+            'geo_locations': {'countries': ['PL']},
+            'flexible_spec': [{'interests': [{'id': '444444'}]}],
+        }
+        self.payload['launch'] = {
+            'base': base, 'override': {'adset': {'targeting': override_targeting}}}
+        original = copy.deepcopy(self.payload)
+        result = await self.launch()
+        self.assertTrue(result['draft_verified'])
+        self.assertEqual(self.payload, original)
+        adset = next(row for row in self.client.fragments.values()
+                     if row['ad_object_type'] == 'ad_set')
+        target = next(row['new_value'] for row in adset['values']
+                      if row['field'] == 'targeting')
+        for key, selected in override_targeting.items():
+            self.assertEqual(target[key], selected, key)
+        # Independent fields not overridden stay inherited.
+        self.assertEqual(target['excluded_geo_locations'], base['adset']['targeting']['excluded_geo_locations'])
+        self.assertEqual(target['age_min'], 25)
+        before = len(self.client.posts)
+        self.owner.state = PrivateLaunchStateStore(self.owner.state.path)
+        self.assertTrue((await self.launch())['draft_verified'])
+        self.assertEqual(len(self.client.posts), before)
+
     async def test_added_nested_targeting_condition_blocks_fragment_publication(self):
         self.configure()
         original = self.client.get
