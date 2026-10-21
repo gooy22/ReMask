@@ -314,10 +314,14 @@ file_put_contents($root.'/classes/RemaskAdvertisingAssetBridge.php', <<<'ASSET_B
 declare(strict_types=1);
 final class RemaskAdvertisingAssetBridge
 {
+    public static function targetingTypes(): array {
+        $editor=json_decode((string)file_get_contents(__DIR__.'/meta-editor-modules.json'),true,512,JSON_THROW_ON_ERROR);
+        return array_keys($editor['targeting_types'] ?? []);
+    }
     public static function read(array $input, array $catalog, string $resource, bool $force = false): array {
         $allowed=['pages','pixels','custom_audiences','images','videos','creatives','instagram_accounts','instagram_media',
             'conversion_goals','campaigns','adsets','ads','insights','locations','interests','behaviors','locales'];
-        if (!in_array($resource,$allowed,true)) throw new InvalidArgumentException('UNKNOWN_ADVERTISING_RESOURCE');
+        if (!in_array($resource,$allowed,true) && !in_array($resource,self::targetingTypes(),true)) throw new InvalidArgumentException('UNKNOWN_ADVERTISING_RESOURCE');
         $profile=trim((string)($input['profile'] ?? ''));
         $account=preg_replace('/^act_/','',trim((string)($input['account_id'] ?? '')));
         $accounts=(array)($catalog['ad_accounts']['data'] ?? []);
@@ -420,7 +424,7 @@ try {
     $type=strtolower(trim((string)($input['type'] ?? '')));
     $type=['location'=>'locations','interest'=>'interests','behavior'=>'behaviors',
            'language'=>'locales','languages'=>'locales','locale'=>'locales'][$type] ?? $type;
-    if (!in_array($type,['locations','interests','behaviors','locales'],true)) throw new InvalidArgumentException('UNKNOWN_TARGETING_TYPE');
+    if (!in_array($type,array_merge(['locations','interests','behaviors','locales'],RemaskAdvertisingAssetBridge::targetingTypes()),true)) throw new InvalidArgumentException('UNKNOWN_TARGETING_TYPE');
     MetaEndpoint::ok(RemaskAdvertisingAssetBridge::read($input,RemaskPrivateLaunchCatalog::load($profile),$type,true));
 } catch (Throwable $e) { MetaEndpoint::fail($e); }
 TARGETING

@@ -12,6 +12,7 @@ const targetingCode=source.slice(source.indexOf('function remaskPrivateTargeting
 function targetingFixture(){
   const calls=[];
   const ctx={URLSearchParams,state:{profile:'38',targets:[]},accounts:['act_120249912222240685'],mode:'DRAFT',
+    remaskModuleControls:{isTargetingType:type=>type==='work_positions'},
     $:()=>({value:ctx.mode}),selectedAccountIds:()=>ctx.accounts,targetMode:()=>ctx.state.targets.length>0,
     apiJson:async(url,options)=>{
       const body=Object.fromEntries(new URLSearchParams(options.body));calls.push({url,body});
@@ -48,8 +49,13 @@ test('unbound and multiple-account templates stay explicitly unbound',async()=>{
     assert.deepEqual(calls,[{url:'ajax/metaTemplateTargetingSearch.php',body:{type:'interests',q:'fitness',limit:'25'}}]);
   }
 });
-test('advanced reference types never call an unsupported account read contract',async()=>{
+test('reviewed advanced targeting types use the existing scoped sender',async()=>{
   const {calls,search}=targetingFixture();await search('work_positions');
+  assert.equal(calls[0].url,'ajax/metaTargetingSearch.php');
+  assert.equal(calls[0].body.profile,'38');assert.equal(calls[0].body.type,'work_positions');
+});
+test('unreviewed types never call an unsupported account read contract',async()=>{
+  const {calls,search}=targetingFixture();await search('invented_type');
   assert.equal(calls[0].url,'ajax/metaTemplateTargetingSearch.php');
   assert.equal(calls[0].body.profile,undefined);
 });

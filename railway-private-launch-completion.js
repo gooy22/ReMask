@@ -22,7 +22,8 @@ apiJson = async function(url, options = {}) {
         }
         const type=String(input.get('type')||'').toLowerCase();
         const resource={location:'locations',locations:'locations',interest:'interests',interests:'interests',
-            behavior:'behaviors',behaviors:'behaviors',language:'locales',languages:'locales',locale:'locales',locales:'locales'}[type];
+            behavior:'behaviors',behaviors:'behaviors',language:'locales',languages:'locales',locale:'locales',locales:'locales'}[type]
+            || (typeof remaskModuleControls!=='undefined' && remaskModuleControls.isTargetingType(type) ? type : null);
         const scope=resource ? remaskPrivateTargetingScope() : null;
         if(scope){
             for(const [key,value] of Object.entries(scope))body.set(key,value);
