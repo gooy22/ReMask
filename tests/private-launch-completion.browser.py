@@ -1018,6 +1018,74 @@ class InstalledLaunchTests(unittest.TestCase):
             worker.shutdown();worker.server_close()
             self.e2e_php_url=None
 
+    def test_installed_carousel_ui_php_native_draft_publish(self):
+        """Restored carousel cards flow through installed UI/PHP/native sender."""
+        import asyncio
+        from dataclasses import replace
+        from concurrent.futures import ThreadPoolExecutor
+        from app.private_launch import PrivateLaunchStateStore
+        from tests import test_private_ads_carousel as carousel_fixtures
+
+        self.page.wait_for_function('fixtureLaunch.ready()')
+        self.page.locator('#creativeLibrarySelect').select_option('preset')
+        snapshot=self.page.evaluate('fixtureLaunch.capture()')
+        second='m-'+'c'*24
+        snapshot['fields']['creativeFormat']='CAROUSEL'
+        snapshot['media']={'format':'CAROUSEL','carousel':[
+            {'media_library_id':MEDIA_ID,'headline':'First card',
+             'link':'https://example.com/first','call_to_action':'LEARN_MORE'},
+            {'media_library_id':second,'headline':'Second card',
+             'description':'Second description','link':'https://example.com/second',
+             'call_to_action':'SHOP_NOW'}]}
+        self.page.evaluate('(data)=>fixtureLaunch.restore(data)',snapshot)
+        self.assertEqual(self.page.evaluate('fixtureLaunch.capture().media.format'),'CAROUSEL')
+        task=self.capture_installed_media_job()
+        creative=task['payload']['launch']['base']['creative']
+        self.assertEqual(creative['format'],'CAROUSEL')
+        self.assertEqual(creative['carousel_media_library_ids'],[MEDIA_ID,second])
+        self.assertEqual([card['headline'] for card in creative['carousel_cards']],
+                         ['First card','Second card'])
+        self.assertEqual([card['link'] for card in creative['carousel_cards']],
+                         ['https://example.com/first','https://example.com/second'])
+
+        async def native():
+            case=carousel_fixtures.CarouselTests('test_two_cards_keep_media_text_links_and_resume_without_posts')
+            await case.asyncSetUp()
+            try:
+                case.media=replace(case.media,id=MEDIA_ID)
+                case.second=replace(case.second,id=second)
+                case.resolver.return_value=[case.media,case.second]
+                case.payload=task['payload']
+                case.payload['launch_key']=task['idempotency_key']
+                async def execute():
+                    return await case.owner.run(item_id='carousel-e2e',profile_id='20',
+                        context=case.context,session=case.session,payload=case.payload)
+                draft=await execute()
+                self.assertTrue(draft['draft_verified'])
+                self.assertEqual(case.client.uploads,2)
+                case.payload['publish_saved_draft']=True
+                published=await execute()
+                self.assertTrue(published['verified'])
+                self.assertFalse(published['delivery_running_verified'])
+                self.assertEqual(len(case.client.posts),5)
+                story=case.client.expected_creative['object_story_spec']
+                self.assertEqual(story['page_id'],'555555')
+                cards=story['link_data']['child_attachments']
+                self.assertEqual([c['name'] for c in cards],['First card','Second card'])
+                self.assertEqual([c['link'] for c in cards],
+                    ['https://example.com/first','https://example.com/second'])
+                self.assertEqual([c['call_to_action']['type'] for c in cards],
+                    ['LEARN_MORE','SHOP_NOW'])
+                self.assertEqual([c['image_hash'] for c in cards],
+                    [case.media.sha256[:32],case.second.sha256[:32]])
+                case.owner.state=PrivateLaunchStateStore(case.owner.state.path)
+                self.assertTrue((await execute())['verified'])
+                self.assertEqual(case.client.uploads,2)
+                self.assertEqual(len(case.client.posts),5)
+            finally:case.doCleanups()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            executor.submit(lambda:asyncio.run(native())).result(timeout=90)
+
     def test_single_rk_cleared_page_cannot_reuse_payload_or_create_job(self):
         self.prepare_single_page_launch()
         self.page.locator('#page').select_option('')
