@@ -263,28 +263,34 @@ function remaskReplaceRetainedLaunchField(event) {
     if(retained)delete retained[field];
 }
 for(const type of ['remask-module-edit','input','change'])document.addEventListener(type,remaskReplaceRetainedLaunchField);
+// A visible Meta field is one complete user selection, including nested JSON.
+ // Do not recursively merge it with a saved preset's old targeting conditions.
+function remaskLaunchOverrideSelectedFields(base, selected) {
+    return {...(base && typeof base==='object' && !Array.isArray(base) ? base : {}),
+            ...(selected && typeof selected==='object' && !Array.isArray(selected) ? selected : {})};
+}
 function remaskCurrentMetaBuilderForJob() {
     const preset=remaskSelectedCreativePreset?.meta_builder||{};
     const extra=remaskReadLaunchMetaSdkFields();
     return {
-        campaign:remaskMergeBuilderObject(preset.campaign||{},extra.campaign||{}),
-        adset:remaskMergeBuilderObject(preset.adset||{},extra.adset||{}),
-        targeting:remaskMergeBuilderObject(preset.targeting||{},extra.targeting||{}),
-        identity:remaskMergeBuilderObject({},preset.identity||{}),
-        existing_media:remaskMergeBuilderObject({},preset.existing_media||{}),
-        creative:remaskMergeBuilderObject(preset.creative||{},extra.creative||{}),
-        ad:remaskMergeBuilderObject(preset.ad||{},extra.ad||{})
+        campaign:remaskLaunchOverrideSelectedFields(preset.campaign||{},extra.campaign||{}),
+        adset:remaskLaunchOverrideSelectedFields(preset.adset||{},extra.adset||{}),
+        targeting:remaskLaunchOverrideSelectedFields(preset.targeting||{},extra.targeting||{}),
+        identity:remaskLaunchOverrideSelectedFields({},preset.identity||{}),
+        existing_media:remaskLaunchOverrideSelectedFields({},preset.existing_media||{}),
+        creative:remaskLaunchOverrideSelectedFields(preset.creative||{},extra.creative||{}),
+        ad:remaskLaunchOverrideSelectedFields(preset.ad||{},extra.ad||{})
     };
 }
 function remaskApplyLaunchMetaFields(payload) {
     const extra=remaskReadLaunchMetaSdkFields();
     const out=remaskMergeBuilderObject({},payload||{});
-    out.campaign=remaskMergeBuilderObject(out.campaign||{},extra.campaign||{});
-    out.adset=remaskMergeBuilderObject(out.adset||{},extra.adset||{});
-    out.adset.targeting=remaskMergeBuilderObject(out.adset.targeting||{},extra.targeting||{});
+    out.campaign=remaskLaunchOverrideSelectedFields(out.campaign||{},extra.campaign||{});
+    out.adset=remaskLaunchOverrideSelectedFields(out.adset||{},extra.adset||{});
+    out.adset.targeting=remaskLaunchOverrideSelectedFields(out.adset.targeting||{},extra.targeting||{});
     out.creative={...(out.creative||{})};
-    out.creative.official_params=remaskMergeBuilderObject(out.creative.official_params||{},extra.creative||{});
-    out.ad=remaskMergeBuilderObject(out.ad||{},extra.ad||{});
+    out.creative.official_params=remaskLaunchOverrideSelectedFields(out.creative.official_params||{},extra.creative||{});
+    out.ad=remaskLaunchOverrideSelectedFields(out.ad||{},extra.ad||{});
     out._meta_official_v1=true;
     return out;
 }
