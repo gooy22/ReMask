@@ -1,8 +1,10 @@
 """Offline service/SQLite integration; only the Meta boundary is simulated."""
+import asyncio
 import copy
 from pathlib import Path
 import unittest
 from unittest.mock import AsyncMock, patch
+from types import SimpleNamespace
 
 from app.private_launch import PrivateLaunchStateStore
 from app.private_launch_extensions import OperationKey
@@ -294,4 +296,90 @@ class AdPublicationLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.client.posts), 4)
         self.assertEqual(len(self.client.fragments), 3)
         self.assertEqual(self.client.uploads, 1)
+
+    async def test_real_worker_queue_keeps_other_profile_running_after_rejected_ad(self):
+        from app import runner
+        from app.models import CreateJobRequest
+        from app.runner import WorkerPool
+        from app.store import JobStore
+
+        store = JobStore(Path(self.temp.name) / 'state.sqlite')
+        await store.init()
+        pool = WorkerPool(store, concurrency=2)
+        pool.private_launch = self.owner
+        pool._restore_workspace_bindings = AsyncMock()
+        clients = {'19': self.client, '20': launch_fixtures.ImageClient()}
+        clients['20'].context.actor_id = '123457'
+        contexts = {'19': self.context, '20': SimpleNamespace(
+            cookies={'c_user': '123457'}, ad_accounts=copy.deepcopy(self.context.ad_accounts))}
+        pool.resolver.resolve = AsyncMock(side_effect=lambda profile: contexts[profile])
+        entered, concurrent = asyncio.Event(), asyncio.Event()
+        original_bad, original_good = clients['19'].get, clients['20'].get
+
+        async def bad(path, params):
+            row = await original_bad(path, params)
+            if row.get('ad_object_type') == 'ad':
+                entered.set()
+                await asyncio.wait_for(concurrent.wait(), 3)
+                row.update(validation_status='HAS_ERRORS', active_errors=[{'error_code': 12345}])
+            return row
+
+        async def good(path, params):
+            row = await original_good(path, params)
+            if path == '/addraft_555555':
+                row['author_id'] = '123457'
+            if row.get('ad_object_type') == 'ad':
+                await asyncio.wait_for(entered.wait(), 3)
+                concurrent.set()
+            return row
+
+        clients['19'].get, clients['20'].get = bad, good
+        boundary_web = object()
+        class Session:
+            def __init__(inner, context):
+                inner.context = context
+            async def __aenter__(inner):
+                return inner
+            async def __aexit__(inner, *args):
+                pass
+            async def facebook_web(inner):
+                return boundary_web
+
+        payloads = {profile: {**copy.deepcopy(self.payload), 'launch_key': 'worker-' + profile}
+                    for profile in clients}
+        for payload in payloads.values():
+            payload['launch']['execution_mode'] = 'DRAFT'
+        job, _ = await store.create_job(CreateJobRequest(profiles=[
+            {'profile_id': profile, 'tasks': [{'action': 'private_launch', 'payload': payload}]}
+            for profile, payload in payloads.items()]))
+        async def open_client(web, *, actor_id, **kwargs):
+            return clients['19' if actor_id == '123456' else '20']
+        with patch.object(runner, 'ProfileSession', Session), patch(
+                'app.private_ads_launch.AdsManagerPrivateHttp.open', side_effect=open_client):
+            await pool.start()
+            try:
+                await pool.enqueue_job(job)
+                async def completed():
+                    while True:
+                        view = await store.job_view(job)
+                        if view['status'] in {'SUCCESS', 'FAILED', 'PARTIAL'}:
+                            return view
+                        await asyncio.sleep(0.01)
+                view = await asyncio.wait_for(completed(), 5)
+            finally:
+                await pool.stop()
+        self.assertTrue(concurrent.is_set())
+        self.assertEqual(view['status'], 'PARTIAL')
+        items = {item['profile_id']: item for item in view['items']}
+        self.assertEqual(items['19']['status'], 'FAILED')
+        self.assertEqual(items['19']['tasks'][0]['error_code'], 'PRIVATE_ADS_DRAFT_VALIDATION_ERRORS')
+        self.assertEqual(items['20']['status'], 'SUCCESS')
+        self.assertTrue(items['20']['tasks'][0]['result']['draft_verified'])
+        self.assertFalse(items['20']['tasks'][0]['result']['published'])
+        for profile, client in clients.items():
+            self.assertEqual(len(client.posts), 4)
+            self.assertEqual(client.uploads, 1)
+            records = await self.owner.state.all_steps('worker-' + profile)
+            self.assertTrue(all(row['profile_id'] == profile for row in records))
+            self.assertTrue(all(row['result']['evidence']['actor_id'] == contexts[profile].cookies['c_user'] for row in records))
 
