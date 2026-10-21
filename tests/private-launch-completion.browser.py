@@ -76,6 +76,74 @@ class InstalledLaunchTests(unittest.TestCase):
         self.assertEqual(self.errors, [])
         self.page.close()
 
+    def offline_php_job_bridge(self):
+        """Execute the installed same-origin PHP job endpoint against fake worker HTTP."""
+        from contextlib import contextmanager
+        @contextmanager
+        def session():
+            import os, socket, threading, time
+            from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+            received=[]
+            class Worker(BaseHTTPRequestHandler):
+                def log_message(self,*args): pass
+                def do_POST(self):
+                    if self.path!='/api/v1/jobs':
+                        self.send_error(404);return
+                    count=int(self.headers.get('Content-Length','0'))
+                    received.append(json.loads(self.rfile.read(count)))
+                    raw=json.dumps({'job_id':'media-e2e-job'}).encode()
+                    self.send_response(200)
+                    self.send_header('Content-Type','application/json')
+                    self.send_header('Content-Length',str(len(raw)))
+                    self.end_headers();self.wfile.write(raw)
+            server=ThreadingHTTPServer(('127.0.0.1',0),Worker)
+            threading.Thread(target=server.serve_forever,daemon=True).start()
+            with socket.socket() as sock:
+                sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
+            env=os.environ.copy()
+            env.update(REMASK_INTERNAL_KEY='remask-fixture-only',
+                REMASK_PYTHON_WORKER_URL='http://127.0.0.1:'+str(server.server_port))
+            php=subprocess.Popen(['php','-S','127.0.0.1:'+str(port),'-t',str(self.root)],
+                env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+            try:
+                for _ in range(70):
+                    try:
+                        with socket.create_connection(('127.0.0.1',port),timeout=.1):break
+                    except OSError:
+                        if php.poll() is not None:raise AssertionError('PHP bridge exited')
+                        time.sleep(.05)
+                else:raise AssertionError('PHP bridge startup timeout')
+                self.e2e_php_url='http://127.0.0.1:'+str(port)+'/ajax/pythonWorkerJobs.php'
+                yield received
+            finally:
+                self.e2e_php_url=None
+                if php.poll() is None:
+                    php.terminate()
+                    try:php.wait(timeout=5)
+                    except subprocess.TimeoutExpired:php.kill();php.wait(timeout=5)
+                server.shutdown();server.server_close()
+        return session()
+
+    def capture_installed_media_job(self):
+        self.page.evaluate('fixtureSingleTarget("act_111111","222222")')
+        self.page.locator('#page option[value="555555"]').wait_for(state='attached')
+        self.page.locator('#page').select_option('555555')
+        self.page.evaluate('fixtureLaunch.geo()')
+        self.page.locator('#launchDeliverySelect').select_option('PAUSED')
+        self.review_ready=True
+        with self.offline_php_job_bridge() as received:
+            self.page.locator('#launchButton').click()
+            self.page.wait_for_function('document.querySelector("#launchResult").textContent.includes("Задача принята")')
+            self.assertEqual(len(received),1)
+            self.assertEqual(len(received[0]['profiles']),1)
+            task=received[0]['profiles'][0]['tasks'][0]
+        self.assertEqual(task['action'],'private_launch')
+        self.assertEqual(task['payload']['ad_account_id'],'111111')
+        self.assertEqual(task['payload']['page_id'],'555555')
+        self.assertEqual(task['payload']['business_id'],'222222')
+        self.assertEqual(task['payload']['launch']['base']['execution_mode'],'DRAFT')
+        return task
+
     def route(self, route):
         request = route.request
         url = urlparse(request.url)
