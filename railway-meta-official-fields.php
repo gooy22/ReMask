@@ -113,27 +113,6 @@ final class MetaOfficialFields
         return $out;
     }
 
-    /**
-     * The browser replaces a selected list as one value. PHP's
-     * array_replace_recursive() instead merges numeric indexes and retains
-     * unselected trailing audience groups, cities or placements.
-     * Merge only associative objects; selected lists (including []) are atomic.
-     */
-    private static function mergeTargetingSelections(array $base, array $selected): array
-    {
-        foreach ($selected as $key => $value) {
-            $existing = $base[$key] ?? null;
-            if (is_array($existing) && is_array($value)
-                && $existing !== [] && $value !== []
-                && !array_is_list($existing) && !array_is_list($value)) {
-                $base[$key] = self::mergeTargetingSelections($existing, $value);
-            } else {
-                $base[$key] = $value;
-            }
-        }
-        return $base;
-    }
-
     public static function applyBuilderToPayload(array $payload, array $builder): array
     {
         $builder = self::sanitizeBuilder($builder);
@@ -148,7 +127,9 @@ final class MetaOfficialFields
         );
 
         $targeting = is_array($payload['adset']['targeting'] ?? null) ? $payload['adset']['targeting'] : [];
-        $payload['adset']['targeting'] = self::mergeTargetingSelections($targeting, $builder['targeting']);
+        // Each targeting field is one selected value. Recursive array merges
+        // retain stale flexible_spec groups, placements and geo subconditions.
+        $payload['adset']['targeting'] = array_replace($targeting, $builder['targeting']);
 
         $payload['creative'] = is_array($payload['creative'] ?? null) ? $payload['creative'] : [];
         foreach ($builder['identity'] as $key => $value) {
