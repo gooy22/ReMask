@@ -79,3 +79,34 @@ class AdsManagerRouteCatalog:
             path = path.replace("{" + key + "}", value)
         return row, "/" + self.data["api_version"] + path
 
+    def validate_values(self, launch):
+        """Use the installed UI's reviewed schema before constructing any POST.
+
+        Field availability is still the pinned native allowlist. An enum in a
+        public module is not account eligibility; this only rejects values the
+        installed UI/contract never offered and preserves every valid value.
+        """
+        from .editor_modules import form_schema
+        schema = form_schema(self)['schema']
+        values = {name:launch[name] for name in ('campaign','adset','ad')}
+        values['targeting'] = launch['adset'].get('targeting') or {}
+        values['creative'] = launch['creative'].get('official_params') or {}
+        for group, fields in values.items():
+            spec = schema[group]
+            for field, value in fields.items():
+                kind = spec['fields'].get(field)
+                choices = spec.get('enums', {}).get(field)
+                label = group + '.' + field
+                if choices is not None:
+                    selected = value if kind and kind.startswith('list<') else [value]
+                    if (not isinstance(selected,list) or any(type(v) not in {str,int} or v not in choices for v in selected)):
+                        raise fail('FIELD_VALUE_UNAVAILABLE', label + ' has a value absent from the reviewed native schema')
+                if kind and kind.startswith('list<') and not isinstance(value,list):
+                    raise fail('FIELD_TYPE_INVALID', label + ' requires a list')
+                if kind in {'unsigned int','int','integer'} and (type(value) is not int or (kind=='unsigned int' and value<0)):
+                    raise fail('FIELD_TYPE_INVALID', label + ' requires an integer')
+                if kind == 'bool' and type(value) is not bool:
+                    raise fail('FIELD_TYPE_INVALID', label + ' requires a boolean')
+                if kind == 'string' and not isinstance(value,str):
+                    raise fail('FIELD_TYPE_INVALID', label + ' requires a string')
+
