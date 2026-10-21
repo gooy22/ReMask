@@ -202,6 +202,19 @@ console.log('Private Launch catalog and funding truth checks passed');
   privateCtx.validateReady();
   assert.equal(buttons.launchButton.disabled,false);
   assert.equal(typeof captureHandler,'function');
+  const routed=[];
+  const originals=[privateCtx.remaskPrivateReviewLive,privateCtx.remaskPrivateReviewOnly,privateCtx.remaskPrivateCreateJob];
+  privateCtx.remaskPrivateReviewLive=()=>routed.push('meta-readiness');
+  privateCtx.remaskPrivateReviewOnly=()=>routed.push('local-plan');
+  privateCtx.remaskPrivateCreateJob=()=>routed.push('create');
+  for(const id of ['reviewLaunch','dryRunPlan','serverDryRun','launchButton']){
+    let stopped=0;
+    captureHandler({target:{closest:()=>({id,disabled:false})},
+      preventDefault(){stopped++;},stopPropagation(){stopped++;},stopImmediatePropagation(){stopped++;}});
+    assert.equal(stopped,3,'legacy submission handlers must remain blocked');
+  }
+  assert.deepEqual(routed,['meta-readiness','local-plan','local-plan','create']);
+  [privateCtx.remaskPrivateReviewLive,privateCtx.remaskPrivateReviewOnly,privateCtx.remaskPrivateCreateJob]=originals;
 
   const originalFetch=privateCtx.fetch;
   privateCtx.fetch=async()=>({ok:true,json:async()=>({ok:true,contracts:{

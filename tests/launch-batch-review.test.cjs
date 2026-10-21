@@ -36,6 +36,51 @@ function fixture(size=30) {
 }
 
 (async()=>{
+  for(const size of [1,3,5,10,30]){
+    const {ctx,config,requests,storage,controls}=fixture(size);
+    controls.remaskPrivateExecutionMode={value:'DRAFT'};
+    const original=JSON.stringify(config);
+    const results=await ctx.remaskPrivateReviewLive();
+    assert.equal(results.length,size);
+    assert.equal(results.filter(row=>row.status==='READY').length,size);
+    assert.equal(JSON.stringify(config),original,'explicit readiness cannot modify the selected settings');
+    assert.equal(requests.filter(row=>row.action==='private_launch_review').length,size);
+    assert.ok(requests.every(row=>['private_launch_contracts','private_launch_review'].includes(row.action)));
+    assert.equal(storage.size,0,'readiness cannot create or replace durable mutation identities');
+    assert.match(controls.launchResult.textContent,/публикация и редактор Meta не подтверждены/);
+    assert.equal(controls.launchButton.disabled,false);
+  }
+  {
+    const {ctx,requests,storage,controls}=fixture(2);
+    controls.remaskPrivateExecutionMode={value:'DRAFT'};
+    let release,entered;
+    const waiting=new Promise(resolve=>entered=resolve);
+    ctx.review=async()=>{entered();await new Promise(resolve=>release=resolve);return {review:{ready:true}};};
+    const first=ctx.remaskPrivateReviewLive();
+    await waiting;
+    assert.equal(controls.reviewLaunch.disabled,true);
+    assert.equal(await ctx.remaskPrivateReviewLive(),null,'duplicate clicks cannot submit another read batch');
+    controls.remaskPrivateExecutionMode.value='PUBLISH';
+    release();
+    assert.equal(await first,null);
+    assert.equal(requests.filter(row=>row.action==='private_launch_review').length,1,
+      'a changed operation must stop remaining account reads and discard the old reply');
+    assert.deepEqual(Array.from(ctx.state.privateLaunchReadiness.targets),[]);
+    assert.match(controls.launchResult.textContent,/Настройки изменились/);
+    assert.equal(storage.size,0);
+  }
+  for(const mode of ['DRAFT','PUBLISH']){
+    const {ctx,requests,storage,controls}=fixture(1);
+    controls.remaskPrivateExecutionMode={value:mode};
+    ctx.review=async()=>{const error=Error('Meta denied Page advertising access');error.code='PAGE_ACCESS_REQUIRED';throw error;};
+    const results=await ctx.remaskPrivateReviewLive();
+    assert.equal(results[0].error_code,'PAGE_ACCESS_REQUIRED');
+    const request=requests.find(row=>row.action==='private_launch_review');
+    assert.equal(request.launch.base.execution_mode,mode==='DRAFT'?'DRAFT':undefined);
+    assert.equal(storage.size,0);
+    assert.ok(requests.every(row=>row.action!=='create'));
+    assert.match(controls.launchResult.textContent,/0\/1 РК готовы/);
+  }
   {
     const {ctx,config,requests,controls}=fixture(1);
     controls.remaskPrivateExecutionMode={value:'DRAFT'};

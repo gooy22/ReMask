@@ -496,9 +496,10 @@ function remaskPrivateRenderReviewResults(results,render=true) {
     }
     box.appendChild(list);
 }
-async function remaskPrivateReviewConfig(config,{render=true}={}) {
+async function remaskPrivateReviewConfig(config,{render=true,assertCurrent=null}={}) {
     remaskPrivateRenderReviewResults([],render);
     const contractStatus=await remaskPrivateContractStatus({render,config});
+    if(assertCurrent)assertCurrent();
     if(!contractStatus.ready){
         const missing=contractStatus.missing.map(row=>row.step).join(', ');
         throw new Error('Модуль публикации не готов ('+missing+').');
@@ -508,6 +509,7 @@ async function remaskPrivateReviewConfig(config,{render=true}={}) {
     const authBlockedProfiles=new Map();
     let batchStop=null;
     for(let index=0;index<rows.length;index++){
+        if(assertCurrent)assertCurrent();
         const row=rows[index];
         const prior=batchStop||authBlockedProfiles.get(row.profile);
         if(prior){
@@ -528,6 +530,7 @@ async function remaskPrivateReviewConfig(config,{render=true}={}) {
                     :{}),
                 launch:row.launch
             });
+            if(assertCurrent)assertCurrent();
             const review=response?.review||{};
             const preflight=review?.preflight||{};
             if(
@@ -563,6 +566,7 @@ async function remaskPrivateReviewConfig(config,{render=true}={}) {
             }
             results.push({row,review,status:'READY'});
         }catch(error){
+            if(assertCurrent)assertCurrent();
             const message=String(error?.message||error);
             const gate=(String(error?.code||'')+' '+message).match(/(?:\b|_)(CHECKPOINT_REQUIRED|TWO_FACTOR_REQUIRED|SESSION_EXPIRED|BUSINESS_LOGIN_GATE)\b/)?.[1];
             const code=error?.code||gate||'REVIEW_FAILED';
@@ -610,6 +614,30 @@ async function remaskPrivateReviewOnly() {
         return plans;
     }catch(error){
         remaskPrivateShow('Создание рекламы недоступно: '+String(error?.message||error),'failed');
+        return null;
+    }finally{
+        remaskPrivateLaunchBusy=false;validateReady();
+    }
+}
+async function remaskPrivateReviewLive() {
+    if(remaskPrivateLaunchBusy)return null;
+    remaskPrivateLaunchBusy=true;validateReady();
+    try{
+        const config=await remaskPrivatePrepareConfig();
+        const assertCurrent=()=>remaskPrivateAssertCurrentConfig(config);
+        assertCurrent();
+        remaskPrivateShow('Проверяю готовность выбранных РК в Meta. Рекламные объекты не создаются…');
+        const results=await remaskPrivateReviewConfig(config,{render:true,assertCurrent});
+        assertCurrent();
+        const ready=results.filter(entry=>entry.review?.ready===true).length;
+        remaskPrivateShow('Проверка Meta: '+ready+'/'+results.length+' РК готовы к выбранной операции. '+
+            'Рекламные объекты не создавались; публикация и редактор Meta не подтверждены.'+
+            (ready===results.length?'':' Причины по каждому РК показаны ниже.'),
+            ready===results.length?'ready':'failed');
+        return results;
+    }catch(error){
+        remaskPrivateRenderReviewResults([],true);
+        remaskPrivateShow('Проверка Meta не завершена: '+String(error?.message||error),'failed');
         return null;
     }finally{
         remaskPrivateLaunchBusy=false;validateReady();
@@ -790,7 +818,8 @@ async function remaskPrivateCreateJob() {
     try{
         const config=await remaskPrivatePrepareConfig();
         remaskPrivateAssertCurrentConfig(config);
-        const reviewed=await remaskPrivateReviewConfig(config,{render:true});
+        const reviewed=await remaskPrivateReviewConfig(config,{render:true,
+            assertCurrent:()=>remaskPrivateAssertCurrentConfig(config)});
         remaskPrivateAssertCurrentConfig(config);
         if(!reviewed?.length)return null;
         const blocked=reviewed.filter(entry=>entry.review?.ready!==true);
@@ -829,7 +858,7 @@ validateReady=function() {
         const button=$(id);
         if(!button)continue;
         // Form-completeness failures are reported by the click handler:
-        // review-only checks locally and Launch checks before creating a job.
+        // Local plans and explicit Meta readiness are separate from creation.
         // A disabled button prevented operators from reaching either handler.
         // Only in-flight work disables the controls to prevent duplicate jobs.
         button.disabled=busy;
@@ -861,7 +890,7 @@ validateReady=function() {
 };
 validateReady();
 if ($('reviewStatus')) $('reviewStatus').textContent=remaskPrivateLaunchNotice;
-if ($('reviewLaunch')) $('reviewLaunch').textContent='Подготовить план';
+if ($('reviewLaunch')) $('reviewLaunch').textContent='Проверить готовность в Meta';
 
 // Search remains attached to an explicitly selected RK/profile rather than
 // the old Graph token. The PHP bridge rejects an unbound account context.
@@ -914,6 +943,7 @@ if(typeof document!=='undefined'&&document.addEventListener){
         event.stopPropagation();
         event.stopImmediatePropagation();
         if(button.id==='launchButton')remaskPrivateCreateJob();
+        else if(button.id==='reviewLaunch')remaskPrivateReviewLive();
         else remaskPrivateReviewOnly();
     },true);
 }
