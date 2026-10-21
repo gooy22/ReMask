@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import time
 from ..editor_modules import persist_public
+from .source_observation import epoch_observation
 
 MANIFEST=Path(__file__).parent.parent/'contracts/meta_module_catalog_20261014.json'
 
@@ -28,8 +29,9 @@ def build_registry(rows):
         'policy':'inventory_all_execute_installed_adapters'}
 
 
-def refresh_registry(rows):
+def refresh_registry(rows,*,observed_at=None):
     if not rows:return
+    observed_at = epoch_observation(observed_at)
     updated=build_registry(rows)
     def merge(saved):
         current=saved if isinstance(saved,dict) and saved.get('version')==1 and isinstance(saved.get('modules'),dict) else json.loads(MANIFEST.read_text())
@@ -37,6 +39,6 @@ def refresh_registry(rows):
         # Unknown modules and conflicts never become executable contracts.
         current['ambiguous']=sorted(set(current.get('ambiguous',[])) | set(updated['ambiguous']))
         if len(current['modules'])>30000:raise ValueError('Module inventory budget exceeded')
-        current['refreshed_at']=int(time.time())
+        current['refreshed_at']=observed_at
         return current
     persist_public('private-module-catalog.json',merge)

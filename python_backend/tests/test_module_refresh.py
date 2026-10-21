@@ -121,6 +121,8 @@ class SelectionTests(unittest.TestCase):
 class AutomaticReadsTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         refresh._cache.clear()
+        from app.contract_maintenance import module_source_cache
+        module_source_cache._cache.clear()
         self.web = SimpleNamespace(profile=SimpleNamespace(name='fixture', proxy='http://proxy.test:8080',
             cookies={'c_user':'111111111'}), fetch_text=AsyncMock())
         self.url = 'https://business.facebook.com/latest/settings'

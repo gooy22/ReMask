@@ -19,13 +19,15 @@ import time
 from urllib.parse import urlsplit
 from weakref import WeakValueDictionary
 
-from .ads_sources import deferred_script_urls, module_records, public_script_url
+from .ads_sources import deferred_script_urls, public_script_url
 from ..private_contract_discovery import _script_urls
 from ..private_inventory import _auth_gate
 from ..provisioning.models import ProvisioningError
 from ..targeting_reference import MODULES as TARGETING_MODULES, refresh_reference
 from ..editor_modules import MODULES as EDITOR_MODULES, refresh_editor
 from .module_registry import refresh_registry
+from .source_observation import oldest_epoch, proof_until
+from .module_source_cache import read_script
 
 log = logging.getLogger('remask.module_refresh')
 BASELINES = Path(__file__).parent.parent / 'contracts' / 'meta_module_refresh_20261013.json'
@@ -63,7 +65,11 @@ def select_updates(rows, references, *, now=None):
     now = time.monotonic() if now is None else now
     versions = {}
     for row in rows:
-        versions.setdefault(row['name'], {})[hashlib.sha256(json.dumps({key:row[key] for key in ('name','dependencies','source')}, sort_keys=True).encode()).hexdigest()] = row
+        digest = hashlib.sha256(json.dumps({key:row[key] for key in ('name','dependencies','source')}, sort_keys=True).encode()).hexdigest()
+        candidates = versions.setdefault(row['name'], {})
+        previous = candidates.get(digest)
+        if previous is None or proof_until(row, now, TTL) >= proof_until(previous, now, TTL):
+            candidates[digest] = row
     accepted, blocked = {}, []
     for friendly, spec in references.items():
         artifact_name = friendly + '.graphql'
@@ -93,11 +99,15 @@ def select_updates(rows, references, *, now=None):
             for name, digest in expected.items())
         # At least one complete captured caller must match. The caller's
         # literal imports and complete body prove the existing payload path.
-        valid_sender = any(len(versions.get(name, {})) == 1 and
-            fingerprint(next(iter(versions[name].values())), doc_id) == digest
-            for name, digest in spec['senders'].items())
-        if valid_artifacts and valid_sender:
-            accepted[friendly] = {'doc_id': doc_id, 'baseline_doc_id': spec['doc_id'], 'until': now + TTL}
+        valid_senders = [next(iter(versions[name].values())) for name, digest in spec['senders'].items()
+            if len(versions.get(name, {})) == 1 and fingerprint(next(iter(versions[name].values())), doc_id) == digest]
+        if valid_artifacts and valid_senders:
+            # Retained/cached source never becomes newly observed merely
+            # because another collection window finally supplied its sender.
+            artifact_until = min(proof_until(next(iter(versions[name].values())), now, TTL) for name in expected)
+            sender_until = max(proof_until(row, now, TTL) for row in valid_senders)
+            accepted[friendly] = {'doc_id': doc_id, 'baseline_doc_id': spec['doc_id'],
+                'until': min(artifact_until, sender_until)}
         elif not valid_artifacts or doc_id != spec['doc_id']:
             blocked.append(friendly)
     return {'accepted': accepted, 'blocked': sorted(blocked), 'observed_modules': len(versions)}
@@ -147,12 +157,24 @@ async def _refresh_window(web, final_url, references, wanted, urls, key):
     continuing = previous and not previous['drained']
     state = previous if continuing else {
         'urls': urls[:URL_LIMIT], 'attempts': {}, 'collected': set(),
-        'proofs': {}, 'proof_bytes': 0, 'limited': len(urls) > URL_LIMIT}
+        'proofs': {}, 'proof_bytes': 0, 'limited': len(urls) > URL_LIMIT,
+        'source_observations': {}}
+    # Long collections must reacquire expired source rather than rolling the
+    # original proof's lifetime forward on every continuation.
+    observations = state.setdefault('source_observations', {})
+    for url, observed in list(observations.items()):
+        if observed + TTL <= now:
+            state['collected'].discard(url)
+            state['attempts'].pop(url, None)
+            del observations[url]
+    state['proofs'] = {key: row for key, row in state['proofs'].items() if proof_until(row, now, TTL) > now}
+    state['proof_bytes'] = sum(len(row['module_source'].encode()) for row in state['proofs'].values())
     pending = [url for url in state['urls'] if url not in state['collected']
                and state['attempts'].get(url, 0) < SCRIPT_ATTEMPTS]
     window = sorted(pending, key=lambda url: state['attempts'].get(url, 0))[:SCRIPT_LIMIT]
     rows, bytes_read = [], 0
     failures = 0
+    cache_stats = {'hits':0,'misses':0}
     # Sequential reads keep a strict aggregate budget and the same cookie jar.
     # The wall clock cap includes parsing and cancellation of the final read.
     try:
@@ -163,28 +185,18 @@ async def _refresh_window(web, final_url, references, wanted, urls, key):
                     break
                 state['attempts'][url] = state['attempts'].get(url, 0) + 1
                 try:
-                    status, source, final = await web.fetch_text(url, max_bytes=budget + 1, referer=final_url)
-                    size = len(source.encode())
+                    source = await read_script(web, url, referer=final_url, wanted=wanted, budget=budget, ttl=TTL,
+                        stats=cache_stats)
+                    size = source['source_bytes']
                     bytes_read += min(size, budget)
-                    if status != 200 or size > budget or not public_script_url(final):
+                    if not source['valid'] or size > budget:
                         failures += 1
                         continue
-                    # Parse bounded public code away from the worker event loop.
-                    # Each parser is local; no JavaScript is executed.
-                    parsed = await asyncio.to_thread(lambda: [row for row in
-                        module_records(source, selected=wanted, all_modules=True)])
-                    for row in parsed:
-                        row['_module_evidence'] = {'module':row['name'],
-                            'module_sha256':hashlib.sha256(row['module_source'].encode()).hexdigest(),
-                            'script_sha256':hashlib.sha256(source.encode()).hexdigest(),'observed_public_url':url}
-                        if row['name'] in TARGETING_MODULES:
-                            row['_targeting_evidence'] = {'module':row['name'],
-                                'module_sha256':hashlib.sha256(row['module_source'].encode()).hexdigest(),
-                                'script_sha256':hashlib.sha256(source.encode()).hexdigest(),
-                                'observed_public_url':url}
+                    parsed = source['rows']
                     rows.extend(parsed)
                     state['collected'].add(url)
-                    for candidate in deferred_script_urls(source, preferred=wanted, all_resources=True):
+                    observations[url] = source['observed_at']
+                    for candidate in source['deferred_urls']:
                         if candidate in state['urls']:
                             continue
                         if len(state['urls']) >= URL_LIMIT:
@@ -197,6 +209,8 @@ async def _refresh_window(web, final_url, references, wanted, urls, key):
                         digest = hashlib.sha256(row['module_source'].encode()).hexdigest()
                         proof_key = (row['name'], digest)
                         if proof_key in state['proofs']:
+                            if proof_until(row, time.monotonic(), TTL) > proof_until(state['proofs'][proof_key], time.monotonic(), TTL):
+                                state['proofs'][proof_key] = row
                             continue
                         size = len(row['module_source'].encode())
                         if state['proof_bytes'] + size > PROOF_BYTES:
@@ -215,18 +229,18 @@ async def _refresh_window(web, final_url, references, wanted, urls, key):
     proofs = list(state['proofs'].values())
     snapshot = select_updates(proofs, references)
     try:
-        await asyncio.to_thread(refresh_reference, proofs)
+        await asyncio.to_thread(refresh_reference, proofs, observed_at=oldest_epoch(proofs))
     except (ValueError, KeyError, TypeError, OSError):
         # An incomplete or changed reference table cannot erase usable IDs.
         log.info('targeting_reference refresh rejected; installed reference preserved')
     try:
         object_fields=json.loads((BASELINES.parent/'ads_manager_http_20261012.json').read_text())['object_fields']
-        await asyncio.to_thread(refresh_editor, rows + proofs, object_fields)
+        await asyncio.to_thread(refresh_editor, rows + proofs, object_fields, observed_at=oldest_epoch(rows + proofs))
     except (ValueError, KeyError, TypeError, OSError):
         log.info('module_metadata refresh rejected; installed adapters preserved')
     # A changed editor table must not suppress collection of unrelated modules.
     try:
-        await asyncio.to_thread(refresh_registry, rows)
+        await asyncio.to_thread(refresh_registry, rows, observed_at=oldest_epoch(rows))
     except (ValueError, KeyError, TypeError, OSError):
         log.info('module_inventory refresh rejected; installed inventory preserved')
     _apply_snapshot(web, snapshot)
@@ -237,15 +251,17 @@ async def _refresh_window(web, final_url, references, wanted, urls, key):
         'collection_limited': state['limited'],
         'collection_complete': not pending and len(state['collected']) == len(state['urls']) and not state['limited']}
     web._module_collection_progress = progress
-    state.update(until=now + (60 if pending else TTL), drained=not pending, snapshot=snapshot, progress=progress)
+    until = min([now + (60 if pending else TTL), *(row['until'] for row in snapshot['accepted'].values()),
+        *(observed + TTL for observed in observations.values())])
+    state.update(until=until, drained=not pending, snapshot=snapshot, progress=progress)
     web._module_collection_due_at = state['until']
     _cache[key] = state
     _cache.move_to_end(key)
     while len(_cache) > 64 or sum(row['proof_bytes'] for row in _cache.values()) > CACHE_PROOF_BYTES:
         _cache.popitem(last=False)
-    log.info('module_refresh accepted=%d changed=%d modules=%d failures=%d bytes=%d changed_names=%s http2=True browser_started=False',
+    log.info('module_refresh accepted=%d changed=%d modules=%d failures=%d source_budget_bytes=%d cache_hits=%d cache_misses=%d changed_names=%s http2=True browser_started=False',
         len(snapshot['accepted']), len(snapshot['blocked']), snapshot['observed_modules'], failures, bytes_read,
-        json.dumps(snapshot['blocked'], separators=(',', ':')))
+        cache_stats['hits'], cache_stats['misses'], json.dumps(snapshot['blocked'], separators=(',', ':')))
 
 
 def _apply_snapshot(web, snapshot):

@@ -228,7 +228,9 @@ def persist_public(name,data):
             if os.path.exists(tmp):os.unlink(tmp)
 
 
-def refresh_editor(rows,object_fields):
+def refresh_editor(rows,object_fields,*,observed_at=None):
+    from .contract_maintenance.source_observation import epoch_observation
+    observed_at = epoch_observation(observed_at)
     updated=compile_editor(rows,object_fields)
     if not updated['source_evidence']:return
     def merge(saved):
@@ -240,6 +242,6 @@ def refresh_editor(rows,object_fields):
         current['references'].update(updated['references'])
         current.setdefault('object_definitions',{}).update(updated['object_definitions'])
         sources={s['module']:s for s in current['source_evidence']};sources.update({s['module']:s for s in updated['source_evidence']})
-        current.update(source_evidence=list(sources.values()),refreshed_at=int(time.time()))
+        current.update(source_evidence=list(sources.values()),refreshed_at=observed_at)
         return current
     persist_public('private-editor-modules.json',merge)
