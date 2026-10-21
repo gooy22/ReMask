@@ -4,7 +4,7 @@ import json
 import unittest
 
 from app.private_ads_draft import fragment_values_match
-from app.private_launch import PrivateLaunchStateStore
+from app.private_launch import PrivateLaunchStateStore, _effective_launch_payload
 from app.private_launch_extensions import OperationKey
 from app.provisioning.models import ProvisioningError
 from tests import test_private_ads_launch as fixtures
@@ -25,6 +25,25 @@ def selected_targeting():
         'instagram_positions': ['story'], 'device_platforms': ['mobile'],
         'user_os': ['Android'], 'user_device': ['Samsung Galaxy S23'],
     }
+
+
+class ExactAccountOverrideTests(unittest.TestCase):
+    def test_account_override_replaces_nested_targeting_selection_not_its_members(self):
+        base={'campaign':{'name':'campaign'},'adset':{'name':'set','targeting':{
+            'geo_locations':{'countries':['UA']},
+            'exclusions':{'interests':[{'id':'111111'}],'behaviors':[{'id':'222222'}]},
+            'flexible_spec':[{'interests':[{'id':'333333'}]},{'behaviors':[{'id':'444444'}]}],
+        }},'creative':{'name':'creative'},'ad':{'name':'ad'}}
+        original=copy.deepcopy(base)
+        launch={'base':base,'override':{'adset':{'targeting':{
+            'exclusions':{'interests':[{'id':'555555'}]},
+            'flexible_spec':[{'interests':[{'id':'666666'}]}],
+        }}}}
+        actual=_effective_launch_payload(launch)['adset']['targeting']
+        self.assertEqual(actual['exclusions'],{'interests':[{'id':'555555'}]})
+        self.assertEqual(actual['flexible_spec'],[{'interests':[{'id':'666666'}]}])
+        self.assertEqual(actual['geo_locations'],{'countries':['UA']})
+        self.assertEqual(base,original)
 
 
 class ExactAdvertisingSettingsTests(unittest.IsolatedAsyncioTestCase):
