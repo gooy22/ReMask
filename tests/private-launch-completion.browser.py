@@ -209,7 +209,9 @@ class InstalledLaunchTests(unittest.TestCase):
                 status = 409
             else:
                 ids = json.loads(parse_qs(url.query)['ids'][0])
-                data = {'media':[{**MEDIA,'id':id, 'media_type':'image' if self._testMethodName=='test_installed_carousel_ui_native_draft_publish_recovery' else ('video' if i else 'image')} for i,id in enumerate(ids)]}
+                data = {'media':[{**MEDIA,'id':id, 'media_type':('video' if self._testMethodName=='test_installed_video_ui_native_draft_publish_recovery'
+                    else ('image' if self._testMethodName=='test_installed_carousel_ui_native_draft_publish_recovery'
+                          else ('video' if i else 'image')))} for i,id in enumerate(ids)]}
                 if self.foreign_bundle_media:
                     data['media'][0]['id'] = 'm-' + 'f' * 24
         route.fulfill(status=status, json={'ok':status==200,'data':data,'error':{'message':'MEDIA_LIBRARY_ITEM_UNAVAILABLE'}})
