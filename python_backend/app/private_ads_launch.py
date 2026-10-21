@@ -118,6 +118,7 @@ class AdsManagerLaunch:
         # nonfinite/unsupported values. Invalid Ad input must not leave uploads.
         self.objectives.validate(launch)
         campaign_values, adset_values, _ = native_bidding(launch["campaign"], launch["adset"])
+        self.catalog.validate_values(launch)
         campaign_values = self.objective_wire.campaign(campaign_values)
         placeholders = [{"image_hash": "planned-image-hash"}] * (len(creative["carousel_cards"])
                         if creative.get("format") == "CAROUSEL" else 1)
