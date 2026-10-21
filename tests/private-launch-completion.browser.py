@@ -63,6 +63,7 @@ class InstalledLaunchTests(unittest.TestCase):
         self.asset_requests=[]
         self.waiting_pages=[]
         self.worker_requests=[]
+        self.review_ready=False
         self.page = self.browser.new_page()
         self.page.set_default_timeout(5000)
         self.page.on('pageerror', lambda e: self.errors.append(str(e)))
@@ -156,7 +157,7 @@ class InstalledLaunchTests(unittest.TestCase):
             elif action=='private_launch_review':
                 # A deliberate independent server refusal proves the fixed UI
                 # reaches review with its selected Page, without creating ads.
-                data={'review':{'ready':False}}
+                data={'review':{'ready':self.review_ready}}
             else:
                 self.fail('Unexpected worker operation in browser fixture: '+str(action))
             route.fulfill(json={'ok':True,**data});return
@@ -663,10 +664,10 @@ class InstalledLaunchTests(unittest.TestCase):
         self.assertIn('доступ не проверен',self.page.locator('#page option[value="567890"]').inner_text())
         self.page.locator('#page').select_option('567890')
         self.page.evaluate('fixtureLaunch.geo()')
-        self.page.locator('#reviewLaunch').click()
+        self.page.locator('#dryRunPlan').click()
         self.page.wait_for_function('document.querySelector("#launchResult").textContent.includes("План подготовлен для 1 РК")')
-        self.page.locator('#launchButton').click()
-        self.page.wait_for_function('document.querySelector("#launchResult").textContent.includes("Проверка не подтвердила готовность")')
+        self.page.locator('#reviewLaunch').click()
+        self.page.wait_for_function('document.querySelector("#launchResult").textContent.includes("Проверка Meta: 0/1")')
         self.assertEqual(next(row for row in self.worker_requests if row['action']=='private_launch_review')['page_id'],'567890')
         self.assertFalse(any(row['action']=='create' for row in self.worker_requests))
 
@@ -695,7 +696,7 @@ class InstalledLaunchTests(unittest.TestCase):
         self.assertEqual(lookup['profile'],['20'])
         self.assertEqual(lookup['account_id'],['123456'])
         self.assertEqual(lookup['execution_mode'],['DRAFT'])
-        self.page.locator('#reviewLaunch').click()
+        self.page.locator('#dryRunPlan').click()
         self.page.wait_for_function('document.querySelector("#launchResult").textContent.includes("План подготовлен для 1 РК")')
         plan=next(row for row in self.worker_requests if row['action']=='private_launch_plan')
         interests=plan['launch']['base']['adset']['targeting']['flexible_spec'][0]['interests']
@@ -726,7 +727,7 @@ class InstalledLaunchTests(unittest.TestCase):
         self.page.evaluate('fixtureSingleTarget("act_123456")')
         self.page.locator('#page option[value="345678"]').wait_for(state='attached')
         self.page.locator('#page').select_option('345678')
-        self.page.locator('#reviewLaunch').click()
+        self.page.locator('#dryRunPlan').click()
         self.page.wait_for_function('document.querySelector("#launchResult").textContent.includes("План подготовлен для 1 РК")')
         base=next(row for row in self.worker_requests if row['action']=='private_launch_plan')['launch']['base']
         target=base['adset']['targeting']
@@ -747,18 +748,37 @@ class InstalledLaunchTests(unittest.TestCase):
 
     def test_single_rk_selected_page_reaches_plan_and_independent_review(self):
         self.prepare_single_page_launch()
-        self.page.locator('#reviewLaunch').click()
+        self.page.locator('#dryRunPlan').click()
         self.page.wait_for_function('document.querySelector("#launchResult").textContent.includes("План подготовлен для 1 РК")')
         plan=next(row for row in self.worker_requests if row['action']=='private_launch_plan')
         self.assertEqual((plan['profile_id'],plan['ad_account_id'],plan['page_id']),('20','123456','345678'))
         self.assertEqual(plan['launch']['base']['creative']['page_id'],'345678')
         self.assertNotIn('official_params',plan['launch']['base']['creative'])
-        self.page.locator('#launchButton').click()
-        self.page.wait_for_function('document.querySelector("#launchResult").textContent.includes("Проверка не подтвердила готовность")')
+        self.page.locator('#reviewLaunch').click()
+        self.page.wait_for_function('document.querySelector("#launchResult").textContent.includes("Проверка Meta: 0/1")')
         review=next(row for row in self.worker_requests if row['action']=='private_launch_review')
         self.assertEqual(review['page_id'],'345678')
         self.assertNotIn('При потере ответа',self.page.locator('#launchResult').inner_text())
         self.assertFalse(any(row['action']=='create' for row in self.worker_requests))
+
+    def test_explicit_meta_readiness_can_succeed_in_both_modes_without_creating_a_job(self):
+        self.prepare_single_page_launch()
+        self.review_ready=True
+        self.assertEqual(self.page.locator('#reviewLaunch').inner_text(),'Проверить готовность в Meta')
+        for mode in ('DRAFT','PUBLISH'):
+            with self.subTest(mode=mode):
+                self.page.locator('#remaskPrivateExecutionMode').select_option(mode)
+                before=self.page.evaluate('fixtureLaunch.capture()')
+                self.worker_requests.clear()
+                self.page.locator('#reviewLaunch').click()
+                self.page.wait_for_function('document.querySelector("#launchResult").textContent.includes("Проверка Meta: 1/1")')
+                review=next(row for row in self.worker_requests if row['action']=='private_launch_review')
+                self.assertEqual((review['profile_id'],review['ad_account_id'],review['page_id']),('20','123456','345678'))
+                self.assertEqual(review['launch']['base'].get('execution_mode'),'DRAFT' if mode=='DRAFT' else None)
+                self.assertTrue(all(row['action'] in ('private_launch_contracts','private_launch_review') for row in self.worker_requests))
+                self.assertEqual(self.page.evaluate('localStorage.getItem("remask_private_launch_pending_v1")'),None)
+                self.assertEqual(self.page.evaluate('fixtureLaunch.capture()'),before)
+                self.assertIn('публикация и редактор Meta не подтверждены',self.page.locator('#launchResult').inner_text())
 
     def test_meta_draft_and_publication_are_explicit_separate_operations(self):
         self.prepare_single_page_launch()
