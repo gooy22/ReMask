@@ -89,12 +89,14 @@ def compile_tables(found, evidence):
         'skipped_region_countries':skipped}
 
 
-def refresh_reference(rows):
+def refresh_reference(rows,*,observed_at=None):
     """Compile only complete literal maps; persist metadata, never vendor source."""
     import fcntl
     import os
     import tempfile
     import time
+    from .contract_maintenance.source_observation import epoch_observation
+    observed_at = epoch_observation(observed_at)
     versions, evidence = {}, {}
     for row in rows:
         name = row['name']
@@ -142,7 +144,7 @@ def refresh_reference(rows):
         sources.update({row['module']:row for row in current.get('source_evidence',[])})
         sources.update(evidence)
         current.update(source='private_meta_module_reference',checked_live=False,
-            captured_at=updated['captured_at'],refreshed_at=int(time.time()),source_evidence=list(sources.values()))
+            captured_at=updated['captured_at'],refreshed_at=observed_at,source_evidence=list(sources.values()))
         fd,tmp=tempfile.mkstemp(dir=root,suffix='.tmp')
         try:
             # Only public reference IDs/labels are stored here; PHP reads the
