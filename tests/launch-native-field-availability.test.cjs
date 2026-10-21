@@ -37,10 +37,10 @@ vm.createContext(ctx);
 vm.runInContext(js,ctx,{timeout:2000});
 ctx.sourceSdk=sdk;
 vm.runInContext('remaskLaunchMetaSchema=sourceSdk; remaskRenderLaunchMetaFields();',ctx,{timeout:2000});
-const selected=vm.runInContext('({
-    unsupported:Object.fromEntries(Object.entries(remaskLaunchUnsupportedNativeFields).map(([k,v])=>[k,[...v]])),
-    covered:Object.fromEntries(Object.entries(remaskLaunchCoveredFields).map(([k,v])=>[k,[...v]]))
-})',ctx);
+const selected={
+    unsupported:vm.runInContext('Object.fromEntries(Object.entries(remaskLaunchUnsupportedNativeFields).map(([k,v])=>[k,[...v]]))',ctx),
+    covered:vm.runInContext('Object.fromEntries(Object.entries(remaskLaunchCoveredFields).map(([k,v])=>[k,[...v]]))',ctx),
+};
 const walk=element=>[element,...element.children.flatMap(walk)];
 const visible=walk(uiRoot).filter(el=>el.dataset.launchMetaGroup&&el.dataset.launchMetaField);
 const allNative=manifest.object_fields;
