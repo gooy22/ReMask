@@ -25,7 +25,8 @@ from .private_launch_extensions import OperationKey
 
 SOURCE_REVISION = "ads-manager-private-2026-10-13-media-resources"
 # Exact source/catalog digests of reviewed main 6b7dfc1, 7b6a985,
-# b23917a (PR #228) and 638d773 (PR #229).
+# b23917a (PR #228), 638d773 (PR #229), 2582080 (PR #230),
+# and 842f2c6 (PR #231).
 # Compatibility permits only fresh reads of an already accepted publication.
 READ_ONLY_PUBLICATION_PREDECESSORS = frozenset({
     "e38dc7d32ba2ccd73d18e0b31b477be7e1d4f94624d1b1a1817efd692307a2c2",
@@ -33,6 +34,7 @@ READ_ONLY_PUBLICATION_PREDECESSORS = frozenset({
     "cb9b5fd76c6b9079d9584818a085848df404239437989499cd27f284f11e9353",
     "0ddf56b2f696365f7cad55886598a7dc95a1a89ba021839f0fb669df4add2c62",
     "40449a5bd6554241032975780e5d44f351ec77a479f803b3602cde90eb35882d",
+    "55cf50aa8acfb55401f75100085b8a41eeb9fc02e4b81458d311e10807f235c3",
 })
 
 class AdsManagerLaunch:

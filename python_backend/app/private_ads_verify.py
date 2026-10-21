@@ -31,6 +31,9 @@ def stable_request_values(value, key=None):
 
 
 def _same(actual, expected, field=None):
+    # Callers project the requested writable fields before comparing them.
+    # Inside a field, an added key can change targeting OR/AND groups, a CTA
+    # destination or creative customization. A subset is not the saved intent.
     if field in {'start_time', 'end_time'} and isinstance(expected, str):
         if not isinstance(actual, str):
             return False
@@ -46,8 +49,8 @@ def _same(actual, expected, field=None):
         return actual == expected if isinstance(actual, int) and not isinstance(actual, bool) else (
             isinstance(actual, str) and actual == str(expected))
     if isinstance(expected, dict):
-        return isinstance(actual, dict) and all(key in actual and _same(actual[key], value, key)
-                                               for key, value in expected.items())
+        return isinstance(actual, dict) and actual.keys() == expected.keys() and all(
+            _same(actual[key], value, key) for key, value in expected.items())
     if isinstance(expected, list):
         return isinstance(actual, list) and len(actual) == len(expected) and all(
             _same(left, right) for left, right in zip(actual, expected))
