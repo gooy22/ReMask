@@ -936,7 +936,11 @@ class InstalledLaunchTests(unittest.TestCase):
                         self.assertEqual(case.client.uploads,1)
                 finally:
                     case.doCleanups()
-            asyncio.run(through_python())
+            # Playwright's synchronous facade owns an event loop on this thread.
+            # Run the actual asynchronous Launch service in an isolated thread.
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                executor.submit(lambda: asyncio.run(through_python())).result(timeout=90)
         finally:
             if php.poll() is None:
                 php.terminate()
