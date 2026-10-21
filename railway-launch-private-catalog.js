@@ -942,6 +942,25 @@ if(typeof document!=='undefined'&&document.createElement&&$('launchButton')?.par
 
 remaskPrivateInstallExecutionMode();
 
+if(globalThis.remaskMediaTools){
+    globalThis.remaskMediaTools.install($('creativeFormat')?.parentElement||$('media'),async()=>{
+        const config=await remaskPrivatePrepareConfig();
+        remaskPrivateAssertCurrentConfig(config);
+        return {creative:config.payload.creative,targeting:config.payload.adset?.targeting||{},
+            assertCurrent:()=>remaskPrivateAssertCurrentConfig(config)};
+    },async(media,index,captured)=>{
+        captured.assertCurrent();
+        const snapshot=bundleFormState();
+        const selected=captured.media.map(row=>({media_library_id:row.id,sha256:row.sha256}));
+        selected[index]={media_library_id:media.id,sha256:media.sha256};
+        snapshot.media=captured.creative.format==='CAROUSEL'
+            ?{format:'CAROUSEL',carousel:captured.creative.carousel_cards.map((card,i)=>({...card,...selected[i]}))}
+            :{format:'SINGLE',...selected[0]};
+        snapshot.media.checksums=selected.map(row=>({id:row.media_library_id,sha256:row.sha256}));
+        await applyBundleData(snapshot);
+    });
+}
+
 // Capture before legacy handlers. Old metaLaunchReview/metaJobCreate endpoints
 // remain blocked, so no click can fall through to the token-based Graph path.
 if(typeof document!=='undefined'&&document.addEventListener){

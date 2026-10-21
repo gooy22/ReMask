@@ -3669,6 +3669,36 @@ async def private_launch_plan(payload: dict = Body(...)):
     except ProvisioningError as exc:
         raise HTTPException(status_code=422, detail={'code':exc.code,'message':str(exc),'retryable':False}) from exc
 
+@app.post('/api/v1/private-launch/media-inspect',dependencies=[Depends(require_key)])
+async def private_launch_media_inspect(payload: dict = Body(...)):
+    from app.private_launch_media import LaunchMediaResolver, local_references
+    from app.media_preflight import compatibility
+    try:
+        creative = payload.get('creative')
+        targeting = payload.get('targeting') or {}
+        if not isinstance(creative, dict) or not isinstance(targeting, dict):
+            raise ProvisioningError('MEDIA_SELECTION_INVALID', 'Select managed media and a targeting object', retryable=False)
+        media = await LaunchMediaResolver().resolve(local_references(creative))
+        result = []
+        for item in media:
+            facts = item.inspection
+            check = ({'locally_valid':False,'code':'MEDIA_PREPARATION_REQUIRED','warnings':[]}
+                     if facts['requires_conversion'] else compatibility(facts, targeting,
+                        creative_format=creative.get('format','SINGLE')))
+            result.append({**item.public(), 'inspection':facts, 'compatibility':check})
+        return {'ok':True, 'media':result, 'meta_acceptance_verified':False}
+    except ProvisioningError as exc:
+        raise HTTPException(status_code=422, detail={'code':exc.code,'message':str(exc),'retryable':False}) from exc
+
+@app.post('/api/v1/private-launch/media-prepare',dependencies=[Depends(require_key)])
+async def private_launch_media_prepare(payload: dict = Body(...)):
+    from app.private_launch_media import LaunchMediaResolver
+    from app.media_preparation import prepare_managed
+    try:
+        return {'ok':True, **await prepare_managed(LaunchMediaResolver(), payload.get('reference'), payload.get('options'))}
+    except ProvisioningError as exc:
+        raise HTTPException(status_code=422, detail={'code':exc.code,'message':str(exc),'retryable':False}) from exc
+
 @app.get('/api/v1/profiles/{profile_id}/advertising-resources',dependencies=[Depends(require_key)])
 async def private_advertising_resources(profile_id: str, resource: str, account_id: str,
                                         force: bool = False, query: str = '', limit: int = 100,

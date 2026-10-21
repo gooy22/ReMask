@@ -14,6 +14,17 @@ foreach ($copies as $from => $to) {
     if (!is_file($from)) { fwrite(STDERR, "[creative-v100] missing source $from\n"); exit(281); }
     if (!copy($from, $to)) { fwrite(STDERR, "[creative-v100] copy failed $from -> $to\n"); exit(282); }
 }
+if (!copy('/tmp/railway-media-tools.js', $root.'/scripts/media-tools.js')) {
+    fwrite(STDERR, "[creative-v100] media tools source missing\n"); exit(298);
+}
+foreach (['creatives.php','launch.php'] as $page) {
+    $path = $root.'/'.$page;
+    $html = file_get_contents($path);
+    if (strpos($html, 'scripts/media-tools.js') === false) {
+        $html = str_replace('</head>', '<script src="scripts/media-tools.js?v=20261021-media-preflight"></script></head>', $html);
+        file_put_contents($path, $html);
+    }
+}
 
 $jobPath = $root . '/ajax/metaJobCreate.php';
 $job = file_get_contents($jobPath);
