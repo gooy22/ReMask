@@ -42,7 +42,7 @@ const selected={
     covered:vm.runInContext('Object.fromEntries(Object.entries(remaskLaunchCoveredFields).map(([k,v])=>[k,[...v]]))',ctx),
 };
 const walk=element=>[element,...(element.children||[]).flatMap(walk)];
-const visible=walk(uiRoot).filter(el=>el.dataset.launchMetaGroup&&el.dataset.launchMetaField);
+const visible=walk(uiRoot).filter(el=>el.dataset?.launchMetaGroup&&el.dataset?.launchMetaField);
 const allNative=manifest.object_fields;
 for(const group of ['campaign','adset','targeting','creative','ad']){
     const exposed=Object.keys(sdk[group]?.fields||{});
