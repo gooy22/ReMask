@@ -43,6 +43,30 @@ class SavedDraftInspectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result['published'])
         self.assertEqual(len(self.client.posts), 4)
 
+    async def test_rejected_final_fragment_can_be_inspected_without_success_result_or_post_replay(self):
+        self.payload['launch']['execution_mode'] = 'DRAFT'
+        original = self.client.get
+        async def rejected(path, params):
+            row = await original(path, params)
+            if row.get('ad_object_type') == 'ad':
+                row.update(validation_status='HAS_ERRORS', active_errors=[{'error_code':1815857,'field':'bid_amount'}])
+            return row
+        self.client.get = rejected
+        with self.assertRaises(ProvisioningError) as caught:
+            await self.launch()
+        self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_VALIDATION_ERRORS')
+        before = copy.deepcopy(await self.owner.state.all_steps('image-launch'))
+        self.payload['reconcile_only'] = True
+        with patch.object(self.client, 'post', new=AsyncMock(side_effect=AssertionError('No replay'))) as post, \
+                patch('app.static_payment_read.inspect_methods', new=AsyncMock(side_effect=AssertionError('No billing'))) as payment:
+            result = await self.launch()
+        post.assert_not_called(); payment.assert_not_called()
+        self.assertEqual([row['validation_status'] for row in result['fragment_reads']],
+                         ['VALIDATED', 'VALIDATED', 'HAS_ERRORS'])
+        self.assertEqual(result['mutation_posts'], 0)
+        self.assertFalse(result['editor_verified'])
+        self.assertEqual(await self.owner.state.all_steps('image-launch'), before)
+
     async def test_unavailable_object_read_records_exact_rejection_without_claiming_absence(self):
         from app.private_ads_http import AdsManagerResponseError
         await self.saved()

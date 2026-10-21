@@ -24,7 +24,8 @@ loadPages=async function(force=false) {
     const accounts=selectedAccountIds();
     if (targetMode()) return;
     const profile=state.profile,account=accounts.length===1 ? accounts[0] : '',selection=accounts.join(','),
-        wanted=$('page').value || state.pendingBundleAssets.page;
+        initialPage=$('page').value,
+        wanted=initialPage || state.pendingBundleAssets.page;
     let data,liveError;
     try {data=await loadCachedAsset('pages',account,force);}
     catch(error) {
@@ -41,13 +42,17 @@ loadPages=async function(force=false) {
     }
     if (generation!==remaskPrivatePagesGeneration || profile!==state.profile
             || selectedAccountIds().join(',')!==selection) return;
+    // A saved list can already be usable while its exact-account refresh is
+    // pending. Keep the operator's newer selection (including an explicit
+    // clear), but only if the completed response still contains that Page.
+    const selectedPage=$('page').value!==initialPage ? $('page').value : wanted;
     const prior=new Map(state.pages.map(row=>[String(row.id),row]));
     state.pages=(data.data || []).map(row=>({...prior.get(String(row.id)),...row}));
     $('page').replaceChildren(new Option('Выберите страницу',''));
     for (const row of state.pages) $('page').appendChild(new Option(`${row.name || row.id} — ${row.id}`+
         (liveError?' · сохранена, доступ не проверен':''),String(row.id)));
     $('page').disabled=!state.pages.length;
-    if (wanted && hasOptionValue($('page'),String(wanted))) $('page').value=String(wanted);
+    if (selectedPage && hasOptionValue($('page'),String(selectedPage))) $('page').value=String(selectedPage);
     refreshInstagram(); invalidateLaunchReview(); validateReady();
     if (liveError) throw liveError;
 };
