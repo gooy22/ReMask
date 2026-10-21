@@ -41,7 +41,7 @@ const selected={
     unsupported:vm.runInContext('Object.fromEntries(Object.entries(remaskLaunchUnsupportedNativeFields).map(([k,v])=>[k,[...v]]))',ctx),
     covered:vm.runInContext('Object.fromEntries(Object.entries(remaskLaunchCoveredFields).map(([k,v])=>[k,[...v]]))',ctx),
 };
-const walk=element=>[element,...element.children.flatMap(walk)];
+const walk=element=>[element,...(element.children||[]).flatMap(walk)];
 const visible=walk(uiRoot).filter(el=>el.dataset.launchMetaGroup&&el.dataset.launchMetaField);
 const allNative=manifest.object_fields;
 for(const group of ['campaign','adset','targeting','creative','ad']){
