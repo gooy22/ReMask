@@ -1,6 +1,8 @@
 """Bounded profile-scoped CDN evidence reuse, with real fixture byte counts."""
 import asyncio
 import copy
+import os
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -15,6 +17,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class ModuleSourceCacheTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        folder=tempfile.TemporaryDirectory();self.addCleanup(folder.cleanup)
+        env=patch.dict(os.environ,{'REMASK_DATA_DIR':folder.name});env.start();self.addCleanup(env.stop)
         refresh._cache.clear()
         cache._cache.clear()
         self.a = 'https://static.xx.fbcdn.net/a.js'
@@ -175,6 +179,113 @@ class ModuleSourceCacheTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.web.fetch_text.await_count,2)
         self.assertIn(name,self.web._reviewed_module_ids['blocked'])
         with self.assertRaises(ProvisioningError):refresh.effective_doc_id(self.web,name,old)
+
+    async def reject_contract(self):
+        name='BizKitSettingsCreateAdAccountMutation'
+        self.web.fetch_text.side_effect=lambda url,**kwargs:(200,
+            self.fixture if url==self.a else self.fixture.replace('currency','new_currency'),url)
+        await self.collect()
+        await self.collect(urls=[self.b],page='/changed')
+        return name,refresh.baselines()[name]['doc_id']
+
+    async def test_old_whole_window_cannot_clear_a_newer_rejection(self):
+        name,old=await self.reject_contract()
+        previous=copy.deepcopy(next(iter(refresh._cache.values()))['snapshot'])
+        refresh._apply_snapshot(self.web,previous)
+        with self.assertRaises(ProvisioningError):refresh.effective_doc_id(self.web,name,old)
+
+    async def test_another_session_cannot_use_old_scope_cache_after_rejection(self):
+        name,old=await self.reject_contract()
+        peer=self.peer();peer.fetch_text.side_effect=OSError('Fresh source unavailable')
+        await self.collect(peer,page='/different')
+        with self.assertRaises(ProvisioningError):refresh.effective_doc_id(peer,name,old)
+
+    async def test_rejection_survives_restart_without_source_or_window_caches(self):
+        name,old=await self.reject_contract()
+        refresh._cache.clear();cache._cache.clear()
+        with self.assertRaises(ProvisioningError):refresh.effective_doc_id(self.peer(),name,old)
+
+    async def test_fresh_full_source_can_recover_but_stale_negative_window_cannot_revoke_it(self):
+        name,old=await self.reject_contract()
+        rejected=copy.deepcopy(list(refresh._cache.values())[-1]['snapshot'])
+        await self.collect(page='/fresh-recovery')
+        self.assertEqual(refresh.effective_doc_id(self.web,name,old),old)
+        self.assertEqual(self.web.fetch_text.await_count,3,'recovery must reacquire the full source')
+        refresh._apply_snapshot(self.web,rejected)
+        self.assertEqual(refresh.effective_doc_id(self.web,name,old),old)
+
+    async def test_inflight_old_collection_cannot_restore_a_concurrently_rejected_contract(self):
+        entered,release=asyncio.Event(),asyncio.Event()
+        peer=self.peer()
+        async def delayed(url,**kwargs):
+            entered.set();await release.wait();return 200,self.fixture,url
+        peer.fetch_text.side_effect=delayed
+        pending=asyncio.create_task(self.collect(peer,urls=['https://static.xx.fbcdn.net/pending.js'],page='/pending'))
+        await entered.wait()
+        name,old=await self.reject_contract()
+        release.set();await pending
+        with self.assertRaises(ProvisioningError):refresh.effective_doc_id(peer,name,old)
+
+    async def test_expired_baseline_observation_cannot_silently_fall_back_to_static_id(self):
+        name='BizKitSettingsCreateAdAccountMutation';old=refresh.baselines()[name]['doc_id']
+        self.web.fetch_text.side_effect=lambda url,**kwargs:(200,self.fixture,url)
+        await self.collect(now=1000)
+        with patch('time.monotonic',return_value=2801),self.assertRaises(ProvisioningError):
+            refresh.effective_doc_id(self.web,name,old)
+
+    async def test_expired_snapshot_cannot_authorize_a_new_session_baseline(self):
+        name='BizKitSettingsCreateAdAccountMutation';old=refresh.baselines()[name]['doc_id']
+        self.web.fetch_text.side_effect=lambda url,**kwargs:(200,self.fixture,url)
+        await self.collect(now=1000)
+        snapshot=copy.deepcopy(next(iter(refresh._cache.values()))['snapshot']);peer=self.peer()
+        with patch('time.monotonic',return_value=2801):
+            refresh._apply_snapshot(peer,snapshot)
+            with self.assertRaises(ProvisioningError):refresh.effective_doc_id(peer,name,old)
+
+    async def test_rejection_is_isolated_by_profile_actor_and_proxy(self):
+        name,old=await self.reject_contract()
+        for field,value in [('name','other'),('actor','222222222'),('proxy','http://other:8080')]:
+            peer=self.peer()
+            if field=='actor':peer.profile.cookies['c_user']=value
+            else:setattr(peer.profile,field,value)
+            self.assertEqual(refresh.effective_doc_id(peer,name,old),old)
+
+    async def test_concurrent_rejection_replay_cannot_advance_or_erase_newer_state(self):
+        from app.contract_maintenance import source_invalidation as invalidation
+        name,old=await self.reject_contract()
+        rejected=copy.deepcopy(list(refresh._cache.values())[-1]['snapshot'])
+        before=invalidation.state(self.web)
+        await asyncio.gather(*(asyncio.to_thread(refresh._apply_snapshot,self.peer(),rejected) for _ in range(8)))
+        self.assertEqual(invalidation.state(self.web),before)
+        with self.assertRaises(ProvisioningError):refresh.effective_doc_id(self.peer(),name,old)
+
+    async def test_failed_rejection_persistence_blocks_other_sessions_and_cached_acceptance(self):
+        from app.contract_maintenance import source_invalidation as invalidation
+        import sqlite3
+        name='BizKitSettingsCreateAdAccountMutation';old=refresh.baselines()[name]['doc_id']
+        with patch.object(invalidation.sqlite3,'connect',side_effect=sqlite3.OperationalError('fixture disk full')):
+            with self.assertRaises(ProvisioningError):
+                refresh._apply_snapshot(self.web,{'accepted':{},'blocked':[name]})
+        with self.assertRaises(ProvisioningError):refresh.effective_doc_id(self.peer(),name,old)
+
+    async def test_changed_actor_cannot_use_previous_session_proof_or_snapshot(self):
+        name='BizKitSettingsCreateAdAccountMutation';old=refresh.baselines()[name]['doc_id']
+        self.web.fetch_text.side_effect=lambda url,**kwargs:(200,self.fixture,url)
+        await self.collect()
+        snapshot=copy.deepcopy(next(iter(refresh._cache.values()))['snapshot'])
+        self.web.profile.cookies['c_user']='222222222'
+        with self.assertRaises(ProvisioningError):refresh.effective_doc_id(self.web,name,old)
+        with self.assertRaises(ProvisioningError):refresh._apply_snapshot(self.web,snapshot)
+
+    async def test_actor_change_during_collection_cannot_install_retained_proof(self):
+        entered,release=asyncio.Event(),asyncio.Event()
+        async def delayed(url,**kwargs):
+            entered.set();await release.wait();return 200,self.fixture,url
+        self.web.fetch_text.side_effect=delayed
+        pending=asyncio.create_task(self.collect())
+        await entered.wait();self.web.profile.cookies['c_user']='222222222';release.set()
+        with self.assertRaises(ProvisioningError):await pending
+        self.assertFalse(getattr(self.web,'_reviewed_module_ids',{}).get('accepted'))
 
     async def test_changed_code_at_expired_same_url_is_fetched_and_blocked(self):
         name='BizKitSettingsCreateAdAccountMutation'

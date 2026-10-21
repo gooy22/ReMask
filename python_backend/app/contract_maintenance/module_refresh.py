@@ -28,6 +28,7 @@ from ..editor_modules import MODULES as EDITOR_MODULES, refresh_editor
 from .module_registry import refresh_registry
 from .source_observation import oldest_epoch, proof_until
 from .module_source_cache import read_script
+from .source_invalidation import state as invalidation_state, reject as reject_sources, scope as source_scope
 
 log = logging.getLogger('remask.module_refresh')
 BASELINES = Path(__file__).parent.parent / 'contracts' / 'meta_module_refresh_20261013.json'
@@ -70,7 +71,7 @@ def select_updates(rows, references, *, now=None):
         previous = candidates.get(digest)
         if previous is None or proof_until(row, now, TTL) >= proof_until(previous, now, TTL):
             candidates[digest] = row
-    accepted, blocked = {}, []
+    accepted, blocked, incomplete = {}, [], set()
     for friendly, spec in references.items():
         artifact_name = friendly + '.graphql'
         artifacts = list(versions.get(artifact_name, {}).values())
@@ -105,12 +106,25 @@ def select_updates(rows, references, *, now=None):
             # Retained/cached source never becomes newly observed merely
             # because another collection window finally supplied its sender.
             artifact_until = min(proof_until(next(iter(versions[name].values())), now, TTL) for name in expected)
-            sender_until = max(proof_until(row, now, TTL) for row in valid_senders)
+            sender = max(valid_senders, key=lambda row:(row.get('_source_generation', 0), proof_until(row, now, TTL)))
+            sender_until = proof_until(sender, now, TTL)
             accepted[friendly] = {'doc_id': doc_id, 'baseline_doc_id': spec['doc_id'],
-                'until': min(artifact_until, sender_until)}
-        elif not valid_artifacts or doc_id != spec['doc_id']:
+                'until': min(artifact_until, sender_until),
+                'generation': min([sender.get('_source_generation', 0),
+                    *(next(iter(versions[name].values())).get('_source_generation', 0) for name in expected)])}
+        elif not valid_artifacts or doc_id != spec['doc_id'] or any(versions.get(name) for name in spec['senders']):
             blocked.append(friendly)
-    return {'accepted': accepted, 'blocked': sorted(blocked), 'observed_modules': len(versions)}
+            contradicted = any(versions.get(name) and (len(versions[name]) != 1 or
+                fingerprint(next(iter(versions[name].values())), doc_id) != digest)
+                for name, digest in expected.items())
+            sender_observed = any(versions.get(name) for name in spec['senders'])
+            if not contradicted and not (sender_observed and not valid_senders):
+                incomplete.add(friendly)
+    blocked_generations = {friendly:max((row.get('_source_generation', 0)
+        for name in (*references[friendly]['artifact_modules'], *references[friendly]['senders'])
+        for row in versions.get(name, {}).values()), default=0) for friendly in blocked}
+    return {'accepted': accepted, 'blocked': sorted(blocked), 'observed_modules': len(versions),
+        'blocked_generations':blocked_generations, 'invalidated':sorted(set(blocked)-incomplete)}
 
 
 async def refresh_from_document(web, document, final_url):
@@ -132,6 +146,7 @@ async def refresh_from_document(web, document, final_url):
     if not urls:
         return
     profile = web.profile
+    scope = source_scope(web)
     route = str(getattr(profile, 'proxy', '') or '')
     key = hashlib.sha256(json.dumps([getattr(profile, 'name', ''), profile.cookies.get('c_user', ''), route,
         parts.hostname, parts.path, sorted(urls)], separators=(',', ':')).encode()).hexdigest()
@@ -140,13 +155,17 @@ async def refresh_from_document(web, document, final_url):
     # instead of downloading it again. Scope and source fingerprints are unchanged.
     lock = _collection_locks.setdefault(key, asyncio.Lock())
     async with lock:
+        if source_scope(web) != scope:
+            raise ProvisioningError('PRIVATE_MODULE_SCOPE_CHANGED', 'Source profile context changed during collection.')
         await _refresh_window(web, final_url, references, wanted, urls, key)
 
 
 async def _refresh_window(web, final_url, references, wanted, urls, key):
+    scope = source_scope(web)
     now = time.monotonic()
+    generation = invalidation_state(web)[0]
     previous = _cache.get(key)
-    if previous and previous['until'] > now:
+    if previous and previous.get('generation', 0) == generation and previous['until'] > now:
         _apply_snapshot(web, previous['snapshot'])
         web._module_collection_progress = dict(previous['progress'])
         web._module_collection_due_at = previous['until']
@@ -154,7 +173,7 @@ async def _refresh_window(web, final_url, references, wanted, urls, key):
     # Retain only reviewed proof candidates between bounded windows. A sender,
     # its Relay artifact and a literal reference table may live in different
     # CDN files. Unrelated factories are inventoried, then discarded.
-    continuing = previous and not previous['drained']
+    continuing = previous and previous.get('generation', 0) == generation and not previous['drained']
     state = previous if continuing else {
         'urls': urls[:URL_LIMIT], 'attempts': {}, 'collected': set(),
         'proofs': {}, 'proof_bytes': 0, 'limited': len(urls) > URL_LIMIT,
@@ -228,6 +247,9 @@ async def _refresh_window(web, final_url, references, wanted, urls, key):
         failures += 1
     proofs = list(state['proofs'].values())
     snapshot = select_updates(proofs, references)
+    snapshot['scope'] = scope
+    if source_scope(web) != scope:
+        raise ProvisioningError('PRIVATE_MODULE_SCOPE_CHANGED', 'Source profile context changed during collection.')
     try:
         await asyncio.to_thread(refresh_reference, proofs, observed_at=oldest_epoch(proofs))
     except (ValueError, KeyError, TypeError, OSError):
@@ -253,7 +275,7 @@ async def _refresh_window(web, final_url, references, wanted, urls, key):
     web._module_collection_progress = progress
     until = min([now + (60 if pending else TTL), *(row['until'] for row in snapshot['accepted'].values()),
         *(observed + TTL for observed in observations.values())])
-    state.update(until=until, drained=not pending, snapshot=snapshot, progress=progress)
+    state.update(until=until, drained=not pending, snapshot=snapshot, progress=progress, generation=generation)
     web._module_collection_due_at = state['until']
     _cache[key] = state
     _cache.move_to_end(key)
@@ -265,34 +287,56 @@ async def _refresh_window(web, final_url, references, wanted, urls, key):
 
 
 def _apply_snapshot(web, snapshot):
-    current = getattr(web, '_reviewed_module_ids', {})
+    scope = source_scope(web)
+    if snapshot.get('scope', scope) != scope:
+        raise ProvisioningError('PRIVATE_MODULE_SCOPE_CHANGED', 'Source evidence belongs to another profile context.')
+    current = getattr(web, '_reviewed_module_ids', {}) if getattr(web, '_reviewed_module_scope', scope) == scope else {}
     # Retain expired IDs as history: learning a new ID must never silently
     # downgrade a later request to the older installed ID after a failed read.
     accepted = dict(current.get('accepted', {}))
-    blocked = set(current.get('blocked', [])) | set(snapshot['blocked'])
-    for name in snapshot['blocked']:
-        accepted.pop(name, None)
+    invalidated = snapshot.get('invalidated', snapshot['blocked'])
+    _, floors = reject_sources(web, {name:snapshot.get('blocked_generations', {}).get(name, 0)
+        for name in invalidated})
+    blocked = set(current.get('blocked', [])) | (set(snapshot['blocked'])-set(invalidated))
+    for name, floor in floors.items():
+        if accepted.get(name, {}).get('generation', 0) < floor:
+            accepted.pop(name, None)
+            blocked.add(name)
     for name, row in snapshot['accepted'].items():
+        if row.get('generation', 0) < floors.get(name, 0):
+            continue
+        if row['until'] <= time.monotonic():
+            if accepted.get(name, {}).get('until', 0) < row['until']:
+                accepted[name] = row  # Expired history cannot authorize a baseline fallback.
+            continue
         accepted[name] = row
         blocked.discard(name)
     web._reviewed_module_ids = {'accepted': accepted, 'blocked': sorted(blocked)}
+    web._reviewed_module_scope = scope
 
 
 def refresh_due(web):
     now = time.monotonic()
+    floors = invalidation_state(web)[1]
+    accepted = getattr(web, '_reviewed_module_ids', {}).get('accepted', {})
     progress = getattr(web, '_module_collection_progress', {})
     unfinished = bool(progress) and not progress.get('collection_complete', False)
     return now - getattr(web, '_module_refresh_attempted_at', 0) >= 60 and (
+        (bool(accepted) and getattr(web, '_reviewed_module_scope', source_scope(web)) != source_scope(web)) or
         unfinished and now >= getattr(web, '_module_collection_due_at', 0) or any(
+            accepted.get(name, {}).get('generation', 0) < floor for name, floor in floors.items()) or any(
             row['until'] <= now for row in getattr(web, '_reviewed_module_ids', {}).get('accepted', {}).values()))
 
 
 def effective_doc_id(web, friendly_name, original):
     snapshot = getattr(web, '_reviewed_module_ids', {})
-    if friendly_name in snapshot.get('blocked', []):
-        raise ProvisioningError('PRIVATE_MODULE_SCHEMA_CHANGED', 'Reviewed Facebook module changed; no request was submitted.')
     row = snapshot.get('accepted', {}).get(friendly_name)
-    if row and row['until'] <= time.monotonic() and row['doc_id'] != row['baseline_doc_id']:
+    floor = invalidation_state(web)[1].get(friendly_name, 0)
+    if friendly_name in snapshot.get('blocked', []) or (floor and (row or {}).get('generation', 0) < floor):
+        raise ProvisioningError('PRIVATE_MODULE_SCHEMA_CHANGED', 'Reviewed Facebook module changed; no request was submitted.')
+    if row and getattr(web, '_reviewed_module_scope', source_scope(web)) != source_scope(web):
+        raise ProvisioningError('PRIVATE_MODULE_REFRESH_REQUIRED', 'Module proof belongs to another profile context; no request was submitted.')
+    if row and row['until'] <= time.monotonic():
         raise ProvisioningError('PRIVATE_MODULE_REFRESH_REQUIRED', 'Updated Facebook module proof expired; no request was submitted.')
     if row and row['until'] > time.monotonic() and str(original) in {row['baseline_doc_id'], row['doc_id']}:
         return row['doc_id']

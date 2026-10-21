@@ -1,6 +1,8 @@
 import asyncio
 import copy
 import json
+import os
+import tempfile
 from pathlib import Path
 import re
 import time
@@ -73,6 +75,19 @@ class SelectionTests(unittest.TestCase):
                 row['source'] += '\n// changed sender'
         self.assertIn(self.name, refresh.select_updates(rows, self.refs)['blocked'])
 
+    def test_changed_sender_also_invalidates_an_unchanged_baseline_id(self):
+        rows=copy.deepcopy(self.rows)
+        for row in rows:
+            if row['name'] in self.refs[self.name]['senders']:
+                row['source'] += '\n// changed sender'
+        self.assertIn(self.name,refresh.select_updates(rows,self.refs)['invalidated'])
+
+    def test_missing_sender_is_pending_collection_not_a_rejected_contract(self):
+        rows=[row for row in self.updated() if row['name'] not in self.refs[self.name]['senders']]
+        result=refresh.select_updates(rows,self.refs)
+        self.assertIn(self.name,result['blocked'])
+        self.assertNotIn(self.name,result['invalidated'])
+
     def test_ambiguous_artifact_cannot_override_id(self):
         rows = self.updated()
         old = next(row for row in self.rows if row['name'] == self.name + '_facebookRelayOperation')
@@ -120,6 +135,8 @@ class SelectionTests(unittest.TestCase):
 
 class AutomaticReadsTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        folder=tempfile.TemporaryDirectory();self.addCleanup(folder.cleanup)
+        env=patch.dict(os.environ,{'REMASK_DATA_DIR':folder.name});env.start();self.addCleanup(env.stop)
         refresh._cache.clear()
         from app.contract_maintenance import module_source_cache
         module_source_cache._cache.clear()
@@ -336,6 +353,10 @@ class AutomaticReadsTests(unittest.IsolatedAsyncioTestCase):
 
 
 class SubmissionTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        folder=tempfile.TemporaryDirectory();self.addCleanup(folder.cleanup)
+        env=patch.dict(os.environ,{'REMASK_DATA_DIR':folder.name});env.start();self.addCleanup(env.stop)
+
     async def test_verified_id_reaches_existing_http_sender_once_with_same_variables(self):
         from fb_worker import FacebookWebSession, FacebookBootstrap, WebProfile
         web = FacebookWebSession(WebProfile(name='fixture', cookies={'c_user':'111111111'},

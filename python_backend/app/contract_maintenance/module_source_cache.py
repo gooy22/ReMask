@@ -14,18 +14,12 @@ from weakref import WeakValueDictionary
 
 from .ads_sources import deferred_script_urls, module_records, public_script_url
 from ..targeting_reference import MODULES as TARGETING_MODULES
+from .source_invalidation import scope as _scope, state as invalidation_state
 
 MAX_ENTRIES = 64
 MAX_BYTES = 8_000_000  # Serialized parsed-evidence budget; not proxy traffic.
 _cache = OrderedDict()
 _locks = WeakValueDictionary()
-
-
-def _scope(web):
-    profile = web.profile
-    return hashlib.sha256(json.dumps([getattr(profile,'name',''),
-        profile.cookies.get('c_user',''), str(getattr(profile,'proxy','') or '')],
-        separators=(',', ':')).encode()).hexdigest()
 
 
 def _copy(entry, *, hit):
@@ -36,13 +30,16 @@ async def read_script(web, url, *, referer, wanted, budget, ttl, stats=None):
     if not public_script_url(url):
         raise ValueError('Public source URL required')
     scope = _scope(web)
+    if scope is None:
+        raise ValueError('Source profile context required')
     key = hashlib.sha256((scope + '\0' + url).encode()).hexdigest()
     lock = _locks.setdefault(key, asyncio.Lock())
     async with lock:
         if _scope(web) != scope:
             raise ValueError('Source profile context changed')
         previous = _cache.get(key)
-        if previous and previous['observed_at'] + ttl > time.monotonic():
+        generation = invalidation_state(web)[0]
+        if previous and previous.get('generation', 0) >= generation and previous['observed_at'] + ttl > time.monotonic():
             _cache.move_to_end(key)
             if stats is not None:stats['hits'] += 1
             if previous['source_bytes'] > budget:
@@ -62,6 +59,7 @@ async def read_script(web, url, *, referer, wanted, budget, ttl, stats=None):
             for row in rows:
                 row['_source_observed_at'] = observed
                 row['_source_observed_wall_at'] = observed_wall
+                row['_source_generation'] = generation
                 row['_module_evidence'] = {'module':row['name'],
                     'module_sha256':hashlib.sha256(row['module_source'].encode()).hexdigest(),
                     'script_sha256':script_digest, 'observed_public_url':url}
@@ -69,13 +67,15 @@ async def read_script(web, url, *, referer, wanted, budget, ttl, stats=None):
                     row['_targeting_evidence'] = dict(row['_module_evidence'])
             entry = {'valid':True, 'source_bytes':size, 'rows':rows,
                 'deferred_urls':deferred_script_urls(source, preferred=wanted, all_resources=True),
-                'observed_at':observed}
+                'observed_at':observed, 'generation':generation}
             entry['cache_bytes'] = len(json.dumps(entry, ensure_ascii=False, separators=(',', ':')).encode())
             return entry
 
         entry = await asyncio.to_thread(parse)
         if _scope(web) != scope:
             raise ValueError('Source profile context changed')
+        if invalidation_state(web)[0] != generation:
+            return {'valid':False,'source_bytes':size,'cache_hit':False}
         if entry['cache_bytes'] <= MAX_BYTES:
             _cache[key] = entry
             _cache.move_to_end(key)
