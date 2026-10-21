@@ -41,6 +41,8 @@ function rmx_pwj_out(array $payload, int $status = 200): void {
 }
 
 function rmx_pwj_input(): array {
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && (int)($_SERVER['CONTENT_LENGTH'] ?? 0) > 167772160)
+        rmx_pwj_out(['ok'=>false,'error'=>'MEDIA_UPLOAD_TRANSPORT_LIMIT'], 413);
     $input = $_POST;
     // Authenticated maintenance GETs are read-only. Never accept a GET action
     // that creates/retries a job or changes a contract.
@@ -122,8 +124,6 @@ function rmx_pwj_worker_request(string $method, string $path, ?array $payload = 
 }
 
 try {
-    if ($_SERVER['REQUEST_METHOD'] === 'POST' && (int)($_SERVER['CONTENT_LENGTH'] ?? 0) > 167772160)
-        rmx_pwj_out(['ok'=>false,'error'=>'MEDIA_UPLOAD_TRANSPORT_LIMIT'], 413);
     $input = rmx_pwj_input();
     $action = strtolower(trim((string)($input['action'] ?? 'status')));
 

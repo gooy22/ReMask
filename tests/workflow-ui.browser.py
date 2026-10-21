@@ -179,6 +179,7 @@ class WorkflowTests(unittest.TestCase):
                 message:'Primary',destination_url:'https://example.com/',cta:'LEARN_MORE',
                 meta_builder:{campaign:{objective:'OUTCOME_TRAFFIC'},adset:{daily_budget:200},targeting:{geo_locations:{countries:['US']}}}});
         }''', {'cards':cards,'first':first,'second':second,'prepared':prepared})
+        self.page.locator('.cr-tab[data-tab="creative"]').click()
         self.assertEqual(self.page.locator('.car-cta').nth(1).input_value(),'SHOP_NOW')
         self.page.locator('#remaskMediaInspect').click()
         self.page.wait_for_function('document.querySelector("#remaskMediaCard").options.length===2')
