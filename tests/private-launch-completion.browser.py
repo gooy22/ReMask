@@ -242,7 +242,7 @@ class InstalledLaunchTests(unittest.TestCase):
         elif path == 'ajax/metaJobsList.php': data = {'jobs': []}
         elif path == 'ajax/creativeLibrary.php':
             data = {'items': [{'id':'preset','name':'Fixture','format':'SINGLE','media_library_id':MEDIA_ID,
-                'media':MEDIA,'message':'Fixture message','headline':'Fixture headline','destination_url':'https://example.com/',
+                'media':{**MEDIA,'media_type':'video' if self._testMethodName=='test_installed_video_ui_php_native_draft_publish' else 'image'},'message':'Fixture message','headline':'Fixture headline','destination_url':'https://example.com/',
                 'meta_builder':{'campaign':{'daily_budget':500,'objective':self.preset_objective},'adset':self.preset_rules}}]}
             if self._testMethodName=='test_saved_preset_module_values_stay_removed_after_bundle_reload':
                 data['items'][0]['meta_builder'].update(adset={'is_dynamic_creative':True},targeting={'user_device':['iphone 17'],'education_statuses':[1]},
@@ -277,7 +277,7 @@ class InstalledLaunchTests(unittest.TestCase):
                 status = 409
             else:
                 ids = json.loads(parse_qs(url.query)['ids'][0])
-                data = {'media':[{**MEDIA,'id':id, 'media_type':'video' if i else 'image'} for i,id in enumerate(ids)]}
+                data = {'media':[{**MEDIA,'id':id, 'media_type':'image' if self._testMethodName=='test_installed_carousel_ui_php_native_draft_publish' else ('video' if i else 'image')} for i,id in enumerate(ids)]}
                 if self.foreign_bundle_media:
                     data['media'][0]['id'] = 'm-' + 'f' * 24
         route.fulfill(status=status, json={'ok':status==200,'data':data,'error':{'message':'MEDIA_LIBRARY_ITEM_UNAVAILABLE'}})
