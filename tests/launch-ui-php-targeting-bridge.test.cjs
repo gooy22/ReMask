@@ -90,7 +90,7 @@ assert.equal(fromPhp.campaign.name,'UI campaign');
 assert.equal(fromPhp.creative.name,'UI creative');
 
 const serialized=JSON.parse(JSON.stringify(runPhp(JSON.parse(JSON.stringify(effective)),
-    JSON.parse(JSON.stringify(builder))));
+    JSON.parse(JSON.stringify(builder)))));
 assert.deepEqual(serialized.adset.targeting.exclusions,{interests:[{id:'303030'}]});
 assert.deepEqual(serialized.adset.targeting.flexible_spec,[{interests:[{id:'404040'}]}]);
 assert.equal(serialized._meta_official_v1,true);
