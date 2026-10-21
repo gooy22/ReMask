@@ -1047,6 +1047,8 @@ class InstalledLaunchTests(unittest.TestCase):
                          ['First card','Second card'])
         self.assertEqual([card['link'] for card in creative['carousel_cards']],
                          ['https://example.com/first','https://example.com/second'])
+        self.assertEqual([card['call_to_action'] for card in creative['carousel_cards']],
+                         ['LEARN_MORE','SHOP_NOW'])
 
         async def native():
             case=carousel_fixtures.CarouselTests('test_two_cards_keep_media_text_links_and_resume_without_posts')
