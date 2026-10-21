@@ -107,9 +107,11 @@ function renderSavedCarouselPreset(cards) {
             '<td><input class="form-control carousel-headline" value="' + escapeHtml(card.headline || '') + '"></td>' +
             '<td><input class="form-control carousel-description" value="' + escapeHtml(card.description || '') + '"></td>' +
             '<td><input class="form-control carousel-link" value="' + escapeHtml(card.link || '') + '"></td>' +
+            '<td><input class="form-control carousel-cta" aria-label="Card ' + (index + 1) +
+            ' CTA" value="' + escapeHtml(card.call_to_action || '') + '"></td>' +
         '</tr>';
     }
-    box.innerHTML = '<div class="app-table-wrap"><table class="app-table"><thead><tr><th>#</th><th>Файл</th><th>Headline</th><th>Description</th><th>Link</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+    box.innerHTML = '<div class="app-table-wrap"><table class="app-table"><thead><tr><th>#</th><th>Файл</th><th>Headline</th><th>Description</th><th>Link</th><th>CTA</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
 }
 JS_CODE;
     if (strpos($launch, $stateAnchor) === false) { fwrite(STDERR, "[creative-v100] library state anchor missing\n"); exit(287); }
