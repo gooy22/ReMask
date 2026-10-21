@@ -19,6 +19,7 @@ from .private_ads_state import AdsManagerSubmitter
 from .private_ads_verify import verify_published_objects
 from .private_ads_resources import AdsManagerResourceCatalog, read_pixels
 from .private_ads_objectives import ObjectiveContract
+from .private_ads_bidding import MANIFEST as BIDDING_MANIFEST, native_bidding
 from .private_launch_extensions import OperationKey
 
 SOURCE_REVISION = "ads-manager-private-2026-10-13-media-resources"
@@ -37,9 +38,10 @@ class AdsManagerLaunch:
         self.objectives = ObjectiveContract()
         digest = hashlib.sha256((SOURCE_REVISION + self.catalog.digest).encode())
         digest.update(self.objectives.digest.encode())
+        digest.update(BIDDING_MANIFEST.read_bytes())
         for name in ("private_ads_launch.py", "private_ads_http.py", "private_ads_draft.py",
                      "private_ads_state.py", "private_ads_media.py", "private_ads_publication.py",
-                     "private_ads_verify.py", "private_ads_creative.py", "private_ads_video.py", "private_ads_delivery.py", "private_ads_catalog.py", "private_ads_reads.py", "private_draft_pages.py", "private_ads_resources.py", "private_ads_helpers.py", "private_ads_preview.py", "private_ads_objectives.py", "private_ads_inspect.py"):
+                     "private_ads_verify.py", "private_ads_creative.py", "private_ads_video.py", "private_ads_delivery.py", "private_ads_catalog.py", "private_ads_reads.py", "private_draft_pages.py", "private_ads_resources.py", "private_ads_helpers.py", "private_ads_preview.py", "private_ads_objectives.py", "private_ads_inspect.py", "private_ads_bidding.py"):
             digest.update(name.encode() + b"\0" + Path(__file__).with_name(name).read_bytes())
         self.source_digest = digest.hexdigest()
 
@@ -105,11 +107,12 @@ class AdsManagerLaunch:
         # Encode every level before media POSTs, including nested auth and
         # nonfinite/unsupported values. Invalid Ad input must not leave uploads.
         self.objectives.validate(launch)
+        campaign_values, adset_values, _ = native_bidding(launch["campaign"], launch["adset"])
         placeholders = [{"image_hash": "planned-image-hash"}] * (len(creative["carousel_cards"])
                         if creative.get("format") == "CAROUSEL" else 1)
         story = resolved_creative(creative, target["page_id"], placeholders,
             {"id": creative.get("source_instagram_media_id")})
-        for level, values in (("campaign", launch["campaign"]), ("ad_set", launch["adset"]),
+        for level, values in (("campaign", campaign_values), ("ad_set", adset_values),
                               ("ad", {**launch["ad"], "creative": story})):
             try:
                 fragment_params("100000", level=level, values=values)
@@ -413,7 +416,12 @@ class AdsManagerLaunch:
         creative = (copy.deepcopy(proof["expected_creative"]) if proof.get("resume_read_only")
                     else resolved_creative(selection, target["page_id"], uploaded or proof.get("confirmed_media", []),
                                            proof.get("instagram_media")))
-        levels = {"campaign": copy.deepcopy(launch["campaign"]), "ad_set": copy.deepcopy(launch["adset"]),
+        # A historical publication resumes its exact saved requests, without
+        # applying a new creation serializer to previously accepted mutations.
+        campaign_values, adset_values = (copy.deepcopy(launch["campaign"]), copy.deepcopy(launch["adset"]))
+        if not historical_recovery:
+            campaign_values, adset_values, _ = native_bidding(campaign_values, adset_values)
+        levels = {"campaign": campaign_values, "ad_set": adset_values,
                   "ad": {**copy.deepcopy(launch["ad"]), "creative": creative}}
         publisher = AdsManagerDraftPublisher(sender)
         draft_only = launch.get("execution_mode") == "DRAFT"

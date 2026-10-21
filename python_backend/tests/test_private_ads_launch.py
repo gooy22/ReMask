@@ -245,7 +245,11 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
                 raise ConnectionError('interrupted after accepted publication')
             return await original(path, params)
         self.client.get = interrupted
-        with self.assertRaises(ConnectionError):
+        # Seed the predecessor's original serializer, not today's bidding
+        # fields under an old source digest. Recovery must retain old bindings.
+        with patch('app.private_ads_launch.native_bidding',
+                   side_effect=lambda campaign, adset: (copy.deepcopy(campaign), copy.deepcopy(adset), {})), \
+                self.assertRaises(ConnectionError):
             await self.launch()
         self.client.get = original
         contracts = PrivateLaunchContractStore('{}')
