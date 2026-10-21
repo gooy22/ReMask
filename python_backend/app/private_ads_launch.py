@@ -24,11 +24,14 @@ from .private_ads_bidding import MANIFEST as BIDDING_MANIFEST, native_bidding
 from .private_launch_extensions import OperationKey
 
 SOURCE_REVISION = "ads-manager-private-2026-10-13-media-resources"
-# Exact source/catalog digests of reviewed main 6b7dfc1 and 7b6a985.
+# Exact source/catalog digests of reviewed main 6b7dfc1, 7b6a985,
+# b23917a (PR #228) and 638d773 (PR #229).
 # Compatibility permits only fresh reads of an already accepted publication.
 READ_ONLY_PUBLICATION_PREDECESSORS = frozenset({
     "e38dc7d32ba2ccd73d18e0b31b477be7e1d4f94624d1b1a1817efd692307a2c2",
     "cc0d9d896c67b95db8bdef3fce77279ba9d9446302f0bd0f1c10a1e62ba92645",
+    "cb9b5fd76c6b9079d9584818a085848df404239437989499cd27f284f11e9353",
+    "0ddf56b2f696365f7cad55886598a7dc95a1a89ba021839f0fb669df4add2c62",
 })
 
 class AdsManagerLaunch:
@@ -432,12 +435,23 @@ class AdsManagerLaunch:
                                            proof.get("instagram_media")))
         # A historical publication resumes its exact saved requests, without
         # applying a new creation serializer to previously accepted mutations.
-        campaign_values, adset_values = (copy.deepcopy(launch["campaign"]), copy.deepcopy(launch["adset"]))
-        if not historical_recovery:
+        if historical_recovery:
+            levels = {}
+            for level in ("campaign", "ad_set", "ad"):
+                binding = saved["ADS_MANAGER:FRAGMENT_" + level.upper()].get("result", {}).get("evidence", {}).get("binding", {}).get("values")
+                if not isinstance(binding, dict) or not binding:
+                    raise fail("SAVED_OPERATION_MISMATCH", "Historical publication has no exact submitted settings")
+                levels[level] = copy.deepcopy(binding)
+            # _saved_publication checks each original request fingerprint
+            # against these bindings before any publication/object read.
+            # In particular, do not rebuild old native objective/bidding fields
+            # from the selected (UI) objective or today's creation serializer.
+        else:
+            campaign_values, adset_values = (copy.deepcopy(launch["campaign"]), copy.deepcopy(launch["adset"]))
             campaign_values, adset_values, _ = native_bidding(campaign_values, adset_values)
             campaign_values = self.objective_wire.campaign(campaign_values)
-        levels = {"campaign": campaign_values, "ad_set": adset_values,
-                  "ad": {**copy.deepcopy(launch["ad"]), "creative": creative}}
+            levels = {"campaign": campaign_values, "ad_set": adset_values,
+                      "ad": {**copy.deepcopy(launch["ad"]), "creative": creative}}
         publisher = AdsManagerDraftPublisher(sender)
         draft_only = launch.get("execution_mode") == "DRAFT"
         result = await publisher.run(client, name=launch["campaign"]["name"],
