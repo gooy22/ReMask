@@ -260,6 +260,11 @@ class InstalledLaunchTests(unittest.TestCase):
             await fixture.asyncSetUp()
             try:
                 fixture.media=replace(fixture.media,id=MEDIA_ID)
+                # The existing fixture installed its resolver patch before
+                # the browser-selected media ID was known. Update that result
+                # so the real media preflight sees the exact same selected ID.
+                from app.private_launch_media import LaunchMediaResolver
+                LaunchMediaResolver.resolve.return_value=[fixture.media]
                 fixture.payload=payload
                 async def execute():
                     return await fixture.owner.run(item_id='browser-ui',profile_id=row['profile'],
