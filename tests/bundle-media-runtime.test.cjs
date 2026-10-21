@@ -7,6 +7,45 @@ const source=fs.readFileSync(path.join(__dirname,'..','railway-private-launch-co
 const bundleCode=source.slice(source.indexOf('async function remaskPrivateCaptureBundle()'),
   source.indexOf('\nfunction remaskPrivateInstallBudgetPeriod()'));
 const ids=['m-'+'a'.repeat(24),'m-'+'b'.repeat(24)];
+const pagesCode=source.slice(source.indexOf('let remaskPrivatePagesGeneration=0;'),
+  source.indexOf("$('adAccount')?.addEventListener"));
+function pagesFixture(initial='') {
+  const page={value:initial,options:[],replaceChildren(...options){this.options=options;this.value='';},
+    appendChild(option){this.options.push(option);}};
+  let resolve;
+  const pending=new Promise(done=>resolve=done);
+  const ctx={$:()=>page,state:{profile:'38',pages:[],pendingBundleAssets:{page:'1408248045702451'}},
+    accountIds:['120249912222240685'],selectedAccountIds:()=>ctx.accountIds,targetMode:()=>false,
+    loadCachedAsset:()=>pending,Option:function(text,value){this.text=text;this.value=value;},
+    hasOptionValue:(select,value)=>select.options.some(option=>option.value===value),
+    refreshInstagram(){},invalidateLaunchReview(){},validateReady(){}};
+  vm.createContext(ctx);vm.runInContext(pagesCode,ctx);
+  return {ctx,page,resolve};
+}
+test('Page refresh keeps a selection made while the exact-account read is pending',async()=>{
+  const {ctx,page,resolve}=pagesFixture();
+  const pending=ctx.loadPages();
+  page.value='1408248045702451';
+  resolve({data:[{id:page.value,name:'PrgssTeam'}]});await pending;
+  assert.equal(page.value,'1408248045702451');
+});
+test('Page refresh respects a newer choice or clear and never retains an absent Page',async()=>{
+  for(const selected of ['1555555555555','']){
+    const {ctx,page,resolve}=pagesFixture('1408248045702451');
+    const pending=ctx.loadPages();page.value=selected;
+    resolve({data:[{id:'1408248045702451'},{id:'1555555555555'}]});await pending;
+    assert.equal(page.value,selected);
+  }
+  const {ctx,page,resolve}=pagesFixture();const pending=ctx.loadPages();
+  page.value='1408248045702451';resolve({data:[{id:'1555555555555'}]});await pending;
+  assert.equal(page.value,'');
+});
+test('Page refresh cannot overwrite a changed account scope',async()=>{
+  const {ctx,page,resolve}=pagesFixture('1408248045702451');const pending=ctx.loadPages();
+  ctx.accountIds=['120249999999999999'];page.value='1555555555555';
+  resolve({data:[{id:'1408248045702451'}]});await pending;
+  assert.equal(page.value,'1555555555555');assert.equal(page.options.length,0);
+});
 function fixture(){
   const ctx={
     $:()=>null,state:{},remaskBundleRestoreGeneration:0,remaskBundleMedia:null,

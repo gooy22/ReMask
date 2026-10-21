@@ -1106,12 +1106,15 @@ function pythonWorkerRenderJob(job) {
               'Ad Set '+String(task.result.draft_objects?.ad_set||'—'),
               'Ad '+String(task.result.draft_objects?.ad||'—')].join(' · ');
             errorTd.appendChild(identities);
-            if(task.payload&&task.result.launch_key){
-              const inspect=document.createElement('button');inspect.type='button';
-              inspect.textContent='Проверить сохранённый черновик';
-              inspect.addEventListener('click',()=>pythonWorkerInspectDraft(item,task,inspect));
-              errorTd.appendChild(inspect);
-            }
+          }
+          // A rejected final fragment has an accepted receipt even though the
+          // task has no success result. Inspect the retained intent, not Retry
+          // Failed or a new Launch. The backend verifies every saved receipt.
+          if(pythonWorkerDraftInspectionKey(item,task)){
+            const inspect=document.createElement('button');inspect.type='button';
+            inspect.textContent='Проверить сохранённый черновик';
+            inspect.addEventListener('click',()=>pythonWorkerInspectDraft(item,task,inspect));
+            errorTd.appendChild(inspect);
           }
           if(task.action==='private_launch'&&task.result?.execution_mode==='DRAFT_INSPECT'){
             for(const message of pythonWorkerDraftValidationMessages(task.result)){
@@ -1214,12 +1217,25 @@ function pythonWorkerRenderJob(job) {
   if (retry) retry.disabled = pythonWorkerUiState.busy || counts.FAILED === 0;
 }
 
+function pythonWorkerDraftInspectionKey(item,task){
+  if(task.action!=='private_launch'||!task.payload||task.payload.reconcile_only)return '';
+  const steps=(item.advertising_steps||[]).filter(step=>step.task_id===task.id);
+  if(steps.some(step=>step.step==='ADS_MANAGER:PUBLISH'))return '';
+  const saved=task.result?.draft_verified===true&&task.result?.published===false;
+  const mode=task.payload.launch?.base?.execution_mode||task.payload.launch?.execution_mode;
+  const complete=['DRAFT','FRAGMENT_CAMPAIGN','FRAGMENT_AD_SET','FRAGMENT_AD'].every(operation=>
+    steps.some(step=>step.step==='ADS_MANAGER:'+operation&&step.submitted===true));
+  if(!saved&&!(mode==='DRAFT'&&complete))return '';
+  return String(task.result?.launch_key||task.payload.launch_key||task.idempotency_key||'');
+}
+
 async function pythonWorkerInspectDraft(item,task,button){
   if(button.disabled)return;
+  const sourceKey=pythonWorkerDraftInspectionKey(item,task);
+  if(!sourceKey)return;
   button.disabled=true;
   try{
     const original=JSON.parse(JSON.stringify(task.payload));
-    const sourceKey=String(task.result.launch_key||'');
     const inspectKey='draft-inspect-'+String(task.id)+'-'+Date.now();
     const data=await pythonWorkerBridge({action:'create',idempotency_key:inspectKey,
       profiles:[{profile_id:String(item.profile_id),tasks:[{action:'private_launch',

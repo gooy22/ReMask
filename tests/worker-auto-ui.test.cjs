@@ -32,11 +32,11 @@ const source = fs.readFileSync('railway-python-worker-ui.js', 'utf8');
     async pythonWorkerPoll(){polls++;},
     async pythonWorkerBridge(payload){calls.push(JSON.parse(JSON.stringify(payload)));return {job:{job_id:'read-job'}};}};
   vm.createContext(scope);
-  const begin=source.indexOf('async function pythonWorkerInspectDraft(');
+  const begin=source.indexOf('function pythonWorkerDraftInspectionKey(');
   vm.runInContext(source.slice(begin,source.indexOf('\nfunction pythonWorkerSchedulePoll',begin)),scope);
-  const task={id:'original-task',payload:{business_id:'222222',ad_account_id:'111111',page_id:'555555',
+  const task={id:'original-task',action:'private_launch',payload:{business_id:'222222',ad_account_id:'111111',page_id:'555555',
     launch:{execution_mode:'DRAFT',campaign:{objective:'OUTCOME_TRAFFIC'},adset:{optimization_goal:'LINK_CLICKS'}}},
-    result:{launch_key:'original-durable-intent'}};
+    result:{draft_verified:true,published:false,launch_key:'original-durable-intent'}};
   const before=JSON.stringify(task);
   const button={disabled:false};
   await scope.pythonWorkerInspectDraft({profile_id:'38'},task,button);
@@ -46,6 +46,25 @@ const source = fs.readFileSync('railway-python-worker-ui.js', 'utf8');
   const payload=submitted.tasks[0].payload;
   assert.equal(payload.launch_key,'original-durable-intent');assert.equal(payload.reconcile_only,true);
   assert.deepEqual(payload.launch,task.payload.launch);assert.equal(JSON.stringify(task),before);
+  const failed={...task,result:null,idempotency_key:'retained-failed-intent',payload:{...task.payload}};
+  const steps=['DRAFT','FRAGMENT_CAMPAIGN','FRAGMENT_AD_SET','FRAGMENT_AD'].map(operation=>
+    ({task_id:task.id,step:'ADS_MANAGER:'+operation,submitted:true}));
+  const retained={profile_id:'38',advertising_steps:steps};
+  assert.equal(scope.pythonWorkerDraftInspectionKey(retained,failed),'retained-failed-intent');
+  const callsBefore=calls.length;
+  await scope.pythonWorkerInspectDraft(retained,failed,{disabled:false});
+  assert.equal(calls.length,callsBefore+1);
+  assert.equal(calls.at(-1).profiles[0].tasks[0].payload.launch_key,'retained-failed-intent');
+  assert.equal(calls.at(-1).profiles[0].tasks[0].payload.reconcile_only,true);
+  for(const [item,candidate] of [
+    [{...retained,advertising_steps:steps.slice(0,3)},failed],
+    [{...retained,advertising_steps:steps.map(step=>({...step,task_id:'other'}))},failed],
+    [{...retained,advertising_steps:[...steps,{task_id:task.id,step:'ADS_MANAGER:PUBLISH'}]},failed],
+    [retained,{...failed,payload:{...failed.payload,launch:{execution_mode:'PUBLISH'}}}],
+    [retained,{...failed,payload:{...failed.payload,reconcile_only:true}}],
+  ]){
+    assert.equal(scope.pythonWorkerDraftInspectionKey(item,candidate),'');
+  }
   console.log('Saved draft inspection preserves exact profile, configuration and original intent; double click cannot create another job.');
 })().catch(error=>{console.error(error);process.exitCode=1;});
 // A failed final bundle step must still display locally confirmed CREATE IDs.
