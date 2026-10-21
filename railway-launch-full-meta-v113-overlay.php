@@ -99,11 +99,12 @@ function remaskLaunchMetaParse(raw, type, field) {
     if(type==='bool'){
         if(raw==='true') return true;
         if(raw==='false') return false;
-        return undefined;
+        throw new Error(field + ': нужно true или false');
     }
     if(type==='unsigned int'||type==='int'){
         const n=Number(raw);
-        if(!Number.isSafeInteger(n)) throw new Error(field + ': нужно целое число');
+        if(!Number.isSafeInteger(n) || (type==='unsigned int' && n<0))
+            throw new Error(field + ': нужно целое число' + (type==='unsigned int' ? ' >= 0' : ''));
         return n;
     }
     if(type==='float'){
@@ -115,7 +116,12 @@ function remaskLaunchMetaParse(raw, type, field) {
         try { return JSON.parse(raw); }
         catch {
             if(type==='list<string>'||type==='list<enum>') return raw.split(',').map(v=>v.trim()).filter(Boolean);
-            if(type==='list<unsigned int>') return raw.split(',').map(v=>Number(v.trim())).filter(Number.isInteger);
+            if(type==='list<unsigned int>'){
+                const entries=raw.split(',').map(v=>v.trim());
+                if(entries.some(v=>!/^(0|[1-9][0-9]*)$/.test(v) || !Number.isSafeInteger(Number(v))))
+                    throw new Error(field + ': каждый элемент должен быть целым неотрицательным числом');
+                return entries.map(Number);
+            }
             throw new Error(field + ': нужен JSON');
         }
     }
