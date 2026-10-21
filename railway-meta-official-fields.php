@@ -204,10 +204,24 @@ final class MetaOfficialFields
         foreach ([['campaign','daily_budget'],['campaign','lifetime_budget'],['adset','daily_budget'],['adset','lifetime_budget']] as [$section,$field]) {
             $value = $payload[$section][$field] ?? null;
             if ($value === null || $value === '') continue;
-            if (!is_numeric($value) || (int)$value <= 0) {
+            // Do not truncate fractional budgets or accept exponent notation.
+            // Python Launch and browser JSON use exact safe integers in minor units.
+            if (is_int($value)) {
+                $amount = $value;
+            } elseif (is_string($value) && preg_match('/^[0-9]+$/D', $value)) {
+                $digits = ltrim($value, '0');
+                if ($digits === '' || strlen($digits) > 16
+                    || (strlen($digits) === 16 && strcmp($digits, '9007199254740991') > 0)) {
+                    throw new InvalidArgumentException("$section.$field must be a positive integer in minor currency units.");
+                }
+                $amount = (int)$digits;
+            } else {
                 throw new InvalidArgumentException("$section.$field must be a positive integer in minor currency units.");
             }
-            $payload[$section][$field] = (int)$value;
+            if ($amount <= 0 || $amount > 9007199254740991) {
+                throw new InvalidArgumentException("$section.$field must be a positive integer in minor currency units.");
+            }
+            $payload[$section][$field] = $amount;
             $activeBudgets[] = $section . '.' . $field;
         }
         if (count($activeBudgets) !== 1) {
