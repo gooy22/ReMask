@@ -809,6 +809,84 @@ class InstalledLaunchTests(unittest.TestCase):
         self.assertNotIn('execution_mode', published['launch']['base'])
         self.assertFalse(any(row['action']=='create' for row in self.worker_requests))
 
+    def test_installed_carousel_ui_native_draft_publish_recovery(self):
+        """Installed carousel control -> selected ordered media -> native draft/publish."""
+        import asyncio
+        from dataclasses import replace
+        from concurrent.futures import ThreadPoolExecutor
+        from app.private_launch import PrivateLaunchStateStore
+        from tests import test_private_ads_carousel as carousel_fixtures
+
+        second='m-'+'c'*24
+        self.page.wait_for_function('fixtureLaunch.ready()')
+        self.page.locator('#creativeLibrarySelect').select_option('preset')
+        snapshot=self.page.evaluate('fixtureLaunch.capture()')
+        snapshot['fields'].update(creativeFormat='CAROUSEL', message='Ordered carousel text',
+            headline='Main carousel', destinationUrl='https://example.com/base', cta='LEARN_MORE')
+        snapshot['media']={'format':'CAROUSEL','carousel':[
+            {'media_library_id':MEDIA_ID,'headline':'First','link':'https://example.com/one'},
+            {'media_library_id':second,'headline':'Second','description':'Second text',
+             'link':'https://example.com/two'}]}
+        self.page.evaluate('(data)=>fixtureLaunch.restore(data)',snapshot)
+        self.page.evaluate('fixtureSingleTarget("act_111111","222222")')
+        self.page.locator('#page option[value="555555"]').wait_for(state='attached')
+        self.page.locator('#page').select_option('555555')
+        self.page.evaluate('fixtureLaunch.geo()')
+        self.page.locator('#remaskPrivateExecutionMode').select_option('DRAFT')
+        rows=self.page.evaluate('fixtureLaunch.preparedRows()')
+        self.assertEqual(len(rows),1)
+        row=rows[0]
+        self.assertEqual((row['profile'],row['business_id'],row['ad_account_id'],row['page_id']),
+            ('20','222222','111111','555555'))
+        creative=row['launch']['base']['creative']
+        self.assertEqual(creative['format'],'CAROUSEL')
+        self.assertEqual(creative['carousel_media_library_ids'],[MEDIA_ID,second])
+        self.assertEqual([card['headline'] for card in creative['carousel_cards']],['First','Second'])
+        self.assertEqual([card['link'] for card in creative['carousel_cards']],
+            ['https://example.com/one','https://example.com/two'])
+        payload={key:row[key] for key in ('business_id','ad_account_id','page_id')}
+        payload.update(launch_key='ui-carousel-draft',launch=row['launch'])
+
+        async def execute_native():
+            case=carousel_fixtures.CarouselTests('test_two_cards_keep_media_text_links_and_resume_without_posts')
+            await case.asyncSetUp()
+            try:
+                case.media=replace(case.media,id=MEDIA_ID)
+                case.second=replace(case.second,id=second)
+                case.resolver.return_value=[case.media,case.second]
+                case.payload=payload
+                async def run():
+                    return await case.owner.run(item_id='browser-carousel',profile_id='20',
+                        context=case.context,session=case.session,payload=case.payload)
+                draft=await run()
+                self.assertTrue(draft['draft_verified'])
+                self.assertEqual(case.client.uploads,2)
+                self.assertEqual(len(case.client.posts),4)
+                ad=next(row for row in case.client.fragments.values() if row['ad_object_type']=='ad')
+                creative_spec=next(value['new_value'] for value in ad['values'] if value['field']=='creative')
+                story=creative_spec['object_story_spec']
+                self.assertEqual(story['page_id'],'555555')
+                cards=story['link_data']['child_attachments']
+                self.assertEqual([card['name'] for card in cards],['First','Second'])
+                self.assertEqual([card['link'] for card in cards],
+                    ['https://example.com/one','https://example.com/two'])
+                self.assertEqual([card['image_hash'] for card in cards],
+                    [case.media.sha256[:32],case.second.sha256[:32]])
+                case.payload['publish_saved_draft']=True
+                published=await run()
+                self.assertTrue(published['published'])
+                self.assertTrue(published['verified'])
+                self.assertEqual(published['draft_id'],draft['draft_id'])
+                self.assertEqual(len(case.client.posts),5)
+                case.owner.state=PrivateLaunchStateStore(case.owner.state.path)
+                self.assertTrue((await run())['verified'])
+                self.assertEqual(len(case.client.posts),5)
+                self.assertEqual(case.client.uploads,2)
+            finally:
+                case.doCleanups()
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pool.submit(lambda: asyncio.run(execute_native())).result(timeout=90)
+
     def test_installed_ui_php_python_draft_publish_and_sqlite_restart(self):
         """Actual installed Launch form -> PHP bridge -> Python native drafts.
 
