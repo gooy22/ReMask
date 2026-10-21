@@ -382,4 +382,3 @@ class AdPublicationLifecycleTests(unittest.IsolatedAsyncioTestCase):
             records = await self.owner.state.all_steps('worker-' + profile)
             self.assertTrue(all(row['profile_id'] == profile for row in records))
             self.assertTrue(all(row['result']['evidence']['actor_id'] == contexts[profile].cookies['c_user'] for row in records))
-
