@@ -275,6 +275,27 @@ function pythonWorkerEnhanceCommonPageMenu() {
   anchor.parentNode.insertBefore(action,anchor);
 }
 
+function pythonWorkerDraftValidationMessages(result) {
+  const labels={campaign:'Кампания',ad_set:'Группа объявлений',ad:'Объявление'};
+  const messages=[];
+  for(const row of Array.isArray(result?.fragment_reads)?result.fragment_reads:[]){
+    if(!row||!Object.prototype.hasOwnProperty.call(labels,row.level))continue;
+    if(row.validation_status!=='HAS_ERRORS'&&row.active_errors_present!==true)continue;
+    const diagnostic=row.active_error_diagnostic||{};
+    const codes=(Array.isArray(diagnostic.codes)?diagnostic.codes:[])
+      .map(code=>code?.value).filter(value=>Number.isSafeInteger(value)&&value>=0&&value<=2147483647);
+    const fields=(Array.isArray(diagnostic.field_names)?diagnostic.field_names:[])
+      .filter(value=>typeof value==='string'&&/^[a-z][a-z0-9_]{0,100}$/.test(value));
+    messages.push(labels[row.level]+': Meta вернула ошибки валидации.'+
+      (codes.length?' Коды: '+Array.from(new Set(codes)).join(', ')+'.':'')+
+      (fields.length?' Поля: '+Array.from(new Set(fields)).join(', ')+'.':''));
+  }
+  if(Array.isArray(result?.object_reads)&&result.object_reads.some(row=>row?.available===false)){
+    messages.push('Независимое чтение объектов недоступно. Это не доказывает их отсутствие или публикацию.');
+  }
+  return messages;
+}
+
 function pythonWorkerEl(id) {
   return document.getElementById(id);
 }
@@ -1093,6 +1114,10 @@ function pythonWorkerRenderJob(job) {
             }
           }
           if(task.action==='private_launch'&&task.result?.execution_mode==='DRAFT_INSPECT'){
+            for(const message of pythonWorkerDraftValidationMessages(task.result)){
+              const warning=document.createElement('div');
+              warning.className='pw-error';warning.textContent=message;errorTd.appendChild(warning);
+            }
             const inspection=document.createElement('details');
             const summary=document.createElement('summary');
             summary.textContent='Свежие чтения Meta: '+String(task.result.draft_id||'')+'. Редактор не проверен. POST: 0.';

@@ -227,6 +227,7 @@ class DraftClient:
             row = {"id": fragment_id, "account_id": "111111", "ad_draft_id": "555555",
                 "ad_object_id": ["777771", "777772", "777773"][index],
                 "ad_object_type": params["ad_object_type"], "values": params["values"],
+                "validation_status": "VALIDATED",
                 "parent_ad_object_id": params.get("parent_ad_object_id")}
             self.fragments[fragment_id] = row
             return {"id": fragment_id}
@@ -258,6 +259,84 @@ class PublisherTests(unittest.IsolatedAsyncioTestCase):
     async def launch(self, verify=None):
         return await self.publisher.run(self.client, name="source-flow", levels=self.levels,
                                         verify_objects=verify or self.verify)
+
+    async def test_has_errors_without_error_details_stops_before_ad_or_publication(self):
+        original = self.client.get
+        async def read(path, params):
+            row = await original(path, params)
+            if row.get('ad_object_type') == 'ad_set':
+                row['validation_status'] = 'HAS_ERRORS'
+                row.pop('active_errors', None)
+            return row
+        self.client.get = read
+        for _ in range(2):
+            with self.assertRaises(ProvisioningError) as caught:
+                await self.launch()
+            self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_VALIDATION_ERRORS')
+            self.assertEqual(len(self.client.fragments), 2)
+            self.assertEqual(len(self.client.posts), 3)
+        self.assertFalse(any(path.endswith('/publish') for path, _ in self.client.posts))
+
+    async def test_profile38_bid_amount_error_is_retained_without_bid_or_objective_rewrite(self):
+        self.levels['campaign'].update(objective='OUTCOME_TRAFFIC', daily_budget=500)
+        self.levels['ad_set'].update(bid_strategy='LOWEST_COST_WITHOUT_CAP', optimization_goal='LINK_CLICKS')
+        before = copy.deepcopy(self.levels)
+        original = self.client.get
+        async def read(path, params):
+            row = await original(path, params)
+            if row.get('ad_object_type') == 'ad_set':
+                row.update(validation_status='HAS_ERRORS',
+                    active_errors=[{'error_code':1815857, 'field':'bid_amount'}])
+            return row
+        self.client.get = read
+        with self.assertRaises(ProvisioningError) as caught:
+            await self.launch()
+        self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_VALIDATION_ERRORS')
+        self.assertEqual(self.levels, before)
+        self.assertEqual(len(self.client.posts), 3)
+        adset = self.client.fragments['222222']
+        values = {r['field']:r['new_value'] for r in adset['values']}
+        self.assertNotIn('bid_amount', values)
+        self.assertEqual(values['bid_strategy'], 'LOWEST_COST_WITHOUT_CAP')
+
+    async def test_unsettled_validation_resumes_exact_fragment_reads_without_replay(self):
+        original = self.client.get
+        status = ['IN_PROGRESS']
+        async def read(path, params):
+            row = await original(path, params)
+            if row.get('ad_object_type') == 'ad_set':
+                row['validation_status'] = status[0]
+            return row
+        self.client.get = read
+        for pending in ('IN_PROGRESS', None, 'UNRECOGNIZED', True):
+            status[0] = pending
+            with self.assertRaises(ProvisioningError) as caught:
+                await self.launch()
+            self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_VALIDATION_PENDING')
+            self.assertTrue(caught.exception.retryable)
+            self.assertEqual(len(self.client.posts), 3)
+            self.assertEqual(set(self.client.fragments), {'111111','222222'})
+        status[0] = 'VALIDATED'
+        result = await self.launch()
+        self.assertTrue(result['verified'])
+        self.assertEqual(len(self.client.posts), 5)
+        self.assertEqual(len(self.client.fragments), 3)
+        await self.launch()
+        self.assertEqual(len(self.client.posts), 5)
+
+    async def test_draft_mode_does_not_call_unsettled_fragment_success(self):
+        original = self.client.get
+        async def read(path, params):
+            row = await original(path, params)
+            if row.get('ad_object_type') == 'ad':
+                row.pop('validation_status', None)
+            return row
+        self.client.get = read
+        with self.assertRaises(ProvisioningError) as caught:
+            await self.publisher.run(self.client, name='source-flow', levels=self.levels,
+                verify_objects=self.verify, draft_only=True)
+        self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_VALIDATION_PENDING')
+        self.assertFalse(any(path.endswith('/publish') for path, _ in self.client.posts))
 
     async def test_three_fragments_publish_and_verify_then_resume_without_post(self):
         result = await self.launch()

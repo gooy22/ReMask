@@ -117,3 +117,74 @@ Public ODAX source scripts were downloaded for offline review; their script hash
 match the existing pinned 3c7de32f... and b2ca67cf... evidence. This does not yet
 prove the sender-side objective transformation, so no objective/ODAX mutation
 has been made.
+## Deployed diagnostic follow-up, 2026-10-21
+
+PR #220 merged as `1821a83955ffe93294abfd5082aeaa3b58313eda`.
+Docker Diagnostic, every Meta regression job, and recovery image build passed
+for that merge. The recovery build confirmed immutable image
+`ghcr.io/gooy22/remask@sha256:28be7b4732cc31406fb4a220a26af7554a147708d5b41618a35e53a66b864404`.
+Railway deployment `611243e0-587a-48a7-838c-f990c92de9ab` reached terminal SUCCESS.
+The exact worker revision was displayed in the authenticated production UI;
+`/ready.php` and `/health` each returned HTTP 200 and `ok: true`.
+Startup reported `[profile-storage] ready count=21 encrypted=1 key_encoding=hex`.
+The existing volume and credentials were preserved.
+
+Two new read-only inspections were run through the supported production UI:
+
+| Original job | New inspection job | Actual fragment validation |
+| --- | --- | --- |
+| `de696c86fa7c4860bc4c1f92e583c053` | `dd3ef32c60194d13b3701bdf8b822bac` | Campaign VALIDATED; Ad Set and Ad HAS_ERRORS |
+| `fc5daf863d2c4ae796ab7107b3728378` | `a18d4a545c9a488cb6d8aacffc98737b` | Campaign VALIDATED; Ad Set and Ad HAS_ERRORS |
+
+Both Ad Set and Ad diagnostics contain Meta `error_code=1815857` and reviewed
+field name `bid_amount`, with the terms `field` and `required`. Raw Meta
+messages are deliberately not retained because they may echo credentials.
+The saved configuration still selects LOWEST_COST_WITHOUT_CAP and a Campaign
+daily budget of 500; no arbitrary bid amount or capped strategy was inserted.
+This error is separate evidence from the unsupported-objective editor message.
+Its originating bidding/default/inheritance defect is not yet established.
+
+For BOTH attempts, independent exact-object GETs returned:
+
+- Campaign: HTTP 200 containing OAuthException code 10, application-permission hint.
+- Ad Set and Ad: HTTP 200 containing GraphMethodException code 100/subcode 33.
+- Creative: no independently obtained Creative ID, so no Creative object read
+  was possible. The retained Ad contains its inline Creative specification.
+
+These errors do not prove object absence, deletion, publication or a profile
+restriction. Every saved fragment and relationship matched its original intent;
+the two distinct hierarchies remain confirmed duplicates in one draft container.
+Both inspections report mutation_posts=0, editor_verified=false and published=null.
+
+The source-pinned `AdsEditorUnsupportedReasonUtils` module (module SHA-256
+`27952b1a6679e1da3f15973d67e56d70fd6bb71e381c9efb6c7eedc8e02993f4`,
+script SHA-256 `e2c3d08281745a87850fa38194b220686a2fc3abe8afa239713724eb91add185`)
+has an explicit supported-objective set that omits OUTCOME_TRAFFIC. Its `C`
+predicate returns `!u.has(objective)`. The Campaign/Ad Set unsupported-reason
+functions use this predicate; the Ad branch first considers a promoted object's
+full_funnel_objective. This supplies a concrete editor-code incompatibility for
+that representation, but does not by itself prove the correct outgoing private
+schema or authorize adding an ODAX flag. AdsAPIObjectives itself DOES include
+OUTCOME_TRAFFIC. No objective rewrite or new mutation parameter was introduced.
+
+The independent browser again redirected the requested account 1119599940716086
+to 1082351911351205, belonging to a different signed-in operator. The local
+extension reported that the originating browser context was unavailable. No
+terms were accepted, credentials injected, proxy route changed, payment action
+performed, or advertising object created in that browser. Correct profile-38
+session access remains necessary for actual editor acceptance.
+
+### Validation-settlement correction
+
+Creation previously rejected a nonempty active_errors list but could proceed
+when validation_status was HAS_ERRORS without details, or validation was not
+settled. The publisher now requires VALIDATED before another fragment or
+publication POST. HAS_ERRORS is terminal for that read; absent, pending or
+unknown validation remains a retryable saved-read operation. Existing accepted
+receipts prevent replay. The UI displays safe Meta error codes and field names
+outside the collapsed inspection JSON, separately from the read job's SUCCESS.
+
+Local validation: 176 private-advertising tests passed, including the exact
+1815857/bid_amount rejection, missing error details, unsettled reads, no POST
+replay, and unchanged selected objective/bid strategy; worker UI JS tests passed.
+These are regression tests, not live editor or publication acceptance.
