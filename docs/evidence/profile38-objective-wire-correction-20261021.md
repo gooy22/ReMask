@@ -74,3 +74,30 @@ remains false when any child has errors, and editor/publication readiness
 remain false. Ordinary inspection of the original journal still expects the
 original Campaign fields; use the explicit repair operation to reread its
 corrected state. No retained live object was changed during these offline tests.
+
+## Release and fresh production read, 2026-10-21
+
+PR #225 merged as `7c8aead0652c805fe8fed932572abbad183f07b4`. All main
+regression jobs and Docker Diagnostic passed. Recovery workflow run
+`39579159896` confirmed image digest
+`sha256:925830da0e5b35e03a22f1232473a0477c85210ed76c0bbfc793b07a54cb174c`.
+The existing Railway service accepted this immutable source and three revision
+variables in patch `f347dbf6-f0ce-40a0-b8f1-eab56e0389e6`. No new deployment
+record appeared. The latest actual deployment remains
+`dc4a037e-e438-44bf-b37b-2be2ff541f87`, using the earlier `26d16762…` image;
+Workspace still reports worker `a8104d0565ec`. This is not a deployed repair.
+Railway's official status at 11:33 UTC still says builds remain paused.
+
+Read-only inspection job `1433ea4efc974521bdf7b7b49dc172fd` reread controlled
+job `6db937742dc34a04b8655f78c86b0ca1` through production. Its original actor,
+scope, Launch fingerprint, sender digest and all three saved specifications
+matched. Campaign `120249923829190685` and Ad Set `120249923829600685` remain
+VALIDATED. Ad `120249923830050685` remains HAS_ERRORS with code 1359188 and
+the sanitized term `billing`. This does not establish its precise cause.
+All fragments remain EDITING and PAUSED with no publish state. Direct object
+reads each returned code 100/subcode 33; no independent Creative ID is available.
+The result reports `mutation_posts: 0`, `editor_verified: false`, `published: null`.
+No new hierarchy, repair, publication, payment or delivery was submitted.
+Both `/ready.php` and `/health` returned HTTP 200 and `ok: true` for the old
+running version. The accepted source change must not be confused with runtime
+acceptance; repeat live repair verification only after the new revision starts.

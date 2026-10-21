@@ -23,6 +23,7 @@ from app.store import JobStore
 from app.facebook_business_browser import BROWSER_TERMINAL_ACCESS_CODES, BrowserBusinessError, FacebookBusinessBrowser
 from app.facebook_page_discovery import PageDiscoveryError, list_pages_via_private_graphql
 from app.private_inventory import private_inventory_snapshot
+from app.private_http_metrics import observe_profile_inventory
 from app.provisioning.models import ProvisioningError, ProvisioningStep
 from app.provisioning.meta_transport import MetaTransportRouter
 from app.provisioning.service import normalize_add_bm_payload
@@ -1723,6 +1724,7 @@ def _live_inventory_targets_ready(
 
 
 @app.get('/api/v1/profiles/{profile_id}/live-inventory',dependencies=[Depends(require_key)])
+@observe_profile_inventory
 async def profile_live_inventory(
     profile_id: str,
     business_ids: str | None = None,

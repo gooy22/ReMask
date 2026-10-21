@@ -42,6 +42,50 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(self.errors, [])
         self.page.close()
 
+    def test_retained_ad_error_and_inspection_are_not_reported_as_bm_creation(self):
+        worker = (ROOT / 'railway-python-worker-ui.js').read_text()
+        begin = worker.find('function pythonWorkerAdvertisingSummary(')
+        if begin < 0:
+            begin = worker.index('async function pythonWorkerPoll()')
+        poll = worker[begin:worker.index('\nwindow.pythonWorkerStartBusiness', begin)]
+        begin = worker.index('function pythonWorkerDraftValidationMessages(')
+        validation = worker[begin:worker.index('\nfunction pythonWorkerEl', begin)]
+        self.page.set_content('<div id="pythonPwStatus"></div>')
+        self.page.add_script_tag(content='''
+          const pythonWorkerUiState={jobId:'retained-job',polling:false,busy:true};
+          window.fixtureRequests=[];window.fixtureStorage={};
+          Object.defineProperty(window,'localStorage',{value:{
+            setItem(k,v){window.fixtureStorage[k]=v;},removeItem(k){delete window.fixtureStorage[k];}}});
+          function pythonWorkerRenderJob(){}
+          function pythonWorkerSetText(id,text){document.getElementById(id).textContent=text;}
+          function pythonWorkerSelectionRefresh(){}
+          function pythonWorkerSchedulePoll(){throw new Error('Terminal task cannot repoll');}
+          async function pythonWorkerRefreshSuccessfulProfiles(){return ['38'];}
+          async function pythonWorkerBridge(payload){window.fixtureRequests.push(payload);return {job:window.fixtureJob};}
+        ''' + validation + poll)
+        for status in ('FAILED', 'PARTIAL', 'SUCCESS'):
+            with self.subTest(status=status):
+                self.page.evaluate('''async status=>{
+                  pythonWorkerUiState.jobId='retained-job';
+                  window.fixtureJob={status,items:[{profile_id:'38',status:status==='PARTIAL'?'FAILED':status,
+                    error_code:'PRIVATE_ADS_DRAFT_VALIDATION_ERRORS',error_message:'Ad validation failed',
+                    tasks:[{action:'private_launch',result:status==='SUCCESS'?{execution_mode:'DRAFT_INSPECT',
+                      fragment_reads:[{level:'ad',validation_status:'HAS_ERRORS',
+                        active_error_diagnostic:{codes:[{value:1359188}]}}]}:null}]}]};
+                  await pythonWorkerPoll();
+                }''', status)
+                message = self.page.locator('#pythonPwStatus').inner_text()
+                self.assertNotIn('BM', message)
+                self.assertNotIn('Business Manager', message)
+                if status == 'SUCCESS':
+                    self.assertIn('Чтение сохранённого черновика завершено', message)
+                    self.assertIn('1359188', message)
+                    self.assertIn('Публикация и редактор Meta не подтверждены', message)
+                else:
+                    self.assertIn('PRIVATE_ADS_DRAFT_VALIDATION_ERRORS', message)
+                    self.assertEqual(self.page.evaluate('window.fixtureStorage.remask_python_worker_job_v1'), 'retained-job')
+        self.assertEqual(self.page.evaluate('window.fixtureRequests.map(x=>x.action)'), ['status'] * 3)
+
     def creative(self, enhanced=True, context=False, preferred="", modules=False, tools_first=False):
         html = re.sub(r'<\?php.*?\?>', '', (ROOT / 'railway-v100-creatives.php').read_text(), flags=re.S)
         html = re.sub(r'<script\b.*?</script>', '', html, flags=re.S)
