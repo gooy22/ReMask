@@ -65,6 +65,12 @@
       "module_sha256": "817edc95d0ba95b01ed4b05239d426e32b44ecb3e6fdcb17c1ebf39ab78eb883",
       "source_kind": "supplied_public_cdn_module_export",
       "artifact_sha256": "c0d74e9d3c121cf531e45a69a2ed0ea3341275407723a9a27db1ddb34a6963c0"
+    },
+    {
+      "module": "AdsLiveCreationDataManager",
+      "module_sha256": "9143a8b8d4e4f7f1a904bcafadda13c2aa70bb065a08b341ff2cf1717a9dbf92",
+      "source_kind": "supplied_public_cdn_module_export",
+      "artifact_sha256": "c0d74e9d3c121cf531e45a69a2ed0ea3341275407723a9a27db1ddb34a6963c0"
     }
   ]
 }

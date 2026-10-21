@@ -29,6 +29,11 @@ class BiddingContractTests(unittest.TestCase):
         self.assertIn('l.setCampaignGroupBidStrategyAndLegacyFlags=N', group)
         self.assertIn('l.resetCampaignWhenCampaignGroupBudgetEnabled=P', group)
         self.assertIn('bid_strategy.delete', group)
+        creator = modules['AdsLiveCreationDataManager']['source']
+        self.assertIn('bid_strategy:n.bidStrategy', creator)
+        self.assertIn('is_autobid:n.isAutobid', creator)
+        self.assertIn('is_average_price_pacing:n.isAveragePricePacing', creator)
+        self.assertIn('createFragment("campaign",s,!1,t.source)', creator)
         self.assertFalse(data['checked_live'])
 
     def test_profile38_configuration_keeps_exact_intent_but_serializes_cbo_strategy_on_campaign(self):

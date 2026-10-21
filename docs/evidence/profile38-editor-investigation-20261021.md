@@ -217,11 +217,14 @@ Reviewed supplied Meta editor source provides the exact model rules:
   WITH_BID_CAP: false/false; COST_CAP: false/true.
 - Its resetCampaignWhenCampaignGroupBudgetEnabled removes these fields from the
   Ad Set. A capped bid_amount stays on the Ad Set; WITHOUT_CAP deletes it.
+- AdsLiveCreationDataManager.__createCampaignGroup passes bid_strategy, is_autobid
+  and is_average_price_pacing directly into createFragment("campaign", values).
+  This connects the reviewed model fields to the actual draft-creation path.
 - AdsCostStrategyUtils.getBidLegacyFieldsValueByBidStrategy supplies the separate
   Ad Set booleans (COST_CAP uses false/false there). These contexts are not merged.
 
 The versioned private_ads_bidding_20261021.json and offline source fixture pin all
-four complete module factories and the supplied export artifact hash. The new
+five complete module factories and the supplied export artifact hash. The new
 serializer copies the original selection, transfers strategy/pacing to its
 budget-owning level, writes the exact reviewed legacy booleans, and never inserts
 an arbitrary bid amount. Contradictory explicit strategies/flags/pacing fail
