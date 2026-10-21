@@ -76,6 +76,74 @@ class InstalledLaunchTests(unittest.TestCase):
         self.assertEqual(self.errors, [])
         self.page.close()
 
+    def offline_php_job_bridge(self):
+        """Execute the installed same-origin PHP job endpoint against fake worker HTTP."""
+        from contextlib import contextmanager
+        @contextmanager
+        def session():
+            import os, socket, threading, time
+            from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+            received=[]
+            class Worker(BaseHTTPRequestHandler):
+                def log_message(self,*args): pass
+                def do_POST(self):
+                    if self.path!='/api/v1/jobs':
+                        self.send_error(404);return
+                    count=int(self.headers.get('Content-Length','0'))
+                    received.append(json.loads(self.rfile.read(count)))
+                    raw=json.dumps({'job_id':'media-e2e-job'}).encode()
+                    self.send_response(200)
+                    self.send_header('Content-Type','application/json')
+                    self.send_header('Content-Length',str(len(raw)))
+                    self.end_headers();self.wfile.write(raw)
+            server=ThreadingHTTPServer(('127.0.0.1',0),Worker)
+            threading.Thread(target=server.serve_forever,daemon=True).start()
+            with socket.socket() as sock:
+                sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
+            env=os.environ.copy()
+            env.update(REMASK_INTERNAL_KEY='remask-fixture-only',
+                REMASK_PYTHON_WORKER_URL='http://127.0.0.1:'+str(server.server_port))
+            php=subprocess.Popen(['php','-S','127.0.0.1:'+str(port),'-t',str(self.root)],
+                env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+            try:
+                for _ in range(70):
+                    try:
+                        with socket.create_connection(('127.0.0.1',port),timeout=.1):break
+                    except OSError:
+                        if php.poll() is not None:raise AssertionError('PHP bridge exited')
+                        time.sleep(.05)
+                else:raise AssertionError('PHP bridge startup timeout')
+                self.e2e_php_url='http://127.0.0.1:'+str(port)+'/ajax/pythonWorkerJobs.php'
+                yield received
+            finally:
+                self.e2e_php_url=None
+                if php.poll() is None:
+                    php.terminate()
+                    try:php.wait(timeout=5)
+                    except subprocess.TimeoutExpired:php.kill();php.wait(timeout=5)
+                server.shutdown();server.server_close()
+        return session()
+
+    def capture_installed_media_job(self):
+        self.page.evaluate('fixtureSingleTarget("act_111111","222222")')
+        self.page.locator('#page option[value="555555"]').wait_for(state='attached')
+        self.page.locator('#page').select_option('555555')
+        self.page.evaluate('fixtureLaunch.geo()')
+        self.page.locator('#launchDeliverySelect').select_option('PAUSED')
+        self.review_ready=True
+        with self.offline_php_job_bridge() as received:
+            self.page.locator('#launchButton').click()
+            self.page.wait_for_function('document.querySelector("#launchResult").textContent.includes("Задача принята")')
+            self.assertEqual(len(received),1)
+            self.assertEqual(len(received[0]['profiles']),1)
+            task=received[0]['profiles'][0]['tasks'][0]
+        self.assertEqual(task['action'],'private_launch')
+        self.assertEqual(task['payload']['ad_account_id'],'111111')
+        self.assertEqual(task['payload']['page_id'],'555555')
+        self.assertEqual(task['payload']['business_id'],'222222')
+        self.assertEqual(task['payload']['launch']['base']['execution_mode'],'DRAFT')
+        return task
+
     def route(self, route):
         request = route.request
         url = urlparse(request.url)
@@ -174,7 +242,7 @@ class InstalledLaunchTests(unittest.TestCase):
         elif path == 'ajax/metaJobsList.php': data = {'jobs': []}
         elif path == 'ajax/creativeLibrary.php':
             data = {'items': [{'id':'preset','name':'Fixture','format':'SINGLE','media_library_id':MEDIA_ID,
-                'media':MEDIA,'message':'Fixture message','headline':'Fixture headline','destination_url':'https://example.com/',
+                'media':{**MEDIA,'media_type':'video' if self._testMethodName=='test_installed_video_ui_php_native_draft_publish' else 'image'},'message':'Fixture message','headline':'Fixture headline','destination_url':'https://example.com/',
                 'meta_builder':{'campaign':{'daily_budget':500,'objective':self.preset_objective},'adset':self.preset_rules}}]}
             if self._testMethodName=='test_saved_preset_module_values_stay_removed_after_bundle_reload':
                 data['items'][0]['meta_builder'].update(adset={'is_dynamic_creative':True},targeting={'user_device':['iphone 17'],'education_statuses':[1]},
@@ -209,9 +277,15 @@ class InstalledLaunchTests(unittest.TestCase):
                 status = 409
             else:
                 ids = json.loads(parse_qs(url.query)['ids'][0])
-                data = {'media':[{**MEDIA,'id':id, 'media_type':('video' if self._testMethodName=='test_installed_video_ui_native_draft_publish_recovery'
-                    else ('image' if self._testMethodName=='test_installed_carousel_ui_native_draft_publish_recovery'
-                          else ('video' if i else 'image')))} for i,id in enumerate(ids)]}
+                video_test=self._testMethodName in {
+                    'test_installed_video_ui_native_draft_publish_recovery',
+                    'test_installed_video_ui_php_native_draft_publish'}
+                carousel_test=self._testMethodName in {
+                    'test_installed_carousel_ui_native_draft_publish_recovery',
+                    'test_installed_carousel_ui_php_native_draft_publish'}
+                data = {'media':[{**MEDIA,'id':id, 'media_type':
+                    'video' if video_test else ('image' if carousel_test else ('video' if i else 'image'))}
+                    for i,id in enumerate(ids)]}
                 if self.foreign_bundle_media:
                     data['media'][0]['id'] = 'm-' + 'f' * 24
         route.fulfill(status=status, json={'ok':status==200,'data':data,'error':{'message':'MEDIA_LIBRARY_ITEM_UNAVAILABLE'}})
@@ -1139,6 +1213,155 @@ class InstalledLaunchTests(unittest.TestCase):
                     php.kill();php.wait(timeout=5)
             worker.shutdown();worker.server_close()
             self.e2e_php_url=None
+
+    def test_installed_carousel_ui_php_native_draft_publish(self):
+        """Restored carousel cards flow through installed UI/PHP/native sender."""
+        import asyncio
+        from dataclasses import replace
+        from concurrent.futures import ThreadPoolExecutor
+        from app.private_launch import PrivateLaunchStateStore
+        from tests import test_private_ads_carousel as carousel_fixtures
+
+        self.page.wait_for_function('fixtureLaunch.ready()')
+        self.page.locator('#creativeLibrarySelect').select_option('preset')
+        snapshot=self.page.evaluate('fixtureLaunch.capture()')
+        second='m-'+'c'*24
+        snapshot['fields']['creativeFormat']='CAROUSEL'
+        snapshot['media']={'format':'CAROUSEL','carousel':[
+            {'media_library_id':MEDIA_ID,'headline':'First card',
+             'link':'https://example.com/first','call_to_action':'LEARN_MORE'},
+            {'media_library_id':second,'headline':'Second card',
+             'description':'Second description','link':'https://example.com/second',
+             'call_to_action':'SHOP_NOW'}]}
+        self.page.evaluate('(data)=>fixtureLaunch.restore(data)',snapshot)
+        self.assertEqual(self.page.evaluate('fixtureLaunch.capture().media.format'),'CAROUSEL')
+        task=self.capture_installed_media_job()
+        creative=task['payload']['launch']['base']['creative']
+        self.assertEqual(creative['format'],'CAROUSEL')
+        self.assertEqual(creative['carousel_media_library_ids'],[MEDIA_ID,second])
+        self.assertEqual([card['headline'] for card in creative['carousel_cards']],
+                         ['First card','Second card'])
+        self.assertEqual([card['link'] for card in creative['carousel_cards']],
+                         ['https://example.com/first','https://example.com/second'])
+        self.assertEqual([card['call_to_action'] for card in creative['carousel_cards']],
+                         ['LEARN_MORE','SHOP_NOW'])
+
+        async def native():
+            case=carousel_fixtures.CarouselTests('test_two_cards_keep_media_text_links_and_resume_without_posts')
+            await case.asyncSetUp()
+            try:
+                case.media=replace(case.media,id=MEDIA_ID)
+                case.second=replace(case.second,id=second)
+                case.resolver.return_value=[case.media,case.second]
+                case.payload=task['payload']
+                case.payload['launch_key']=task['idempotency_key']
+                async def execute():
+                    return await case.owner.run(item_id='carousel-e2e',profile_id='20',
+                        context=case.context,session=case.session,payload=case.payload)
+                draft=await execute()
+                self.assertTrue(draft['draft_verified'])
+                self.assertEqual(case.client.uploads,2)
+                case.payload['publish_saved_draft']=True
+                published=await execute()
+                self.assertTrue(published['verified'])
+                self.assertFalse(published['delivery_running_verified'])
+                self.assertEqual(len(case.client.posts),5)
+                story=case.client.expected_creative['object_story_spec']
+                self.assertEqual(story['page_id'],'555555')
+                cards=story['link_data']['child_attachments']
+                self.assertEqual([c['name'] for c in cards],['First card','Second card'])
+                self.assertEqual([c['link'] for c in cards],
+                    ['https://example.com/first','https://example.com/second'])
+                self.assertEqual([c['call_to_action']['type'] for c in cards],
+                    ['LEARN_MORE','SHOP_NOW'])
+                self.assertEqual([c['image_hash'] for c in cards],
+                    [case.media.sha256[:32],case.second.sha256[:32]])
+                case.owner.state=PrivateLaunchStateStore(case.owner.state.path)
+                self.assertTrue((await execute())['verified'])
+                self.assertEqual(case.client.uploads,2)
+                self.assertEqual(len(case.client.posts),5)
+            finally:case.doCleanups()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            executor.submit(lambda:asyncio.run(native())).result(timeout=90)
+
+    def test_installed_video_ui_php_native_draft_publish(self):
+        """Video Media Library identity reaches native upload, thumbnail and Ad."""
+        import asyncio
+        import copy
+        from dataclasses import replace
+        from concurrent.futures import ThreadPoolExecutor
+        from unittest.mock import AsyncMock, patch
+        from app.private_launch import PrivateLaunchStateStore
+        from tests import test_private_ads_launch as launch_fixtures
+
+        self.page.wait_for_function('fixtureLaunch.ready()')
+        self.page.locator('#creativeLibrarySelect').select_option('preset')
+        task=self.capture_installed_media_job()
+        creative=task['payload']['launch']['base']['creative']
+        self.assertEqual(creative['format'],'SINGLE')
+        self.assertEqual(creative['media_library_id'],MEDIA_ID)
+
+        class VideoAdsClient(launch_fixtures.ImageClient):
+            async def post(self,path,params,*,before_submit,files=None,multipart=False):
+                if not path.endswith('/advideos'):
+                    return await super().post(path,params,before_submit=before_submit,files=files)
+                await before_submit()
+                self.posts.append((path,copy.deepcopy(params)))
+                phase=params['upload_phase']
+                if phase=='start':
+                    return {'upload_session_id':'999991','video_id':'999992',
+                            'start_offset':'0','end_offset':str(params['file_size'])}
+                if phase=='transfer':
+                    end=int(params['start_offset'])+len(files['video_file_chunk'][1])
+                    return {'start_offset':str(end),'end_offset':str(end)}
+                return {'video_id':'999992'}
+            async def get(self,path,params):
+                if path=='/act_111111/advideos':
+                    return {'data':[{'id':'999992'}]}
+                if path=='/999992':
+                    return {'id':'999992','status':{'video_status':'ready'},
+                            'thumbnails':{'data':[{'uri':'https://example.invalid/offline-video.jpg',
+                                                  'is_preferred':True}]}}
+                return await super().get(path,params)
+
+        async def native():
+            case=launch_fixtures.LaunchTests(
+                'test_existing_launch_entrypoint_uploads_image_publishes_and_verifies')
+            await case.asyncSetUp()
+            try:
+                video=replace(case.media,id=MEDIA_ID,media_type='video',mime_type='video/mp4')
+                client=VideoAdsClient()
+                case.payload=task['payload']
+                case.payload['launch_key']=task['idempotency_key']
+                with patch('app.private_launch_media.LaunchMediaResolver.resolve',
+                           new=AsyncMock(return_value=[video])), \
+                     patch('app.private_ads_launch.AdsManagerPrivateHttp.open',
+                           new=AsyncMock(return_value=client)):
+                    async def execute():
+                        return await case.owner.run(item_id='video-e2e',profile_id='20',
+                            context=case.context,session=case.session,payload=case.payload)
+                    draft=await execute()
+                    self.assertTrue(draft['draft_verified'])
+                    self.assertFalse(draft['published'])
+                    self.assertEqual(len([row for row in client.posts if row[0].endswith('/advideos')]),3)
+                    case.payload['publish_saved_draft']=True
+                    published=await execute()
+                    self.assertTrue(published['verified'])
+                    self.assertFalse(published['delivery_running_verified'])
+                    story=client.expected_creative['object_story_spec']
+                    self.assertEqual(story['page_id'],'555555')
+                    video_data=story['video_data']
+                    self.assertEqual(video_data['video_id'],'999992')
+                    self.assertEqual(video_data['image_url'],'https://example.invalid/offline-video.jpg')
+                    self.assertEqual(video_data['message'],creative['message'])
+                    self.assertEqual(video_data['call_to_action']['value']['link'],creative['link'])
+                    posted=len(client.posts)
+                    case.owner.state=PrivateLaunchStateStore(case.owner.state.path)
+                    self.assertTrue((await execute())['verified'])
+                    self.assertEqual(len(client.posts),posted)
+            finally:case.doCleanups()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            executor.submit(lambda:asyncio.run(native())).result(timeout=90)
 
     def test_single_rk_cleared_page_cannot_reuse_payload_or_create_job(self):
         self.prepare_single_page_launch()

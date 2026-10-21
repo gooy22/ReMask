@@ -369,7 +369,10 @@ function remaskPrivateInputSnapshot() {
     const targets=remaskPrivateTargetRows(config);
     // A review may discover the sole payment method. Only an explicit user
     // change invalidates that discovery; account/page/override changes always do.
-    const signature=JSON.stringify({config,format,preset,selected,cards,delivery,
+    // Restored bundle media is authoritative even when no preset is active.
+    // A change while Review awaits must invalidate the pending job snapshot.
+    const restoredMedia=typeof remaskBundleMedia==='undefined'?null:remaskBundleMedia;
+    const signature=JSON.stringify({config,format,preset,selected,restoredMedia,cards,delivery,
         targets:targets.map(({selected_payment_method,...row})=>row),
         paymentRevision:remaskPrivatePaymentRevision});
     return {config,format,preset,selected,files,cards,delivery,targets,signature};
@@ -401,15 +404,21 @@ async function remaskPrivatePrepareConfig() {
     }
     creative.format=format;
     if(delivery==='ACTIVE'||delivery==='PAUSED')config.payload.delivery={campaign:delivery,adset:delivery,ad:delivery};
+    // Saved bundles retain Media Library selections even without an active
+    // Creative preset. Review and Job must use those same restored identities.
+    const restoredMedia=!files.length && typeof remaskBundleMedia!=='undefined'
+        && remaskBundleMedia?.format===format ? remaskBundleMedia : null;
+    const retainedMedia=!files.length
+        ? (preset?.format===format ? preset : restoredMedia) : null;
     if(format==='CAROUSEL'){
-        const saved=!files.length&&preset?.format==='CAROUSEL'?preset.carousel||[]:[];
+        const saved=Array.isArray(retainedMedia?.carousel)?retainedMedia.carousel:[];
         if(cards.length<2||cards.length>10||cards.length!==(saved.length||files.length))
             throw new Error('Карусель требует от 2 до 10 подготовленных карточек.');
         creative.carousel_cards=JSON.parse(JSON.stringify(cards));
         if(saved.length)creative.carousel_media_library_ids=saved.map(card=>String(card.media_library_id||''));
     }else if(format==='SINGLE'){
-        if(!files.length&&preset?.format==='SINGLE'&&preset.media_library_id)
-            creative.media_library_id=String(preset.media_library_id);
+        if(!files.length&&retainedMedia?.media_library_id)
+            creative.media_library_id=String(retainedMedia.media_library_id);
         if(!files.length&&selected){
             const account=remaskPrivateAccountId(selected.account_id);
             if(account&&config.accountIds.some(id=>remaskPrivateAccountId(id)!==account))
