@@ -1106,6 +1106,12 @@ function pythonWorkerRenderJob(job) {
               'Ad Set '+String(task.result.draft_objects?.ad_set||'—'),
               'Ad '+String(task.result.draft_objects?.ad||'—')].join(' · ');
             errorTd.appendChild(identities);
+            if(pythonWorkerDraftPublicationKey(item,task)){
+              const publish=document.createElement('button');publish.type='button';
+              publish.textContent='Опубликовать сохранённый черновик · PAUSED';
+              publish.addEventListener('click',()=>pythonWorkerPublishSavedDraft(item,task,publish));
+              errorTd.appendChild(publish);
+            }
           }
           // A rejected final fragment has an accepted receipt even though the
           // task has no success result. Inspect the retained intent, not Retry
@@ -1238,7 +1244,7 @@ function pythonWorkerRenderJob(job) {
 }
 
 function pythonWorkerDraftInspectionKey(item,task){
-  if(task.action!=='private_launch'||!task.payload||task.payload.reconcile_only||task.payload.repair_objective)return '';
+  if(task.action!=='private_launch'||!task.payload||task.payload.reconcile_only||task.payload.repair_objective||task.payload.publish_saved_draft)return '';
   const steps=(item.advertising_steps||[]).filter(step=>step.task_id===task.id);
   if(steps.some(step=>step.step==='ADS_MANAGER:PUBLISH'))return '';
   const saved=task.result?.draft_verified===true&&task.result?.published===false;
@@ -1286,6 +1292,35 @@ async function pythonWorkerRepairDraftObjective(item,task,button){
         idempotency_key:repairKey,payload:{...original,launch_key:sourceKey,repair_objective:true}}]}]});
     const id=String(data?.job?.job_id||'');
     if(!id)throw new Error('Worker не вернул задачу исправления Traffic.');
+    pythonWorkerClearBatchState();pythonWorkerUiState.jobId=id;
+    localStorage.setItem('remask_python_worker_job_v1',id);
+    pythonWorkerUiState.busy=true;
+    await pythonWorkerPoll();
+  }catch(error){
+    button.disabled=false;pythonWorkerSetText('pythonPwStatus',String(error.message||error));
+  }
+}
+
+function pythonWorkerDraftPublicationKey(item,task){
+  const result=task.result||{};
+  if(task.status!=='SUCCESS'||result.draft_verified!==true||result.published!==false
+      ||result.fragment_storage_verified!==true||result.relationships_confirmed!==true)return '';
+  return pythonWorkerDraftInspectionKey(item,task);
+}
+
+async function pythonWorkerPublishSavedDraft(item,task,button){
+  if(button.disabled)return;
+  const sourceKey=pythonWorkerDraftPublicationKey(item,task);
+  if(!sourceKey)return;
+  button.disabled=true;
+  try{
+    const original=JSON.parse(JSON.stringify(task.payload));
+    const publishKey='draft-publish-'+String(task.id);
+    const data=await pythonWorkerBridge({action:'create',idempotency_key:publishKey,
+      profiles:[{profile_id:String(item.profile_id),tasks:[{action:'private_launch',
+        idempotency_key:publishKey,payload:{...original,launch_key:sourceKey,publish_saved_draft:true}}]}]});
+    const id=String(data?.job?.job_id||'');
+    if(!id)throw new Error('Worker не вернул задачу публикации сохранённого черновика.');
     pythonWorkerClearBatchState();pythonWorkerUiState.jobId=id;
     localStorage.setItem('remask_python_worker_job_v1',id);
     pythonWorkerUiState.busy=true;

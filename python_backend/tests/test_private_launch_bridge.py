@@ -96,6 +96,19 @@ class AdvertisingBridgeTests(unittest.TestCase):
         self.assertFalse(result['contracts']['CREATIVE']['verification_configured'])
         self.assertTrue(result['contracts']['CAMPAIGN']['active'])
 
+    def test_saved_draft_publication_keeps_original_intent_through_php(self):
+        original = {'launch_key': 'retained-draft', 'publish_saved_draft': True,
+            'business_id': '222222', 'ad_account_id': '111111', 'page_id': '555555',
+            'launch': {'execution_mode': 'DRAFT', 'creative': {'message': 'Original text'}}}
+        status, result = self.request({'action': 'create', 'idempotency_key': 'draft-publish-source-task',
+            'profiles': [{'profile_id': '39', 'tasks': [{'action': 'private_launch',
+                'idempotency_key': 'draft-publish-source-task', 'payload': original}]}]})
+        self.assertEqual(status, 200)
+        forwarded = result['job']['forwarded']
+        self.assertEqual(forwarded['idempotency_key'], 'draft-publish-source-task')
+        self.assertEqual(forwarded['profiles'][0]['profile_id'], '39')
+        self.assertEqual(forwarded['profiles'][0]['tasks'][0]['payload'], original)
+
     def test_multipart_media_uses_existing_durable_content_addressed_library(self):
         content = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aXioAAAAASUVORK5CYII=')
         boundary = 'remask-test-boundary'

@@ -143,7 +143,7 @@ class AdsManagerDraftPublisher:
             raise fail("READ_RELATION_MISMATCH", "Published objects differ from the saved draft hierarchy")
         await self._confirm("PUBLISH", {"operation_id": publication["operation_id"], "entities": clean})
         return {"status": "SUCCESS", "entities": clean, "draft_id": draft_id,
-                "publication_id": publication["operation_id"], "verified": True,
+                "publication_id": publication["operation_id"], "published": True, "verified": True,
                 "effective_statuses": proof.get("effective_statuses", {}), "delivery_running_verified": False,
                 "browser_started": False, "transport": "private_ads_manager_http_h2"}
 
