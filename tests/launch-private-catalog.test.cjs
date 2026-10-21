@@ -294,6 +294,21 @@ console.log('Private Launch catalog and funding truth checks passed');
   assert.equal(carousel.payload.creative.carousel_cards[1].headline,'Second');
   assert.deepEqual(Array.from(carousel.payload.creative.carousel_media_library_ids),['m-first','m-second']);
   assert.equal(config.payload.creative.format,undefined,'preparation must not mutate the form config');
+  // Restored bundles have no active preset; retain their exact library IDs.
+  vm.runInContext(`remaskSelectedCreativePreset=null; let remaskBundleMedia={format:'CAROUSEL',carousel:[
+    {media_library_id:'m-restored-first'},{media_library_id:'m-restored-second'}]}`,privateCtx);
+  const restored=await privateCtx.remaskPrivatePrepareConfig();
+  assert.deepEqual(Array.from(restored.payload.creative.carousel_media_library_ids),
+    ['m-restored-first','m-restored-second']);
+  vm.runInContext(`remaskBundleMedia.carousel[1].media_library_id='m-replaced'`,privateCtx);
+  assert.throws(()=>privateCtx.remaskPrivateAssertCurrentConfig(restored),/Настройки изменились/);
+  privateCtx.creativeFormat=()=> 'SINGLE';
+  vm.runInContext(`remaskBundleMedia={format:'SINGLE',media_library_id:'m-restored-video'}`,privateCtx);
+  const singleRestored=await privateCtx.remaskPrivatePrepareConfig();
+  assert.equal(singleRestored.payload.creative.media_library_id,'m-restored-video');
+  vm.runInContext(`remaskBundleMedia={format:'SINGLE',media_library_id:'m-replaced-image'}`,privateCtx);
+  assert.throws(()=>privateCtx.remaskPrivateAssertCurrentConfig(singleRestored),/Настройки изменились/);
+  vm.runInContext(`remaskBundleMedia=null`,privateCtx);
   privateCtx.creativeFormat=()=> 'INSTAGRAM_POST';
   buttons.instagramMediaId={value:'888888888'};
   bindings['111111111'].source_instagram_media_id='777777777';

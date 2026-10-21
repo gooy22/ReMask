@@ -164,7 +164,7 @@ class InstalledLaunchTests(unittest.TestCase):
             if path == 'scripts/launch.js':
                 body += b'\nwindow.fixtureSingleTarget=(account,business="654321")=>{state.profile="20";state.targets=[];state.accounts=[{id:account,business_id:business}];$("adAccount").innerHTML=`<option value="${account}" selected>${account}</option>`;$("adAccount").disabled=false;$("adAccount").dispatchEvent(new Event("change",{bubbles:true}));};'
                 body += b'\nwindow.fixtureBulkTargets=()=>{state.targets=[{profile:"20",account_id:"act_123456",business_id:"654321"},{profile:"20",account_id:"act_234567",business_id:"765432"}];state.profile="20";state.targetBindingAssets.pages={};$("adAccount").innerHTML=state.targets.map(t=>`<option value="${t.account_id}" selected>${t.account_id}</option>`).join("");renderTargetBindings();};'
-                body += b'\nwindow.fixtureLaunch={payload:()=>buildPayload(),effective:()=>remaskApplySavedMetaBuilderToPayload(buildPayload()),capture:()=>bundleFormState(),restore:applyBundleData,config:loadLaunchConfig,ready:()=>Boolean(state.launchConfig),geo:()=>{state.geo=[{type:"country",key:"US",country_code:"US",name:"United States"}];$("geoQuery").dispatchEvent(new Event("change",{bubbles:true}));},instagramTargets:()=>{state.targets=[{profile:"20",account_id:"act_123456",business_id:"654321"},{profile:"21",account_id:"act_234567",business_id:"765432"}];state.profile="20";state.targetBindingAssets.pages={"20|123456|DRAFT":[{id:"345678",instagram_business_account:{id:"456789"}}],"21|234567|DRAFT":[{id:"567890",instagram_business_account:{id:"678901"}}]};$("adAccount").innerHTML=state.targets.map(t=>`<option value="${t.account_id}" selected>${t.account_id}</option>`).join("");$("creativeFormat").value="INSTAGRAM_POST";renderTargetBindings();},reloadPages:force=>loadPages(force),binding:account=>({...bindingFor(account)})};'
+                body += b'\nwindow.fixtureLaunch={payload:()=>buildPayload(),effective:()=>remaskApplySavedMetaBuilderToPayload(buildPayload()),capture:()=>bundleFormState(),restore:applyBundleData,config:loadLaunchConfig,ready:()=>Boolean(state.launchConfig),geo:()=>{state.geo=[{type:"country",key:"US",country_code:"US",name:"United States"}];$("geoQuery").dispatchEvent(new Event("change",{bubbles:true}));},instagramTargets:()=>{state.targets=[{profile:"20",account_id:"act_123456",business_id:"654321"},{profile:"21",account_id:"act_234567",business_id:"765432"}];state.profile="20";state.targetBindingAssets.pages={"20|123456|DRAFT":[{id:"345678",instagram_business_account:{id:"456789"}}],"21|234567|DRAFT":[{id:"567890",instagram_business_account:{id:"678901"}}]};$("adAccount").innerHTML=state.targets.map(t=>`<option value="${t.account_id}" selected>${t.account_id}</option>`).join("");$("creativeFormat").value="INSTAGRAM_POST";renderTargetBindings();},reloadPages:force=>loadPages(force),binding:account=>({...bindingFor(account)}),preparedRows:()=>remaskPrivatePrepareConfig().then(config=>config._targets)};'
             route.fulfill(body=body, content_type='application/javascript' if path.endswith('.js') else 'text/css'); return
         data = {}
         status = 200
@@ -277,7 +277,15 @@ class InstalledLaunchTests(unittest.TestCase):
                 status = 409
             else:
                 ids = json.loads(parse_qs(url.query)['ids'][0])
-                data = {'media':[{**MEDIA,'id':id, 'media_type':'image' if self._testMethodName=='test_installed_carousel_ui_php_native_draft_publish' else ('video' if i else 'image')} for i,id in enumerate(ids)]}
+                video_test=self._testMethodName in {
+                    'test_installed_video_ui_native_draft_publish_recovery',
+                    'test_installed_video_ui_php_native_draft_publish'}
+                carousel_test=self._testMethodName in {
+                    'test_installed_carousel_ui_native_draft_publish_recovery',
+                    'test_installed_carousel_ui_php_native_draft_publish'}
+                data = {'media':[{**MEDIA,'id':id, 'media_type':
+                    'video' if video_test else ('image' if carousel_test else ('video' if i else 'image'))}
+                    for i,id in enumerate(ids)]}
                 if self.foreign_bundle_media:
                     data['media'][0]['id'] = 'm-' + 'f' * 24
         route.fulfill(status=status, json={'ok':status==200,'data':data,'error':{'message':'MEDIA_LIBRARY_ITEM_UNAVAILABLE'}})
@@ -876,6 +884,194 @@ class InstalledLaunchTests(unittest.TestCase):
         published = publication_request.value.post_data_json
         self.assertNotIn('execution_mode', published['launch']['base'])
         self.assertFalse(any(row['action']=='create' for row in self.worker_requests))
+
+    def test_installed_video_ui_native_draft_publish_recovery(self):
+        """Installed Media Library video -> native upload, thumbnail, Ad and restart."""
+        import asyncio
+        from concurrent.futures import ThreadPoolExecutor
+        from unittest.mock import AsyncMock, patch
+        from app.private_launch import PrivateLaunchStateStore
+        from app.private_launch_media import LocalMedia
+        from tests import test_private_ads_launch as image_fixture
+
+        self.page.wait_for_function('fixtureLaunch.ready()')
+        self.page.locator('#creativeLibrarySelect').select_option('preset')
+        snapshot=self.page.evaluate('fixtureLaunch.capture()')
+        snapshot['fields'].update(creativeFormat='SINGLE',message='Video creative text',
+            headline='Video headline',description='Video description',
+            destinationUrl='https://example.com/video',cta='LEARN_MORE')
+        snapshot['media']={'format':'SINGLE','media_library_id':MEDIA_ID}
+        self.page.evaluate('(data)=>fixtureLaunch.restore(data)',snapshot)
+        self.page.evaluate('fixtureSingleTarget("act_111111","222222")')
+        self.page.locator('#page option[value="555555"]').wait_for(state='attached')
+        self.page.locator('#page').select_option('555555')
+        self.page.evaluate('fixtureLaunch.geo()')
+        self.page.locator('#remaskPrivateExecutionMode').select_option('DRAFT')
+        rows=self.page.evaluate('fixtureLaunch.preparedRows()')
+        self.assertEqual(len(rows),1)
+        row=rows[0]
+        self.assertEqual((row['profile'],row['business_id'],row['ad_account_id'],row['page_id']),
+            ('20','222222','111111','555555'))
+        creative=row['launch']['base']['creative']
+        self.assertEqual(creative['format'],'SINGLE')
+        self.assertEqual(creative['media_library_id'],MEDIA_ID)
+        payload={key:row[key] for key in ('business_id','ad_account_id','page_id')}
+        payload.update(launch_key='ui-video-draft',launch=row['launch'])
+
+        class NativeVideoClient(image_fixture.ImageClient):
+            def __init__(self):
+                super().__init__()
+                self.video_phases=[]
+                self.video_size=0
+            async def post(self,path,params,*,before_submit,files=None,multipart=False):
+                if not path.endswith('/advideos'):
+                    return await super().post(path,params,before_submit=before_submit,files=files)
+                await before_submit()
+                phase=params['upload_phase']
+                self.video_phases.append(phase)
+                if phase=='start':
+                    self.video_size=int(params['file_size'])
+                    return {'upload_session_id':'888888','video_id':'999999',
+                            'start_offset':'0','end_offset':str(self.video_size)}
+                if phase=='transfer':
+                    self.assert_video_bytes=files['video_file_chunk'][1]
+                    return {'start_offset':str(self.video_size),'end_offset':str(self.video_size)}
+                if phase=='finish':
+                    return {'video_id':'999999'}
+                raise AssertionError('Unexpected video upload phase')
+            async def get(self,path,params):
+                if path=='/act_111111/advideos':
+                    return {'data':[{'id':'999999'}]}
+                if path=='/999999':
+                    return {'id':'999999','status':{'video_status':'ready'},
+                            'thumbnails':{'data':[{'uri':'https://example.com/video-thumb.jpg',
+                                                  'is_preferred':True}]}}
+                return await super().get(path,params)
+
+        async def execute_native():
+            case=image_fixture.LaunchTests('test_existing_launch_entrypoint_uploads_image_publishes_and_verifies')
+            await case.asyncSetUp()
+            try:
+                original=case.media
+                local=LocalMedia(MEDIA_ID,original.sha256,original.size_bytes,
+                                 'video','video/mp4',original.path)
+                case.payload=payload
+                case.client=NativeVideoClient()
+                with patch('app.private_ads_launch.AdsManagerPrivateHttp.open',
+                           new=AsyncMock(return_value=case.client)), \
+                     patch('app.private_launch_media.LaunchMediaResolver.resolve',
+                           new=AsyncMock(return_value=[local])):
+                    async def run():
+                        return await case.owner.run(item_id='browser-video',profile_id='20',
+                            context=case.context,session=case.session,payload=case.payload)
+                    draft=await run()
+                    self.assertTrue(draft['draft_verified'])
+                    self.assertFalse(draft['published'])
+                    self.assertEqual(case.client.video_phases,['start','transfer','finish'])
+                    self.assertEqual(case.client.assert_video_bytes,local.path.read_bytes())
+                    self.assertEqual(len(case.client.posts),4)
+                    ad=next(row for row in case.client.fragments.values() if row['ad_object_type']=='ad')
+                    creative_spec=next(value['new_value'] for value in ad['values'] if value['field']=='creative')
+                    story=creative_spec['object_story_spec']
+                    self.assertEqual(story['page_id'],'555555')
+                    video=story['video_data']
+                    self.assertEqual(video['video_id'],'999999')
+                    self.assertEqual(video['image_url'],'https://example.com/video-thumb.jpg')
+                    self.assertEqual(video['message'],creative['message'])
+                    self.assertEqual(video['call_to_action']['value']['link'],creative['link'])
+                    case.payload['publish_saved_draft']=True
+                    published=await run()
+                    self.assertTrue(published['published'])
+                    self.assertTrue(published['verified'])
+                    self.assertFalse(published['delivery_running_verified'])
+                    self.assertEqual(published['draft_id'],draft['draft_id'])
+                    self.assertEqual(len(case.client.posts),5)
+                    case.owner.state=PrivateLaunchStateStore(case.owner.state.path)
+                    self.assertTrue((await run())['verified'])
+                    self.assertEqual(case.client.video_phases,['start','transfer','finish'])
+                    self.assertEqual(len(case.client.posts),5)
+            finally:
+                case.doCleanups()
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pool.submit(lambda: asyncio.run(execute_native())).result(timeout=90)
+
+    def test_installed_carousel_ui_native_draft_publish_recovery(self):
+        """Installed carousel control -> selected ordered media -> native draft/publish."""
+        import asyncio
+        from dataclasses import replace
+        from concurrent.futures import ThreadPoolExecutor
+        from app.private_launch import PrivateLaunchStateStore
+        from tests import test_private_ads_carousel as carousel_fixtures
+
+        second='m-'+'c'*24
+        self.page.wait_for_function('fixtureLaunch.ready()')
+        self.page.locator('#creativeLibrarySelect').select_option('preset')
+        snapshot=self.page.evaluate('fixtureLaunch.capture()')
+        snapshot['fields'].update(creativeFormat='CAROUSEL', message='Ordered carousel text',
+            headline='Main carousel', destinationUrl='https://example.com/base', cta='LEARN_MORE')
+        snapshot['media']={'format':'CAROUSEL','carousel':[
+            {'media_library_id':MEDIA_ID,'headline':'First','link':'https://example.com/one'},
+            {'media_library_id':second,'headline':'Second','description':'Second text',
+             'link':'https://example.com/two'}]}
+        self.page.evaluate('(data)=>fixtureLaunch.restore(data)',snapshot)
+        self.page.evaluate('fixtureSingleTarget("act_111111","222222")')
+        self.page.locator('#page option[value="555555"]').wait_for(state='attached')
+        self.page.locator('#page').select_option('555555')
+        self.page.evaluate('fixtureLaunch.geo()')
+        self.page.locator('#remaskPrivateExecutionMode').select_option('DRAFT')
+        rows=self.page.evaluate('fixtureLaunch.preparedRows()')
+        self.assertEqual(len(rows),1)
+        row=rows[0]
+        self.assertEqual((row['profile'],row['business_id'],row['ad_account_id'],row['page_id']),
+            ('20','222222','111111','555555'))
+        creative=row['launch']['base']['creative']
+        self.assertEqual(creative['format'],'CAROUSEL')
+        self.assertEqual(creative['carousel_media_library_ids'],[MEDIA_ID,second])
+        self.assertEqual([card['headline'] for card in creative['carousel_cards']],['First','Second'])
+        self.assertEqual([card['link'] for card in creative['carousel_cards']],
+            ['https://example.com/one','https://example.com/two'])
+        payload={key:row[key] for key in ('business_id','ad_account_id','page_id')}
+        payload.update(launch_key='ui-carousel-draft',launch=row['launch'])
+
+        async def execute_native():
+            case=carousel_fixtures.CarouselTests('test_two_cards_keep_media_text_links_and_resume_without_posts')
+            await case.asyncSetUp()
+            try:
+                case.media=replace(case.media,id=MEDIA_ID)
+                case.second=replace(case.second,id=second)
+                case.resolver.return_value=[case.media,case.second]
+                case.payload=payload
+                async def run():
+                    return await case.owner.run(item_id='browser-carousel',profile_id='20',
+                        context=case.context,session=case.session,payload=case.payload)
+                draft=await run()
+                self.assertTrue(draft['draft_verified'])
+                self.assertEqual(case.client.uploads,2)
+                self.assertEqual(len(case.client.posts),4)
+                ad=next(row for row in case.client.fragments.values() if row['ad_object_type']=='ad')
+                creative_spec=next(value['new_value'] for value in ad['values'] if value['field']=='creative')
+                story=creative_spec['object_story_spec']
+                self.assertEqual(story['page_id'],'555555')
+                cards=story['link_data']['child_attachments']
+                self.assertEqual([card['name'] for card in cards],['First','Second'])
+                self.assertEqual([card['link'] for card in cards],
+                    ['https://example.com/one','https://example.com/two'])
+                self.assertEqual([card['image_hash'] for card in cards],
+                    [case.media.sha256[:32],case.second.sha256[:32]])
+                case.payload['publish_saved_draft']=True
+                published=await run()
+                self.assertTrue(published['published'])
+                self.assertTrue(published['verified'])
+                self.assertEqual(published['draft_id'],draft['draft_id'])
+                self.assertEqual(len(case.client.posts),5)
+                case.owner.state=PrivateLaunchStateStore(case.owner.state.path)
+                self.assertTrue((await run())['verified'])
+                self.assertEqual(len(case.client.posts),5)
+                self.assertEqual(case.client.uploads,2)
+            finally:
+                case.doCleanups()
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pool.submit(lambda: asyncio.run(execute_native())).result(timeout=90)
 
     def test_installed_ui_php_python_draft_publish_and_sqlite_restart(self):
         """Actual installed Launch form -> PHP bridge -> Python native drafts.

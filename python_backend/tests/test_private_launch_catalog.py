@@ -179,7 +179,7 @@ function renderTargetBindings() {
             self.assertEqual(result.returncode, 0, result.stderr)
         for file in [*root.glob('classes/*.php'),*root.glob('ajax/*.php')]:
             subprocess.run(['php','-l',str(file)],capture_output=True,check=True,timeout=10)
-        self.assertIn('20261021-explicit-meta-readiness', (root/'launch.php').read_text())
+        self.assertIn('20261021-restored-media-identities', (root/'launch.php').read_text())
         self.assertEqual((root/'scripts/launch.js').read_text().count('/* REMASK_PRIVATE_LAUNCH_CATALOG_V1 */'), 1)
         for name in ['metaLaunchReview.php','metaDryRun.php','metaJobCreate.php','metaLaunch.php']:
             self.assertIn('PRIVATE_LAUNCH_VERIFICATION_REQUIRED',(root/'ajax'/name).read_text())
