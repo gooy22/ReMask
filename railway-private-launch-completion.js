@@ -324,6 +324,24 @@ function remaskPrivateBudgetLabel() {
 }
 remaskPrivateInstallBudgetPeriod();
 
+// Retain card-specific CTA from the installed saved-Carousel editor.
+// The legacy carouselCardsPayload() reads media/headline/description/URL but
+// omits CTA, silently replacing every card with the creative-level default.
+const remaskOriginalCarouselCardsPayload = carouselCardsPayload;
+carouselCardsPayload = function() {
+    const cards=remaskOriginalCarouselCardsPayload();
+    const rows=Array.from($('carouselCards')?.querySelectorAll('.carousel-card')||[]);
+    return cards.map((card,index)=>{
+        const control=rows[index]?.querySelector('.carousel-cta');
+        if(!control)return card;
+        const updated={...card};
+        const action=String(control.value||'').trim();
+        if(action)updated.call_to_action=action;
+        else delete updated.call_to_action;
+        return updated;
+    });
+};
+
 const remaskPrivateOriginalBuildPayload = buildPayload;
 buildPayload = function() {
     if (!currentObjectiveSpec()?.enabled) throw new Error(remaskUnsupportedObjectiveMessage);
