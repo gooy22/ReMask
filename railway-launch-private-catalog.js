@@ -369,7 +369,10 @@ function remaskPrivateInputSnapshot() {
     const targets=remaskPrivateTargetRows(config);
     // A review may discover the sole payment method. Only an explicit user
     // change invalidates that discovery; account/page/override changes always do.
-    const signature=JSON.stringify({config,format,preset,selected,cards,delivery,
+    // Restored bundle media is authoritative even when no preset is active.
+    // A change while Review awaits must invalidate the pending job snapshot.
+    const restoredMedia=typeof remaskBundleMedia==='undefined'?null:remaskBundleMedia;
+    const signature=JSON.stringify({config,format,preset,selected,restoredMedia,cards,delivery,
         targets:targets.map(({selected_payment_method,...row})=>row),
         paymentRevision:remaskPrivatePaymentRevision});
     return {config,format,preset,selected,files,cards,delivery,targets,signature};
