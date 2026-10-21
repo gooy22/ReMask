@@ -167,7 +167,14 @@ final class MetaOfficialFields
             $payload['creative']['source_instagram_media_id'] = (string)$creativeOfficial['source_instagram_media_id'];
             unset($creativeOfficial['source_instagram_media_id']);
         }
-        $payload['creative']['official_params'] = $creativeOfficial;
+        // An empty PHP associative map JSON-encodes as [], which the Python
+        // native creative adapter correctly rejects as a non-object. Do not
+        // inject an empty official_params field into the Launch payload.
+        if ($creativeOfficial !== []) {
+            $payload['creative']['official_params'] = $creativeOfficial;
+        } elseif (empty($payload['creative']['official_params'])) {
+            unset($payload['creative']['official_params']);
+        }
 
         $payload['ad'] = array_replace(
             is_array($payload['ad'] ?? null) ? $payload['ad'] : [],
