@@ -32,6 +32,7 @@ READ_ONLY_PUBLICATION_PREDECESSORS = frozenset({
     "cc0d9d896c67b95db8bdef3fce77279ba9d9446302f0bd0f1c10a1e62ba92645",
     "cb9b5fd76c6b9079d9584818a085848df404239437989499cd27f284f11e9353",
     "0ddf56b2f696365f7cad55886598a7dc95a1a89ba021839f0fb669df4add2c62",
+    "40449a5bd6554241032975780e5d44f351ec77a479f803b3602cde90eb35882d",
 })
 
 class AdsManagerLaunch:
@@ -231,7 +232,8 @@ class AdsManagerLaunch:
             "payment_selection_required": required, "payment_methods": methods,
             "selected_payment_method": selected, "payment_selection_source": source}
 
-    async def _prepare_live(self, *, profile_id, context, session, payload, saved_media=None, expected_creative=None):
+    async def _prepare_live(self, *, profile_id, context, session, payload, saved_media=None, expected_creative=None,
+                            publication_required=False):
         target, launch, references, fingerprint = self.prepare(profile_id, payload)
         if self.owner._inventory_row(context, target["business_id"], target["ad_account_id"]) is None:
             raise fail("ACCOUNT_CONTEXT_UNAVAILABLE", "The selected account is absent from this profile inventory")
@@ -257,7 +259,7 @@ class AdsManagerLaunch:
             return target, launch, fingerprint, actor, client, [], {**target,
                 "resume_read_only": True, "payment_selection_required": False,
                 "payment_checked_live": False, "expected_creative": copy.deepcopy(expected_creative)}
-        preflight = await self._preflight(client, web, payload, target)
+        preflight = await self._preflight(client, web, payload, target, publication_required=publication_required)
         creative = launch['creative']
         if creative.get('existing_creative_id'):
             selected_id = identity(creative['existing_creative_id'])
@@ -334,6 +336,10 @@ class AdsManagerLaunch:
             "source_revision": SOURCE_REVISION, "contracts": self.status()["contracts"]}
 
     async def run(self, *, item_id, profile_id, context, session, payload, task_idempotency_key=None):
+        promote = isinstance(payload, dict) and "publish_saved_draft" in payload
+        if promote and (payload["publish_saved_draft"] is not True
+                        or "repair_objective" in payload or "reconcile_only" in payload):
+            raise fail("INVALID_INPUT", "Saved draft publication must be a separate explicit action")
         if isinstance(payload, dict) and "repair_objective" in payload:
             from .private_ads_objective_repair import repair_saved_objective
             return await repair_saved_objective(self, profile_id=profile_id, context=context, session=session, payload=payload)
@@ -341,6 +347,8 @@ class AdsManagerLaunch:
             from .private_ads_inspect import inspect_saved_draft
             return await inspect_saved_draft(self, profile_id=profile_id, context=context, session=session, payload=payload)
         target, launch, references, fingerprint = self.prepare(profile_id, payload)
+        if promote and (launch.get("execution_mode") != "DRAFT" or launch.get("delivery")):
+            raise fail("INVALID_INPUT", "Saved draft publication requires the original DRAFT intent and PAUSED delivery")
         key = str(payload.get("launch_key") or task_idempotency_key or
                   f"{profile_id}:{target['business_id']}:{target['ad_account_id']}").strip()
         if not key or len(key) > 200:
@@ -385,6 +393,15 @@ class AdsManagerLaunch:
                     from .private_ads_http import AdsManagerResponseError
                     raise AdsManagerResponseError(evidence["response_error"])
                 raise fail("RECONCILE_REQUIRED", "An advertising submission has an unknown reply; replay is blocked")
+        if promote:
+            saved = {row["step"]: row for row in saved_steps}
+            for operation in ("DRAFT", "FRAGMENT_CAMPAIGN", "FRAGMENT_AD_SET", "FRAGMENT_AD"):
+                row = saved.get("ADS_MANAGER:" + operation)
+                verified = (row or {}).get("result", {}).get("evidence", {}).get("verification", {})
+                if (not row or row.get("status") != "SUCCESS" or verified.get("verified") is not True
+                        or verified.get("source") != "independent_private_ads_http"
+                        or (operation != "DRAFT" and verified.get("meta_validation_status") != "VALIDATED")):
+                    raise fail("SAVED_OPERATION_MISMATCH", "Publication requires the complete independently validated saved draft")
         digest = hashlib.sha256((source_digest + actor).encode()).hexdigest()
         await self.owner.state.bind_plan(key, target, fingerprint, digest)
         published = await self.owner.state.step(key, OperationKey("ADS_MANAGER:PUBLISH"))
@@ -419,7 +436,8 @@ class AdsManagerLaunch:
             saved_media.append(candidates[0])
         target, launch, fingerprint, actor, client, media, proof = await self._prepare_live(
             profile_id=profile_id, context=context, session=session, payload=payload,
-            saved_media=saved_media if references else None, expected_creative=expected_creative)
+            saved_media=saved_media if references else None, expected_creative=expected_creative,
+            publication_required=promote)
         if proof["payment_selection_required"]:
             raise fail("PAYMENT_SELECTION_REQUIRED", "Choose a currently linked card before creating advertising")
         sender = AdsManagerSubmitter(self.owner.state, launch_key=key, profile_id=profile_id,
@@ -453,7 +471,7 @@ class AdsManagerLaunch:
             levels = {"campaign": campaign_values, "ad_set": adset_values,
                       "ad": {**copy.deepcopy(launch["ad"]), "creative": creative}}
         publisher = AdsManagerDraftPublisher(sender)
-        draft_only = launch.get("execution_mode") == "DRAFT"
+        draft_only = launch.get("execution_mode") == "DRAFT" and not promote
         result = await publisher.run(client, name=launch["campaign"]["name"],
                                      levels=levels, verify_objects=verify_published_objects, draft_only=draft_only)
         if draft_only:
@@ -462,7 +480,7 @@ class AdsManagerLaunch:
                 "configuration": self.objectives.validate(launch)})
             return result
         result.update({"launch_key": key, **target, "preflight": proof,
-            "source_revision": SOURCE_REVISION,
+            "source_revision": SOURCE_REVISION, "execution_mode": "PUBLISH",
             "steps": [{"step": name, "status": "SUCCESS", "entity_id": result["entities"][field]}
                       for name, field in (("CAMPAIGN", "campaign_id"), ("ADSET", "adset_id"),
                                           ("CREATIVE", "creative_id"), ("AD", "ad_id"))]})

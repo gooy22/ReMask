@@ -125,6 +125,42 @@ const source = fs.readFileSync('railway-python-worker-ui.js', 'utf8');
   }
   console.log('Saved draft inspection preserves exact profile, configuration and original intent; double click cannot create another job.');
 })().catch(error=>{console.error(error);process.exitCode=1;});
+// Publication is a separate explicit action on a complete, successful DRAFT.
+(async()=>{
+  const calls=[];
+  const scope={pythonWorkerUiState:{},localStorage:{setItem(){}},
+    pythonWorkerClearBatchState(){},pythonWorkerSetText(){},async pythonWorkerPoll(){},
+    async pythonWorkerBridge(payload){calls.push(JSON.parse(JSON.stringify(payload)));return {job:{job_id:'publish-job'}};}};
+  vm.createContext(scope);
+  const begin=source.indexOf('function pythonWorkerDraftInspectionKey(');
+  vm.runInContext(source.slice(begin,source.indexOf('\nfunction pythonWorkerSchedulePoll',begin)),scope);
+  const item={profile_id:'39'};
+  const task={id:'draft-task',status:'SUCCESS',action:'private_launch',payload:{
+    business_id:'222222',ad_account_id:'111111',page_id:'555555',launch:{execution_mode:'DRAFT'}},
+    result:{launch_key:'original-draft',draft_verified:true,published:false,
+      fragment_storage_verified:true,relationships_confirmed:true}};
+  const before=JSON.stringify(task),button={disabled:false};
+  await scope.pythonWorkerPublishSavedDraft(item,task,button);
+  await scope.pythonWorkerPublishSavedDraft(item,task,button);
+  assert.equal(calls.length,1);
+  assert.equal(calls[0].idempotency_key,'draft-publish-draft-task');
+  const sent=calls[0].profiles[0];assert.equal(sent.profile_id,'39');
+  assert.equal(sent.tasks[0].payload.launch_key,'original-draft');
+  assert.equal(sent.tasks[0].payload.publish_saved_draft,true);
+  assert.equal(sent.tasks[0].payload.launch.execution_mode,'DRAFT');
+  assert.equal(JSON.stringify(task),before);
+  for(const candidate of [
+    {...task,status:'FAILED'},
+    {...task,result:{...task.result,draft_verified:false}},
+    {...task,result:{...task.result,relationships_confirmed:false}},
+    {...task,result:{...task.result,published:true}},
+    {...task,payload:{...task.payload,reconcile_only:true}},
+    {...task,payload:{...task.payload,publish_saved_draft:true}},
+  ])assert.equal(scope.pythonWorkerDraftPublicationKey(item,candidate),'');
+  assert.equal(scope.pythonWorkerDraftPublicationKey({...item,advertising_steps:[
+    {task_id:task.id,step:'ADS_MANAGER:PUBLISH'}]},task),'');
+  console.log('Saved draft publication is explicit, PAUSED, exact-scope and idempotent.');
+})().catch(error=>{console.error(error);process.exitCode=1;});
 // A failed final bundle step must still display locally confirmed CREATE IDs.
 (async()=>{
   const refreshed=[];

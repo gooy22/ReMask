@@ -693,7 +693,7 @@ $workspacePath=$root.'/workspace.php';
 if (is_file($workspacePath)) {
     $workspace=file_get_contents($workspacePath);
     $workspace=preg_replace('#scripts/workspace\\.js(?:\\?[^"\\\']*)?#',
-        'scripts/workspace.js?v=20261021-python-worker-ui-v223-private-assets-v5',$workspace,1);
+        'scripts/workspace.js?v=20261021-python-worker-ui-v223-private-assets-v5-saved-publish-v1',$workspace,1);
     file_put_contents($workspacePath,$workspace);
 }
 fwrite(STDERR,"[launch-private-catalog] local RK/Page reads installed; live advertising/payment permissions remain unverified\n");
