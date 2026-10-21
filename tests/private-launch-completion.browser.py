@@ -1086,6 +1086,85 @@ class InstalledLaunchTests(unittest.TestCase):
         with ThreadPoolExecutor(max_workers=1) as executor:
             executor.submit(lambda:asyncio.run(native())).result(timeout=90)
 
+    def test_installed_video_ui_php_native_draft_publish(self):
+        """Video Media Library identity reaches native upload, thumbnail and Ad."""
+        import asyncio
+        import copy
+        from dataclasses import replace
+        from concurrent.futures import ThreadPoolExecutor
+        from unittest.mock import AsyncMock, patch
+        from app.private_launch import PrivateLaunchStateStore
+        from tests import test_private_ads_launch as launch_fixtures
+
+        self.page.wait_for_function('fixtureLaunch.ready()')
+        self.page.locator('#creativeLibrarySelect').select_option('preset')
+        task=self.capture_installed_media_job()
+        creative=task['payload']['launch']['base']['creative']
+        self.assertEqual(creative['format'],'SINGLE')
+        self.assertEqual(creative['media_library_id'],MEDIA_ID)
+
+        class VideoAdsClient(launch_fixtures.ImageClient):
+            async def post(self,path,params,*,before_submit,files=None,multipart=False):
+                if not path.endswith('/advideos'):
+                    return await super().post(path,params,before_submit=before_submit,files=files)
+                await before_submit()
+                self.posts.append((path,copy.deepcopy(params)))
+                phase=params['upload_phase']
+                if phase=='start':
+                    return {'upload_session_id':'999991','video_id':'999992',
+                            'start_offset':'0','end_offset':str(params['file_size'])}
+                if phase=='transfer':
+                    end=int(params['start_offset'])+len(files['video_file_chunk'][1])
+                    return {'start_offset':str(end),'end_offset':str(end)}
+                return {'video_id':'999992'}
+            async def get(self,path,params):
+                if path=='/act_111111/advideos':
+                    return {'data':[{'id':'999992'}]}
+                if path=='/999992':
+                    return {'id':'999992','status':{'video_status':'ready'},
+                            'thumbnails':{'data':[{'uri':'https://example.invalid/offline-video.jpg',
+                                                  'is_preferred':True}]}}
+                return await super().get(path,params)
+
+        async def native():
+            case=launch_fixtures.LaunchTests(
+                'test_existing_launch_entrypoint_uploads_image_publishes_and_verifies')
+            await case.asyncSetUp()
+            try:
+                video=replace(case.media,id=MEDIA_ID,media_type='video',mime_type='video/mp4')
+                client=VideoAdsClient()
+                case.payload=task['payload']
+                case.payload['launch_key']=task['idempotency_key']
+                with patch('app.private_launch_media.LaunchMediaResolver.resolve',
+                           new=AsyncMock(return_value=[video])), \
+                     patch('app.private_ads_launch.AdsManagerPrivateHttp.open',
+                           new=AsyncMock(return_value=client)):
+                    async def execute():
+                        return await case.owner.run(item_id='video-e2e',profile_id='20',
+                            context=case.context,session=case.session,payload=case.payload)
+                    draft=await execute()
+                    self.assertTrue(draft['draft_verified'])
+                    self.assertFalse(draft['published'])
+                    self.assertEqual(len([row for row in client.posts if row[0].endswith('/advideos')]),3)
+                    case.payload['publish_saved_draft']=True
+                    published=await execute()
+                    self.assertTrue(published['verified'])
+                    self.assertFalse(published['delivery_running_verified'])
+                    story=client.expected_creative['object_story_spec']
+                    self.assertEqual(story['page_id'],'555555')
+                    video_data=story['video_data']
+                    self.assertEqual(video_data['video_id'],'999992')
+                    self.assertEqual(video_data['image_url'],'https://example.invalid/offline-video.jpg')
+                    self.assertEqual(video_data['message'],creative['message'])
+                    self.assertEqual(video_data['call_to_action']['value']['link'],creative['link'])
+                    posted=len(client.posts)
+                    case.owner.state=PrivateLaunchStateStore(case.owner.state.path)
+                    self.assertTrue((await execute())['verified'])
+                    self.assertEqual(len(client.posts),posted)
+            finally:case.doCleanups()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            executor.submit(lambda:asyncio.run(native())).result(timeout=90)
+
     def test_single_rk_cleared_page_cannot_reuse_payload_or_create_job(self):
         self.prepare_single_page_launch()
         self.page.locator('#page').select_option('')
