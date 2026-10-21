@@ -204,6 +204,101 @@ class InstalledLaunchTests(unittest.TestCase):
                     data['media'][0]['id'] = 'm-' + 'f' * 24
         route.fulfill(status=status, json={'ok':status==200,'data':data,'error':{'message':'MEDIA_LIBRARY_ITEM_UNAVAILABLE'}})
 
+    def test_installed_ui_php_python_native_saved_draft_publish_restart(self):
+        """Complete installed UI/real PHP bridge/real Python Launch against fake Meta HTTP."""
+        import asyncio
+        from dataclasses import replace
+        from unittest.mock import AsyncMock, patch
+        from tests import test_private_ads_launch as ads_fixtures
+        from app.private_launch import PrivateLaunchStateStore
+
+        self.page.wait_for_function('fixtureLaunch.ready()')
+        self.page.locator('#creativeLibrarySelect').select_option('preset')
+        # Match the exact RK/BM/Page IDs observed by the simulated native
+        # sender; this is never substituted after collecting UI state.
+        self.page.evaluate('fixtureSingleTarget("act_111111","222222")')
+        self.page.locator('#page option[value="555555"]').wait_for(state='attached')
+        self.page.locator('#page').select_option('555555')
+        self.page.evaluate('fixtureLaunch.geo()')
+        self.page.locator('#interestQuery').fill('Fixture')
+        self.page.locator('#interestQuery').press('Enter')
+        self.page.locator('#interestResults .search-item').first.click()
+        self.page.locator('#remaskPrivateExecutionMode').select_option('DRAFT')
+        rows=self.page.evaluate('fixtureLaunch.rows()')
+        self.assertEqual(len(rows),1)
+        row=rows[0]
+        self.assertEqual((row['profile'],row['business_id'],row['ad_account_id'],row['page_id']),
+                         ('20','222222','111111','555555'))
+        self.assertEqual(row['launch']['base']['execution_mode'],'DRAFT')
+        self.assertEqual(row['launch']['base']['creative']['media_library_id'],MEDIA_ID)
+        self.assertEqual(row['launch']['base']['campaign']['objective'],'OUTCOME_TRAFFIC')
+        self.assertIn('flexible_spec',row['launch']['base']['adset']['targeting'])
+        builder=self.page.evaluate('fixtureLaunch.capture().meta_builder')
+
+        # This is the installed MetaOfficialFields class used by the PHP job
+        # endpoint. It must not change campaign, ad set, creative or targeting.
+        php_source=(
+            'require $argv[1];'
+            '$row=json_decode(stream_get_contents(STDIN),true,512,JSON_THROW_ON_ERROR);'
+            '$effective=MetaOfficialFields::applyBuilderToPayload($row["launch"]["base"],$row["builder"]);'
+            '$effective=MetaOfficialFields::validateAndNormalizePayload($effective);'
+            'echo json_encode($effective,JSON_THROW_ON_ERROR|JSON_UNESCAPED_UNICODE);'
+        )
+        prepared={**row,'builder':builder}
+        result=subprocess.run(['php','-r',php_source,str(self.root/'classes/MetaOfficialFields.php')],
+            input=json.dumps(prepared),text=True,capture_output=True,check=True)
+        normalized=json.loads(result.stdout)
+        self.assertEqual(normalized['adset']['targeting'],row['launch']['base']['adset']['targeting'])
+        self.assertEqual(normalized['campaign']['objective'],'OUTCOME_TRAFFIC')
+        self.assertEqual(normalized['creative']['media_library_id'],MEDIA_ID)
+        payload={key:row[key] for key in ('business_id','ad_account_id','page_id')}
+        payload.update(launch_key='installed-ui-traffic',
+            launch={'base':normalized,'override':row['launch']['override']})
+
+        async def exercise_real_engine():
+            fixture=ads_fixtures.LaunchTests('test_existing_launch_entrypoint_uploads_image_publishes_and_verifies')
+            await fixture.asyncSetUp()
+            try:
+                fixture.media=replace(fixture.media,id=MEDIA_ID)
+                fixture.payload=payload
+                async def execute():
+                    return await fixture.owner.run(item_id='browser-ui',profile_id=row['profile'],
+                        context=fixture.context,session=fixture.session,payload=fixture.payload)
+                draft=await execute()
+                self.assertTrue(draft['draft_verified'])
+                self.assertFalse(draft['published'])
+                self.assertEqual(len(fixture.client.fragments),3)
+                self.assertEqual(len(fixture.client.posts),4)
+                self.assertEqual(fixture.client.uploads,1)
+                adset=next(r for r in fixture.client.fragments.values() if r['ad_object_type']=='ad_set')
+                values={r['field']:r['new_value'] for r in adset['values']}
+                self.assertEqual(values['targeting'],normalized['adset']['targeting'])
+                self.assertEqual(values['campaign_id'],'777771')
+                self.assertEqual(values['status'],'PAUSED')
+                ad=next(r for r in fixture.client.fragments.values() if r['ad_object_type']=='ad')
+                ad_values={r['field']:r['new_value'] for r in ad['values']}
+                self.assertEqual(ad_values['adset_id'],'777772')
+                self.assertEqual(ad_values['creative']['object_story_spec']['page_id'],'555555')
+                self.assertEqual(ad_values['creative']['object_story_spec']['link_data']['message'],
+                                 normalized['creative']['message'])
+                fixture.payload['publish_saved_draft']=True
+                published=await execute()
+                self.assertTrue(published['published'])
+                self.assertTrue(published['verified'])
+                self.assertFalse(published['delivery_running_verified'])
+                self.assertEqual(published['draft_id'],draft['draft_id'])
+                self.assertEqual(len(fixture.client.posts),5)
+                self.assertEqual(published['entities']['ad_id'],draft['draft_objects']['ad'])
+                fixture.owner.state=PrivateLaunchStateStore(fixture.owner.state.path)
+                recovered=await execute()
+                self.assertTrue(recovered['verified'])
+                self.assertEqual(recovered['entities'],published['entities'])
+                self.assertEqual(len(fixture.client.posts),5)
+                self.assertEqual(fixture.client.uploads,1)
+            finally:
+                fixture.doCleanups()
+        asyncio.run(exercise_real_engine())
+
     def test_bundle_restore_rejects_foreign_media_without_checksums(self):
         self.page.locator('#creativeLibrarySelect').select_option('preset')
         data = self.page.evaluate('fixtureLaunch.capture()')
