@@ -177,6 +177,10 @@ console.log('Private Launch catalog and funding truth checks passed');
           AD:{configured:true,active:true,verification_configured:true,friendly_name:'AdMutation'}
         }})};
       if(body.action==='private_launch_media_inspect'){
+        if(['auth401','auth403','rate_limit'].includes(mediaMode)){
+          const status=mediaMode==='auth401'?401:(mediaMode==='auth403'?403:429);
+          return {ok:false,status,json:async()=>({ok:false,error:status===429?'Rate limited':'Unauthorized'})};
+        }
         const facts={media_type:'image',encoding:'PNG',mime_type:'image/png',width:1200,height:600,
           aspect_ratio:2,size_bytes:1234,requires_conversion:false};
         const compatibility=mediaMode==='blocked'
@@ -287,6 +291,20 @@ console.log('Private Launch catalog and funding truth checks passed');
   assert.deepEqual(requests.slice(blockedStart).map(row=>row.body.action),[
     'private_launch_contracts','private_launch_media_inspect','private_launch_media_inspect'
   ],'a local media failure must not trigger the Meta review request');
+  for(const [mode,status,errorCode] of [
+    ['auth401','AUTH_REQUIRED','REMASK_AUTH_REQUIRED'],
+    ['auth403','AUTH_REQUIRED','REMASK_AUTH_REQUIRED'],
+    ['rate_limit','RATE_LIMITED','META_RATE_LIMITED']
+  ]){
+    mediaMode=mode;
+    const stoppedAt=requests.length;
+    const stopped=await privateCtx.remaskPrivateReviewConfig(mediaConfig,{render:false});
+    assert.ok(stopped.every(row=>row.status===status&&row.error_code===errorCode&&row.review_attempted===false),
+      mode+' during media preflight must retain the batch-stop classification');
+    assert.deepEqual(requests.slice(stoppedAt).map(row=>row.body.action),[
+      'private_launch_contracts','private_launch_media_inspect'
+    ],mode+' during media preflight must stop further Meta review reads');
+  }
   mediaMode='warn';
 
   const planned=privateCtx.remaskPrivateJobRequest(config,reviewed);
