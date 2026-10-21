@@ -1791,7 +1791,8 @@ if(globalThis.remaskMediaTools){
     function remaskCreativeMediaSnapshot(){
         const files=$('presetFormat').value==='CAROUSEL'?Array.from(carouselFiles):Array.from($('presetMedia').files||[]);
         return {files,signature:JSON.stringify({format:$('presetFormat').value,id:$('creativeId').value,
-            values:Array.from(document.querySelectorAll('#creativeForm input,#creativeForm select,#creativeForm textarea')).map(el=>[el.id,el.value,el.checked]),
+            values:Array.from(document.querySelectorAll('#creativeForm input,#creativeForm select,#creativeForm textarea'))
+                .filter(el=>!el.closest('#remaskMediaTools')).map(el=>[el.id,el.value,el.checked]),
             cards:currentCarouselMeta(),prepared:remaskPreparedLibraryMedia})};
     }
     globalThis.remaskMediaTools.install($('singleSection'),async()=>{
