@@ -16,6 +16,7 @@ from .provisioning.models import ProvisioningStep
 from .provisioning.timeouts import prepare_hard_timeout, provisioning_hard_timeout
 from .router import RoutePolicyError, TransparentPostRouter
 from .private_launch import PrivateLaunchService
+from .private_http_metrics import begin_operation, end_operation
 from .session import ProfileResolver, ProfileSession, ProfileContextError, ProxyCheckError
 from .store import JobStore
 from .work_queue import ProfileWorkQueue, WorkerInstanceLease
@@ -462,6 +463,8 @@ class WorkerPool:
                         if task['status']=='SUCCESS':
                             continue
                         await self.store.set_task_running(task['id'])
+                        traffic, traffic_token = begin_operation(profile_id, task['action'])
+                        traffic_outcome = 'failed'
                         try:
                             action=str(task['action'])
                             if action in {'private_launch','private_delivery'}:
@@ -618,6 +621,7 @@ class WorkerPool:
                             else:
                                 result=await self.registry.execute(action,session,task['payload'])
                             await self.store.set_task_success(task['id'],result)
+                            traffic_outcome = 'success'
                         except ProvisioningError as exc:
                             await self.store.set_task_failed(
                                 task['id'],
@@ -650,6 +654,10 @@ class WorkerPool:
                                 retryable=False,
                             )
                             break
+                        finally:
+                            if asyncio.current_task().cancelling():
+                                traffic_outcome = 'cancelled'
+                            end_operation(traffic, traffic_token, outcome=traffic_outcome)
             except ProfileContextError as exc:
                 retryable=bool(getattr(exc,'retryable',False))
                 category=str(getattr(exc,'category','profile_context') or 'profile_context')

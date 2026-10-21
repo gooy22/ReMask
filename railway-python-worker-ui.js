@@ -1,4 +1,4 @@
-/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 REMASK_PYTHON_WORKER_UI_V145 REMASK_PYTHON_WORKER_UI_V146 REMASK_PYTHON_WORKER_UI_V147 REMASK_PYTHON_WORKER_UI_V148 REMASK_PYTHON_WORKER_UI_V149 REMASK_PYTHON_WORKER_UI_V150 REMASK_PYTHON_WORKER_UI_V151 REMASK_PYTHON_WORKER_UI_V152 REMASK_PYTHON_WORKER_UI_V153 REMASK_PYTHON_WORKER_UI_V154 REMASK_PYTHON_WORKER_UI_V155 REMASK_PYTHON_WORKER_UI_V156 REMASK_PYTHON_WORKER_UI_V157 REMASK_PYTHON_WORKER_UI_V158 REMASK_PYTHON_WORKER_UI_V159 REMASK_PYTHON_WORKER_UI_V160 REMASK_PYTHON_WORKER_UI_V161 REMASK_PYTHON_WORKER_UI_V164 REMASK_PYTHON_WORKER_UI_V166 REMASK_PYTHON_WORKER_UI_V169 REMASK_PYTHON_WORKER_UI_V170 REMASK_PYTHON_WORKER_UI_V171 REMASK_PYTHON_WORKER_UI_V172 REMASK_PYTHON_WORKER_UI_V173 REMASK_PYTHON_WORKER_UI_V174 REMASK_PYTHON_WORKER_UI_V175 REMASK_PYTHON_WORKER_UI_V176 REMASK_PYTHON_WORKER_UI_V177 REMASK_PYTHON_WORKER_UI_V178 REMASK_PYTHON_WORKER_UI_V179 REMASK_PYTHON_WORKER_UI_V180 */
+/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 REMASK_PYTHON_WORKER_UI_V145 REMASK_PYTHON_WORKER_UI_V146 REMASK_PYTHON_WORKER_UI_V147 REMASK_PYTHON_WORKER_UI_V148 REMASK_PYTHON_WORKER_UI_V149 REMASK_PYTHON_WORKER_UI_V150 REMASK_PYTHON_WORKER_UI_V151 REMASK_PYTHON_WORKER_UI_V152 REMASK_PYTHON_WORKER_UI_V153 REMASK_PYTHON_WORKER_UI_V154 REMASK_PYTHON_WORKER_UI_V155 REMASK_PYTHON_WORKER_UI_V156 REMASK_PYTHON_WORKER_UI_V157 REMASK_PYTHON_WORKER_UI_V158 REMASK_PYTHON_WORKER_UI_V159 REMASK_PYTHON_WORKER_UI_V160 REMASK_PYTHON_WORKER_UI_V161 REMASK_PYTHON_WORKER_UI_V164 REMASK_PYTHON_WORKER_UI_V166 REMASK_PYTHON_WORKER_UI_V169 REMASK_PYTHON_WORKER_UI_V170 REMASK_PYTHON_WORKER_UI_V171 REMASK_PYTHON_WORKER_UI_V172 REMASK_PYTHON_WORKER_UI_V173 REMASK_PYTHON_WORKER_UI_V174 REMASK_PYTHON_WORKER_UI_V175 REMASK_PYTHON_WORKER_UI_V176 REMASK_PYTHON_WORKER_UI_V177 REMASK_PYTHON_WORKER_UI_V178 REMASK_PYTHON_WORKER_UI_V179 REMASK_PYTHON_WORKER_UI_V180 REMASK_PYTHON_WORKER_UI_V181 */
 const linkedPythonWorkerJobId = new URLSearchParams(window.location.search).get('job') || '';
 const restoredPythonWorkerJobId = /^[a-zA-Z0-9_-]{8,160}$/.test(linkedPythonWorkerJobId)
   ? linkedPythonWorkerJobId : localStorage.getItem('remask_python_worker_job_v1') || '';
@@ -487,10 +487,10 @@ function pythonWorkerSelectionRefresh() {
       profiles.length
         ? (
             pythonWorkerUiState.workerOnline === true
-              ? 'Worker UI v180 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
-              : 'Worker UI v180 · Выбрано FB-профилей: ' + profiles.length + '. Жду READY от worker.'
+              ? 'Worker UI v181 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
+              : 'Worker UI v181 · Выбрано FB-профилей: ' + profiles.length + '. Жду READY от worker.'
           )
-        : 'Worker UI v180 · Выберите FB-профили в Workspace.'
+        : 'Worker UI v181 · Выберите FB-профили в Workspace.'
     );
   }
 }
@@ -2139,6 +2139,30 @@ async function pythonWorkerStartProvisioning() {
   return pythonWorkerOpenOwnBmModal();
 }
 
+function pythonWorkerAdvertisingSummary(items,status,errorText='') {
+  const tasks=(Array.isArray(items)?items:[]).flatMap(item=>Array.isArray(item?.tasks)?item.tasks:[]);
+  const advertising=tasks.filter(task=>['private_launch','private_delivery'].includes(task?.action));
+  if(!advertising.length)return '';
+  if(status==='FAILED')return 'Рекламная задача остановлена: '+(errorText||'проверка не завершена');
+  if(status==='PARTIAL')return 'Часть рекламных задач не выполнена: '+(errorText||'проверьте результаты отдельных профилей');
+  if(status!=='SUCCESS')return '';
+  const results=advertising.map(task=>task.result||{});
+  const warnings=Array.from(new Set(results.flatMap(pythonWorkerDraftValidationMessages)));
+  let message='Обработка рекламной задачи завершена. Полное подтверждение рекламы отсутствует.';
+  if(advertising.length===tasks.length&&results.every(result=>result.execution_mode==='DRAFT_INSPECT')){
+    message='Чтение сохранённого черновика завершено. Публикация и редактор Meta не подтверждены.';
+  }else if(advertising.length===tasks.length&&results.every(result=>result.execution_mode==='DRAFT_OBJECTIVE_REPAIR'&&result.campaign_correction_verified===true)){
+    message='Представление Traffic исправлено в существующей кампании. Редактор Meta не проверен; реклама не опубликована.';
+  }else if(advertising.length===tasks.length&&results.every(result=>result.draft_verified===true&&result.published===false)){
+    message='Фрагменты черновика сохранены и прошли валидацию. Редактор Meta не проверен; реклама не опубликована.';
+  }else if(advertising.length===tasks.length&&advertising.every(task=>task.action==='private_delivery')){
+    message='Задача изменения статуса рекламы завершена. Подтверждения и фактические статусы показаны в результатах.';
+  }else if(advertising.length===tasks.length&&results.every(result=>result.verified===true)){
+    message='Рекламные объекты независимо подтверждены. Фактические статусы показаны в результатах.';
+  }
+  return message+(warnings.length?' '+warnings.join(' '):'');
+}
+
 async function pythonWorkerPoll() {
   if (!pythonWorkerUiState.jobId || pythonWorkerUiState.polling) return;
 
@@ -2237,7 +2261,7 @@ async function pythonWorkerPoll() {
       const unconfirmed = await pythonWorkerRefreshSuccessfulProfiles(items);
       pythonWorkerSetText(
         'pythonPwStatus',
-        isPageAccessJob
+        pythonWorkerAdvertisingSummary(items,status) || (isPageAccessJob
           ? 'Доступ PrgssTeam в выбранном BM настроен.'
           : isConfirmationJob
           ? 'Confirm существующей FP в основном BM проверен. Page ID сохранён в Job.'
@@ -2266,7 +2290,7 @@ async function pythonWorkerPoll() {
                     '. Это не отменяет успешный CREATE.'
                   )
                 : 'Business Manager создан и подтверждён Workspace sync.'
-            )
+            ))
       );
 
       pythonWorkerUiState.jobId = '';
@@ -2312,14 +2336,14 @@ async function pythonWorkerPoll() {
 
       pythonWorkerSetText(
         'pythonPwStatus',
-        status === 'PARTIAL'
+        pythonWorkerAdvertisingSummary(items,status,errors.join(' · ')) || (status === 'PARTIAL'
           ? 'Часть ' + entityLabel + ' создана. Ошибки: ' + (errors.join(' · ') || 'неизвестная ошибка')
-          : entityFailureLabel + (errors.join(' · ') || 'неизвестная ошибка')
+          : entityFailureLabel + (errors.join(' · ') || 'неизвестная ошибка'))
       );
 
       if (status === 'PARTIAL' || status === 'FAILED') {
         const unconfirmed = await pythonWorkerRefreshSuccessfulProfiles(items);
-        if (unconfirmed.length) {
+        if (unconfirmed.length && !pythonWorkerAdvertisingSummary(items,status)) {
           pythonWorkerSetText(
             'pythonPwStatus',
             isAdAccountJob

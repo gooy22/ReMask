@@ -3,6 +3,50 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const {webcrypto} = require('node:crypto');
 const source = fs.readFileSync('railway-python-worker-ui.js', 'utf8');
+// A real terminal poll must not turn a Launch rejection/read into BM creation.
+(async()=>{
+  const texts={},storage={};let job;
+  const scope={pythonWorkerUiState:{jobId:'retained-job',polling:false,busy:true},
+    localStorage:{setItem(k,v){storage[k]=v;},removeItem(k){delete storage[k];}},
+    pythonWorkerRenderJob(){},pythonWorkerSetText(k,v){texts[k]=v;},
+    pythonWorkerSelectionRefresh(){},pythonWorkerSchedulePoll(){throw Error('Terminal job cannot repoll');},
+    async pythonWorkerRefreshSuccessfulProfiles(){return ['38'];},
+    async pythonWorkerBridge(){return {job};}};
+  vm.createContext(scope);
+  const helper=source.indexOf('function pythonWorkerDraftValidationMessages(');
+  vm.runInContext(source.slice(helper,source.indexOf('\nfunction pythonWorkerEl',helper)),scope);
+  const summary=source.indexOf('function pythonWorkerAdvertisingSummary(');
+  const begin=summary<0?source.indexOf('async function pythonWorkerPoll()'):summary;
+  vm.runInContext(source.slice(begin,source.indexOf('\nwindow.pythonWorkerStartBusiness',begin)),scope);
+  for(const status of ['FAILED','PARTIAL','SUCCESS']){
+    job={status,items:[{profile_id:'38',status:status==='PARTIAL'?'FAILED':status,
+      error_code:'PRIVATE_ADS_DRAFT_VALIDATION_ERRORS',error_message:'Ad validation failed',
+      tasks:[{action:'private_launch',result:status==='SUCCESS'?{execution_mode:'DRAFT_INSPECT',
+        fragment_reads:[{level:'ad',validation_status:'HAS_ERRORS',
+          active_error_diagnostic:{codes:[{value:1359188}]}}]}:null}]}]};
+    scope.pythonWorkerUiState.jobId='retained-job';scope.pythonWorkerUiState.busy=true;
+    await scope.pythonWorkerPoll();
+    assert.doesNotMatch(texts.pythonPwStatus,/BM|Business Manager|Часть RK создана/);
+    if(status==='SUCCESS'){
+      assert.match(texts.pythonPwStatus,/Чтение сохранённого черновика завершено/);
+      assert.match(texts.pythonPwStatus,/1359188/);
+      assert.match(texts.pythonPwStatus,/Публикация и редактор Meta не подтверждены/);
+      assert.equal(scope.pythonWorkerUiState.jobId,'');
+    }else{
+      assert.match(texts.pythonPwStatus,/Рекламн|рекламн/);
+      assert.match(texts.pythonPwStatus,/PRIVATE_ADS_DRAFT_VALIDATION_ERRORS/);
+      assert.equal(storage.remask_python_worker_job_v1,'retained-job');
+    }
+  }
+  const task=result=>[{tasks:[{action:'private_launch',result}]}];
+  assert.match(scope.pythonWorkerAdvertisingSummary(task({execution_mode:'DRAFT_OBJECTIVE_REPAIR',
+    campaign_correction_verified:true,all_fragments_validated:false,
+    fragment_reads:[{level:'ad',validation_status:'HAS_ERRORS',active_error_diagnostic:{codes:[{value:1359188}]}}]}),'SUCCESS'),/1359188/);
+  assert.match(scope.pythonWorkerAdvertisingSummary(task({draft_verified:true,published:false}),'SUCCESS'),/не опубликована/);
+  assert.match(scope.pythonWorkerAdvertisingSummary(task({verified:true}),'SUCCESS'),/независимо подтверждены/);
+  assert.match(scope.pythonWorkerAdvertisingSummary(task({}),'SUCCESS'),/Полное подтверждение рекламы отсутствует/);
+  assert.equal(scope.pythonWorkerAdvertisingSummary([{tasks:[{action:'provision'}]}],'SUCCESS'),'');
+})().catch(error=>{console.error(error);process.exitCode=1;});
 // Read-only inspection must show Meta rejection independently of job SUCCESS.
 {
   const scope={};vm.createContext(scope);

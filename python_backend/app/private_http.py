@@ -13,6 +13,7 @@ from typing import Any
 
 import httpx
 from .direct_test import direct_test_deadline
+from .private_http_metrics import begin_request, end_request, request_hook, response_hook
 
 log = logging.getLogger("remask_worker")
 # HTTPX's INFO messages include full redirect URLs (including session IDs).
@@ -21,9 +22,10 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 class _Body:
-    def __init__(self, response: httpx.Response) -> None:
+    def __init__(self, response: httpx.Response, metric=None) -> None:
         self._chunks = response.aiter_bytes()
         self._pending = b""
+        self._metric = metric
 
     async def read(self, size: int = -1) -> bytes:
         data = bytearray(self._pending)
@@ -36,17 +38,19 @@ class _Body:
         if size >= 0:
             self._pending = bytes(data[size:])
             del data[size:]
+        if self._metric is not None:
+            self._metric.delivered += len(data)
         return bytes(data)
 
 
 class PrivateResponse:
-    def __init__(self, response: httpx.Response) -> None:
+    def __init__(self, response: httpx.Response, metric=None) -> None:
         self.status = response.status_code
         self.headers = response.headers
         self.url = response.url
         self.charset = response.charset_encoding
         self.http_version = response.http_version
-        self.content = _Body(response)
+        self.content = _Body(response, metric)
 
     async def text(self) -> str:
         # Bootstrap/GraphQL bodies have a finite decompressed budget too.
@@ -95,6 +99,7 @@ class PrivateHttpClient:
             timeout=httpx.Timeout(timeout_seconds), cookies=jar,
             headers={"User-Agent": user_agent,
                      "Accept-Language": "en-US,en;q=0.9", "Accept": "*/*"},
+            event_hooks={'request': [request_hook], 'response': [response_hook]},
         )
 
     @property
@@ -124,16 +129,24 @@ class PrivateHttpClient:
                  method.upper(), httpx.URL(url).host)
         # HTTPX timeouts bound individual I/O phases. Also preserve the old
         # whole-request deadline, including stream consumption and redirects.
-        async with asyncio.timeout(request_budget):
-            async with self._client.stream(
-                method, url, follow_redirects=redirects, **kwargs,
-            ) as response:
-                log.info(
-                    "[%s] private_http method=%s host=%s status=%d protocol=%s",
-                    self.profile_name, method.upper(), response.url.host,
-                    response.status_code, response.http_version,
-                )
-                yield PrivateResponse(response)
+        metric, token = begin_request(self.profile_name)
+        error = None
+        try:
+            async with asyncio.timeout(request_budget):
+                async with self._client.stream(
+                    method, url, follow_redirects=redirects, **kwargs,
+                ) as response:
+                    log.info(
+                        "[%s] private_http method=%s host=%s status=%d protocol=%s",
+                        self.profile_name, method.upper(), response.url.host,
+                        response.status_code, response.http_version,
+                    )
+                    yield PrivateResponse(response, metric)
+        except BaseException as exc:
+            error = exc
+            raise
+        finally:
+            end_request(metric, token, error)
 
     def get(self, url: str, **kwargs: Any):
         return self.request("GET", url, **kwargs)
