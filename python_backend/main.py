@@ -3674,15 +3674,23 @@ async def private_launch_media_inspect(payload: dict = Body(...)):
     from app.private_launch_media import LaunchMediaResolver, local_references
     from app.media_preflight import compatibility
     try:
-        creative = payload.get('creative')
-        targeting = payload.get('targeting') or {}
+        if isinstance(payload.get('launch'), dict):
+            from app.private_launch import _effective_launch_payload
+            launch = _effective_launch_payload(payload['launch'])
+            creative = launch.get('creative')
+            targeting = (launch.get('adset') or {}).get('targeting') or {}
+        else:
+            creative = payload.get('creative')
+            targeting = payload.get('targeting') or {}
         if not isinstance(creative, dict) or not isinstance(targeting, dict):
             raise ProvisioningError('MEDIA_SELECTION_INVALID', 'Select managed media and a targeting object', retryable=False)
         media = await LaunchMediaResolver().resolve(local_references(creative))
         result = []
         for item in media:
             facts = item.inspection
-            check = ({'locally_valid':False,'code':'MEDIA_PREPARATION_REQUIRED','warnings':[]}
+            check = ({'locally_valid':False,'code':'MEDIA_PREPARATION_REQUIRED',
+                      'message':'Prepare this encoding as PNG/JPEG or MP4 H.264/AAC before Launch',
+                      'warnings':[], 'meta_acceptance_verified':False}
                      if facts['requires_conversion'] else compatibility(facts, targeting,
                         creative_format=creative.get('format','SINGLE')))
             result.append({**item.public(), 'inspection':facts, 'compatibility':check})
