@@ -981,7 +981,14 @@ def _deep_merge(base: Any, override: Any) -> Any:
         return dict(base)
     out = dict(base)
     for key, value in override.items():
-        if isinstance(out.get(key), dict) and isinstance(value, dict):
+        if (key == "targeting" and isinstance(out.get(key), dict)
+                and isinstance(value, dict)):
+            # An account override selects entire targeting fields, not a
+            # recursive union of logical exclusion/flexible_spec conditions.
+            # Keep independent base targeting fields but replace each chosen
+            # targeting value atomically, matching the installed JS/PHP bridge.
+            out[key] = {**out[key], **value}
+        elif isinstance(out.get(key), dict) and isinstance(value, dict):
             out[key] = _deep_merge(out[key], value)
         else:
             out[key] = value
