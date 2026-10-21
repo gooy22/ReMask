@@ -3,6 +3,9 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
 const source = fs.readFileSync(path.join(__dirname, '..', 'railway-launch-private-catalog.js'), 'utf8');
+const workerBridge = fs.readFileSync(path.join(__dirname, '..', 'railway-python-worker-jobs-overlay.php'), 'utf8');
+assert.match(workerBridge, /\$request = \$path === 'media-inspect'[\s\S]*\['launch'=>\$input\['launch'\]\]/,
+  'the authenticated PHP bridge must forward the exact per-RK launch to media preflight');
 
 (async()=>{
   const overlay=fs.readFileSync(path.join(__dirname,'..','railway-launch-private-catalog-overlay.php'),'utf8');
@@ -112,6 +115,7 @@ console.log('Private Launch catalog and funding truth checks passed');
   ];
   const storage=new Map(),requests=[],shown=[];
   let captureHandler=null;
+  let mediaMode='warn';
   const bindings={
     '111111111':{page_id:'333333333'},
     '222222222':{page_id:'444444444'}
@@ -172,6 +176,20 @@ console.log('Private Launch catalog and funding truth checks passed');
           CREATIVE:{configured:true,active:true,verification_configured:true,friendly_name:'CreativeMutation'},
           AD:{configured:true,active:true,verification_configured:true,friendly_name:'AdMutation'}
         }})};
+      if(body.action==='private_launch_media_inspect'){
+        const facts={media_type:'image',encoding:'PNG',mime_type:'image/png',width:1200,height:600,
+          aspect_ratio:2,size_bytes:1234,requires_conversion:false};
+        const compatibility=mediaMode==='blocked'
+          ?{locally_valid:false,code:'MEDIA_PREPARATION_REQUIRED',
+            message:'Prepare this encoding as PNG/JPEG or MP4 H.264/AAC before Launch',warnings:[],facts}
+          :{locally_valid:true,meta_acceptance_verified:false,facts,warnings:[{
+            code:'MEDIA_PLACEMENT_LAYOUT_REVIEW',placement:'instagram:story',preferred_ratio:0.5625,
+            message:'Review cropping/padding for this placement',meta_rejection_established:false
+          }]};
+        return {ok:true,status:200,json:async()=>({ok:true,media:[{
+          id:'m-'+'a'.repeat(24),mime_type:'image/png',inspection:facts,compatibility
+        }]})};
+      }
       if(body.action==='private_launch_review')
         return {ok:true,status:200,json:async()=>({ok:true,review:{
           ready:true,
@@ -240,6 +258,36 @@ console.log('Private Launch catalog and funding truth checks passed');
   assert.equal(reviewed[0].row.selected_payment_method.last4,'1111');
   assert.equal(reviewed[1].row.selected_payment_method.last4,'2222');
   assert.ok(requests.every(r=>r.body.doc_id===undefined&&r.body.fb_dtsg===undefined));
+
+  // Real media preflight runs before the account/Meta readiness request and uses each target's exact launch.
+  const mediaConfig=JSON.parse(JSON.stringify(config));
+  const mediaId='m-'+'a'.repeat(24);
+  mediaConfig.payload.creative.media_library_id=mediaId;
+  mediaMode='warn';
+  const mediaStart=requests.length;
+  const mediaReviewed=await privateCtx.remaskPrivateReviewConfig(mediaConfig,{render:false});
+  assert.ok(mediaReviewed.every(row=>row.status==='READY'&&row.media_checks?.length===1));
+  assert.ok(mediaReviewed.every(row=>row.media_checks[0].compatibility.warnings.length===1),
+    'placement recommendations must survive the UI review result');
+  const mediaActions=requests.slice(mediaStart).map(row=>row.body.action);
+  assert.deepEqual(mediaActions,[
+    'private_launch_contracts','private_launch_media_inspect','private_launch_review',
+    'private_launch_media_inspect','private_launch_review'
+  ]);
+  assert.ok(requests.slice(mediaStart).filter(row=>row.body.action==='private_launch_media_inspect')
+    .every(row=>row.body.launch?.base?.creative?.media_library_id===mediaId),
+    'media preflight must inspect the exact managed media selected for each target');
+
+  mediaMode='blocked';
+  const blockedStart=requests.length;
+  const mediaBlocked=await privateCtx.remaskPrivateReviewConfig(mediaConfig,{render:false});
+  assert.ok(mediaBlocked.every(row=>row.status==='MEDIA_BLOCKED'&&
+    row.error_code==='MEDIA_PREPARATION_REQUIRED'&&row.review_attempted===false),
+    'unsupported encoding must block before Meta readiness and carry a clear media error');
+  assert.deepEqual(requests.slice(blockedStart).map(row=>row.body.action),[
+    'private_launch_contracts','private_launch_media_inspect','private_launch_media_inspect'
+  ],'a local media failure must not trigger the Meta review request');
+  mediaMode='warn';
 
   const planned=privateCtx.remaskPrivateJobRequest(config,reviewed);
   assert.equal(planned.request.action,'create');
