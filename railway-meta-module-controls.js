@@ -75,13 +75,20 @@ const remaskModuleControls = (() => {
                 if(spec.kind==='lookup'){
                     status.textContent='Загружаю варианты…';
                     const body=new URLSearchParams({type:spec.lookup,q,limit:'100'}).toString();
-                    const response=await fetch('ajax/metaTemplateTargetingSearch.php',{method:'POST',headers:{
+                    const options={method:'POST',headers:{
                         'Content-Type':'application/x-www-form-urlencoded',
                         'X-ReMask-CSRF':document.querySelector('meta[name="remask-csrf"]')?.content||''
-                    },body,signal:controller.signal});
-                    const payload=JSON.parse(await response.text());
-                    if(!response.ok||payload.ok!==true)throw new Error(payload.error?.message||'Справочник Meta временно недоступен.');
-                    const data=payload.data||{};rows=Array.isArray(data.data)?data.data:[];truncated=Boolean(data.truncated);
+                    },body,signal:controller.signal};
+                    let data;
+                    if(typeof remaskPrivateTargetingScope==='function'){
+                        data=await apiJson('ajax/metaTemplateTargetingSearch.php',options);
+                    }else{
+                        const response=await fetch('ajax/metaTemplateTargetingSearch.php',options);
+                        const payload=JSON.parse(await response.text());
+                        if(!response.ok||payload.ok!==true)throw new Error(payload.error?.message||'Справочник Meta временно недоступен.');
+                        data=payload.data||{};
+                    }
+                    rows=Array.isArray(data?.data)?data.data:[];truncated=Boolean(data?.truncated);
                 }else{
                     const needle=q.toLocaleLowerCase();rows=rows.filter(row=>(String(row.name)+' '+String(row.id)).toLocaleLowerCase().includes(needle));
                 }
@@ -224,5 +231,5 @@ const remaskModuleControls = (() => {
     }
     function queue() {if(scheduled)return;scheduled=true;queueMicrotask(()=>{scheduled=false;scan();});}
     new MutationObserver(queue).observe(document.body,{childList:true,subtree:true});
-    return {configure(data){metadata=data||{};queue();},scan};
+    return {configure(data){metadata=data||{};queue();},isTargetingType(type){return Object.hasOwn(metadata.targeting_types||{},type);},scan};
 })();

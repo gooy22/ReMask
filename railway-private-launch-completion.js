@@ -1,15 +1,40 @@
 /* REMASK_PRIVATE_CREATIVE_LAUNCH_COMPLETION_V1 */
-// Audience templates use the same private, server-scoped lookup as Creative.
-// Never carry the service's lookup identity into the publishing configuration.
+// Unbound templates may use the reference catalog. A selected RK must use its
+// own fresh private reads, never another profile's cached targeting options.
+function remaskPrivateTargetingScope() {
+    const accounts=selectedAccountIds().map(value=>String(value).replace(/^act_/,''));
+    if(accounts.length!==1)return null;
+    const account=accounts[0];
+    const targets=targetMode() ? state.targets.filter(row=>String(row.account_id).replace(/^act_/,'')===account) : [];
+    const profile=targetMode() ? (targets.length===1 ? targets[0].profile : '') : state.profile;
+    if(!profile)throw new Error('TARGETING_PROFILE_SCOPE_REQUIRED');
+    return {profile:String(profile),account_id:account,execution_mode:$('remaskPrivateExecutionMode')?.value||'DRAFT'};
+}
 const remaskPrivateOriginalTargetingApiJson = apiJson;
 apiJson = async function(url, options = {}) {
-    if (String(url).split('?')[0].endsWith('ajax/metaTargetingSearch.php')
+    if (['ajax/metaTargetingSearch.php','ajax/metaTemplateTargetingSearch.php'].some(path=>String(url).split('?')[0].endsWith(path))
             && (typeof options.body === 'string' || typeof options.body?.get === 'function')) {
         const input = typeof options.body === 'string' ? new URLSearchParams(options.body) : options.body;
         const body = new URLSearchParams();
         for (const key of ['type','q','limit']) {
             const value = input.get(key);
             if (value !== null) body.set(key, value);
+        }
+        const type=String(input.get('type')||'').toLowerCase();
+        const resource={location:'locations',locations:'locations',interest:'interests',interests:'interests',
+            behavior:'behaviors',behaviors:'behaviors',language:'locales',languages:'locales',locale:'locales',locales:'locales'}[type]
+            || (typeof remaskModuleControls!=='undefined' && remaskModuleControls.isTargetingType(type) ? type : null);
+        const scope=resource ? remaskPrivateTargetingScope() : null;
+        if(scope){
+            for(const [key,value] of Object.entries(scope))body.set(key,value);
+            body.set('type',resource);
+            const result=await remaskPrivateOriginalTargetingApiJson('ajax/metaTargetingSearch.php',{...options,body:body.toString()});
+            const current=remaskPrivateTargetingScope();
+            if(JSON.stringify(current)!==JSON.stringify(scope))throw new Error('TARGETING_SELECTION_CHANGED');
+            if(result?.checked_live!==true || result?.account_scope_verified!==true
+                    || String(result.profile)!==scope.profile || String(result.account_id)!==scope.account_id
+                    || result.resource!==resource)throw new Error('TARGETING_SOURCE_SCOPE_UNVERIFIED');
+            return result;
         }
         return remaskPrivateOriginalTargetingApiJson('ajax/metaTemplateTargetingSearch.php', {...options, body:body.toString()});
     }

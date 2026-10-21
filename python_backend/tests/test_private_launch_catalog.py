@@ -179,18 +179,21 @@ function renderTargetBindings() {
             self.assertEqual(result.returncode, 0, result.stderr)
         for file in [*root.glob('classes/*.php'),*root.glob('ajax/*.php')]:
             subprocess.run(['php','-l',str(file)],capture_output=True,check=True,timeout=10)
-        self.assertIn('20261021-advertising-pipeline-v223', (root/'launch.php').read_text())
+        self.assertIn('20261021-advertising-pipeline-scoped-targeting', (root/'launch.php').read_text())
         self.assertEqual((root/'scripts/launch.js').read_text().count('/* REMASK_PRIVATE_LAUNCH_CATALOG_V1 */'), 1)
         for name in ['metaLaunchReview.php','metaDryRun.php','metaJobCreate.php','metaLaunch.php']:
             self.assertIn('PRIVATE_LAUNCH_VERIFICATION_REQUIRED',(root/'ajax'/name).read_text())
             self.assertNotIn('cachedAsset',(root/'ajax'/name).read_text())
 
-    def workspace_assets(self, inputs):
+    def workspace_assets(self, inputs, endpoint='metaAssetManager.php'):
         root=Path(self.tmp.name)/'assets-endpoint'
         for folder in ['ajax','classes']:(root/folder).mkdir(parents=True,exist_ok=True)
         source=OVERLAY.read_text()
         (root/'ajax/metaAssetManager.php').write_text(re.search(r"<<<'ASSET_MANAGER'\n(.*?)\nASSET_MANAGER",source,re.S).group(1))
+        (root/'ajax/metaTargetingSearch.php').write_text(re.search(r"<<<'TARGETING'\n(.*?)\nTARGETING",source,re.S).group(1))
         (root/'classes/RemaskAdvertisingAssetBridge.php').write_text(re.search(r"<<<'ASSET_BRIDGE'\n(.*?)\nASSET_BRIDGE",source,re.S).group(1))
+        from app.editor_modules import installed_editor
+        (root/'classes/meta-editor-modules.json').write_text(json.dumps(installed_editor()))
         (root/'settings.php').write_text('<?php // isolated endpoint configuration')
         (root/'checkpassword.php').write_text('<?php // authenticated fixture')
         (root/'classes/RemaskPrivateLaunchCatalog.php').write_text('''<?php
@@ -227,7 +230,7 @@ class FixtureWorkerStream {
 stream_wrapper_unregister('http');stream_wrapper_register('http','FixtureWorkerStream');
 putenv('REMASK_PYTHON_WORKER_URL=http://127.0.0.1:8081');putenv('REMASK_WORKER_API_KEY=fixture-private-key');
 '''
-        code=prelude+'$_POST=json_decode('+json.dumps(json.dumps(inputs))+',true);require '+json.dumps(str(root/'ajax/metaAssetManager.php'))+';'
+        code=prelude+'$_POST=json_decode('+json.dumps(json.dumps(inputs))+',true);require '+json.dumps(str(root/'ajax'/endpoint))+';'
         result=subprocess.run(['php','-r',code],capture_output=True,text=True,check=True,timeout=10)
         return json.loads(result.stdout)
 
@@ -240,6 +243,25 @@ putenv('REMASK_PYTHON_WORKER_URL=http://127.0.0.1:8081');putenv('REMASK_WORKER_A
         self.assertEqual(request['query']['resource'],'pages')
         self.assertEqual(request['query']['force'],'true')
         self.assertTrue(request['worker_key_present'])
+
+    def test_reviewed_targeting_families_keep_exact_scope_and_draft_mode_through_php(self):
+        for kind in ['interests','behaviors','locales','work_positions','education_statuses']:
+            with self.subTest(kind=kind):
+                result=self.workspace_assets({'profile':'19','type':kind,'account_id':'act_333333333',
+                    'execution_mode':'DRAFT','q':'selected query'},'metaTargetingSearch.php')
+                request=result['requests'][0]
+                self.assertEqual(request['path'],'/api/v1/profiles/19/advertising-resources')
+                self.assertEqual(request['query']['resource'],kind)
+                self.assertEqual(request['query']['execution_mode'],'DRAFT')
+                self.assertEqual(request['query']['account_id'],'333333333')
+                self.assertEqual(request['query']['query'],'selected query')
+                self.assertEqual(request['query']['force'],'true')
+
+    def test_unreviewed_targeting_type_never_reaches_worker(self):
+        result=self.workspace_assets({'profile':'19','type':'invented_type','account_id':'333333333'},
+            'metaTargetingSearch.php')
+        self.assertEqual(result['error'],'UNKNOWN_TARGETING_TYPE')
+        self.assertEqual(result['requests'],[])
 
     def test_workspace_rejects_foreign_resource_response_or_unbound_account(self):
         for fields in [{'response_account':'999999999'},{'response_profile':'20'},{'response_resource':'pixels'}]:

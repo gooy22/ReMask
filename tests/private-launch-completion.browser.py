@@ -168,7 +168,7 @@ class InstalledLaunchTests(unittest.TestCase):
             if self._testMethodName=='test_saved_preset_module_values_stay_removed_after_bundle_reload':
                 data['items'][0]['meta_builder'].update(adset={'is_dynamic_creative':True},targeting={'user_device':['iphone 17'],'education_statuses':[1]},
                     creative={'degrees_of_freedom_spec':{'creative_features_spec':{'standard_enhancements':{'enroll_status':'OPT_IN'}}}})
-        elif path == 'ajax/metaTemplateTargetingSearch.php':
+        elif path in ('ajax/metaTemplateTargetingSearch.php','ajax/metaTargetingSearch.php'):
             if request.headers.get('x-remask-csrf')!='fixture-csrf':
                 route.fulfill(status=403,json={'ok':False,'error':{'message':'CSRF validation failed.'}});return
             fields = parse_qs(request.post_data or '', keep_blank_values=True)
@@ -181,6 +181,11 @@ class InstalledLaunchTests(unittest.TestCase):
             item = {'key':'US','name':'Fixture locations','type':'country','country_code':'US'} if kind == 'locations' else {
                 'id':{'interests':'123456','behaviors':'654321','languages':'1000'}.get(kind,'345678'), 'name':'Fixture '+kind}
             data = {'data':[item], 'checked_live':True,'source':'private_meta_template_lookup','template_account_bound':False}
+            if path=='ajax/metaTargetingSearch.php':
+                data.update(profile=fields['profile'][0],account_id=fields['account_id'][0],resource=kind,
+                    account_scope_verified=True,template_account_bound=True,source='ads_manager_private_http')
+                if self._testMethodName=='test_selected_rk_searches_fresh_multiple_interests_and_preserves_ids_in_worker_plan':
+                    data['data'].append({'id':'234567','name':'Fixture second interest'})
         elif path == 'ajax/metaBundles.php':
             fields = parse_qs(request.post_data or '')
             if fields.get('action') == ['save']:
@@ -679,6 +684,66 @@ class InstalledLaunchTests(unittest.TestCase):
         self.page.locator('#page').select_option('345678')
         self.page.evaluate('fixtureLaunch.geo()')
         self.page.locator('#launchDeliverySelect').select_option('PAUSED')
+
+    def test_selected_rk_searches_fresh_multiple_interests_and_preserves_ids_in_worker_plan(self):
+        self.prepare_single_page_launch()
+        for name in ('Fixture interests','Fixture second interest'):
+            self.page.locator('#interestQuery').fill('Fixture')
+            self.page.locator('#interestQuery').press('Enter')
+            self.page.locator('#interestResults').get_by_role('button',name=name,exact=False).click()
+        lookup=self.lookup_requests[-1]
+        self.assertEqual(lookup['profile'],['20'])
+        self.assertEqual(lookup['account_id'],['123456'])
+        self.assertEqual(lookup['execution_mode'],['DRAFT'])
+        self.page.locator('#reviewLaunch').click()
+        self.page.wait_for_function('document.querySelector("#launchResult").textContent.includes("План подготовлен для 1 РК")')
+        plan=next(row for row in self.worker_requests if row['action']=='private_launch_plan')
+        interests=plan['launch']['base']['adset']['targeting']['flexible_spec'][0]['interests']
+        self.assertEqual([item['id'] for item in interests],['123456','234567'])
+        self.assertFalse(any(row['action']=='create' for row in self.worker_requests))
+
+    def test_nested_targeting_placements_schedule_and_copy_survive_bundle_and_worker_plan(self):
+        self.prepare_single_page_launch()
+        snapshot=self.page.evaluate('fixtureLaunch.capture()')
+        nested=[{'interests':[{'id':'123456','name':'First'},{'id':'234567','name':'Second'}]},
+            {'behaviors':[{'id':'654321','name':'Behavior'}],
+             'education_statuses':[1,2]}]
+        extra={'genders':[1],'flexible_spec':nested,'exclusions':{'interests':[{'id':'345678','name':'Excluded'}]},
+            'excluded_geo_locations':{'countries':['RU']},'device_platforms':['mobile'],
+            'facebook_positions':['feed'],'instagram_positions':['story'],'user_os':['Android']}
+        snapshot['meta_builder']['targeting']=extra
+        snapshot['meta_builder']['adset']={'attribution_spec':[{'event_type':'CLICK_THROUGH','window_days':1}]}
+        snapshot['fields'].update(ageMin='25',ageMax='55',placementMode='MANUAL',
+            startTime='2026-11-01T09:00',endTime='2026-11-07T18:30',
+            message='Primary text ✓',headline='Headline ✓',description='Description ✓',
+            destinationUrl='https://example.com/selected?a=1',urlTags='utm_source=selected',cta='LEARN_MORE')
+        snapshot['publisherPlatforms']=['facebook','instagram']
+        snapshot['languages']=[{'id':'52','name':'Ukrainian'},{'id':'1000','name':'Second language'}]
+        snapshot['geo']=[{'type':'country','key':'UA','country_code':'UA'},
+            {'type':'region','key':'123456'},{'type':'city','key':'234567'}]
+        self.page.evaluate('(data)=>fixtureLaunch.restore(data)',snapshot)
+        self.save_and_reload()
+        self.page.evaluate('fixtureSingleTarget("act_123456")')
+        self.page.locator('#page option[value="345678"]').wait_for(state='attached')
+        self.page.locator('#page').select_option('345678')
+        self.page.locator('#reviewLaunch').click()
+        self.page.wait_for_function('document.querySelector("#launchResult").textContent.includes("План подготовлен для 1 РК")')
+        base=next(row for row in self.worker_requests if row['action']=='private_launch_plan')['launch']['base']
+        target=base['adset']['targeting']
+        for field,value in extra.items():self.assertEqual(target[field],value,field)
+        self.assertEqual(target['locales'],[52,1000])
+        self.assertEqual((target['age_min'],target['age_max']),(25,55))
+        self.assertEqual(target['publisher_platforms'],['facebook','instagram'])
+        self.assertEqual(target['geo_locations'],{'countries':['UA'],'regions':[{'key':'123456'}],'cities':[{'key':'234567'}]})
+        self.assertEqual(base['campaign']['objective'],'OUTCOME_TRAFFIC')
+        self.assertEqual(base['campaign']['daily_budget'],500)
+        self.assertEqual(base['adset']['attribution_spec'],snapshot['meta_builder']['adset']['attribution_spec'])
+        self.assertTrue(base['adset']['start_time'].startswith('2026-11-01T09:00:'))
+        self.assertTrue(base['adset']['end_time'].startswith('2026-11-07T18:30:'))
+        for field,value in {'message':'Primary text ✓','headline':'Headline ✓','description':'Description ✓',
+                'link':'https://example.com/selected?a=1','url_tags':'utm_source=selected','call_to_action':'LEARN_MORE',
+                'page_id':'345678'}.items():self.assertEqual(base['creative'][field],value,field)
+        self.assertFalse(any(row['action']=='create' for row in self.worker_requests))
 
     def test_single_rk_selected_page_reaches_plan_and_independent_review(self):
         self.prepare_single_page_launch()

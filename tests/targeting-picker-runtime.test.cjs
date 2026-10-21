@@ -61,6 +61,17 @@ function fixture(){
   assert.equal(results.children.length,0,'an aborted lookup cannot reopen a dismissed list');
   console.log('Shared module choices: authenticated POST and stale response rejection passed.');
 
+  // The same shared picker must use Launch's verified scope adapter when it is
+  // installed, while Creative's unbound workflow above retains its own fetch.
+  let scoped=[];
+  ctx.remaskPrivateTargetingScope=()=>({profile:'38',account_id:'111111'});
+  ctx.apiJson=async(url,options)=>{scoped.push({url,options});return {data:[{id:'23456',name:'Scoped employer'}]};};
+  search.fire('keydown','Enter');await settle();
+  assert.equal(scoped.length,1);assert.equal(scoped[0].url,'ajax/metaTemplateTargetingSearch.php');
+  assert.equal(scoped[0].options.headers['X-ReMask-CSRF'],doc.querySelector().content);
+  assert.equal(results.children[0].textContent,'Scoped employer');
+  console.log('Shared Launch choices: exact-scope adapter and CSRF preserved.');
+
   const creative=fixture();const requests=[];
   Object.assign(creative.ctx,{$:id=>creative.nodes.get(id),creativeTargetingTimers:{interests:0},creativeTargetingControllers:{interests:null},
     esc:String,creativeTargetLabel:()=>({main:'Interest'}),addCreativeTarget(){},api:async()=>new Promise(resolve=>requests.push(resolve))});

@@ -7,6 +7,81 @@ const source=fs.readFileSync(path.join(__dirname,'..','railway-private-launch-co
 const bundleCode=source.slice(source.indexOf('async function remaskPrivateCaptureBundle()'),
   source.indexOf('\nfunction remaskPrivateInstallBudgetPeriod()'));
 const ids=['m-'+'a'.repeat(24),'m-'+'b'.repeat(24)];
+const targetingCode=source.slice(source.indexOf('function remaskPrivateTargetingScope()'),
+  source.indexOf('// A selected RK needs'));
+function targetingFixture(){
+  const calls=[];
+  const ctx={URLSearchParams,state:{profile:'38',targets:[]},accounts:['act_120249912222240685'],mode:'DRAFT',
+    remaskModuleControls:{isTargetingType:type=>type==='work_positions'},
+    $:()=>({value:ctx.mode}),selectedAccountIds:()=>ctx.accounts,targetMode:()=>ctx.state.targets.length>0,
+    apiJson:async(url,options)=>{
+      const body=Object.fromEntries(new URLSearchParams(options.body));calls.push({url,body});
+      if(ctx.failure)throw new Error(ctx.failure);
+      if(ctx.pending)await ctx.pending;
+      return {...{data:[{id:'6003277229371'}],profile:body.profile,account_id:body.account_id,resource:body.type,
+        checked_live:true,account_scope_verified:true},...ctx.response};
+    }};
+  vm.createContext(ctx);vm.runInContext(targetingCode,ctx);
+  return {ctx,calls,search:(type='interests',url='ajax/metaTargetingSearch.php')=>ctx.apiJson(url,
+    {body:new URLSearchParams({type,q:'fitness',profile:'WRONG',account_id:'999999',limit:'25'}).toString()})};
+}
+test('selected RK reads fresh GEO, interests, behaviors and languages in its exact scope',async()=>{
+  for(const [type,resource] of [['locations','locations'],['interests','interests'],['behaviors','behaviors'],['languages','locales']]){
+    const {ctx,calls,search}=targetingFixture();const result=await search(type);
+    assert.deepEqual(calls,[{url:'ajax/metaTargetingSearch.php',body:{type:resource,q:'fitness',limit:'25',
+      profile:'38',account_id:'120249912222240685',execution_mode:'DRAFT'}}]);
+    assert.equal(result.data[0].id,'6003277229371');
+    ctx.mode='PUBLISH';await search(type);assert.equal(calls[1].body.execution_mode,'PUBLISH');
+  }
+});
+test('installed picker reference URL also uses the selected RK live read',async()=>{
+  const {calls,search}=targetingFixture();await search('interests','ajax/metaTemplateTargetingSearch.php');
+  assert.equal(calls[0].url,'ajax/metaTargetingSearch.php');assert.equal(calls[0].body.profile,'38');
+});
+test('single bulk target uses its owning profile, never the current unrelated profile',async()=>{
+  const {ctx,calls,search}=targetingFixture();ctx.state.profile='16';
+  ctx.state.targets=[{profile:'38',account_id:'120249912222240685'}];
+  await search();assert.equal(calls[0].body.profile,'38');
+});
+test('unbound and multiple-account templates stay explicitly unbound',async()=>{
+  for(const accounts of [[],['111111','222222']]){
+    const {ctx,calls,search}=targetingFixture();ctx.accounts=accounts;await search();
+    assert.deepEqual(calls,[{url:'ajax/metaTemplateTargetingSearch.php',body:{type:'interests',q:'fitness',limit:'25'}}]);
+  }
+});
+test('reviewed advanced targeting types use the existing scoped sender',async()=>{
+  const {calls,search}=targetingFixture();await search('work_positions');
+  assert.equal(calls[0].url,'ajax/metaTargetingSearch.php');
+  assert.equal(calls[0].body.profile,'38');assert.equal(calls[0].body.type,'work_positions');
+});
+test('unreviewed types never call an unsupported account read contract',async()=>{
+  const {calls,search}=targetingFixture();await search('invented_type');
+  assert.equal(calls[0].url,'ajax/metaTemplateTargetingSearch.php');
+  assert.equal(calls[0].body.profile,undefined);
+});
+test('failed scoped read never falls back to cached or another profile reference',async()=>{
+  const {ctx,calls,search}=targetingFixture();
+  ctx.failure='SESSION_EXPIRED';await assert.rejects(search,/SESSION_EXPIRED/);
+  assert.equal(calls.length,1);assert.equal(calls[0].url,'ajax/metaTargetingSearch.php');
+});
+test('foreign, cached and incomplete proof cannot supply scoped targeting choices',async()=>{
+  for(const response of [{profile:'16'},{account_id:'999999'},{resource:'behaviors'},
+      {checked_live:false},{account_scope_verified:false}]){
+    const {ctx,search}=targetingFixture();ctx.response=response;
+    await assert.rejects(search,/TARGETING_SOURCE_SCOPE_UNVERIFIED/);
+  }
+});
+test('a changed profile, RK or execution mode rejects a pending lookup response',async()=>{
+  for(const change of [ctx=>ctx.state.profile='16',ctx=>ctx.accounts=['999999'],ctx=>ctx.mode='PUBLISH']){
+    const {ctx,search}=targetingFixture();let release;
+    ctx.pending=new Promise(done=>release=done);const pending=search();change(ctx);release();
+    await assert.rejects(pending,/TARGETING_SELECTION_CHANGED/);
+  }
+});
+test('selected RK without an unambiguous owner fails before any reference request',async()=>{
+  const {ctx,calls,search}=targetingFixture();ctx.state.profile='';
+  await assert.rejects(search,/TARGETING_PROFILE_SCOPE_REQUIRED/);assert.equal(calls.length,0);
+});
 const pagesCode=source.slice(source.indexOf('let remaskPrivatePagesGeneration=0;'),
   source.indexOf("$('adAccount')?.addEventListener"));
 function pagesFixture(initial='') {
