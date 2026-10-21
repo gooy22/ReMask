@@ -297,7 +297,11 @@ class InstalledLaunchTests(unittest.TestCase):
                 self.assertEqual(fixture.client.uploads,1)
             finally:
                 fixture.doCleanups()
-        asyncio.run(exercise_real_engine())
+        # Playwright's synchronous driver owns an event loop in this thread.
+        # Run the actual asynchronous Python worker in a separate thread.
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            executor.submit(lambda: asyncio.run(exercise_real_engine())).result(timeout=60)
 
     def test_bundle_restore_rejects_foreign_media_without_checksums(self):
         self.page.locator('#creativeLibrarySelect').select_option('preset')
