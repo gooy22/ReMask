@@ -29,7 +29,7 @@ const status=createElement('status');
 const ctx={
     $:id=>id==='launchMetaSdkFields'?uiRoot:id==='launchMetaSchemaStatus'?status:null,
     document:{createElement,querySelectorAll:()=>[],addEventListener(){}},
-    Option:(label,value)=>({label,value}),
+    Option:function Option(label,value){this.label=label;this.value=value;},
     apiJson:()=>new Promise(()=>{}),
     remaskSelectedCreativePreset:null,
 };
