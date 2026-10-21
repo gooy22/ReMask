@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "revision": "private-web-cta-2026-10-21",
+  "source": "application_supported_native_link_and_video_serializers",
+  "checked_live": false,
+  "account_eligibility_verified": false,
+  "formats": ["SINGLE", "CAROUSEL"],
+  "destinations": ["WEBSITE"],
+  "default": "LEARN_MORE",
+  "web_actions": ["LEARN_MORE", "SIGN_UP", "APPLY_NOW", "CONTACT_US", "SHOP_NOW", "GET_OFFER"],
+  "selection_basis": "Existing ReMask website CTA subset; executable link_data.type and video_data.type/value.link adapters. This is an application subset, not the complete Meta CTA catalog or account eligibility.",
+  "enum_evidence": {
+    "module": "CallToActionTypes",
+    "module_sha256": "2c6cfe03c10fe7b4a35d961465602cf5f8449dddb95ba620913eb326883e0757",
+    "script_sha256": "3c7de32f7de0b89953b2ecd5b31ff65bf34367e671f7f9e67134f6eb2d163000",
+    "url": "https://static.xx.fbcdn.net/rsrc.php/v4ijsg4/yq/l/en_US-j/Y731TQMByU4.js"
+  },
+  "value_evidence": {
+    "module": "AdCallToActionSpecUtil",
+    "module_sha256": "ba5e23bea5f85a2070f9850b735dbcd1799e85ab9c5547250c35db6f904f45b3",
+    "script_sha256": "3c7de32f7de0b89953b2ecd5b31ff65bf34367e671f7f9e67134f6eb2d163000"
+  }
+}

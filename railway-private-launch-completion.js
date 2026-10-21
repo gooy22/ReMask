@@ -342,6 +342,15 @@ carouselCardsPayload = function() {
     });
 };
 
+function remaskPrivateCtaControlState(){
+    const control=$('cta');if(!control)return;
+    const existing=creativeFormat()==='INSTAGRAM_POST';
+    control.disabled=existing;
+    control.title=existing?'CTA сохраняется в выбранной публикации Instagram.':'';
+}
+$('creativeFormat')?.addEventListener('change',remaskPrivateCtaControlState);
+remaskPrivateCtaControlState();
+
 const remaskPrivateOriginalBuildPayload = buildPayload;
 buildPayload = function() {
     if (!currentObjectiveSpec()?.enabled) throw new Error(remaskUnsupportedObjectiveMessage);

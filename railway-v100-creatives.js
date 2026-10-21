@@ -887,6 +887,17 @@ function setMetaSelectOptions(id, values, options = {}) {
     else if (normalized.length) el.value = normalized[0];
 }
 
+function remaskRestoreCreativeCta(value) {
+    const control=$('presetCta');
+    if(!control)return;
+    value=String(value||'');
+    if(value&&!Array.from(control.options).some(option=>option.value===value)){
+        const option=new Option(value+' · сохранено; доступность запуска не подтверждена',value);
+        option.dataset.remaskUnavailableCta='1';control.appendChild(option);
+    }
+    control.value=value;
+}
+
 function schemaEnum(group, field) {
     const values = metaSdkSchema?.[group]?.enums?.[field];
     return Array.isArray(values) ? values : [];
@@ -931,7 +942,9 @@ function populatePrimaryMetaControls() {
     setMetaSelectOptions('mbAdStatus', schemaEnum('ad','status'), {fallback:'PAUSED'});
 
     if (Array.isArray(metaCapabilities?.cta_types) && metaCapabilities.cta_types.length) {
+        const selected=$('presetCta').value;
         setMetaSelectOptions('presetCta', metaCapabilities.cta_types, {fallback:'LEARN_MORE'});
+        remaskRestoreCreativeCta(selected);
     }
     if (Array.isArray(metaCapabilities?.preview_formats) && metaCapabilities.preview_formats.length) {
         const preferred = [
@@ -1428,6 +1441,8 @@ function clearMetaPreview() {
 function renderFormat() {
     clearMetaPreview();
     const format = $('presetFormat').value;
+    $('presetCta').disabled=format==='INSTAGRAM_POST';
+    $('presetCta').title=format==='INSTAGRAM_POST'?'CTA сохраняется в выбранной публикации Instagram.':'';
     $('singleSection').style.display = format === 'SINGLE' ? 'block' : 'none';
     $('carouselSection').style.display = format === 'CAROUSEL' ? 'block' : 'none';
     if ($('instagramSection')) $('instagramSection').style.display = format === 'INSTAGRAM_POST' ? 'block' : 'none';
@@ -1511,7 +1526,7 @@ function openEditor(item = null) {
     $('presetHeadline').value = item?.headline || '';
     $('presetDescription').value = item?.description || '';
     $('presetUrl').value = item?.destination_url || '';
-    $('presetCta').value = item?.cta || 'LEARN_MORE';
+    remaskRestoreCreativeCta(item?.cta || 'LEARN_MORE');
     $('presetTags').value = item?.url_tags || '';
     $('presetFormat').value = item?.format || 'SINGLE';
     $('presetMedia').value = '';

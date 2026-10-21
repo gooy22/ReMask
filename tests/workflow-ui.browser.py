@@ -197,6 +197,18 @@ class WorkflowTests(unittest.TestCase):
         for key in ('headline','description','link','call_to_action'):
             self.assertEqual([row[key] for row in result],[row[key] for row in cards])
 
+    def test_saved_cta_survives_restore_and_late_metadata_without_default_substitution(self):
+        self.creative(context=True)
+        self.page.evaluate('''()=>testCreative.open({id:'fixture',name:'Saved CTA',format:'SINGLE',cta:'SHOP_NOW',
+            message:'Primary',destination_url:'https://example.com/',
+            meta_builder:{campaign:{objective:'OUTCOME_TRAFFIC'},adset:{daily_budget:200},targeting:{geo_locations:{countries:['US']}}}})''')
+        self.assertEqual(self.page.locator('#presetCta').input_value(),'SHOP_NOW')
+        self.page.evaluate('''()=>{metaCapabilities={cta_types:['LEARN_MORE','SHOP_NOW','GET_OFFER']};populatePrimaryMetaControls();}''')
+        self.assertEqual(self.page.locator('#presetCta').input_value(),'SHOP_NOW')
+        self.page.locator('#saveCreative').click()
+        self.page.wait_for_function('fixtureSaves.length===1')
+        self.assertEqual(self.page.evaluate('fixtureSaves[0].cta'),'SHOP_NOW')
+
     def test_audience_sidebar_is_visible_from_every_tab_when_workflow_loads_last(self):
         self.creative(context=True,tools_first=True)
         self.assertEqual(self.page.locator('#creativeForm>.wf-summary>#remaskAdvertisingEstimate').count(),1)

@@ -3658,7 +3658,8 @@ async def private_launch_form_schema():
     if adapter is None:
         raise HTTPException(status_code=409, detail='PRIVATE_FORM_SCHEMA_UNAVAILABLE')
     from app.editor_modules import form_schema
-    return {'ok': True, **form_schema(adapter.catalog),
+    from app.private_ads_cta import capabilities
+    return {'ok': True, **form_schema(adapter.catalog), **capabilities(),
             'api_version': adapter.catalog.data['api_version'],
             'object_fields': adapter.catalog.data['object_fields']}
 
