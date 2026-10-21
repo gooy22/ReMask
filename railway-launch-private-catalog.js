@@ -684,7 +684,7 @@ async function remaskPrivateReviewConfig(config,{render=true,assertCurrent=null}
             if(error?.httpStatus===429||/(?:^|_)(?:RATE_LIMIT(?:ED)?|THROTTLED)(?:_|$)/.test(code)||
                 (/Meta rejected the advertising request/.test(message)&&/\bcode=(?:4|17|32|613)\b/.test(message)))
                 batchStop={code:'META_RATE_LIMITED',message,status:'RATE_LIMITED'};
-            results.push({row,review:{ready:false},status:mediaInspectionPending?'MEDIA_BLOCKED':(batchStop?.status||(gate?'AUTH_REQUIRED':'BLOCKED')),
+            results.push({row,review:{ready:false},status:batchStop?.status||(gate?'AUTH_REQUIRED':(mediaInspectionPending?'MEDIA_BLOCKED':'BLOCKED')),
                 error_code:batchStop?.code||code,error:message,media_checks:mediaChecks,
                 review_attempted:mediaInspectionPending?false:true});
         }
