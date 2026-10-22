@@ -178,7 +178,13 @@ class AdvertisingResourceStore:
             if not saved:
                 return {"data": [], "availability": "NOT_LOADED", "checked_live": False,
                         "account_id": values["ad_account_id"], "_cache": {"hit": False, "cached_only": True}}
-            result = saved["result"]
+            result = saved.get("result")
+            if (not isinstance(result, dict) or not isinstance(result.get("data"), list)
+                    or any(not isinstance(item, dict) for item in result["data"])
+                    or type(result.get("checked_at")) not in {int, float}
+                    or result.get("account_id") != values["ad_account_id"]):
+                return {"data": [], "availability": "NOT_LOADED", "checked_live": False,
+                        "account_id": values["ad_account_id"], "_cache": {"hit": False, "cached_only": True}}
             # Do not expose historical permission flags as live proof.
             rows = [{field: value for field, value in item.items() if field != "ad_account_page_access_verified"}
                     for item in result["data"]]
@@ -188,6 +194,21 @@ class AdvertisingResourceStore:
         if web is None:
             raise fail("HTTP_SESSION_REQUIRED", "Refreshing advertising resources requires the profile HTTP session")
         result = await asyncio.wait_for(self.catalog.read(web, name, values), timeout=65)
+        if (not isinstance(result, dict) or not isinstance(result.get("data"), list)
+                or any(not isinstance(item, dict) for item in result["data"]) 
+                or result.get("account_id") != values["ad_account_id"]):
+            raise fail("RESOURCE_SCOPE_MISMATCH", "Resource refresh did not return a complete scoped account result")
+        # Browsing may intentionally return a preview, query-required response,
+        # or a truncated selection. It is not a full confirmed inventory and
+        # must never overwrite an older complete account-scoped cache.
+        complete = (result.get("checked_live") is True
+                    and result.get("account_scope_verified") is True
+                    and result.get("query_required") is not True
+                    and result.get("truncated") is not True
+                    and result.get("inventory_complete") is not False)
+        if not complete:
+            return {**result, "_cache": {"hit": False, "cached_only": False,
+                    "fetched_at": result.get("checked_at"), "stale": True}}
         def save():
             self.root.mkdir(parents=True, exist_ok=True)
             descriptor, temporary = tempfile.mkstemp(dir=self.root, suffix=".tmp")
