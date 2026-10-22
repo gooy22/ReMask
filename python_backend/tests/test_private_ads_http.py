@@ -356,6 +356,8 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
             b'{"id":"act_111111","nested":{"state":1,"state":2}}',
             b'{"id":"act_111111","estimate":NaN}',
             b'{"id":"act_111111","estimate":Infinity}',
+            b'{"id":"act_111111","estimate":1e999}',
+            b'{"id":"act_111111","estimate":-1e999}',
         ]
         for body in bodies:
             with self.subTest(body=body):
