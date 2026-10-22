@@ -231,6 +231,37 @@ class JournalTests(unittest.IsolatedAsyncioTestCase):
                               result=verified, error_code="VERIFIED", submitted=True)
         self.assertEqual(await self.state.step("launch", key), original)
 
+    async def test_late_read_cannot_downgrade_or_change_confirmed_success(self):
+        key = OperationKey("ADS_MANAGER:PUBLISH")
+        args = {"launch_key": "launch", "profile_id": "19",
+                "business_id": "222222", "ad_account_id": "111111", "step": key}
+        initial = ActionResult.success(key.value, entity_id="333333", code="READ_CONFIRMED",
+                                       evidence={"verification": {"verified": True}})
+        await self.state.save(**args, status="SUCCESS", entity_id="333333",
+                              result=initial.as_dict(), error_code=initial.code, submitted=True)
+        original = await self.state.step("launch", key)
+
+        pending = ActionResult.reconcile(key.value, code="READ_PENDING",
+                                         message="A stale read returned no proof", submitted=True)
+        pending.entity_id = "333333"
+        self.assertFalse(await self.state.finish_read(original, pending))
+        self.assertEqual(await self.state.step("launch", key), original)
+
+        changed_identity = ActionResult.success(key.value, entity_id="444444",
+                                                code="READ_CONFIRMED", evidence={})
+        self.assertFalse(await self.state.finish_read(original, changed_identity))
+        self.assertEqual(await self.state.step("launch", key), original)
+
+        renewed = ActionResult.success(key.value, entity_id="333333",
+                                       code="READ_CONFIRMED",
+                                       evidence={"verification": {"verified": True, "fresh": True}})
+        self.assertTrue(await self.state.finish_read(original, renewed))
+        newest = await self.state.step("launch", key)
+        self.assertEqual(newest["status"], "SUCCESS")
+        self.assertEqual(newest["entity_id"], "333333")
+        self.assertTrue(newest["result"]["evidence"]["verification"]["fresh"])
+        self.assertFalse(await self.state.finish_read(original, renewed))
+
     async def test_lost_reply_never_replays(self):
         class Client:
             count = 0
