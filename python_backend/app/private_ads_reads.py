@@ -21,7 +21,11 @@ class _ReadClient:
         self.http = None
 
     async def request(self, name, *, values=None, params=None):
-        row, path = self.catalog.route(name, {"ad_account_id": self.account, **(values or {})})
+        if values is not None and not isinstance(values, dict):
+            raise fail("INVALID_RESOURCE_ROUTE", "Resource route values must be an object")
+        if values and "ad_account_id" in values and identity(values["ad_account_id"]) != self.account:
+            raise fail("RESOURCE_SCOPE_MISMATCH", "Resource route cannot change the selected account")
+        row, path = self.catalog.route(name, {**(values or {}), "ad_account_id": self.account})
         if row["method"] != "GET" or set(params or {}) - set(row["params"]):
             raise fail("INVALID_RESOURCE_ROUTE", "Resource request differs from its reviewed source")
         if self.http is None:
@@ -39,6 +43,8 @@ class _ReadClient:
             fields.append("currency")
         row = await self.request("ACCOUNT_READ", params={"fields":
             fields})
+        if not isinstance(row, dict):
+            raise fail("RESOURCE_READ_INCOMPLETE", "Account scope read returned no account object")
         business = row.get("business")
         if (not isinstance(row.get("id"), str) or row["id"].removeprefix("act_") != self.account
                 or not isinstance(business, dict) or business.get("id") != self.business):
@@ -92,7 +98,7 @@ class AdsManagerReadCatalog:
             return await self.browse_targeting(client, name, values)
         if name == "instagram_media":
             actors = await self.read(web,"instagram_accounts",{**values,"query":""})
-            records, seen = [], set()
+            records, seen = [], {}
             requests = 0
             for actor in actors["data"]:
                 actor_id = identity(actor.get("id_v2"),"Instagram user V2")
@@ -107,11 +113,19 @@ class AdsManagerReadCatalog:
                     if not isinstance(items,list) or any(not isinstance(r,dict) for r in items):
                         raise fail("RESOURCE_READ_INCOMPLETE", "Advertisable Instagram media read is incomplete")
                     for row in items:
+                        if ("account_id" in row and row["account_id"] != client.account
+                                or "instagram_actor_id" in row and row["instagram_actor_id"] != actor["id"]
+                                or "instagram_user_id" in row and row["instagram_user_id"] != actor_id):
+                            raise fail("RESOURCE_SCOPE_MISMATCH", "Instagram media returned a foreign account or actor")
                         key = identity(row.get("id"),"Instagram media")
-                        if key not in seen:
-                            seen.add(key)
-                            records.append({**{k:v for k,v in row.items() if k in RESOURCE_FIELDS[name]},
-                                "instagram_actor_id": actor["id"], "instagram_user_id": actor_id})
+                        projected = {**{k:v for k,v in row.items() if k in RESOURCE_FIELDS[name]},
+                            "instagram_actor_id": actor["id"], "instagram_user_id": actor_id}
+                        if key in seen:
+                            if seen[key] != projected:
+                                raise fail("RESOURCE_READ_INCOMPLETE", "Instagram media returned conflicting resource identities")
+                            continue
+                        seen[key] = projected
+                        records.append(projected)
                         if len(records) > 500:
                             raise fail("RESOURCE_READ_INCOMPLETE", "Instagram media exceeded its account row budget")
                     paging = response.get("paging") or {}
