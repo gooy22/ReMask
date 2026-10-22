@@ -70,6 +70,18 @@ class ResourceCases(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['data'],[{'id':'777777','name':'Exact employer','type':'work_employers'}])
         self.assertEqual(self.calls[-1][1]['whitelisted_types'],['work_employers'])
 
+    async def test_scoped_resources_reject_conflicting_duplicate_ids(self):
+        path = '/act_111111/customaudiences'
+        first = {'id': '777777', 'name': 'Original audience'}
+        same_id = {'id': '777777', 'name': 'Different audience'}
+        self.responses[path] = {'data': [first, same_id]}
+        with self.assertRaises(ProvisioningError) as caught:
+            await self.catalog.read(self.web, 'custom_audiences', self.values)
+        self.assertIn('RESOURCE_READ_INCOMPLETE', caught.exception.code)
+        self.responses[path] = {'data': [first, dict(first)]}
+        result = await self.catalog.read(self.web, 'custom_audiences', self.values)
+        self.assertEqual(result['data'], [first])
+
     async def test_malformed_or_rejected_resource_envelopes_never_count_as_complete(self):
         for resource, path in (
             ("custom_audiences", "/act_111111/customaudiences"),
