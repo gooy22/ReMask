@@ -201,7 +201,12 @@ class PixelReads(unittest.IsolatedAsyncioTestCase):
             saved = json.loads(path.read_text())
             for malformed in ({'data': [None], 'account_id': '111111'},
                               {'data': [], 'account_id': '999999'},
-                              {'data': [], 'account_id': '111111', 'checked_at': 'now'}):
+                              {'data': [], 'account_id': '111111', 'checked_at': 'now'},
+                              {**response, 'truncated': True},
+                              {**response, 'inventory_complete': False},
+                              {**response, 'query_required': True},
+                              {**response, 'checked_live': False},
+                              {**response, 'account_scope_verified': False}):
                 with self.subTest(malformed=malformed):
                     saved['result'] = malformed
                     path.write_text(json.dumps(saved))
