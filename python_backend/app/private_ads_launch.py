@@ -68,7 +68,10 @@ class AdsManagerLaunch:
                 and set(raw_launch) - {"base", "override"}):
             raise fail("INVALID_INPUT", "Launch overrides contain unsupported sections")
         launch = _effective_launch_payload(raw_launch)
-        mode = launch.get("execution_mode", "PUBLISH")
+        # Never infer permission to publish from an omitted mode.
+        # A caller must explicitly choose an execution intent before any
+        # live session/bootstrap or media mutation is attempted.
+        mode = launch.get("execution_mode")
         if not isinstance(mode, str) or mode not in {"DRAFT", "PUBLISH"}:
             raise fail("INVALID_INPUT", "Choose DRAFT or PUBLISH execution")
         if set(launch) - {"execution_mode", "campaign", "adset", "ad", "creative", "delivery"}:
@@ -401,7 +404,7 @@ class AdsManagerLaunch:
             "api_preflight_ready": proof.get("draft_ready") is True if launch.get("execution_mode") == "DRAFT"
                 else not proof["payment_selection_required"],
             **target, "launch": launch,
-            "ready_for": launch.get("execution_mode", "PUBLISH"),
+            "ready_for": launch["execution_mode"],
             "preflight": proof, "protocol": "private_ads_manager_versioned",
             "source_revision": SOURCE_REVISION, "contracts": self.status()["contracts"]}
 
