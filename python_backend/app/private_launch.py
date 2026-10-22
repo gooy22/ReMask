@@ -1382,7 +1382,10 @@ class PrivateLaunchService:
                     or type(result.get("checked_at")) is not int
                     or not time.time()-120 <= result["checked_at"] <= time.time()+5
                     or not isinstance(result.get("source"), str) or not result["source"]
-                    or not isinstance(result.get("data"), list)):
+                    or not isinstance(result.get("data"), list)
+                    or result.get("query_required") is True
+                    or result.get("truncated") is True
+                    or result.get("inventory_complete") is False):
                 raise ProvisioningError("PRIVATE_LAUNCH_ASSET_ACCESS_UNCONFIRMED",
                     "Selected advertising resources require a fresh exact-account read",retryable=False)
             identity_field = "hash" if resource == "images" else "id"
