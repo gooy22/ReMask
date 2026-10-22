@@ -9,6 +9,8 @@ import re
 import shutil
 import socket
 import subprocess
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Thread
 import tarfile
 import tempfile
 import time
@@ -22,6 +24,37 @@ ROOT = Path(__file__).resolve().parents[2]
 @unittest.skipUnless(shutil.which('php'), 'PHP required in deployment CI')
 class AdvertisingBridgeTests(unittest.TestCase):
     def setUp(self):
+        self.worker_requests = []
+        worker_requests = self.worker_requests
+        class WorkerHandler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+            def respond(handler, status, payload):
+                raw = json.dumps(payload).encode()
+                handler.send_response(status)
+                handler.send_header('Content-Type', 'application/json')
+                handler.send_header('Content-Length', str(len(raw)))
+                handler.end_headers()
+                handler.wfile.write(raw)
+            def do_GET(handler):
+                worker_requests.append({'method':'GET','path':handler.path,'payload':None})
+                rows = {step: {'configured': True, 'active': step != 'AD',
+                        'verification_configured': step != 'CREATIVE', 'verification_code': 'fixture'}
+                        for step in ('CAMPAIGN', 'ADSET', 'CREATIVE', 'AD')}
+                handler.respond(200, {'contracts': rows})
+            def do_POST(handler):
+                length = int(handler.headers.get('Content-Length', '0'))
+                body = json.loads(handler.rfile.read(length) or b'{}')
+                worker_requests.append({'method':'POST','path':handler.path,'payload':body})
+                if getattr(handler.server, 'fail_posts', False):
+                    handler.respond(422, {'error':'FIXTURE_WORKER_REJECTED'})
+                    return
+                handler.respond(200, {'forwarded': body})
+        self.worker = ThreadingHTTPServer(('127.0.0.1', 0), WorkerHandler)
+        self.worker.fail_posts = False
+        self.worker_thread = Thread(target=self.worker.serve_forever, daemon=True)
+        self.worker_thread.start()
+        self.addCleanup(self.stop_worker)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
@@ -34,23 +67,14 @@ class AdvertisingBridgeTests(unittest.TestCase):
         (self.root / 'checkpassword.php').write_text('<?php // isolated fixture auth')
         source = (ROOT / 'railway-python-worker-jobs-overlay.php').read_text()
         php = re.search(r"<<<'PHP_CODE'\n(.*?)\nPHP_CODE;", source, re.S).group(1)
-        begin = php.index('function rmx_pwj_worker_request(')
-        end = php.index('\ntry {\n    $input', begin)
-        stub = '''function rmx_pwj_worker_request(string $method, string $path, ?array $payload = null, int $timeoutSeconds = 20): array {
-            if ($method === 'GET') return json_decode(getenv('TEST_WORKER_REPLY'), true);
-            return ['forwarded'=>$payload];
-        }
-        '''
-        (self.root / 'ajax/pythonWorkerJobs.php').write_text(php[:begin] + stub + php[end:])
+        (self.root / 'ajax/pythonWorkerJobs.php').write_text(php)
         with socket.socket() as sock:
             sock.bind(('127.0.0.1', 0))
             port = sock.getsockname()[1]
         self.url = f'http://127.0.0.1:{port}/ajax/pythonWorkerJobs.php'
-        rows = {step: {'configured': True, 'active': step != 'AD',
-                'verification_configured': step != 'CREATIVE', 'verification_code': 'fixture'}
-                for step in ('CAMPAIGN', 'ADSET', 'CREATIVE', 'AD')}
         self.process = subprocess.Popen(['php', '-S', f'127.0.0.1:{port}', '-t', str(self.root)],
-            env={**os.environ, 'TEST_WORKER_REPLY': json.dumps({'contracts': rows})},
+            env={**os.environ, 'REMASK_PYTHON_WORKER_URL':
+                f'http://127.0.0.1:{self.worker.server_address[1]}'},
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.addCleanup(self.stop_server)
         for _ in range(100):
@@ -67,6 +91,11 @@ class AdvertisingBridgeTests(unittest.TestCase):
     def stop_server(self):
         self.process.terminate()
         self.process.wait(timeout=5)
+
+    def stop_worker(self):
+        self.worker.shutdown()
+        self.worker.server_close()
+        self.worker_thread.join(timeout=5)
 
     def request(self, payload=None, *, body=None, content_type='application/json'):
         data = body if body is not None else json.dumps(payload).encode()
@@ -85,10 +114,25 @@ class AdvertisingBridgeTests(unittest.TestCase):
         status, result = self.request(payload)
         self.assertEqual(status, 200)
         self.assertEqual(result['review']['forwarded']['selected_payment_method'], {'type': 'Visa', 'last4': '1234'})
+        forwarded = self.worker_requests[-1]
+        self.assertEqual(forwarded['method'], 'POST')
+        self.assertEqual(forwarded['path'], '/api/v1/profiles/7/private-launch-review')
+        self.assertEqual(forwarded['payload']['ad_account_id'], '222222222')
+        self.assertEqual(forwarded['payload']['launch'], {'creative': {'message': 'fixture'}})
         payload['selected_payment_method']['number'] = 'forbidden-fixture'
         status, result = self.request(payload)
         self.assertEqual(status, 400)
         self.assertEqual(result['error'], 'PRIVATE_LAUNCH_PAYMENT_SELECTION_INVALID')
+
+    def test_worker_http_error_is_propagated_through_real_php_http_transport(self):
+        self.worker.fail_posts = True
+        status, result = self.request({'action': 'private_launch_review', 'profile_id': '7',
+            'business_id': '111111111', 'ad_account_id': '222222222', 'page_id': '333333333',
+            'launch': {'creative': {'message': 'fixture'}}})
+        self.assertEqual(status, 502)
+        self.assertEqual(result['error'], 'PYTHON_WORKER_FAILED')
+        self.assertTrue(any(row['path'] == '/api/v1/profiles/7/private-launch-review'
+                            for row in self.worker_requests))
 
     def test_disabled_and_missing_read_contract_flags_survive_bridge(self):
         _, result = self.request({'action': 'private_launch_contracts'})

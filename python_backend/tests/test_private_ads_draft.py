@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import asyncio
 import json
 from pathlib import Path
 import tempfile
@@ -141,6 +142,40 @@ class JournalTests(unittest.IsolatedAsyncioTestCase):
                 await self.sender.submit(client, operation="DRAFT", path="/act_111111/addrafts",
                     params={"name": "test"}, receipt=lambda row: {"draft_id": row["id"]})
         self.assertEqual(client.count, 1)
+
+    async def test_concurrent_workers_claim_before_dispatch_and_only_one_post_wins(self):
+        class Client:
+            def __init__(inner):
+                inner.dispatches = 0
+                inner.barrier = asyncio.Event()
+                inner.arrivals = 0
+
+            async def post(inner, path, params, *, before_submit, files):
+                inner.arrivals += 1
+                if inner.arrivals == 2:
+                    inner.barrier.set()
+                await inner.barrier.wait()
+                await before_submit()
+                inner.dispatches += 1
+                return {"id": "333333"}
+
+        client = Client()
+        senders = [AdsManagerSubmitter(self.state, launch_key="launch", profile_id="19",
+            business_id="222222", account_id="111111", actor_id="123456",
+            launch_fingerprint="fixed-inputs", source_digest="source") for _ in range(2)]
+        async def submit(sender):
+            try:
+                return await sender.submit(client, operation="DRAFT", path="/act_111111/addrafts",
+                    params={"name": "test"}, receipt=lambda row: {"draft_id": row["id"]})
+            except ProvisioningError as exc:
+                return exc.code
+        results = await asyncio.gather(*(submit(sender) for sender in senders))
+        self.assertEqual(client.dispatches, 1)
+        self.assertEqual(sum(isinstance(value, dict) for value in results), 1)
+        self.assertEqual(sum(value == "PRIVATE_LAUNCH_RECONCILE_REQUIRED" for value in results), 1)
+        rows = await self.state.all_steps("launch")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["status"], "RECONCILE_REQUIRED")
 
     async def test_saved_receipt_survives_reopen_without_second_post(self):
         class Client:

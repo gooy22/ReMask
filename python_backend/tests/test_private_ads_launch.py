@@ -129,6 +129,8 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
             result = await self.launch()
             repeated = await self.launch()
         self.assertTrue(result['draft_verified'])
+        self.assertEqual(result['editor_state'], 'EDITOR_UNVERIFIED')
+        self.assertFalse(result['editor_verified'])
         self.assertEqual(result['draft_id'], repeated['draft_id'])
         self.assertFalse(result['published'])
         self.assertFalse(result['verified'])
@@ -355,8 +357,51 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
         result = self.owner.plan(profile_id='19',payload=self.payload)
         self.assertFalse(result['ready'])
         self.assertFalse(result['checked_live'])
+        self.assertTrue(result['configuration_valid'])
+        self.assertEqual(result['editor_state'], 'EDITOR_UNVERIFIED')
+        self.assertEqual(result['missing_fields'], [])
+        self.assertEqual(result['missing_contracts'], [])
         self.assertEqual(result['mutation_posts'],0)
         self.session.facebook_web.assert_not_awaited()
+
+    async def test_versioned_launch_acceptance_fixture_matches_request_projection(self):
+        fixture_path = Path(__file__).parent / 'fixtures/launch/single-image-draft.json'
+        accepted = json.loads(fixture_path.read_text())
+        self.payload = copy.deepcopy(accepted['payload'])
+        plan = self.owner.ads_manager.plan(profile_id='19', payload=self.payload)
+        campaign, adset, _ = __import__('app.private_ads_bidding', fromlist=['native_bidding']).native_bidding(
+            plan['launch']['campaign'], plan['launch']['adset'])
+        campaign = self.owner.ads_manager.objective_wire.campaign(campaign)
+        from app.private_ads_creative import resolved_creative
+        creative = resolved_creative(plan['launch']['creative'], plan['target']['page_id'],
+            [{'image_hash': plan['launch']['creative']['existing_image_hash']}])
+        link_data = creative['object_story_spec']['link_data']
+        actual = {
+            'campaign': {key: campaign[key] for key in accepted['expected_request_projection']['campaign']},
+            'ad_set': {key: adset[key] for key in accepted['expected_request_projection']['ad_set']},
+            'ad': {'name': plan['launch']['ad']['name'], 'status': plan['launch']['ad']['status'],
+                   'creative_page_id': creative['object_story_spec']['page_id'],
+                   'image_hash': link_data['image_hash']},
+        }
+        self.assertEqual(actual, accepted['expected_request_projection'])
+        self.assertEqual(plan['launch_fingerprint'], self.owner.ads_manager.plan(
+            profile_id='19', payload=self.payload)['launch_fingerprint'])
+        self.assertEqual(accepted['source_sha'], 'd55851e37c7ae6ec3bcd6cf8e746ce1ce940e81a')
+        self.assertFalse(accepted['checked_live'])
+        self.assertEqual(accepted['editor_state'], 'EDITOR_UNVERIFIED')
+        self.assertEqual(plan['editor_state'], 'EDITOR_UNVERIFIED')
+        self.assertFalse(plan['checked_live'])
+
+    async def test_live_api_review_keeps_editor_acceptance_unverified(self):
+        self.payload['launch']['execution_mode'] = 'DRAFT'
+        result = await self.owner.review(profile_id='19', context=self.context, payload=self.payload,
+            transport=SimpleNamespace(session=self.session))
+        self.assertTrue(result['configuration_valid'])
+        self.assertTrue(result['checked_live'])
+        self.assertTrue(result['api_preflight_ready'])
+        self.assertEqual(result['editor_state'], 'EDITOR_UNVERIFIED')
+        self.assertEqual(result['missing_fields'], [])
+        self.assertEqual(result['missing_contracts'], [])
     async def test_competing_video_and_unsupported_creative_reject_before_any_post(self):
         for change in ('competing_video','advanced'):
             payload = copy.deepcopy(self.payload)

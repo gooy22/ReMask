@@ -1,7 +1,9 @@
 import copy
+import ast
 import json
 from contextlib import asynccontextmanager
 import os
+from pathlib import Path
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -16,6 +18,28 @@ class Body:
     def __init__(self, payload):self.payload = payload
     async def read(self, size):
         return self.payload
+
+
+class LaunchTransportIsolationTests(unittest.TestCase):
+    def test_private_launch_transport_modules_have_no_browser_automation_imports(self):
+        root = Path(__file__).parents[1] / 'app'
+        modules = ('private_ads_launch.py', 'private_ads_http.py', 'private_ads_draft.py',
+            'private_ads_state.py', 'private_ads_publication.py', 'private_launch_media.py',
+            'private_ads_media.py', 'private_ads_video.py', 'private_ads_creative.py',
+            'media_preflight.py')
+        for name in modules:
+            source = (root / name).read_text()
+            tree = ast.parse(source, filename=name)
+            imported = []
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    imported.extend(alias.name for alias in node.names)
+                elif isinstance(node, ast.ImportFrom):
+                    imported.append(node.module or '')
+            with self.subTest(module=name):
+                self.assertFalse(any('facebook_business_browser' in item or 'playwright' in item.casefold()
+                                     for item in imported), imported)
+                self.assertNotIn('FacebookBusinessBrowser', source)
 
 
 class Session:

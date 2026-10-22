@@ -138,12 +138,22 @@ class AdsManagerLaunch:
     def plan(self, *, profile_id, payload):
         target, launch, references, fingerprint = self.prepare(profile_id, payload)
         draft_only = launch.get("execution_mode") == "DRAFT"
+        contracts = self.status()["contracts"]
+        missing_contracts = [name for name, row in contracts.items()
+                             if row.get("active") is not True or row.get("configured") is not True]
+        creative_format = launch["creative"].get("format", "SINGLE")
+        if creative_format not in self.status()["creative_formats"]:
+            missing_contracts.append("CREATIVE_FORMAT_" + str(creative_format))
+        for resource in self.owner._asset_selections(launch, bool(references)):
+            if resource not in self.owner.reads.rows:
+                missing_contracts.append("READ_" + resource.upper())
         return {"configuration_valid": True, "ready": False, "checked_live": False,
+            "editor_state": "EDITOR_UNVERIFIED", "missing_fields": [],
             "objective_representation": {"selected": launch["campaign"].get("objective"),
                 "private_campaign": {key: value for key, value in self.objective_wire.campaign(launch["campaign"]).items()
                     if key in {"objective", "is_odax_campaign_group"}},
                 "editor_state": "EDITOR_UNVERIFIED"},
-            "mutation_posts": 0, "target": target, "creative_format": launch["creative"].get("format", "SINGLE"),
+            "mutation_posts": 0, "target": target, "creative_format": creative_format,
             "delivery": launch.get("delivery", {key: "PAUSED" for key in ("campaign", "adset", "ad")}),
             "steps": [{"stage": stage, "label": label} for stage, label in
                 (("MEDIA", "Медиа рекламы"), ("DRAFT", "Черновик рекламы"),
@@ -152,7 +162,7 @@ class AdsManagerLaunch:
                 if not (draft_only and stage == "PUBLISH")],
             "execution_mode": "DRAFT" if draft_only else "PUBLISH",
             "local_media": references, "media_resolution_required": bool(references),
-            "missing_contracts": [], "protocol": "private_ads_manager_versioned",
+            "missing_contracts": missing_contracts, "protocol": "private_ads_manager_versioned",
             "launch": launch, "launch_fingerprint": fingerprint, "source_revision": SOURCE_REVISION}
 
     async def _preflight(self, client, web, payload, target, *, publication_required=False):
@@ -345,7 +355,12 @@ class AdsManagerLaunch:
                                          transport=SimpleNamespace(session=session))
         target, launch, fingerprint, actor, client, media, proof = await self._prepare_live(
             profile_id=profile_id, context=context, session=transport.session, payload=payload)
-        return {"ready": not proof["payment_selection_required"], **target, "launch": launch,
+        return {"ready": not proof["payment_selection_required"],
+            "configuration_valid": True, "checked_live": True,
+            "editor_state": "EDITOR_UNVERIFIED", "missing_fields": [], "missing_contracts": [],
+            "api_preflight_ready": proof.get("draft_ready") is True if launch.get("execution_mode") == "DRAFT"
+                else not proof["payment_selection_required"],
+            **target, "launch": launch,
             "ready_for": launch.get("execution_mode", "PUBLISH"),
             "preflight": proof, "protocol": "private_ads_manager_versioned",
             "source_revision": SOURCE_REVISION, "contracts": self.status()["contracts"]}

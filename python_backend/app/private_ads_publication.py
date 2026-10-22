@@ -114,7 +114,7 @@ class AdsManagerDraftPublisher:
                 return {"status": "SUCCESS", "draft_id": draft_id, "fragment_ids": fragments,
                     "draft_objects": objects, "draft_verified": True, "published": False,
                     "fragment_storage_verified": True, "relationships_confirmed": True,
-                    "editor_verified": False,
+                    "editor_verified": False, "editor_state": "EDITOR_UNVERIFIED",
                     "verified": False, "delivery_running_verified": False, "browser_started": False,
                     "verification_source": "independent_private_ads_http",
                     "transport": "private_ads_manager_http_h2"}

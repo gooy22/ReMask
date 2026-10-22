@@ -11,6 +11,31 @@ concurrency:
   group: meta-regression-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  launch_http:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      REMASK_DATA_DIR: /tmp/remask-launch-http-state
+      REMASK_DOC_ID_STORE: /tmp/remask-launch-http-state/facebook-web/docids.json
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install media inspection tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg php-cli
+      - name: Install backend dependencies without browser tooling
+        run: |
+          python3 -m venv /tmp/remask-launch-http
+          /tmp/remask-launch-http/bin/pip install -r python_backend/requirements.txt
+          php --version
+          /tmp/remask-launch-http/bin/python -c "import importlib.util; assert importlib.util.find_spec('playwright') is None"
+      - name: Launch serializer, draft lifecycle, recovery, media and PHP bridge fixtures
+        working-directory: python_backend
+        run: /tmp/remask-launch-http/bin/python -m unittest \
+          tests.test_private_ads_launch tests.test_private_ads_draft \
+          tests.test_private_ads_objectives tests.test_private_ads_bidding \
+          tests.test_private_ads_objective_wire tests.test_private_ads_exact_settings \
+          tests.test_private_ads_http tests.test_private_launch_http \
+          tests.test_media_preflight tests.test_private_launch_bridge
+
   regression:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -146,11 +171,3 @@ jobs:
           fi
       - name: Verify Details to Confirm capture and duplicate guards in Chromium
         run: PYTHONPATH=python_backend /tmp/remask-browser-regression/bin/python tests/meta-ad-account-dialogs.browser.py
-
-
-      - name: Creative serializer and Launch workflow interface
-        run: /tmp/remask-browser-regression/bin/python tests/workflow-ui.browser.py
-
-      - name: Installed private Launch media and budget round trips
-        if: ${{ always() }}
-        run: PYTHONPATH=python_backend /tmp/remask-browser-regression/bin/python tests/private-launch-completion.browser.py
