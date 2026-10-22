@@ -102,7 +102,8 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(_json_payloads(ambiguous), [])
         server_js = '<script>requireLazy(["ServerJS"],function(s){s.handle(' + ambiguous + ');});</script>'
         self.assertEqual(_ads_document_payloads(server_js), [])
-        for invalid in ('{"data":NaN}', '{"data":Infinity}', '{"data":-Infinity}'):
+        for invalid in ('{"data":NaN}', '{"data":Infinity}', '{"data":-Infinity}',
+                        '{"data":1e999}', '{"data":-1e999}'):
             with self.subTest(invalid=invalid):
                 self.assertEqual(_json_payloads(invalid), [])
 
