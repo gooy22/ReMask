@@ -181,7 +181,8 @@ class AdvertisingResourceStore:
             result = saved.get("result")
             if (not isinstance(result, dict) or not isinstance(result.get("data"), list)
                     or any(not isinstance(item, dict) for item in result["data"])
-                    or type(result.get("checked_at")) not in {int, float}
+                    or type(result.get("checked_at")) is not int
+                    or not 0 < result["checked_at"] <= int(time.time()) + 300
                     or result.get("account_id") != values["ad_account_id"]
                     or result.get("checked_live") is not True
                     or result.get("account_scope_verified") is not True
@@ -200,7 +201,10 @@ class AdvertisingResourceStore:
         if web is None:
             raise fail("HTTP_SESSION_REQUIRED", "Refreshing advertising resources requires the profile HTTP session")
         result = await asyncio.wait_for(self.catalog.read(web, name, values), timeout=65)
-        if (not isinstance(result, dict) or not isinstance(result.get("data"), list)
+        if (not isinstance(result, dict) or type(result.get("checked_at")) is not int
+                or not 0 < result["checked_at"] <= int(time.time()) + 300):
+            raise fail("RESOURCE_READ_INCOMPLETE", "Resource refresh has no valid collection time")
+        if (not isinstance(result.get("data"), list)
                 or any(not isinstance(item, dict) for item in result["data"]) 
                 or result.get("account_id") != values["ad_account_id"]):
             raise fail("RESOURCE_SCOPE_MISMATCH", "Resource refresh did not return a complete scoped account result")
