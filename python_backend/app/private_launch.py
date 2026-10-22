@@ -837,7 +837,10 @@ class PrivateLaunchStateStore:
                     result_json=excluded.result_json,
                     error_code=excluded.error_code,
                     submitted=excluded.submitted,
-                    updated_at=excluded.updated_at
+                    updated_at=CASE
+                        WHEN private_launch_steps.status='SUCCESS' THEN private_launch_steps.updated_at
+                        ELSE excluded.updated_at
+                    END
                 WHERE private_launch_steps.profile_id=excluded.profile_id
                     AND private_launch_steps.business_id=excluded.business_id
                     AND private_launch_steps.ad_account_id=excluded.ad_account_id
