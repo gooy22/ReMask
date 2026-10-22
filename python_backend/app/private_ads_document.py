@@ -15,6 +15,28 @@ _JSON_SCRIPT_RE = re.compile(r"<script\b[^>]*>(.*?)</script\s*>", re.IGNORECASE 
 _REQUEST_KEYS = {"variables", "params", "request", "input", "query", "preloadparams"}
 
 
+def _unique_json_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("Duplicate JSON member")
+        result[key] = value
+    return result
+
+
+def _reject_json_constant(_value):
+    raise ValueError("Non-finite JSON number")
+
+
+def _strict_json_decoder():
+    return json.JSONDecoder(object_pairs_hook=_unique_json_object,
+                            parse_constant=_reject_json_constant)
+
+
+def _strict_json(raw):
+    return _strict_json_decoder().decode(raw)
+
+
 def _response_only(value: Any, depth: int = 0, decode_string: bool = False) -> Any:
     if depth > 64:
         return None
@@ -29,7 +51,7 @@ def _response_only(value: Any, depth: int = 0, decode_string: bool = False) -> A
         return [_response_only(child, depth + 1, decode_string) for child in value]
     if decode_string and isinstance(value, str) and value.lstrip().startswith(("{", "[")):
         try:
-            decoded = json.loads(value)
+            decoded = _strict_json(value)
         except (ValueError, RecursionError):
             return value
         if isinstance(decoded, (dict, list)):
@@ -63,7 +85,7 @@ def _json_payloads(body: str) -> list[Any]:
             continue
         for candidate in dict.fromkeys((raw, html.unescape(raw))):
             try:
-                decoded = json.loads(candidate)
+                decoded = _strict_json(candidate)
                 if isinstance(decoded, (dict, list)):
                     payloads.append(_response_only(decoded))
                     break
