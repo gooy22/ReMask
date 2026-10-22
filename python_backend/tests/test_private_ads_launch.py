@@ -64,7 +64,7 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
         path.write_bytes(data)
         self.media = LocalMedia('m-'+sha[:24],sha,len(data),'image','image/png',path)
         self.payload = {'business_id':'222222','ad_account_id':'111111','page_id':'555555','launch_key':'image-launch',
-            'launch':{'campaign':{'name':'campaign','daily_budget':2000,'objective':'OUTCOME_TRAFFIC'},
+            'launch':{'execution_mode':'PUBLISH','campaign':{'name':'campaign','daily_budget':2000,'objective':'OUTCOME_TRAFFIC'},
                       'adset':{'name':'adset','optimization_goal':'LINK_CLICKS','billing_event':'IMPRESSIONS',
                                'destination_type':'WEBSITE','targeting':{'geo_locations':{'countries':['UA']}}},
                       'ad':{'name':'ad'},'creative':{'name':'creative','message':'text',
@@ -97,6 +97,18 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
     async def launch(self):
         return await self.owner.run(item_id='fixture',profile_id='19',context=self.context,
                                     session=self.session,payload=self.payload)
+    async def test_missing_execution_mode_fails_before_meta_or_media_operations(self):
+        self.payload['launch'].pop('execution_mode')
+        self.client.get = AsyncMock(side_effect=AssertionError('No Meta reads allowed'))
+        with self.assertRaises(ProvisioningError) as error:
+            await self.launch()
+        self.assertEqual(error.exception.code, 'PRIVATE_ADS_DRAFT_INVALID_INPUT')
+        self.client.get.assert_not_awaited()
+        self.assertEqual(self.client.uploads, 0)
+        self.assertEqual(self.client.posts, [])
+        with self.assertRaises(ProvisioningError):
+            self.owner.ads_manager.plan(profile_id='19', payload=self.payload)
+
     async def test_existing_launch_entrypoint_uploads_image_publishes_and_verifies(self):
         result = await self.launch()
         self.assertEqual(result['status'],'SUCCESS')
