@@ -27,6 +27,7 @@ from .facebook_docids import (
     upsert_candidate,
 )
 from .private_launch_read import inspect_pages
+from .private_ads_document import _strict_json
 from .static_payment_read import inspect_methods
 from .private_auth import private_auth_error
 from .provisioning.models import ProvisioningError
@@ -712,7 +713,7 @@ class PrivateLaunchStateStore:
         raw = data.pop("result_json", None)
         if raw:
             try:
-                data["result"] = json.loads(str(raw))
+                data["result"] = _strict_json(str(raw))
             except (json.JSONDecodeError, TypeError, ValueError):
                 data["result"] = {}
         else:
