@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import re
 import time
 
 from .private_ads_draft import fail, identity
@@ -13,6 +14,15 @@ PIXEL_READ = {"edge": "adspixels", "fields": ["id", "name", "is_unavailable"],
 
 async def read_pixels(client, *, query="", limit=500):
     """Never follow credential-bearing next URLs; keep the exact account route."""
+    if type(limit) is int:
+        selected_limit = limit
+    elif isinstance(limit, str) and re.fullmatch(r"[0-9]{1,9}", limit):
+        selected_limit = int(limit)
+    else:
+        raise fail("INVALID_RESOURCE_LIMIT", "Pixel row limit must be a positive integer")
+    if selected_limit < 1 or not isinstance(query, str) or len(query) > 256:
+        raise fail("INVALID_RESOURCE_LIMIT", "Pixel query or row limit is invalid")
+    limit = min(500, selected_limit)
     rows, cursors, seen = [], set(), {}
     params = {"fields": PIXEL_READ["fields"], "limit": PIXEL_READ["limit"]}
     path = "/act_" + identity(client.context.account_id) + "/adspixels"
