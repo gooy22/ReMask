@@ -59,7 +59,10 @@ class _ReadClient:
         if not isinstance(row, dict):
             raise fail("RESOURCE_READ_INCOMPLETE", "Account scope read returned no account object")
         business = row.get("business")
+        secondary_id = row.get("account_id")
         if (not isinstance(row.get("id"), str) or row["id"].removeprefix("act_") != self.account
+                or (secondary_id is not None and (not isinstance(secondary_id, str)
+                    or secondary_id.removeprefix("act_") != self.account))
                 or not isinstance(business, dict) or business.get("id") != self.business):
             raise fail("RESOURCE_SCOPE_MISMATCH", "Resource account did not confirm the exact Business")
         if require_active and (type(row.get("account_status")) not in {int, str} or str(row["account_status"]) != "1"):
