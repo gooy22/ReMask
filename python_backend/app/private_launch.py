@@ -696,9 +696,15 @@ class PrivateLaunchStateStore:
 
     async def all_steps(self, launch_key):
         def read():
+            # A single SQLite statement produces one coherent journal snapshot.
+            # Opening a fresh connection for every step could mix pre/post-CAS
+            # states and would amplify contention on an account with many steps.
             with self._connect() as con:
-                names = [row[0] for row in con.execute("SELECT step FROM private_launch_steps WHERE launch_key=?", (launch_key,))]
-            return [self._step_sync(launch_key, name) for name in names]
+                rows = con.execute(
+                    "SELECT * FROM private_launch_steps WHERE launch_key=? ORDER BY step",
+                    (launch_key,),
+                ).fetchall()
+            return [self._decode_step_row(row) for row in rows]
         return await asyncio.to_thread(read)
 
     def _step_sync(self, launch_key: str, step: str) -> dict[str, Any] | None:
@@ -707,6 +713,10 @@ class PrivateLaunchStateStore:
                 "SELECT * FROM private_launch_steps WHERE launch_key=? AND step=?",
                 (launch_key, step),
             ).fetchone()
+        return self._decode_step_row(row)
+
+    @staticmethod
+    def _decode_step_row(row) -> dict[str, Any] | None:
         if row is None:
             return None
         data = dict(row)
