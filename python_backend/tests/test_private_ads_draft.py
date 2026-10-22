@@ -110,6 +110,17 @@ class WireTests(unittest.TestCase):
         rows[-1]["new_value"] = 0
         self.assertFalse(fragment_values_match(rows, expected))
 
+    def test_saved_fragment_json_rejects_ambiguous_duplicate_keys(self):
+        desired = {'targeting': {'age_min': 23, 'age_max': 33}}
+        row = {'field': 'targeting', 'old_value': None,
+               'new_value': '{"age_min":23,"age_max":33}'}
+        self.assertTrue(fragment_values_match([row], desired))
+        for bad in ('{"age_min":23,"age_min":23,"age_max":33}',
+                    '{"age_min":23,"age_max":33,"extra":NaN}',
+                    '{"age_min":23,"age_max":33,"extra":Infinity}'):
+            with self.subTest(bad=bad):
+                self.assertFalse(fragment_values_match([{**row, 'new_value': bad}], desired))
+
     def test_raw_fragment_status_array_is_verified_without_ui_cache_wrapper(self):
         row = completed()
         row['data'][0]['fragment_statuses'] = row['data'][0]['fragment_statuses']['data']
