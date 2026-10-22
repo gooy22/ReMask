@@ -171,6 +171,31 @@ class JournalTests(unittest.IsolatedAsyncioTestCase):
             await self.state.finish_read(prior, malformed)
         self.assertEqual(await self.state.step("launch", key), prior)
 
+    async def test_journal_update_cannot_cross_profile_business_or_account_scope(self):
+        key = OperationKey("ADS_MANAGER:DRAFT")
+        args = {"launch_key": "launch", "profile_id": "19",
+                "business_id": "222222", "ad_account_id": "111111",
+                "step": key, "status": "RECONCILE_REQUIRED",
+                "result": {"evidence": {"owner": "19"}}}
+        await self.state.save(**args)
+        original = await self.state.step("launch", key)
+        for field, foreign in (("profile_id", "20"), ("business_id", "999999"),
+                               ("ad_account_id", "888888")):
+            with self.subTest(field=field):
+                with self.assertRaises(ProvisioningError) as rejected:
+                    await self.state.save(**{**args, field: foreign,
+                                            "status": "SUCCESS",
+                                            "result": {"verified": True}})
+                self.assertEqual(rejected.exception.code,
+                                 "PRIVATE_LAUNCH_SAVED_OPERATION_MISMATCH")
+                self.assertEqual(await self.state.step("launch", key), original)
+
+        await self.state.save(**{**args, "status": "SUCCESS",
+                                 "result": {"evidence": {"owner": "19", "verified": True}}})
+        updated = await self.state.step("launch", key)
+        self.assertEqual(updated["status"], "SUCCESS")
+        self.assertEqual(updated["result"]["evidence"]["owner"], "19")
+
     async def test_lost_reply_never_replays(self):
         class Client:
             count = 0
