@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import html
 import json
+import math
 import re
 from typing import Any
 
@@ -28,9 +29,17 @@ def _reject_json_constant(_value):
     raise ValueError("Non-finite JSON number")
 
 
+def _finite_json_float(value):
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("Non-finite JSON number")
+    return number
+
+
 def _strict_json_decoder():
     return json.JSONDecoder(object_pairs_hook=_unique_json_object,
-                            parse_constant=_reject_json_constant)
+                            parse_constant=_reject_json_constant,
+                            parse_float=_finite_json_float)
 
 
 def _strict_json(raw):
