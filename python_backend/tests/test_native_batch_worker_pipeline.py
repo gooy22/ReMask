@@ -37,7 +37,8 @@ class AccountPeer:
             index=len(self.fragments);fragment=str(600000+self.index*10+index);entity=str(700000+self.index*10+index)
             row={'id':fragment,'account_id':self.account,'ad_draft_id':self.draft,'ad_object_id':entity,
                  'ad_object_type':params['ad_object_type'],'values':copy.deepcopy(params['values']),
-                 'parent_ad_object_id':params.get('parent_ad_object_id'),'validation_status':'VALIDATED'}
+                 'parent_ad_object_id':params.get('parent_ad_object_id'),
+                 'validation_status':'VALIDATED','active_errors':[]}
             self.fragments[fragment]=row;self.objects[entity]=row
             return {'id':fragment}
         assert path=='/'+self.draft+'/publish'
