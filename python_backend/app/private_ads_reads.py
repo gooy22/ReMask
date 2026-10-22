@@ -169,7 +169,7 @@ class AdsManagerReadCatalog:
                 if name in TARGETING_TYPES else self.catalog.data.get("resource_fields", {}).get(name))
             if not isinstance(fields, list) or not fields:
                 raise fail("RESOURCE_CONTRACT_REQUIRED", "Source field projection is missing for " + name)
-            records, seen, cursors = [], set(), set()
+            records, seen, cursors = [], {}, set()
             fields = list(fields)
             if name == "instagram_accounts":
                 fields.append("is_connected_to_ad_account.ad_account_id("+client.account+")")
@@ -216,9 +216,6 @@ class AdsManagerReadCatalog:
                         raise fail("RESOURCE_READ_INCOMPLETE", "Account resource has no exact identity")
                     if "account_id" in row and row["account_id"] != client.account:
                         raise fail("RESOURCE_SCOPE_MISMATCH", "Account edge returned a foreign resource")
-                    if key in seen:
-                        continue
-                    seen.add(key)
                     clean = {k:v for k,v in row.items() if k in RESOURCE_FIELDS[name]}
                     if name in TARGETING_TYPES: clean["id"]=key
                     if name in {"locations","locales"}: clean.update(id=key,key=key)
@@ -226,6 +223,11 @@ class AdsManagerReadCatalog:
                         clean["pixel_id"] = identity(row["pixel"].get("id"),"pixel")
                     if name == "ads" and isinstance(row.get("creative"),dict):
                         clean["creative_id"] = identity(row["creative"].get("id"), "creative")
+                    if key in seen:
+                        if seen[key] != clean:
+                            raise fail("RESOURCE_READ_INCOMPLETE", "Account resource identity has conflicting values")
+                        continue
+                    seen[key] = clean
                     records.append(clean)
                     if len(records) > 500:
                         raise fail("RESOURCE_READ_INCOMPLETE", "Account resource list exceeded its row budget")
