@@ -43,7 +43,11 @@ def _strict_json_decoder():
 
 
 def _strict_json(raw):
-    return _strict_json_decoder().decode(raw)
+    # json.loads accepts both HTTP response bytes and document strings;
+    # JSONDecoder.decode only accepts str. Keep identical strict hooks.
+    return json.loads(raw, object_pairs_hook=_unique_json_object,
+                      parse_constant=_reject_json_constant,
+                      parse_float=_finite_json_float)
 
 
 def _response_only(value: Any, depth: int = 0, decode_string: bool = False) -> Any:
