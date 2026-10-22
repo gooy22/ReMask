@@ -812,7 +812,9 @@ class PrivateLaunchStateStore:
                         private_launch_steps.status != 'SUCCESS'
                         OR (excluded.status = 'SUCCESS'
                             AND private_launch_steps.entity_id IS excluded.entity_id
-                            AND private_launch_steps.result_json = excluded.result_json)
+                            AND private_launch_steps.result_json = excluded.result_json
+                            AND private_launch_steps.error_code IS excluded.error_code
+                            AND private_launch_steps.submitted IS excluded.submitted)
                     )"""
             cursor = con.execute(
                 """
