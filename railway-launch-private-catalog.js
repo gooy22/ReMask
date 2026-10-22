@@ -42,7 +42,9 @@ let remaskPrivateLaunchBusy=false;
 const remaskPrivateLaunchPendingKey='remask_private_launch_pending_v1';
 // Saving an actual Meta draft is an explicit operation, separate from publishing.
 function remaskPrivateExecutionMode(config) {
-    const mode=$('remaskPrivateExecutionMode')?.value||config?.payload?.execution_mode||'PUBLISH';
+    // Missing controls or a stale stored bundle never imply publish intent.
+    // Publication must be chosen in the visible execution-mode selector.
+    const mode=$('remaskPrivateExecutionMode')?.value||'DRAFT';
     if(!['DRAFT','PUBLISH'].includes(mode))throw new Error('Выберите режим создания рекламы.');
     return mode;
 }
@@ -227,7 +229,7 @@ function remaskPrivateTargetRows(config) {
         // Operation mode is a form-level choice, never a stale per-RK override.
         delete override.execution_mode;
         const base={...(config.payload||{})};delete base.execution_mode;
-        if(executionMode==='DRAFT')base.execution_mode='DRAFT';
+        base.execution_mode=executionMode;
         if(config.payload?.creative?.page_id||override.creative?.page_id)
             override.creative={...(override.creative||{}),page_id:pageId};
         if(config.payload?.adset?.promoted_object?.page_id||override.adset?.promoted_object?.page_id)
@@ -401,7 +403,7 @@ async function remaskPrivatePrepareConfig() {
     const {config,format,preset,selected,files,cards,delivery}=snapshot;
     const executionMode=remaskPrivateExecutionMode(config);
     delete config.payload.execution_mode;
-    if(executionMode==='DRAFT')config.payload.execution_mode='DRAFT';
+    config.payload.execution_mode=executionMode;
     const creative=config.payload.creative||(config.payload.creative={});
     // PHP's associative JSON decode/encode turns an empty {} into []. These
     // optional maps contain no settings; omit them before the worker bridge
