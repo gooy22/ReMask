@@ -756,7 +756,7 @@ class PrivateLaunchStateStore:
         return await asyncio.to_thread(self._finish_read_sync, prior, result.as_dict())
 
     def _finish_read_sync(self, prior: dict[str, Any], result: dict[str, Any]) -> bool:
-        encode = lambda value: json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        encode = lambda value: json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
         with self._connect() as con:
             cursor = con.execute("""UPDATE private_launch_steps
                 SET status=?,entity_id=?,result_json=?,error_code=?,submitted=1,updated_at=?
@@ -782,7 +782,7 @@ class PrivateLaunchStateStore:
     ) -> None:
         now = int(time.time())
         submitted_db = None if submitted is None else (1 if submitted else 0)
-        encoded = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+        encoded = json.dumps(result, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
         with self._connect() as con:
             # INSERT is the durable ownership claim. Two worker processes can
             # both pass the earlier read/preflight; only one may cross CREATE.
