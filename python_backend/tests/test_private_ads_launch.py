@@ -109,6 +109,20 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ProvisioningError):
             self.owner.ads_manager.plan(profile_id='19', payload=self.payload)
 
+    async def test_account_override_cannot_change_draft_intent_to_publish(self):
+        self.payload['launch']['execution_mode'] = 'DRAFT'
+        self.payload['launch'] = {
+            'base': copy.deepcopy(self.payload['launch']),
+            'override': {'execution_mode': 'PUBLISH'}
+        }
+        self.client.get = AsyncMock(side_effect=AssertionError('No Meta reads allowed'))
+        with self.assertRaises(ProvisioningError) as error:
+            await self.launch()
+        self.assertEqual(error.exception.code, 'PRIVATE_ADS_DRAFT_INVALID_INPUT')
+        self.client.get.assert_not_awaited()
+        self.assertEqual(self.client.uploads, 0)
+        self.assertEqual(self.client.posts, [])
+
     async def test_existing_launch_entrypoint_uploads_image_publishes_and_verifies(self):
         result = await self.launch()
         self.assertEqual(result['status'],'SUCCESS')
