@@ -26,8 +26,9 @@ class AdsManagerDraftPublisher:
         if not prior:
             raise fail("RECONCILE_REQUIRED", "Draft verification has no saved submission")
         evidence = copy.deepcopy(prior.get("result", {}).get("evidence", {}))
-        if not isinstance(proof, dict) or set(proof) & {"verified", "source"}:
-            raise fail("READ_PENDING", "Independent verification metadata cannot override its proof source")
+        if (not isinstance(proof, dict) or ("verified" in proof and proof["verified"] is not True)
+                or ("source" in proof and proof["source"] != "independent_private_ads_http")):
+            raise fail("READ_PENDING", "Independent verification metadata contradicts its proof source")
         evidence["verification"] = {**proof, "verified": True, "source": "independent_private_ads_http"}
         result = ActionResult.success(prior["step"], entity_id=prior.get("entity_id") or "",
             code="PRIVATE_ADS_DRAFT_READ_CONFIRMED", evidence=evidence)
