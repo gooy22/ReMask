@@ -43,6 +43,24 @@ class PixelReads(unittest.IsolatedAsyncioTestCase):
             with self.subTest(response=response), self.assertRaises(ProvisioningError):
                 await read_pixels(self.client(response))
 
+    async def test_pixel_inputs_are_validated_before_any_http_request(self):
+        for limit in (0, -3, False, True, 1.5, [], None, 'bogus', '0'):
+            with self.subTest(limit=limit):
+                client = self.client()
+                with self.assertRaises(ProvisioningError) as caught:
+                    await read_pixels(client, limit=limit)
+                self.assertIn('INVALID_RESOURCE_LIMIT', caught.exception.code)
+                client.get.assert_not_awaited()
+        for query in (None, 42, 'x' * 257):
+            with self.subTest(query=query):
+                client = self.client()
+                with self.assertRaises(ProvisioningError):
+                    await read_pixels(client, query=query)
+                client.get.assert_not_awaited()
+        client = self.client({'data': []})
+        self.assertEqual((await read_pixels(client, limit='10'))['data'], [])
+        self.assertEqual(client.get.await_args.args[1]['limit'], 300)
+
     async def test_empty_error_envelopes_cannot_become_empty_confirmed_pixel_inventory(self):
         for envelope in ({'error': {}}, {'errors': []}, {'error': None}):
             with self.subTest(envelope=envelope):
