@@ -214,6 +214,38 @@ class JournalTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows[0]["status"], "RECONCILE_REQUIRED")
         self.assertFalse(rows[0]["result"]["verified"])
 
+    async def test_corrupt_journal_never_restores_a_saved_receipt_or_replays(self):
+        class Client:
+            count = 0
+            async def post(inner, path, params, *, before_submit, files):
+                inner.count += 1
+                await before_submit()
+                return {"id": "333333"}
+
+        client = Client()
+        kwargs = {"operation": "DRAFT", "path": "/act_111111/addrafts",
+                  "params": {"name": "test"},
+                  "receipt": lambda row: {"draft_id": row["id"]}}
+        self.assertEqual((await self.sender.submit(client, **kwargs))["draft_id"], "333333")
+        with self.state._connect() as con:
+            original = con.execute(
+                "SELECT result_json FROM private_launch_steps WHERE launch_key=? AND step=?",
+                ("launch", "ADS_MANAGER:DRAFT")).fetchone()[0]
+        self.assertIn('"status":', original)
+        for malformed in ('{"status":"SUCCESS",' + original[1:],
+                          '{"untrusted_float":1e999,' + original[1:],
+                          '{"untrusted_number":NaN,' + original[1:]):
+            with self.subTest(malformed=malformed[:35]):
+                with self.state._connect() as con:
+                    con.execute("UPDATE private_launch_steps SET result_json=? WHERE launch_key=? AND step=?",
+                                (malformed, "launch", "ADS_MANAGER:DRAFT"))
+                self.sender.state = PrivateLaunchStateStore(Path(self.tmp.name) / "state.sqlite")
+                saved = await self.sender.state.step("launch", OperationKey("ADS_MANAGER:DRAFT"))
+                self.assertEqual(saved["result"], {})
+                with self.assertRaises(ProvisioningError):
+                    await self.sender.submit(client, **kwargs)
+                self.assertEqual(client.count, 1, "A corrupt journal cannot cause another submission")
+
     async def test_explicit_rejection_survives_restart_without_post_replay(self):
         class Client:
             count = 0
