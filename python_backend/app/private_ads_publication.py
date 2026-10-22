@@ -26,7 +26,9 @@ class AdsManagerDraftPublisher:
         if not prior:
             raise fail("RECONCILE_REQUIRED", "Draft verification has no saved submission")
         evidence = copy.deepcopy(prior.get("result", {}).get("evidence", {}))
-        evidence["verification"] = {"verified": True, "source": "independent_private_ads_http", **proof}
+        if not isinstance(proof, dict) or set(proof) & {"verified", "source"}:
+            raise fail("READ_PENDING", "Independent verification metadata cannot override its proof source")
+        evidence["verification"] = {**proof, "verified": True, "source": "independent_private_ads_http"}
         result = ActionResult.success(prior["step"], entity_id=prior.get("entity_id") or "",
             code="PRIVATE_ADS_DRAFT_READ_CONFIRMED", evidence=evidence)
         if not await state.finish_read(prior, result):
@@ -34,7 +36,7 @@ class AdsManagerDraftPublisher:
 
     @staticmethod
     def _account(row, account_id):
-        if (not isinstance(row, dict) or row.get("error") or row.get("errors")
+        if (not isinstance(row, dict) or "error" in row or "errors" in row
                 or not isinstance(row.get("account_id"), str)
                 or row["account_id"].removeprefix("act_") != account_id):
             raise fail("READ_SCOPE_MISMATCH", "Draft response belongs to another advertising account")
