@@ -296,6 +296,15 @@ async function remaskPrivateWorker(payload) {
     }
     return data;
 }
+function remaskPrivateHasManagedMedia(value) {
+    if(!value||typeof value!=='object')return false;
+    if(!Array.isArray(value)){
+        if(typeof value.media_library_id==='string'&&value.media_library_id.trim())return true;
+        if(Array.isArray(value.carousel_media_library_ids)&&value.carousel_media_library_ids.some(id=>typeof id==='string'&&id.trim()))return true;
+        if(Array.isArray(value.staged_media)&&value.staged_media.length)return true;
+    }
+    return Object.values(value).some(remaskPrivateHasManagedMedia);
+}
 async function remaskPrivateContractStatus({render=true,config=null}={}) {
     const response=await remaskPrivateWorker({action:'private_launch_contracts'});
     const contracts=response?.contracts||{};
@@ -480,6 +489,66 @@ function remaskPrivatePendingWrite(fingerprint,request) {
 function remaskPrivatePendingClear() {
     try{localStorage.removeItem(remaskPrivateLaunchPendingKey);}catch(_){}
 }
+function remaskPrivateRenderMediaPreflight(results,render=true) {
+    const entries=results.flatMap(entry=>(Array.isArray(entry.media_checks)?entry.media_checks:[])
+        .map(media=>({entry,media})));
+    if(!render||typeof document==='undefined'||!document.createElement)return;
+    const anchor=$('remaskPrivateAccountReviews')||$('launchResult')||$('reviewStatus');
+    if(!anchor?.parentNode)return;
+    let box=$('remaskPrivateMediaPreflight');
+    if(!entries.length){
+        if(box){box.replaceChildren();box.hidden=true;}
+        return;
+    }
+    if(!box){
+        box=document.createElement('div');box.id='remaskPrivateMediaPreflight';
+        box.className='mt-2';box.setAttribute('aria-label','Результаты локальной проверки медиа');
+        anchor.parentNode.insertBefore(box,anchor.nextSibling);
+    }
+    box.hidden=false;box.replaceChildren();
+    const heading=document.createElement('p');
+    heading.textContent='Проверка медиа перед запуском';
+    box.appendChild(heading);
+    const note=document.createElement('p');
+    note.textContent='Проверены реальные байты и локальная совместимость. Это не подтверждает принятие файла Meta.';
+    box.appendChild(note);
+    const list=document.createElement('ul');
+    for(const {entry,media} of entries){
+        const facts=media?.inspection||media?.facts||media?.compatibility?.facts||{};
+        const compatibility=media?.compatibility||media||{};
+        const warnings=Array.isArray(compatibility.warnings)?compatibility.warnings:[];
+        const valid=compatibility.locally_valid===true;
+        const dimensions=Number.isFinite(Number(facts.width))&&Number.isFinite(Number(facts.height))
+            ?Number(facts.width)+'×'+Number(facts.height):'размер неизвестен';
+        const ratio=Number.isFinite(Number(facts.aspect_ratio))
+            ?' · ratio '+Number(facts.aspect_ratio).toFixed(2):'';
+        const size=Number.isFinite(Number(facts.size_bytes))
+            ?' · '+(Number(facts.size_bytes)/1048576).toFixed(2)+' MiB':'';
+        const encoding=String(facts.encoding||facts.mime_type||media?.mime_type||'медиа');
+        const stateLabel=valid?(warnings.length?'ТРЕБУЕТСЯ ПРОВЕРКА РАЗМЕЩЕНИЯ':'ЛОКАЛЬНО ПРОВЕРЕНО'):'БЛОКИРУЕТ ЗАПУСК';
+        const item=document.createElement('li');
+        item.textContent='РК '+entry.row.ad_account_id+' · '+String(media?.id||'медиа')+' · '+encoding+
+            ' · '+dimensions+ratio+size+' · '+stateLabel;
+        list.appendChild(item);
+        if(!valid){
+            const detail=document.createElement('li');
+            const code=String(compatibility.code||entry.error_code||'MEDIA_PREFLIGHT_FAILED');
+            const message=String(compatibility.message||(code==='MEDIA_PREPARATION_REQUIRED'
+                ?'Подготовьте копию в PNG/JPEG или MP4 H.264/AAC, затем повторите проверку.'
+                :'Локальная проверка медиа не пройдена.'));
+            detail.textContent='РК '+entry.row.ad_account_id+' · '+code+': '+message;
+            list.appendChild(detail);
+        }
+        for(const warning of warnings){
+            const detail=document.createElement('li');
+            detail.textContent='РК '+entry.row.ad_account_id+' · '+String(warning.placement||'размещение')+
+                ' · рекомендация: '+String(warning.message||'проверьте кадрирование или поля')+
+                ' (это не установленный отказ Meta).';
+            list.appendChild(detail);
+        }
+    }
+    box.appendChild(list);
+}
 function remaskPrivateRenderReviewResults(results,render=true) {
     const targets=results.map(entry=>({profile_id:entry.row.profile,
         business_id:entry.row.business_id,ad_account_id:entry.row.ad_account_id,
@@ -507,6 +576,7 @@ function remaskPrivateRenderReviewResults(results,render=true) {
         list.appendChild(item);
     }
     box.appendChild(list);
+    remaskPrivateRenderMediaPreflight(results,render);
 }
 async function remaskPrivateReviewConfig(config,{render=true,assertCurrent=null}={}) {
     remaskPrivateRenderReviewResults([],render);
@@ -530,7 +600,32 @@ async function remaskPrivateReviewConfig(config,{render=true,assertCurrent=null}
             continue;
         }
         if(render)remaskPrivateShow('Проверка рекламы '+(index+1)+'/'+rows.length+' · РК '+row.ad_account_id+'…');
+        let mediaChecks=[];
+        let mediaInspectionPending=false;
         try{
+            if(remaskPrivateHasManagedMedia(row.launch)){
+                mediaInspectionPending=true;
+                const inspected=await remaskPrivateWorker({
+                    action:'private_launch_media_inspect',
+                    launch:row.launch
+                });
+                if(assertCurrent)assertCurrent();
+                mediaChecks=Array.isArray(inspected?.media)?inspected.media:[];
+                if(!mediaChecks.length)throw Object.assign(new Error('Сервер не подтвердил выбранные Media Library файлы.'),{code:'MEDIA_PREFLIGHT_EMPTY'});
+                mediaInspectionPending=false;
+                const incompatible=mediaChecks.filter(item=>item?.compatibility?.locally_valid!==true);
+                if(incompatible.length){
+                    const first=incompatible[0];
+                    const code=String(first?.compatibility?.code||'MEDIA_PREFLIGHT_FAILED');
+                    const message=String(first?.compatibility?.message||(code==='MEDIA_PREPARATION_REQUIRED'
+                        ?'Подготовьте копию в PNG/JPEG или MP4 H.264/AAC, затем повторите проверку.'
+                        :'Локальная проверка медиа не пройдена.'));
+                    results.push({row,review:{ready:false,preflight:{local_media:mediaChecks}},
+                        status:'MEDIA_BLOCKED',error_code:code,error:message,
+                        media_checks:mediaChecks,review_attempted:false});
+                    continue;
+                }
+            }
             const response=await remaskPrivateWorker({
                 action:'private_launch_review',
                 profile_id:row.profile,
@@ -555,12 +650,14 @@ async function remaskPrivateReviewConfig(config,{render=true,assertCurrent=null}
                 );
                 results.push({row,review,status:'WAITING_FOR_SELECTION',
                     error_code:'PAYMENT_SELECTION_REQUIRED',
-                    error:'Выберите карту для РК '+row.ad_account_id+' и повторите проверку.'});
+                    error:'Выберите карту для РК '+row.ad_account_id+' и повторите проверку.',
+                    media_checks:mediaChecks});
                 continue;
             }
             if(review.ready!==true){
                 results.push({row,review,status:'BLOCKED',error_code:'ACCOUNT_NOT_READY',
-                    error:'Проверка не подтвердила готовность РК '+row.ad_account_id+'.'});
+                    error:'Проверка не подтвердила готовность РК '+row.ad_account_id+'.',
+                    media_checks:mediaChecks});
                 continue;
             }
             const selected=preflight.selected_payment_method;
@@ -576,12 +673,12 @@ async function remaskPrivateReviewConfig(config,{render=true,assertCurrent=null}
                     last4:String(selected.last4)
                 };
             }
-            results.push({row,review,status:'READY'});
+            results.push({row,review,status:'READY',media_checks:mediaChecks});
         }catch(error){
             if(assertCurrent)assertCurrent();
             const message=String(error?.message||error);
             const gate=(String(error?.code||'')+' '+message).match(/(?:\b|_)(CHECKPOINT_REQUIRED|TWO_FACTOR_REQUIRED|SESSION_EXPIRED|BUSINESS_LOGIN_GATE)\b/)?.[1];
-            const code=error?.code||gate||'REVIEW_FAILED';
+            const code=error?.code||gate||(mediaInspectionPending?'MEDIA_PREFLIGHT_FAILED':'REVIEW_FAILED');
             if(gate)authBlockedProfiles.set(row.profile,{code:gate,message});
             if(error?.httpStatus===401||error?.httpStatus===403)
                 batchStop={code:'REMASK_AUTH_REQUIRED',message,status:'AUTH_REQUIRED'};
@@ -590,8 +687,9 @@ async function remaskPrivateReviewConfig(config,{render=true,assertCurrent=null}
             if(error?.httpStatus===429||/(?:^|_)(?:RATE_LIMIT(?:ED)?|THROTTLED)(?:_|$)/.test(code)||
                 (/Meta rejected the advertising request/.test(message)&&/\bcode=(?:4|17|32|613)\b/.test(message)))
                 batchStop={code:'META_RATE_LIMITED',message,status:'RATE_LIMITED'};
-            results.push({row,review:{ready:false},status:batchStop?.status||(gate?'AUTH_REQUIRED':'BLOCKED'),
-                error_code:batchStop?.code||code,error:message});
+            results.push({row,review:{ready:false},status:batchStop?.status||(gate?'AUTH_REQUIRED':(mediaInspectionPending?'MEDIA_BLOCKED':'BLOCKED')),
+                error_code:batchStop?.code||code,error:message,media_checks:mediaChecks,
+                review_attempted:mediaInspectionPending?false:true});
         }
     }
     const ready=results.filter(entry=>entry.review?.ready===true).length;

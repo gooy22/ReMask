@@ -359,7 +359,9 @@ try {
         if ($_SERVER['REQUEST_METHOD'] !== 'POST') rmx_pwj_out(['ok'=>false,'error'=>'POST_REQUIRED'], 405);
         $path = $action === 'private_launch_media_inspect' ? 'media-inspect' : 'media-prepare';
         $request = $path === 'media-inspect'
-            ? ['creative'=>$input['creative'] ?? null,'targeting'=>$input['targeting'] ?? []]
+            ? (is_array($input['launch'] ?? null)
+                ? ['launch'=>$input['launch']]
+                : ['creative'=>$input['creative'] ?? null,'targeting'=>$input['targeting'] ?? []])
             : ['reference'=>$input['reference'] ?? null,'options'=>$input['options'] ?? null];
         rmx_pwj_out(rmx_pwj_worker_request('POST', '/api/v1/private-launch/'.$path, $request, 180));
     }

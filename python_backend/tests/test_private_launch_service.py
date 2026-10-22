@@ -665,13 +665,13 @@ class PrivateLaunchTests(unittest.IsolatedAsyncioTestCase):
                 payload=payload,
             )
         self.assertEqual(result["status"], "SUCCESS")
-        # Contract placeholders see one effective per-RK payload; nested base
-        # values survive while the selected RK override replaces only its leaf.
+        # Contract placeholders see the exact per-RK targeting object. Replacing
+        # targeting must not silently inherit fields from the base account.
         effective = __import__("app.private_launch", fromlist=["_effective_launch_payload"])._effective_launch_payload(payload["launch"])
-        self.assertEqual(effective["adset"]["targeting"], {"age_min": 18, "age_max": 35})
+        self.assertEqual(effective["adset"]["targeting"], {"age_max": 35})
         self.assertEqual(effective["creative"]["message"], "RK override")
         self.assertEqual(effective["creative"]["name"], "Base creative")
-        self.assertEqual(self.web.graphql.await_args_list[1].args[1]["input"]["targeting"], {"age_min": 18, "age_max": 35})
+        self.assertEqual(self.web.graphql.await_args_list[1].args[1]["input"]["targeting"], {"age_max": 35})
         self.assertEqual(self.web.graphql.await_args_list[2].args[1]["input"]["message"], "RK override")
 
     async def test_unsupported_budget_blocks_before_preflight_and_create(self):

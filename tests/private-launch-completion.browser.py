@@ -212,9 +212,18 @@ class InstalledLaunchTests(unittest.TestCase):
             fields=json.loads(request.post_data or '{}');self.worker_requests.append(fields)
             action=fields.get('action')
             if action=='private_launch_media_inspect':
-                self.assertEqual(fields['creative']['media_library_id'], MEDIA_ID)
-                data={'media':[{**MEDIA,'inspection':{'encoding':'PNG','width':64,'height':48,
-                    'size_bytes':120,'requires_conversion':False},'compatibility':{'warnings':[]}}]}
+                from app.private_launch import _effective_launch_payload
+                from app.private_launch_media import local_references
+                launch_payload=fields.get('launch')
+                creative=(_effective_launch_payload(launch_payload).get('creative',{})
+                          if isinstance(launch_payload,dict) else fields.get('creative',{}))
+                references=local_references(creative)
+                self.assertTrue(references,'media preflight must receive the selected managed media')
+                data={'media':[{**MEDIA,'id':reference['id'],
+                    'inspection':{'encoding':'PNG','width':64,'height':48,
+                        'size_bytes':120,'requires_conversion':False},
+                    'compatibility':{'locally_valid':True,'meta_acceptance_verified':False,'warnings':[]}}
+                    for reference in references]}
             elif action=='private_launch_media_prepare':
                 self.assertEqual(fields['reference']['id'], MEDIA_ID)
                 self.assertEqual(fields['options']['mode'], 'pad')
@@ -893,7 +902,9 @@ class InstalledLaunchTests(unittest.TestCase):
                 review=next(row for row in self.worker_requests if row['action']=='private_launch_review')
                 self.assertEqual((review['profile_id'],review['ad_account_id'],review['page_id']),('20','123456','345678'))
                 self.assertEqual(review['launch']['base'].get('execution_mode'),'DRAFT' if mode=='DRAFT' else None)
-                self.assertTrue(all(row['action'] in ('private_launch_contracts','private_launch_review') for row in self.worker_requests))
+                self.assertTrue(all(row['action'] in ('private_launch_contracts','private_launch_media_inspect','private_launch_review') for row in self.worker_requests))
+                self.assertTrue(any(row['action']=='private_launch_media_inspect' for row in self.worker_requests))
+                self.assertFalse(any(row['action']=='create' for row in self.worker_requests))
                 self.assertEqual(self.page.evaluate('localStorage.getItem("remask_private_launch_pending_v1")'),None)
                 self.assertEqual(self.page.evaluate('fixtureLaunch.capture()'),before)
                 self.assertIn('публикация и редактор Meta не подтверждены',self.page.locator('#launchResult').inner_text())

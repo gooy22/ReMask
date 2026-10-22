@@ -988,7 +988,10 @@ def _deep_merge(base: Any, override: Any, path: tuple[str, ...] = ()) -> Any:
         return dict(base)
     out = dict(base)
     for key, value in override.items():
-        if (path == ("adset", "targeting")
+        # Replace the targeting object as a unit when a per-RK override
+        # explicitly supplies it. Merging nested groups can resurrect stale
+        # placements, GEO, audience conditions or exclusions from the base.
+        if ((*path, key) == ("adset", "targeting")
                 or not isinstance(out.get(key), dict)
                 or not isinstance(value, dict)):
             out[key] = value
