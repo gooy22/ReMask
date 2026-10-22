@@ -109,6 +109,8 @@ class AdsManagerReadCatalog:
                     if requests > 25:
                         raise fail("RESOURCE_READ_INCOMPLETE", "Instagram media exceeded its total request budget", True)
                     response = await client.request("INSTAGRAM_MEDIA_READ",values={"instagram_id":actor_id},params=params)
+                    if not isinstance(response, dict) or "error" in response or "errors" in response:
+                        raise fail("RESOURCE_READ_INCOMPLETE", "Instagram media response is not a complete resource object")
                     items = response.get("data")
                     if not isinstance(items,list) or any(not isinstance(r,dict) for r in items):
                         raise fail("RESOURCE_READ_INCOMPLETE", "Advertisable Instagram media read is incomplete")
@@ -175,6 +177,8 @@ class AdsManagerReadCatalog:
             if name == "insights": params.update(level="ad",date_preset="last_30d")
             for _ in range(5):
                 response = await client.request(route, params=params)
+                if not isinstance(response, dict) or "error" in response or "errors" in response:
+                    raise fail("RESOURCE_READ_INCOMPLETE", "Account resource response is not a complete object")
                 items = response.get("data")
                 if not isinstance(items, list) or len(items) > 500:
                     raise fail("RESOURCE_READ_INCOMPLETE", "Account edge returned an incomplete resource list")
@@ -238,6 +242,8 @@ class AdsManagerReadCatalog:
                       "audience_size_lower_bound","audience_size_upper_bound"],
             "include_nodes":True, "whitelisted_types":[name], "is_exclusion":False,
             "is_reserved":False, "regulated_categories":[], "regulated_countries":[]})
+        if not isinstance(response, dict) or "error" in response or "errors" in response:
+            raise fail("RESOURCE_READ_INCOMPLETE", "Resource browse response is incomplete", True)
         rows = response.get("data")
         paging = response.get("paging", {})
         if (not isinstance(rows, list) or len(rows) > 20000
