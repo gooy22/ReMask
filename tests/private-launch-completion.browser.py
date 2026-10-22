@@ -212,9 +212,16 @@ class InstalledLaunchTests(unittest.TestCase):
             fields=json.loads(request.post_data or '{}');self.worker_requests.append(fields)
             action=fields.get('action')
             if action=='private_launch_media_inspect':
-                self.assertEqual(fields['creative']['media_library_id'], MEDIA_ID)
-                data={'media':[{**MEDIA,'inspection':{'encoding':'PNG','width':64,'height':48,
-                    'size_bytes':120,'requires_conversion':False},'compatibility':{'warnings':[]}}]}
+                from app.private_launch import _effective_launch_payload
+                from app.private_launch_media import local_references
+                launch=_effective_launch_payload(fields['launch'])
+                references=local_references(launch['creative'])
+                self.assertTrue(references,'media preflight must receive the effective managed media')
+                data={'media':[{**MEDIA,'id':reference['id'],
+                    'inspection':{'encoding':'PNG','width':64,'height':48,
+                        'size_bytes':120,'requires_conversion':False},
+                    'compatibility':{'locally_valid':True,'meta_acceptance_verified':False,'warnings':[]}}
+                    for reference in references]}
             elif action=='private_launch_media_prepare':
                 self.assertEqual(fields['reference']['id'], MEDIA_ID)
                 self.assertEqual(fields['options']['mode'], 'pad')
