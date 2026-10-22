@@ -79,7 +79,12 @@ class AdsManagerResponseError(ProvisioningError):
         message = "Meta rejected the advertising request"
         if details:
             message += " (" + ", ".join(details) + ")"
-        super().__init__("PRIVATE_ADS_DRAFT_REQUEST_REJECTED", message, retryable=False)
+        # HTTP 429 is a rate limit, not a permanent field validation error.
+        # The durable submit journal still blocks replay of any claimed POST;
+        # only independent READ/reconciliation may be retried.
+        limited = safe.get("http_status") == 429
+        super().__init__("PRIVATE_ADS_DRAFT_RATE_LIMITED" if limited else
+            "PRIVATE_ADS_DRAFT_REQUEST_REJECTED", message, retryable=limited)
 
 
 def _walk(value, depth=0):
