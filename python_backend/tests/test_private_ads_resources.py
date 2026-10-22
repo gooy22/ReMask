@@ -19,6 +19,11 @@ class PixelReads(unittest.IsolatedAsyncioTestCase):
         image_name = 'synthetic.png'
         clean_receipt = {'images': {image_name: {'hash': 'aabbccdd11223344'}}}
         self.assertEqual(_image_receipt(clean_receipt, image_name)['image_hash'], 'aabbccdd11223344')
+        for nested in ({'error': {}}, {'errors': []}, {'error': None}):
+            with self.subTest(nested=nested):
+                with self.assertRaises(ProvisioningError):
+                    _image_receipt({'images': {image_name: {
+                        'hash': 'aabbccdd11223344', **nested}}}, image_name)
         for envelope in ({'error': {}}, {'errors': []}, {'error': None}):
             with self.subTest(envelope=envelope):
                 with self.assertRaises(ProvisioningError):
@@ -26,6 +31,11 @@ class PixelReads(unittest.IsolatedAsyncioTestCase):
         good = {'data': [{'hash': 'aabbccdd11223344', 'account_id': '111111'}]}
         client = self.client(good)
         self.assertTrue((await verify_image(client, 'aabbccdd11223344'))['verified'])
+        for page in ({'next': 'https://foreign.invalid/ignored'}, [], 'malformed'):
+            with self.subTest(page=page):
+                client = self.client({**good, 'paging': page})
+                with self.assertRaises(ProvisioningError):
+                    await verify_image(client, 'aabbccdd11223344')
         for envelope in ({'error': {}}, {'errors': []}, {'error': None}):
             with self.subTest(envelope=envelope):
                 client = self.client({**good, **envelope})
