@@ -289,6 +289,23 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.claims, 1)
         self.assertEqual([row[0] for row in self.web.session.calls], ["GET", "POST"])
 
+    async def test_empty_error_envelopes_and_unfinished_responses_fail_closed(self):
+        responses = [
+            ({"id":"act_111111", "error":{}}, "PRIVATE_ADS_DRAFT_REQUEST_REJECTED"),
+            ({"id":"act_111111", "errors":[]}, "PRIVATE_ADS_DRAFT_REQUEST_REJECTED"),
+            ({"id":"act_111111", "data":[], "hasNext":True}, "PRIVATE_ADS_DRAFT_RESPONSE_INCOMPLETE"),
+            ({"id":"act_111111", "extensions":{"is_final":False}},
+             "PRIVATE_ADS_DRAFT_RESPONSE_INCOMPLETE"),
+        ]
+        for value, code in responses:
+            with self.subTest(value=value):
+                self.web.session.response_body = json.dumps(value).encode()
+                with self.assertRaises(ProvisioningError) as caught:
+                    await self.client.get("/act_111111", {"fields":["id"]})
+                self.assertEqual(caught.exception.code, code)
+        self.assertEqual(self.claims, 0)
+        self.assertEqual(len(self.web.session.calls), len(responses))
+
     async def test_ambiguous_or_nonfinite_json_reply_is_never_accepted_as_account_proof(self):
         bodies = [
             b'{"id":"act_111111","account_id":"999999","account_id":"111111"}',
