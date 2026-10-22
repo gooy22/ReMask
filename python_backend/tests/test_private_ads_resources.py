@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from app.private_ads_resources import AdsManagerResourceCatalog, read_pixels
+from app.private_ads_media import _image_receipt, verify_image
 from app.private_advertising_reads import AdvertisingReadCatalog, AdvertisingResourceStore
 from app.provisioning.models import ProvisioningError
 
@@ -13,6 +14,24 @@ class PixelReads(unittest.IsolatedAsyncioTestCase):
     def client(self, *responses):
         return SimpleNamespace(context=SimpleNamespace(account_id='111111', business_id='222222'),
                                get=AsyncMock(side_effect=responses))
+
+    async def test_image_receipt_and_scoped_read_reject_error_envelopes(self):
+        image_name = 'synthetic.png'
+        clean_receipt = {'images': {image_name: {'hash': 'aabbccdd11223344'}}}
+        self.assertEqual(_image_receipt(clean_receipt, image_name)['image_hash'], 'aabbccdd11223344')
+        for envelope in ({'error': {}}, {'errors': []}, {'error': None}):
+            with self.subTest(envelope=envelope):
+                with self.assertRaises(ProvisioningError):
+                    _image_receipt({**clean_receipt, **envelope}, image_name)
+        good = {'data': [{'hash': 'aabbccdd11223344', 'account_id': '111111'}]}
+        client = self.client(good)
+        self.assertTrue((await verify_image(client, 'aabbccdd11223344'))['verified'])
+        for envelope in ({'error': {}}, {'errors': []}, {'error': None}):
+            with self.subTest(envelope=envelope):
+                client = self.client({**good, **envelope})
+                with self.assertRaises(ProvisioningError):
+                    await verify_image(client, 'aabbccdd11223344')
+                self.assertEqual(client.get.await_count, 1)
 
     async def test_paging_keeps_account_route_and_never_follows_next_url(self):
         client = self.client({'data':[], 'paging':{'next':'https://other.invalid/?access_token=secret',
