@@ -216,6 +216,29 @@ class JournalTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('synthetic-secret', json.dumps(rows))
         self.assertEqual(rows[0]['result']['evidence']['receipt'], {})
 
+    async def test_rate_limited_claim_survives_restart_without_post_replay(self):
+        class Client:
+            count = 0
+            async def post(inner, path, params, *, before_submit, files):
+                await before_submit()
+                inner.count += 1
+                raise AdsManagerResponseError({"http_status": 429, "code": 4,
+                    "message": "synthetic-rate-limit-private-response"})
+        client = Client()
+        for _ in range(2):
+            self.sender.state = PrivateLaunchStateStore(Path(self.tmp.name)/"state.sqlite")
+            with self.assertRaises(ProvisioningError) as caught:
+                await self.sender.submit(client, operation="DRAFT", path="/act_111111/addrafts",
+                    params={"name": "rate-limit-test"},
+                    receipt=lambda row: {"draft_id": row["id"]})
+            self.assertEqual(caught.exception.code, "PRIVATE_ADS_DRAFT_RATE_LIMITED")
+            self.assertTrue(caught.exception.retryable)
+        self.assertEqual(client.count, 1, "A retryable rate-limit must not replay a claimed CREATE")
+        rows = await self.state.all_steps("launch")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["result"]["evidence"]["receipt"], {})
+        self.assertNotIn("synthetic-rate-limit", json.dumps(rows))
+
     async def test_changed_inputs_cannot_reuse_receipt(self):
         class Client:
             async def post(inner, path, params, *, before_submit, files):
