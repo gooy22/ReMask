@@ -331,6 +331,71 @@ class PublisherTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_READ_RELATION_MISMATCH')
         self.assertEqual(len(self.client.posts), 2)
 
+    async def test_unknown_post_reply_at_every_draft_stage_never_replays_creation(self):
+        stages = ("draft", "campaign", "ad_set", "ad")
+        for stage in stages:
+            with self.subTest(stage=stage):
+                state = PrivateLaunchStateStore(Path(self.tmp.name) / ("lost-" + stage + ".sqlite"))
+                await state.init()
+                sender = AdsManagerSubmitter(state, launch_key="lost-" + stage,
+                    profile_id="19", business_id="222222", account_id="111111",
+                    actor_id="123456", launch_fingerprint="fixed-inputs", source_digest="source")
+                publisher = AdsManagerDraftPublisher(sender)
+                client = DraftClient()
+                original = client.post
+                lost = [False]
+                async def post(path, params, *, before_submit, files):
+                    result = await original(path, params, before_submit=before_submit, files=files)
+                    matches = ((stage == "draft" and path.endswith("/addrafts")) or
+                        (path.endswith("/addraft_fragments") and params.get("ad_object_type") == stage))
+                    if matches and not lost[0]:
+                        lost[0] = True
+                        raise TimeoutError("Synthetic response loss after server accepted the mutation")
+                    return result
+                client.post = post
+                for _ in range(2):
+                    with self.assertRaises(ProvisioningError) as caught:
+                        await publisher.run(client, name="source-flow", levels=self.levels,
+                                            verify_objects=self.verify, draft_only=True)
+                    self.assertEqual(caught.exception.code, "PRIVATE_ADS_DRAFT_RECONCILE_REQUIRED")
+                    self.assertTrue(lost[0])
+                expected_posts = stages.index(stage) + 1
+                self.assertEqual(len(client.posts), expected_posts)
+                self.assertFalse(any(path.endswith("/publish") for path, _ in client.posts))
+
+    async def test_interrupted_read_at_every_draft_stage_resumes_without_repeating_post(self):
+        stages = ("draft", "campaign", "ad_set", "ad")
+        for stage in stages:
+            with self.subTest(stage=stage):
+                state = PrivateLaunchStateStore(Path(self.tmp.name) / ("read-" + stage + ".sqlite"))
+                await state.init()
+                sender = AdsManagerSubmitter(state, launch_key="read-" + stage,
+                    profile_id="19", business_id="222222", account_id="111111",
+                    actor_id="123456", launch_fingerprint="fixed-inputs", source_digest="source")
+                publisher = AdsManagerDraftPublisher(sender)
+                client = DraftClient()
+                original = client.get
+                interrupted = [False]
+                async def get(path, params):
+                    is_target = ((stage == "draft" and path == "/addraft_555555") or
+                        (stage != "draft" and path.startswith("/addraftfragment_") and
+                         client.fragments.get(path.removeprefix("/addraftfragment_"), {}).get("ad_object_type") == stage))
+                    if is_target and not interrupted[0]:
+                        interrupted[0] = True
+                        raise ConnectionError("Synthetic independent read was interrupted")
+                    return await original(path, params)
+                client.get = get
+                with self.assertRaises(ConnectionError):
+                    await publisher.run(client, name="source-flow", levels=self.levels,
+                                        verify_objects=self.verify, draft_only=True)
+                self.assertTrue(interrupted[0])
+                result = await publisher.run(client, name="source-flow", levels=self.levels,
+                                             verify_objects=self.verify, draft_only=True)
+                self.assertTrue(result["draft_verified"])
+                self.assertEqual(len(client.posts), 4)
+                self.assertEqual(len(client.fragments), 3)
+                self.assertFalse(any(path.endswith("/publish") for path, _ in client.posts))
+
     async def test_duplicate_fragment_receipt_cannot_advance_to_ad(self):
         original_post = self.client.post
         async def post(path, params, **options):
