@@ -73,8 +73,21 @@ class AdsManagerLaunch:
             raise fail("INVALID_INPUT", "Choose DRAFT or PUBLISH execution")
         if set(launch) - {"execution_mode", "campaign", "adset", "ad", "creative", "delivery"}:
             raise fail("INVALID_INPUT", "Launch contains unsupported sections")
-        if mode == "DRAFT" and set(payload) - {"business_id", "ad_account_id", "page_id", "launch_key", "launch", "publish_saved_draft"}:
-            raise fail("INVALID_INPUT", "Draft input contains unsupported fields")
+        if mode == "DRAFT":
+            # The job store adds an empty task variables map; the plan endpoint
+            # carries profile_id. Neither is an advertising wire input.
+            # Saved-draft commands are explicit boolean control flags, not
+            # additional draft-create fields.
+            allowed_root = {"business_id", "ad_account_id", "page_id", "launch_key",
+                            "launch", "profile_id", "variables", "publish_saved_draft",
+                            "repair_objective", "reconcile_only"}
+            commands = ("publish_saved_draft", "repair_objective", "reconcile_only")
+            if (set(payload) - allowed_root
+                    or ("profile_id" in payload and str(payload["profile_id"]) != str(profile_id))
+                    or ("variables" in payload and payload["variables"] != {})
+                    or any(name in payload and payload[name] is not True for name in commands)
+                    or sum(name in payload for name in commands) > 1):
+                raise fail("INVALID_INPUT", "Draft input contains unsupported fields")
         if mode == "DRAFT" and any(value != "PAUSED" for value in launch.get("delivery", {}).values()):
             raise fail("INVALID_INPUT", "A Meta draft cannot request active delivery")
         for section in ("campaign", "adset"):
