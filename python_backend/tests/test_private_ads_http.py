@@ -269,6 +269,26 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn('code=100', str(error))
             self.assertNotIn('synthetic-', str(error))
 
+    async def test_http_429_is_classified_without_replaying_or_leaking_response(self):
+        self.web.session.response_status = 429
+        self.web.session.response_body = json.dumps({"error": {
+            "code": 4, "type": "OAuthException", "message": "synthetic-private-secret",
+            "fbtrace_id": "synthetic-private-trace"}}).encode()
+        for method in ("GET", "POST"):
+            with self.subTest(method=method), self.assertRaises(ProvisioningError) as caught:
+                if method == "GET":
+                    await self.client.get("/act_111111", {"fields": ["id"]})
+                else:
+                    await self.client.post("/act_111111/addrafts", {}, before_submit=self.claim)
+            error = caught.exception
+            self.assertEqual(error.code, "PRIVATE_ADS_DRAFT_RATE_LIMITED")
+            self.assertTrue(error.retryable)
+            self.assertEqual(error.diagnostic, {"http_status": 429,
+                "code": 4, "type": "OAuthException"})
+            self.assertNotIn("synthetic-private", str(error))
+        self.assertEqual(self.claims, 1)
+        self.assertEqual([row[0] for row in self.web.session.calls], ["GET", "POST"])
+
     async def test_http_rejection_without_json_still_preserves_received_status(self):
         self.web.session.response_status = 403
         self.web.session.response_body = b'<html>synthetic-private-content</html>'
