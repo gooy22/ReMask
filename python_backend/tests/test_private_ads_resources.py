@@ -207,6 +207,35 @@ class PixelReads(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await store.get(name='images', values=values,
                                               actor_id='123456'))['data'], complete['data'])
 
+    async def test_cache_disappearance_during_stat_is_a_safe_cache_miss(self):
+        from pathlib import Path
+        from time import time
+        values = {'profile_id': '19', 'ad_account_id': '111111',
+                  'business_id': '222222', 'actor_id': '123456', 'query': ''}
+        response = {'data': [{'hash': 'known-image'}], 'account_id': '111111',
+                    'checked_live': True, 'account_scope_verified': True,
+                    'checked_at': int(time())}
+        reader = SimpleNamespace(rows={'images': {'source': 'fixture'}},
+                                 read=AsyncMock(return_value=response))
+        with tempfile.TemporaryDirectory() as folder:
+            store = AdvertisingResourceStore(reader); store.root = Path(folder)
+            await store.get(name='images', values=values, actor_id='123456',
+                            force=True, web=object())
+            original_stat = Path.stat
+            calls = [0]
+            def disappearing(path, *args, **kwargs):
+                if path.suffix == '.json':
+                    calls[0] += 1
+                    if calls[0] == 2:
+                        raise FileNotFoundError('Synthetic rename between is_file and stat')
+                return original_stat(path, *args, **kwargs)
+            with patch.object(Path, 'stat', disappearing):
+                cached = await store.get(name='images', values=values,
+                                         actor_id='123456')
+            self.assertEqual(cached['availability'], 'NOT_LOADED')
+            self.assertFalse(cached['checked_live'])
+            self.assertGreaterEqual(calls[0], 2)
+
     async def test_duplicate_json_fields_in_disk_cache_are_not_loaded(self):
         from pathlib import Path
         from time import time
