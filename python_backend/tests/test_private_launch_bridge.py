@@ -50,7 +50,7 @@ class AdvertisingBridgeTests(unittest.TestCase):
                     handler.respond(422, getattr(handler.server, 'error_payload',
                                                   {'error':'FIXTURE_WORKER_REJECTED'}))
                     return
-                handler.respond(200, {'forwarded': body})
+                handler.respond(200, getattr(handler.server, 'success_payload', {'forwarded': body}))
         self.worker = ThreadingHTTPServer(('127.0.0.1', 0), WorkerHandler)
         self.worker.fail_posts = False
         self.worker_thread = Thread(target=self.worker.serve_forever, daemon=True)
@@ -158,6 +158,16 @@ class AdvertisingBridgeTests(unittest.TestCase):
         self.assertEqual(status, 502)
         self.assertEqual(result['error'], 'PYTHON_WORKER_FAILED')
         self.assertNotIn(secret, json.dumps(result))
+
+    def test_worker_bare_array_response_cannot_masquerade_as_success(self):
+        self.worker.success_payload = [{'forwarded': {'fake': 'response'}}]
+        status, result = self.request({'action': 'private_launch_review', 'profile_id': '7',
+            'business_id': '111111111', 'ad_account_id': '222222222', 'page_id': '333333333',
+            'launch': {'creative': {'message': 'fixture'}}})
+        self.assertEqual(status, 502)
+        self.assertEqual(result['error'], 'PYTHON_WORKER_FAILED')
+        self.assertEqual(result['message'], 'PYTHON_WORKER_INVALID_JSON')
+        self.assertNotIn('forwarded', result)
 
     def test_disabled_and_missing_read_contract_flags_survive_bridge(self):
         _, result = self.request({'action': 'private_launch_contracts'})
