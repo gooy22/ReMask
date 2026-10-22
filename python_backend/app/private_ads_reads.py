@@ -11,6 +11,19 @@ from .private_ads_http import AdsManagerPrivateHttp
 from .private_advertising_reads import RESOURCE_FIELDS, TARGETING_TYPES
 
 
+def _bounded_limit(value, *, maximum=100):
+    """Accept explicit positive integer page limits, never booleans or coercions."""
+    if type(value) is int:
+        requested = value
+    elif isinstance(value, str) and re.fullmatch(r"[0-9]{1,9}", value):
+        requested = int(value)
+    else:
+        raise fail("INVALID_RESOURCE_LIMIT", "Resource row limit must be a positive integer")
+    if requested < 1:
+        raise fail("INVALID_RESOURCE_LIMIT", "Resource row limit must be positive")
+    return min(maximum, requested)
+
+
 class _ReadClient:
     """Adapt catalog reads to the same fresh profile HTTP/2 sender as Launch."""
     def __init__(self, web, catalog, values):
@@ -84,6 +97,7 @@ class AdsManagerReadCatalog:
     async def read(self, web, name, values):
         if name not in self.rows:
             raise fail("RESOURCE_CONTRACT_REQUIRED", "Reviewed account query is unavailable for " + name)
+        _bounded_limit(values.get("limit", 100), maximum=20000)
         client = self.client(web, values)
         reference = name in TARGETING_TYPES | {"locations","locales"}
         draft_pages = name == "pages" and values.get("execution_mode") == "DRAFT"
@@ -159,7 +173,7 @@ class AdsManagerReadCatalog:
             fields = list(fields)
             if name == "instagram_accounts":
                 fields.append("is_connected_to_ad_account.ad_account_id("+client.account+")")
-            params = {"fields":fields, "limit":min(100, int(values.get("limit",100)))}
+            params = {"fields":fields, "limit":_bounded_limit(values.get("limit",100))}
             if name == "instagram_accounts": params["business_id"] = client.business
             if name in TARGETING_TYPES | {"locations"}:
                 query = str(values.get("query") or "").strip()
@@ -168,7 +182,7 @@ class AdsManagerReadCatalog:
                         "checked_live":False,"checked_at":int(time.time()),"query_required":True,
                         "source":"ads_manager_private_http"}
                 if name == "locations":
-                    params = {"type":"adgeolocation","qs":[query],"limit":min(100,int(values.get("limit",100))),
+                    params = {"type":"adgeolocation","qs":[query],"limit":_bounded_limit(values.get("limit",100)),
                         "ad_account_id":client.account,"place_fallback":True,"bulk_upload":False}
                 else:
                     params.update(accountId=client.account,q=query,
@@ -277,7 +291,7 @@ class AdsManagerReadCatalog:
             if key in seen:
                 continue
             seen.add(key); records.append(clean)
-        limit = max(1, min(20000, int(values.get("limit", 100))))
+        limit = _bounded_limit(values.get("limit", 100), maximum=20000)
         return {"data":records[:limit], "account_id":client.account, "account_scope_verified":True,
                 "checked_live":True, "checked_at":int(time.time()), "source":"private_meta_targetingbrowse",
                 "catalog_count":len(records), "truncated":len(records)>limit}
