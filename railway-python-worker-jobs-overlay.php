@@ -105,20 +105,24 @@ function rmx_pwj_worker_request(string $method, string $path, ?array $payload = 
     }
 
     if ($raw === false) {
-        $last = error_get_last();
-        $detail = is_array($last) ? trim((string)($last['message'] ?? '')) : '';
-        throw new RuntimeException('PYTHON_WORKER_TRANSPORT' . ($detail !== '' ? ': ' . $detail : ''));
+        // PHP transport diagnostics may contain private hostnames, headers,
+        // request URLs or other service credentials. Never expose them.
+        throw new RuntimeException('PYTHON_WORKER_TRANSPORT');
     }
 
     $decoded = json_decode($raw, true);
     if (!is_array($decoded)) throw new RuntimeException('PYTHON_WORKER_INVALID_JSON');
     if ($status < 200 || $status >= 300) {
-        $detailValue = $decoded['detail'] ?? $decoded['error'] ?? ('HTTP ' . $status);
-        $detail = is_scalar($detailValue)
-            ? trim((string)$detailValue)
-            : json_encode($detailValue, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-        throw new RmxPwjWorkerHttpError('PYTHON_WORKER_HTTP_' . $status . ': ' . ($detail ?: ('HTTP ' . $status)),
-            is_array($detailValue) ? $detailValue : []);
+        // Upstream message text is untrusted and may contain tokens, URLs
+        // or raw response fragments. Retain only safe, typed diagnostics.
+        $detailValue = $decoded['detail'] ?? $decoded['error'] ?? null;
+        $safe = [];
+        if (is_array($detailValue)) {
+            $code = $detailValue['code'] ?? null;
+            if (is_string($code) && preg_match('/^[A-Z0-9_]{1,100}$/D', $code)) $safe['code'] = $code;
+            if (($detailValue['retryable'] ?? false) === true) $safe['retryable'] = true;
+        }
+        throw new RmxPwjWorkerHttpError('PYTHON_WORKER_HTTP_' . $status, $safe);
     }
     return $decoded;
 }
@@ -544,20 +548,22 @@ try {
 
     rmx_pwj_out(['ok'=>false,'error'=>'UNSUPPORTED_ACTION'], 400);
 } catch (Throwable $e) {
-    error_log('[python-worker-jobs] ' . get_class($e) . ': ' . $e->getMessage());
     $message = $e->getMessage();
+    $safeMessage = preg_match('/^[A-Z][A-Z0-9_]{2,100}$/D', $message)
+        ? $message : 'PYTHON_WORKER_FAILED';
+    error_log('[python-worker-jobs] ' . get_class($e) . ': ' . $safeMessage);
     if (($action ?? '') === 'private_launch_review' && $e instanceof RmxPwjWorkerHttpError
         && preg_match('/^[A-Z0-9_]{1,100}$/D', (string)($e->detail['code'] ?? ''))) {
         // Preserve the typed readiness failure across PHP. Do not make the
         // browser recover control flow from JSON embedded in an error string.
         rmx_pwj_out(['ok'=>false, 'error'=>$e->detail['code'], 'code'=>$e->detail['code'],
-            'message'=>is_string($e->detail['message'] ?? null) ? $e->detail['message'] : $message,
+            'message'=>$e->detail['code'],
             'retryable'=>($e->detail['retryable'] ?? false) === true], 502);
     }
     if (str_starts_with($message, 'PYTHON_WORKER_NOT_CONFIGURED')) {
         rmx_pwj_out(['ok'=>false,'error'=>'PYTHON_WORKER_NOT_CONFIGURED'], 503);
     }
-    rmx_pwj_out(['ok'=>false,'error'=>'PYTHON_WORKER_FAILED','message'=>$message], 502);
+    rmx_pwj_out(['ok'=>false,'error'=>'PYTHON_WORKER_FAILED','message'=>$safeMessage], 502);
 }
 PHP_CODE;
 
