@@ -115,6 +115,11 @@ console.log('Private Launch catalog and funding truth checks passed');
   assert.equal(ctx.remaskPrivateExecutionMode(config),'DRAFT',
     'when the visible selector is absent, stored configuration cannot imply PUBLISH');
   assert.equal(ctx.remaskPrivateTargetRows(config)[0].launch.base.execution_mode,'DRAFT');
+  const precomputed={...config,_targets:[{launch:{base:{execution_mode:'PUBLISH'},override:{}}}]};
+  assert.throws(()=>ctx.remaskPrivateTargetRows(precomputed),/Режим создания изменился/,
+    'a saved precomputed PUBLISH target must never bypass a DRAFT UI choice');
+  precomputed._targets[0].launch.base.execution_mode='DRAFT';
+  assert.equal(ctx.remaskPrivateTargetRows(precomputed)[0].launch.base.execution_mode,'DRAFT');
   assert.equal(ctx.remaskPrivateTargetRows(config)[0].page_id,page.value,
     'single RK must submit the selected visible Page, not a stale/empty bulk binding');
   config.payload.creative.format='INSTAGRAM_POST';
