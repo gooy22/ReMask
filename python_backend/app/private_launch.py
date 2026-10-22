@@ -807,7 +807,13 @@ class PrivateLaunchStateStore:
                     updated_at=excluded.updated_at
                 WHERE private_launch_steps.profile_id=excluded.profile_id
                     AND private_launch_steps.business_id=excluded.business_id
-                    AND private_launch_steps.ad_account_id=excluded.ad_account_id"""
+                    AND private_launch_steps.ad_account_id=excluded.ad_account_id
+                    AND (
+                        private_launch_steps.status != 'SUCCESS'
+                        OR (excluded.status = 'SUCCESS'
+                            AND private_launch_steps.entity_id IS excluded.entity_id
+                            AND private_launch_steps.result_json = excluded.result_json)
+                    )"""
             cursor = con.execute(
                 """
                 INSERT INTO private_launch_steps(
@@ -835,7 +841,7 @@ class PrivateLaunchStateStore:
                     raise ProvisioningError("PRIVATE_LAUNCH_RECONCILE_REQUIRED",
                         f"{step} already has a durable submit claim; concurrent CREATE is blocked", retryable=False)
                 raise ProvisioningError("PRIVATE_LAUNCH_SAVED_OPERATION_MISMATCH",
-                    "A journal step is already owned by another profile, business or account", retryable=False)
+                    "A journal step belongs to another target or has an immutable verified result", retryable=False)
 
 
 def _lookup(value: Any, path: str) -> Any:
