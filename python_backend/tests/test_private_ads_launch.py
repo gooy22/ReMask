@@ -451,7 +451,8 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(checks['custom_audiences']['source'], 'ads_manager_private_http')
         self.assertEqual(checks['custom_audiences']['checked_at'], observed['checked_at'])
         for changed in ({'checked_live':False}, {'account_id':'999999'}, {'checked_at':0},
-                        {'data':[]}):
+                        {'data':[]}, {'query_required':True},
+                        {'truncated':True}, {'inventory_complete':False}):
             with self.subTest(changed=changed), patch.object(self.owner.reads, 'read',
                     new=AsyncMock(return_value={**observed, **changed})):
                 with self.assertRaises(ProvisioningError):
