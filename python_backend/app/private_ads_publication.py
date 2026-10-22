@@ -85,6 +85,8 @@ class AdsManagerDraftPublisher:
                     path="/" + draft_id + "/addraft_fragments", params=params,
                     receipt=lambda row: {"fragment_id": identity(row.get("id"))})
                 fragment_id = receipt["fragment_id"]
+                if fragment_id in fragments:
+                    raise fail("READ_RELATION_MISMATCH", "Draft hierarchy reused a fragment identity")
                 row = await client.get("/addraftfragment_" + fragment_id, {"fields": FRAGMENT_FIELDS})
                 self._account(row, scope["ad_account_id"])
                 if (row.get("id") != fragment_id or row.get("ad_draft_id") != draft_id
@@ -93,6 +95,8 @@ class AdsManagerDraftPublisher:
                     raise fail("READ_RELATION_MISMATCH", "Draft fragment identity or parent is unconfirmed")
                 if not fragment_values_match(row.get("values"), values, business_id=scope["business_id"]):
                     raise fail("READ_SPEC_MISMATCH", "Saved draft settings differ from this Launch")
+                if row.get("status") == "ACTIVE":
+                    raise fail("DRAFT_DELIVERY_UNSAFE", "Saved draft fragment reports active delivery")
                 # Meta can expose HAS_ERRORS before returning its error list.
                 # A stored fragment is not a settled, valid configuration.
                 active_errors = row.get("active_errors")
