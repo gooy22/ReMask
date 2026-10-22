@@ -22,7 +22,7 @@ async def verify_image(client, image_hash):
         raise fail("IMAGE_UNVERIFIED", "Selected image hash is malformed")
     response = await client.get("/act_" + client.context.account_id + "/adimages",
         {"hashes": [image_hash], "fields": ["account_id", "hash"], "limit": 2})
-    rows = response.get("data") if isinstance(response, dict) else None
+    rows = response.get("data") if isinstance(response, dict) and "error" not in response and "errors" not in response else None
     if (not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict)
             or rows[0].get("hash") != image_hash or not isinstance(rows[0].get("account_id"), str)
             or rows[0]["account_id"].removeprefix("act_") != client.context.account_id):
