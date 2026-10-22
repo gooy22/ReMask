@@ -47,7 +47,8 @@ class AdvertisingBridgeTests(unittest.TestCase):
                 body = json.loads(handler.rfile.read(length) or b'{}')
                 worker_requests.append({'method':'POST','path':handler.path,'payload':body})
                 if getattr(handler.server, 'fail_posts', False):
-                    handler.respond(422, {'error':'FIXTURE_WORKER_REJECTED'})
+                    handler.respond(422, getattr(handler.server, 'error_payload',
+                                                  {'error':'FIXTURE_WORKER_REJECTED'}))
                     return
                 handler.respond(200, {'forwarded': body})
         self.worker = ThreadingHTTPServer(('127.0.0.1', 0), WorkerHandler)
@@ -133,6 +134,30 @@ class AdvertisingBridgeTests(unittest.TestCase):
         self.assertEqual(result['error'], 'PYTHON_WORKER_FAILED')
         self.assertTrue(any(row['path'] == '/api/v1/profiles/7/private-launch-review'
                             for row in self.worker_requests))
+
+    def test_worker_error_diagnostics_cannot_expose_private_response_material(self):
+        self.worker.fail_posts = True
+        secret = 'synthetic-secret-access-token-never-expose'
+        self.worker.error_payload = {'detail': {
+            'code': 'ACCOUNT_SCOPE_MISMATCH', 'retryable': True,
+            'message': 'access_token=' + secret,
+            'response': {'headers': {'Cookie': 'c_user=' + secret}}}}
+        status, result = self.request({'action': 'private_launch_review', 'profile_id': '7',
+            'business_id': '111111111', 'ad_account_id': '222222222', 'page_id': '333333333',
+            'launch': {'creative': {'message': 'fixture'}}})
+        self.assertEqual(status, 502)
+        self.assertEqual(result['code'], 'ACCOUNT_SCOPE_MISMATCH')
+        self.assertEqual(result['error'], 'ACCOUNT_SCOPE_MISMATCH')
+        self.assertTrue(result['retryable'])
+        self.assertNotIn(secret, json.dumps(result))
+        self.assertNotIn('Cookie', json.dumps(result))
+        self.worker.error_payload = {'error': 'access_token=' + secret}
+        status, result = self.request({'action': 'private_launch_review', 'profile_id': '7',
+            'business_id': '111111111', 'ad_account_id': '222222222', 'page_id': '333333333',
+            'launch': {'creative': {'message': 'fixture'}}})
+        self.assertEqual(status, 502)
+        self.assertEqual(result['error'], 'PYTHON_WORKER_FAILED')
+        self.assertNotIn(secret, json.dumps(result))
 
     def test_disabled_and_missing_read_contract_flags_survive_bridge(self):
         _, result = self.request({'action': 'private_launch_contracts'})
