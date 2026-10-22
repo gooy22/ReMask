@@ -64,9 +64,14 @@ class AdsManagerLaunch:
         target = {"profile_id": str(profile_id), **{key: identity(payload.get(key))
                   for key in ("business_id", "ad_account_id", "page_id")}}
         raw_launch = payload.get("launch")
-        if (isinstance(raw_launch, dict) and {"base", "override"} & set(raw_launch)
-                and set(raw_launch) - {"base", "override"}):
-            raise fail("INVALID_INPUT", "Launch overrides contain unsupported sections")
+        if isinstance(raw_launch, dict) and {"base", "override"} & set(raw_launch):
+            if set(raw_launch) - {"base", "override"}:
+                raise fail("INVALID_INPUT", "Launch overrides contain unsupported sections")
+            # A per-account setting must never silently change the selected
+            # operation from saving a draft into publishing an advertisement.
+            override = raw_launch.get("override")
+            if isinstance(override, dict) and "execution_mode" in override:
+                raise fail("INVALID_INPUT", "Launch execution mode must be chosen at plan level")
         launch = _effective_launch_payload(raw_launch)
         # Never infer permission to publish from an omitted mode.
         # A caller must explicitly choose an execution intent before any
