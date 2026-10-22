@@ -170,12 +170,26 @@ class AdsManagerLaunch:
         for resource in self.owner._asset_selections(launch, bool(references)):
             if resource not in self.owner.reads.rows:
                 missing_contracts.append("READ_" + resource.upper())
+        bid_campaign, bid_adset, bidding = native_bidding(launch["campaign"], launch["adset"])
+        bidding_fields = {"bid_strategy", "bid_amount", "is_autobid",
+                          "is_average_price_pacing", "pacing_type"}
+        bidding_representation = {
+            "budget_owner": bidding["budget_level"],
+            "selected": {"campaign_strategy": launch["campaign"].get("bid_strategy"),
+                         "adset_strategy": launch["adset"].get("bid_strategy"),
+                         "adset_bid_amount": launch["adset"].get("bid_amount")},
+            "private_campaign": {key: value for key, value in bid_campaign.items()
+                                 if key in bidding_fields},
+            "private_adset": {key: value for key, value in bid_adset.items()
+                              if key in bidding_fields},
+            "checked_live": False, "editor_state": "EDITOR_UNVERIFIED"}
         return {"configuration_valid": True, "ready": False, "checked_live": False,
             "editor_state": "EDITOR_UNVERIFIED", "missing_fields": [],
             "objective_representation": {"selected": launch["campaign"].get("objective"),
                 "private_campaign": {key: value for key, value in self.objective_wire.campaign(launch["campaign"]).items()
                     if key in {"objective", "is_odax_campaign_group"}},
                 "editor_state": "EDITOR_UNVERIFIED"},
+            "bidding_representation": bidding_representation,
             "mutation_posts": 0, "target": target, "creative_format": creative_format,
             "delivery": launch.get("delivery", {key: "PAUSED" for key in ("campaign", "adset", "ad")}),
             "steps": [{"stage": stage, "label": label} for stage, label in
