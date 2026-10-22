@@ -365,6 +365,32 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['mutation_posts'],0)
         self.session.facebook_web.assert_not_awaited()
 
+    async def test_draft_allows_only_inert_worker_metadata_and_explicit_control_flags(self):
+        self.payload['launch']['execution_mode'] = 'DRAFT'
+        accepted = copy.deepcopy(self.payload)
+        accepted.update(variables={}, profile_id='19')
+        plan = self.owner.ads_manager.plan(profile_id='19', payload=accepted)
+        self.assertEqual(plan['target']['profile_id'], '19')
+        self.assertEqual(plan['launch_fingerprint'],
+            self.owner.ads_manager.plan(profile_id='19', payload=self.payload)['launch_fingerprint'])
+        for change in ({'variables': {'unreviewed': True}}, {'profile_id': '20'},
+                       {'repair_objective': False}, {'reconcile_only': 'true'},
+                       {'publish_saved_draft': True, 'repair_objective': True},
+                       {'selected_payment_method': {'last4': '1234'}}):
+            with self.subTest(change=change):
+                candidate = copy.deepcopy(accepted)
+                candidate.update(change)
+                with self.assertRaises(ProvisioningError):
+                    self.owner.ads_manager.plan(profile_id='19', payload=candidate)
+        repaired = copy.deepcopy(self.payload)
+        repaired['repair_objective'] = True
+        self.owner.ads_manager.prepare('19', repaired)
+        inspected = copy.deepcopy(self.payload)
+        inspected['reconcile_only'] = True
+        self.owner.ads_manager.prepare('19', inspected)
+        self.session.facebook_web.assert_not_awaited()
+        self.assertEqual(self.client.posts, [])
+
     async def test_versioned_launch_acceptance_fixture_matches_request_projection(self):
         fixture_path = Path(__file__).parent / 'fixtures/launch/single-image-draft.json'
         accepted = json.loads(fixture_path.read_text())
