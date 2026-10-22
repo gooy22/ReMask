@@ -89,6 +89,8 @@ class AdsManagerResourceCatalog:
         row = await client.get("/act_" + client.context.account_id, {"fields": ["id", "account_id", "business"]})
         if (not isinstance(row, dict) or row.get("id") not in
                 {client.context.account_id, "act_" + client.context.account_id}
+                or ("account_id" in row and (not isinstance(row["account_id"], str)
+                    or row["account_id"].removeprefix("act_") != client.context.account_id))
                 or not isinstance(row.get("business"), dict)
                 or row["business"].get("id") != client.context.business_id):
             raise fail("RESOURCE_SCOPE_MISMATCH", "Pixel read did not confirm the selected account/Business")
