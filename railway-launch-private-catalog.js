@@ -883,7 +883,12 @@ async function remaskPrivatePollJob(jobId) {
 
 function remaskPrivateCanDeliver(item,task,status){
     if(task?.action!=='private_launch')return false;
-    if((task.payload?.launch?.base?.execution_mode||task.payload?.launch?.execution_mode)==='DRAFT')return false;
+    const launch=task.payload?.launch;
+    const executionMode=launch?.base?.execution_mode||launch?.execution_mode;
+    // Legacy tasks with missing intent must never inherit publishing controls.
+    // An account-level override is not a valid source of publication consent.
+    if(executionMode!=='PUBLISH'||(launch?.override&&
+        Object.prototype.hasOwnProperty.call(launch.override,'execution_mode')))return false;
     if(status==='PAUSED'||task.status==='SUCCESS')return true;
     return (item.advertising_steps||[]).some(step=>step.task_id===task.id&&step.verified===true&&
         step.status==='SUCCESS'&&['ADS_MANAGER:PUBLISH','PUBLISH_FAMILY'].includes(step.step)&&
