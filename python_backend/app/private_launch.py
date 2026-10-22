@@ -713,8 +713,11 @@ class PrivateLaunchStateStore:
         raw = data.pop("result_json", None)
         if raw:
             try:
-                data["result"] = _strict_json(str(raw))
-            except (json.JSONDecodeError, TypeError, ValueError):
+                decoded = _strict_json(str(raw))
+                # A valid scalar or list is still not a valid durable ActionResult.
+                # Never let a malformed journal field impersonate proof of success.
+                data["result"] = decoded if isinstance(decoded, dict) else {}
+            except (json.JSONDecodeError, TypeError, ValueError, RecursionError):
                 data["result"] = {}
         else:
             data["result"] = {}
