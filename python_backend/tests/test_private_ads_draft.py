@@ -231,6 +231,36 @@ class JournalTests(unittest.IsolatedAsyncioTestCase):
                               result=verified, error_code="VERIFIED", submitted=True)
         self.assertEqual(await self.state.step("launch", key), original)
 
+    async def test_journal_list_is_one_account_scoped_snapshot_even_with_corrupt_step(self):
+        first, second = OperationKey("ADS_MANAGER:DRAFT"), OperationKey("ADS_MANAGER:FRAGMENT_AD")
+        args = {"profile_id": "19", "business_id": "222222", "ad_account_id": "111111"}
+        await self.state.save(**args, launch_key="launch", step=first,
+                              status="SUCCESS", entity_id="333333",
+                              result={"verified": True, "evidence": {"proof": "known"}},
+                              error_code="CONFIRMED", submitted=True)
+        await self.state.save(**args, launch_key="launch", step=second,
+                              status="SUBMITTING", result={"verified": False}, submitted=None)
+        await self.state.save(**args, launch_key="other", step=first,
+                              status="SUBMITTING", result={"verified": False}, submitted=None)
+        with self.state._connect() as con:
+            con.execute("UPDATE private_launch_steps SET result_json=? WHERE launch_key=? AND step=?",
+                        ('{"verified":true,"verified":false}', "launch", first.value))
+
+        connections = []
+        connect = self.state._connect
+        def counted_connect():
+            connections.append(True)
+            return connect()
+        with patch.object(self.state, "_connect", side_effect=counted_connect):
+            rows = await self.state.all_steps("launch")
+        self.assertEqual(len(connections), 1)
+        self.assertEqual([row["step"] for row in rows], [first.value, second.value])
+        self.assertEqual(rows[0]["status"], "RECONCILE_REQUIRED")
+        self.assertEqual(rows[0]["error_code"], "PRIVATE_LAUNCH_JOURNAL_CORRUPT")
+        self.assertIsNone(rows[0]["entity_id"])
+        self.assertEqual(rows[1]["status"], "SUBMITTING")
+        self.assertEqual(len(await self.state.all_steps("other")), 1)
+
     async def test_late_read_cannot_downgrade_or_change_confirmed_success(self):
         key = OperationKey("ADS_MANAGER:PUBLISH")
         args = {"launch_key": "launch", "profile_id": "19",
