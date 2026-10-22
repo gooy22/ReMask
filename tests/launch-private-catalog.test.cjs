@@ -112,6 +112,9 @@ console.log('Private Launch catalog and funding truth checks passed');
     targetMode:()=>perTarget,bindingFor:()=>binding};
   vm.createContext(ctx);vm.runInContext(source,ctx);
   const config={accountIds:ids,payload:{creative:{page_id:page.value}}};
+  assert.equal(ctx.remaskPrivateExecutionMode(config),'DRAFT',
+    'when the visible selector is absent, stored configuration cannot imply PUBLISH');
+  assert.equal(ctx.remaskPrivateTargetRows(config)[0].launch.base.execution_mode,'DRAFT');
   assert.equal(ctx.remaskPrivateTargetRows(config)[0].page_id,page.value,
     'single RK must submit the selected visible Page, not a stale/empty bulk binding');
   config.payload.creative.format='INSTAGRAM_POST';
@@ -153,6 +156,9 @@ console.log('Private Launch catalog and funding truth checks passed');
     '111111111':{page_id:'333333333'},
     '222222222':{page_id:'444444444'}
   };
+  // Existing publication-flow fixtures deliberately opt into publish.
+  // A missing selector must never carry implicit publication intent.
+  buttons.remaskPrivateExecutionMode={value:'PUBLISH'};
   const config={
     accountIds:['111111111','222222222'],
     payload:{
@@ -364,11 +370,12 @@ console.log('Private Launch catalog and funding truth checks passed');
   );
   assert.ok(planned.request.profiles.every(row=>row.tasks[0].payload.doc_id===undefined));
 
-  config.payload.execution_mode='DRAFT';
+  buttons.remaskPrivateExecutionMode.value='DRAFT';
   const draftRows=privateCtx.remaskPrivateTargetRows(config);
-  assert.ok(draftRows.every(row=>row.selected_payment_method===undefined),
-    'draft review and worker input must omit payment selection');
-  delete config.payload.execution_mode;
+  assert.ok(draftRows.every(row=>row.selected_payment_method===undefined
+      && row.launch.base.execution_mode==='DRAFT'),
+    'the explicit draft selector must omit payment selection and be serialized');
+  buttons.remaskPrivateExecutionMode.value='PUBLISH';
 
   const reused=privateCtx.remaskPrivateJobRequest(config,reviewed);
   assert.equal(reused.reused,true);
