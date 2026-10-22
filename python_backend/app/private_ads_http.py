@@ -15,7 +15,8 @@ import re
 from urllib.parse import parse_qs, urlsplit
 
 from .private_ads_draft import fail, flatten_params, identity
-from .private_ads_document import _auth_gate, _json_payloads, _JSON_SCRIPT_RE, _response_only
+from .private_ads_document import (_auth_gate, _json_payloads, _JSON_SCRIPT_RE,
+                                   _response_only, _strict_json, _strict_json_decoder)
 from .provisioning.models import ProvisioningError
 
 log = logging.getLogger("remask.private_ads_http")
@@ -29,7 +30,7 @@ _SERVERJS_HANDLE = re.compile(
 
 def _ads_document_payloads(body):
     payloads = _json_payloads(body)
-    decoder = json.JSONDecoder()
+    decoder = _strict_json_decoder()
     for script in _JSON_SCRIPT_RE.finditer(body):
         source = script.group(1)
         for call in _SERVERJS_HANDLE.finditer(source):
@@ -44,18 +45,7 @@ def _ads_document_payloads(body):
 
 def _strict_response_json(raw):
     """Reject ambiguous Meta HTTP replies before deriving any scope evidence."""
-    def unique_object(pairs):
-        value = {}
-        for name, item in pairs:
-            if name in value:
-                raise ValueError("Duplicate JSON member")
-            value[name] = item
-        return value
-
-    def invalid_constant(_value):
-        raise ValueError("Non-finite JSON number")
-
-    return json.loads(raw, object_pairs_hook=unique_object, parse_constant=invalid_constant)
+    return _strict_json(raw)
 
 
 class AdsManagerResponseError(ProvisioningError):
@@ -384,8 +374,8 @@ class AdsManagerPrivateHttp:
             text = raw.decode("utf-8").strip()
             if text.startswith("for (;;);"):
                 text = text[len("for (;;);"):].lstrip()
-            result = json.loads(text)
-            if not isinstance(result, dict) or result.get("error") or result.get("errors"):
+            result = _strict_response_json(text)
+            if not isinstance(result, dict) or "error" in result or "errors" in result:
                 code = result.get("error") if isinstance(result, dict) else None
                 log.warning("ads_session_renewal rejected profile=%s code=%s",
                     self._profile_name, code if type(code) is int else "unavailable")
