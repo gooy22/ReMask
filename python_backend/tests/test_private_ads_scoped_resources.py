@@ -127,6 +127,18 @@ class ResourceCases(unittest.IsolatedAsyncioTestCase):
             await self.catalog.read(self.web, 'pixels', self.values)
         self.assertEqual([path for path, _ in self.calls], ['/act_111111', '/act_111111/adspixels', '/act_111111/adspixels'])
 
+    async def test_invalid_resource_page_limits_fail_before_meta_http(self):
+        for limit in (0, -1, True, False, 1.5, 'NaN', '0', '', None, [], {}):
+            with self.subTest(limit=limit):
+                with self.assertRaises(ProvisioningError) as caught:
+                    await self.catalog.read(self.web, 'custom_audiences', {**self.values, 'limit': limit})
+                self.assertIn('INVALID_RESOURCE_LIMIT', caught.exception.code)
+                self.assertEqual(self.calls, [])
+        self.responses['/act_111111/customaudiences'] = {'data': []}
+        rows = await self.catalog.read(self.web, 'custom_audiences', {**self.values, 'limit': '10'})
+        self.assertEqual(rows['data'], [])
+        self.assertEqual(self.calls[-1][1]['limit'], 10)
+
     async def test_resource_route_rejects_foreign_account_without_http(self):
         reader = self.catalog.client(self.web, self.values)
         with self.assertRaises(ProvisioningError) as caught:
