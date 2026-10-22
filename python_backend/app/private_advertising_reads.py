@@ -168,9 +168,11 @@ class AdvertisingResourceStore:
         path = self.root / (key + ".json")
         if not force:
             def cached():
-                if not path.is_file() or path.stat().st_size > 2_000_000:
-                    return None
                 try:
+                    # File replacement/deletion can race both is_file and stat.
+                    # A lost cache file is an ordinary cache miss, not a 500.
+                    if not path.is_file() or path.stat().st_size > 2_000_000:
+                        return None
                     data = _strict_json(path.read_text())
                     return data if data.get("scope") == scope and data.get("resource") == name else None
                 except (OSError, ValueError, AttributeError, RecursionError, TypeError):
