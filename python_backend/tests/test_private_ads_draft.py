@@ -287,7 +287,7 @@ class JournalTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(row["status"], "RECONCILE_REQUIRED")
                 self.assertEqual(row["error_code"], "PRIVATE_LAUNCH_JOURNAL_CORRUPT")
                 self.assertIsNone(row["entity_id"])
-                self.assertEqual(row["result"], payload)
+                self.assertEqual(row["result"], {})
         with self.state._connect() as con:
             con.execute("UPDATE private_launch_steps SET result_json=? WHERE launch_key=? AND step=?",
                         (original, "launch", key.value))
