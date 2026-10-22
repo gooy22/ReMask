@@ -104,6 +104,45 @@ class ResourceCases(unittest.IsolatedAsyncioTestCase):
             await self.catalog.read(self.web, 'pixels', self.values)
         self.assertEqual([path for path, _ in self.calls], ['/act_111111', '/act_111111/adspixels', '/act_111111/adspixels'])
 
+    async def test_resource_route_rejects_foreign_account_without_http(self):
+        reader = self.catalog.client(self.web, self.values)
+        with self.assertRaises(ProvisioningError) as caught:
+            await reader.request("INSTAGRAM_MEDIA_READ",
+                                 values={"instagram_id": "888889", "ad_account_id": "999999"})
+        self.assertIn("RESOURCE_SCOPE_MISMATCH", caught.exception.code)
+        self.assertEqual(self.calls, [])
+
+    async def test_missing_account_object_fails_with_scoped_resource_error(self):
+        for missing in (None, [], "not an account"):
+            with self.subTest(missing=missing):
+                self.account = missing
+                with self.assertRaises(ProvisioningError) as caught:
+                    await self.catalog.read(self.web, "pages", self.values)
+                self.assertIn("RESOURCE_READ_INCOMPLETE", caught.exception.code)
+
+    async def test_instagram_media_rejects_foreign_account_actor_and_conflicting_duplicate(self):
+        actors_path = "/act_111111/instagram_accounts"
+        media_path = "/888889/advertisable_media"
+        self.responses[actors_path] = {"data": [{
+            "id": "888888", "id_v2": "888889", "has_create_ads_access": True,
+            "is_connected_to_ad_account": True}]}
+        rows = [
+            [{"id": "777777", "account_id": "999999"}],
+            [{"id": "777777", "instagram_actor_id": "999999"}],
+            [{"id": "777777", "instagram_user_id": "999999"}],
+            [{"id": "777777", "caption": "first"}, {"id": "777777", "caption": "changed"}],
+        ]
+        for selection in rows:
+            with self.subTest(rows=selection):
+                self.responses[media_path] = {"data": selection}
+                with self.assertRaises(ProvisioningError):
+                    await self.catalog.read(self.web, "instagram_media", self.values)
+        self.responses[media_path] = {"data": [{"id": "777777", "caption": "same"},
+                                               {"id": "777777", "caption": "same"}]}
+        confirmed = await self.catalog.read(self.web, "instagram_media", self.values)
+        self.assertEqual(len(confirmed["data"]), 1)
+        self.assertEqual(confirmed["data"][0]["instagram_actor_id"], "888888")
+
     async def test_instagram_media_carries_its_eligible_account_actor(self):
         self.responses['/act_111111/instagram_accounts'] = {'data': [
             {'id': '888888', 'id_v2': '888889', 'username': 'synthetic', 'has_create_ads_access': True,
