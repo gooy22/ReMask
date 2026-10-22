@@ -18,7 +18,9 @@ async def read_pixels(client, *, query="", limit=500):
     path = "/act_" + identity(client.context.account_id) + "/adspixels"
     for _ in range(5):
         response = await client.get(path, params)
-        items = response.get("data") if isinstance(response, dict) and not (response.get("error") or response.get("errors")) else None
+        # An empty error envelope is still a failed response; truthiness does
+        # not prove the HTTP body was a successful resource inventory.
+        items = response.get("data") if isinstance(response, dict) and "error" not in response and "errors" not in response else None
         if not isinstance(items, list) or len(items) > 500:
             raise fail("RESOURCE_READ_INCOMPLETE", "Account pixel rows are incomplete", True)
         for row in items:
