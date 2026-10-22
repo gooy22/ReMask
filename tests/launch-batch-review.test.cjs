@@ -95,6 +95,15 @@ function fixture(size=30) {
     const task={action:'private_launch',status:'SUCCESS',payload:created.profiles[0].tasks[0].payload};
     assert.equal(ctx.remaskPrivateCanDeliver({},task,'ACTIVE'),false);
     assert.equal(ctx.remaskPrivateCanDeliver({},task,'PAUSED'),false);
+    const previous={...task,payload:{...task.payload,launch:{base:{},override:{}}}};
+    assert.equal(ctx.remaskPrivateCanDeliver({},previous,'ACTIVE'),false,
+      'a legacy task without explicit publication intent cannot expose activation');
+    assert.equal(ctx.remaskPrivateCanDeliver({},previous,'PAUSED'),false,
+      'a legacy task without explicit publication intent cannot expose delivery actions');
+    const conflicting={...task,payload:{...task.payload,
+      launch:{base:{execution_mode:'PUBLISH'},override:{execution_mode:'DRAFT'}}}};
+    assert.equal(ctx.remaskPrivateCanDeliver({},conflicting,'ACTIVE'),false,
+      'an account-level mode override invalidates stored publication consent');
     const draftFingerprint=ctx.remaskPrivateFingerprint(rows);
     controls.remaskPrivateExecutionMode.value='PUBLISH';
     const publicationRows=ctx.remaskPrivateTargetRows(config);
