@@ -43,6 +43,14 @@ class PixelReads(unittest.IsolatedAsyncioTestCase):
             with self.subTest(response=response), self.assertRaises(ProvisioningError):
                 await read_pixels(self.client(response))
 
+    async def test_empty_error_envelopes_cannot_become_empty_confirmed_pixel_inventory(self):
+        for envelope in ({'error': {}}, {'errors': []}, {'error': None}):
+            with self.subTest(envelope=envelope):
+                response = {'data': [], **envelope}
+                with self.assertRaises(ProvisioningError) as caught:
+                    await read_pixels(self.client(response))
+                self.assertIn('RESOURCE_READ_INCOMPLETE', caught.exception.code)
+
     async def test_filter_and_limit_never_hide_truncation(self):
         rows = [{'id':'777771','name':'PIXEL One'}, {'id':'777772','name':'Pixel Two'}]
         result = await read_pixels(self.client({'data':rows}), query='pixel', limit=1)
