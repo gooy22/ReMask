@@ -95,6 +95,15 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(context.application_id, "119211728144504")
         self.assertNotIn("synthetic-session-value", repr(context))
 
+    def test_strict_http_decoder_accepts_bytes_and_rejects_ambiguous_bytes(self):
+        from app.private_ads_http import _strict_response_json
+        self.assertEqual(_strict_response_json(b'{"account_id":"111111"}'),
+                         {'account_id': '111111'})
+        for body in (b'{"id":"111111","id":"999999"}',
+                     b'{"size":1e999}', b'{"size":NaN}'):
+            with self.subTest(body=body), self.assertRaises(ValueError):
+                _strict_response_json(body)
+
     def test_bootstrap_json_rejects_ambiguous_fields_in_json_and_serverjs(self):
         from app.private_ads_document import _json_payloads
         from app.private_ads_http import _ads_document_payloads
