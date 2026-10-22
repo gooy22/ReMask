@@ -757,8 +757,9 @@ class PrivateLaunchStateStore:
             corrupt = data.get("status") == "SUCCESS"
         if corrupt:
             # Never expose a persisted SUCCESS as authoritative when its
-            # independent result evidence cannot be decoded. This is a read
-            # projection only; we do not rewrite or silently replay the claim.
+            # independent result evidence cannot be decoded or trusted.
+            # This is a read projection only, not an on-disk rewrite.
+            data["result"] = {}
             data["status"] = "RECONCILE_REQUIRED"
             data["entity_id"] = None
             data["error_code"] = "PRIVATE_LAUNCH_JOURNAL_CORRUPT"
