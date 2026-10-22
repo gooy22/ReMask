@@ -318,6 +318,32 @@ class PublisherTests(unittest.IsolatedAsyncioTestCase):
         return await self.publisher.run(self.client, name="source-flow", levels=self.levels,
                                         verify_objects=verify or self.verify)
 
+    async def test_draft_account_scope_rejects_empty_error_envelopes(self):
+        good = {'id': '555555', 'account_id': '111111'}
+        self.publisher._account(good, '111111')
+        for envelope in ({'error': {}}, {'errors': []}, {'error': None}):
+            with self.subTest(envelope=envelope):
+                with self.assertRaises(ProvisioningError) as caught:
+                    self.publisher._account({**good, **envelope}, '111111')
+                self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_READ_SCOPE_MISMATCH')
+
+    async def test_confirmation_refuses_contradictory_verification_metadata(self):
+        await self.sender.submit(self.client, operation='DRAFT',
+            path='/act_111111/addrafts', params={'name': 'source-flow'},
+            receipt=lambda row: {'draft_id': row['id']})
+        for proof in ({'verified': False}, {'source': 'untrusted'}, {'verified': None}):
+            with self.subTest(proof=proof):
+                with self.assertRaises(ProvisioningError) as caught:
+                    await self.publisher._confirm('DRAFT', proof)
+                self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_READ_PENDING')
+        step = await self.state.step('launch', OperationKey('ADS_MANAGER:DRAFT'))
+        self.assertNotEqual(step['status'], 'SUCCESS')
+        await self.publisher._confirm('DRAFT', {'verified': True})
+        confirmed = await self.state.step('launch', OperationKey('ADS_MANAGER:DRAFT'))
+        self.assertEqual(confirmed['status'], 'SUCCESS')
+        self.assertEqual(confirmed['result']['evidence']['verification']['source'],
+                         'independent_private_ads_http')
+
     async def test_campaign_fragment_with_foreign_parent_blocks_next_post(self):
         original = self.client.get
         async def read(path, params):
