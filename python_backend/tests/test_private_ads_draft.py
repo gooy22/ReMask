@@ -192,7 +192,7 @@ class JournalTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(await self.state.step("launch", key), original)
 
         await self.state.save(**{**args, "status": "SUCCESS",
-                                 "result": {"evidence": {"owner": "19", "verified": True}}})
+                                 "result": {"verified": True, "evidence": {"owner": "19", "verified": True}}})
         updated = await self.state.step("launch", key)
         self.assertEqual(updated["status"], "SUCCESS")
         self.assertEqual(updated["result"]["evidence"]["owner"], "19")
@@ -260,6 +260,38 @@ class JournalTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(rows[0]["entity_id"])
         self.assertEqual(rows[1]["status"], "SUBMITTING")
         self.assertEqual(len(await self.state.all_steps("other")), 1)
+
+    async def test_parseable_but_contradictory_success_cannot_be_trusted(self):
+        key = OperationKey("ADS_MANAGER:DRAFT")
+        args = {"launch_key": "launch", "profile_id": "19",
+                "business_id": "222222", "ad_account_id": "111111",
+                "step": key, "status": "SUCCESS", "entity_id": "333333",
+                "result": {"verified": True, "evidence": {}}, "submitted": True}
+        await self.state.save(**args)
+        with self.state._connect() as con:
+            original = con.execute("SELECT result_json FROM private_launch_steps WHERE launch_key=? AND step=?",
+                                   ("launch", key.value)).fetchone()[0]
+        cases = [
+            {"verified": False, "evidence": {}},
+            {"evidence": {}},
+            {"verified": True, "status": "RECONCILE_REQUIRED", "evidence": {}},
+            {"verified": True, "entity_id": "999999", "evidence": {}},
+            {"verified": True, "evidence": {"verification": {"verified": False}}},
+        ]
+        for payload in cases:
+            with self.subTest(payload=payload):
+                with self.state._connect() as con:
+                    con.execute("UPDATE private_launch_steps SET result_json=? WHERE launch_key=? AND step=?",
+                                (json.dumps(payload), "launch", key.value))
+                row = await self.state.step("launch", key)
+                self.assertEqual(row["status"], "RECONCILE_REQUIRED")
+                self.assertEqual(row["error_code"], "PRIVATE_LAUNCH_JOURNAL_CORRUPT")
+                self.assertIsNone(row["entity_id"])
+                self.assertEqual(row["result"], payload)
+        with self.state._connect() as con:
+            con.execute("UPDATE private_launch_steps SET result_json=? WHERE launch_key=? AND step=?",
+                        (original, "launch", key.value))
+        self.assertEqual((await self.state.step("launch", key))["status"], "SUCCESS")
 
     async def test_late_read_cannot_downgrade_or_change_confirmed_success(self):
         key = OperationKey("ADS_MANAGER:PUBLISH")
