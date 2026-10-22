@@ -711,16 +711,28 @@ class PrivateLaunchStateStore:
             return None
         data = dict(row)
         raw = data.pop("result_json", None)
+        corrupt = False
         if raw:
             try:
                 decoded = _strict_json(str(raw))
-                # A valid scalar or list is still not a valid durable ActionResult.
-                # Never let a malformed journal field impersonate proof of success.
-                data["result"] = decoded if isinstance(decoded, dict) else {}
+                if not isinstance(decoded, dict):
+                    corrupt = True
+                    data["result"] = {}
+                else:
+                    data["result"] = decoded
             except (json.JSONDecodeError, TypeError, ValueError, RecursionError):
+                corrupt = True
                 data["result"] = {}
         else:
             data["result"] = {}
+            corrupt = data.get("status") == "SUCCESS"
+        if corrupt:
+            # Never expose a persisted SUCCESS as authoritative when its
+            # independent result evidence cannot be decoded. This is a read
+            # projection only; we do not rewrite or silently replay the claim.
+            data["status"] = "RECONCILE_REQUIRED"
+            data["entity_id"] = None
+            data["error_code"] = "PRIVATE_LAUNCH_JOURNAL_CORRUPT"
         return data
 
     async def save(
