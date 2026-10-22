@@ -95,6 +95,23 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(context.application_id, "119211728144504")
         self.assertNotIn("synthetic-session-value", repr(context))
 
+    def test_bootstrap_json_rejects_ambiguous_fields_in_json_and_serverjs(self):
+        from app.private_ads_document import _json_payloads
+        from app.private_ads_http import _ads_document_payloads
+        ambiguous = '{"define":[],"define":[["CurrentUserInitialData",[],{"USER_ID":"999999"}]]}'
+        self.assertEqual(_json_payloads(ambiguous), [])
+        server_js = '<script>requireLazy(["ServerJS"],function(s){s.handle(' + ambiguous + ');});</script>'
+        self.assertEqual(_ads_document_payloads(server_js), [])
+        for invalid in ('{"data":NaN}', '{"data":Infinity}', '{"data":-Infinity}'):
+            with self.subTest(invalid=invalid):
+                self.assertEqual(_json_payloads(invalid), [])
+
+    def test_nested_encoded_bootstrap_json_with_duplicate_fields_is_not_interpreted(self):
+        from app.private_ads_document import _json_payloads
+        embedded = '{"id":"111111","id":"999999"}'
+        rows = _json_payloads(json.dumps({'data': embedded}))
+        self.assertEqual(rows, [{'data': embedded}])
+
     def test_arbitrary_javascript_wrapper_cannot_initialize_credentials(self):
         body = '<script>untrusted.handle(' + document() + ');</script>'
         with self.assertRaises(ProvisioningError):
@@ -151,6 +168,32 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
                 await AdsManagerPrivateHttp.open(self.web,
                     account_id='111111',business_id='222222',actor_id='123456')
             self.assertEqual(calls,['POST'])
+
+    async def test_session_renewal_rejects_duplicate_tokens_and_empty_error_envelopes(self):
+        payload = json.loads(document()); payload['require'] = []
+        async def missing(url, **kwargs):
+            return 200, json.dumps(payload), url
+        self.web.fetch_text = missing
+        async def bootstrap():
+            return SimpleNamespace(actor_id='123456', fb_dtsg='synthetic-csrf')
+        self.web.bootstrap = bootstrap
+        normal = {'payload': {'access_token': 'synthetic-renewed-session',
+                              'client_id': '119211728144504'}}
+        duplicated = ('{"payload":{"access_token":"synthetic-renewed-session",'
+                      '"access_token":"other-session","client_id":"119211728144504"}}')
+        errors = json.dumps({**normal, 'errors': []})
+        for raw in (duplicated, errors):
+            calls = []
+            @asynccontextmanager
+            async def request(method, url, **options):
+                calls.append(method)
+                yield SimpleNamespace(http_version='HTTP/2', status=200,
+                                      content=Body(raw.encode()))
+            self.web.session.request = request
+            with self.subTest(raw=raw), self.assertRaises(ProvisioningError):
+                await AdsManagerPrivateHttp.open(self.web,
+                    account_id='111111', business_id='222222', actor_id='123456')
+            self.assertEqual(calls, ['POST'])
 
     async def test_session_renewal_rejects_wrong_bootstrap_actor_before_post(self):
         payload = json.loads(document());payload['require'] = []
