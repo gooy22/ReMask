@@ -365,6 +365,35 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['mutation_posts'],0)
         self.session.facebook_web.assert_not_awaited()
 
+    async def test_review_bidding_evidence_keeps_selected_and_wire_levels_distinct(self):
+        self.payload['launch']['execution_mode'] = 'DRAFT'
+        plan = self.owner.ads_manager.plan(profile_id='19', payload=self.payload)
+        bidding = plan['bidding_representation']
+        self.assertEqual(bidding['budget_owner'], 'campaign')
+        self.assertEqual(bidding['selected'], {
+            'campaign_strategy': None, 'adset_strategy': None, 'adset_bid_amount': None})
+        self.assertEqual(bidding['private_campaign']['bid_strategy'], 'LOWEST_COST_WITHOUT_CAP')
+        self.assertTrue(bidding['private_campaign']['is_autobid'])
+        self.assertNotIn('bid_strategy', bidding['private_adset'])
+        self.assertFalse(bidding['checked_live'])
+        self.assertEqual(bidding['editor_state'], 'EDITOR_UNVERIFIED')
+        self.payload['launch']['campaign'].pop('daily_budget')
+        self.payload['launch']['adset'].update(daily_budget=2000,
+            bid_strategy='COST_CAP', bid_amount=75)
+        plan2 = self.owner.ads_manager.plan(profile_id='19', payload=self.payload)
+        bidding = plan2['bidding_representation']
+        self.assertEqual(bidding['budget_owner'], 'adset')
+        self.assertEqual(bidding['selected']['adset_strategy'], 'COST_CAP')
+        self.assertEqual(bidding['selected']['adset_bid_amount'], 75)
+        self.assertEqual(bidding['private_adset']['bid_strategy'], 'COST_CAP')
+        self.assertEqual(bidding['private_adset']['bid_amount'], 75)
+        self.assertNotIn('bid_strategy', bidding['private_campaign'])
+        self.assertFalse(plan2['checked_live'])
+        self.assertEqual(plan2['launch_fingerprint'],
+            self.owner.ads_manager.plan(profile_id='19', payload=self.payload)['launch_fingerprint'])
+        self.session.facebook_web.assert_not_awaited()
+        self.assertEqual(self.client.posts, [])
+
     async def test_draft_allows_only_inert_worker_metadata_and_explicit_control_flags(self):
         self.payload['launch']['execution_mode'] = 'DRAFT'
         accepted = copy.deepcopy(self.payload)
