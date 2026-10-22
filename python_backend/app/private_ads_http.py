@@ -42,6 +42,22 @@ def _ads_document_payloads(body):
     return payloads
 
 
+def _strict_response_json(raw):
+    """Reject ambiguous Meta HTTP replies before deriving any scope evidence."""
+    def unique_object(pairs):
+        value = {}
+        for name, item in pairs:
+            if name in value:
+                raise ValueError("Duplicate JSON member")
+            value[name] = item
+        return value
+
+    def invalid_constant(_value):
+        raise ValueError("Non-finite JSON number")
+
+    return json.loads(raw, object_pairs_hook=unique_object, parse_constant=invalid_constant)
+
+
 class AdsManagerResponseError(ProvisioningError):
     """A received rejection, with only typed non-secret response metadata."""
     def __init__(self, diagnostic):
@@ -450,7 +466,7 @@ class AdsManagerPrivateHttp:
                 if len(raw) > 2_000_000:
                     raise fail("RESPONSE_TOO_LARGE", "Advertising response exceeds its body budget")
                 try:
-                    result = json.loads(raw)
+                    result = _strict_response_json(raw)
                 except (ValueError, UnicodeDecodeError):
                     if response.status != 200:
                         raise AdsManagerResponseError({"http_status": response.status}) from None
