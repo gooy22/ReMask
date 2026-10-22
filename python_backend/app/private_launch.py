@@ -773,10 +773,13 @@ class PrivateLaunchStateStore:
             cursor = con.execute("""UPDATE private_launch_steps
                 SET status=?,entity_id=?,result_json=?,error_code=?,submitted=1,updated_at=?
                 WHERE launch_key=? AND step=? AND profile_id=? AND business_id=? AND ad_account_id=?
-                    AND status=? AND entity_id IS ? AND result_json=?""",
+                    AND status=? AND entity_id IS ? AND result_json=?
+                    AND (status != 'SUCCESS'
+                         OR (? = 'SUCCESS' AND ? = 1 AND entity_id IS ?))""",
                 (result["status"], result.get("entity_id") or None, encode(result), result["code"], int(time.time()),
                  prior["launch_key"], prior["step"], prior["profile_id"], prior["business_id"],
-                 prior["ad_account_id"], prior["status"], prior["entity_id"], encode(prior["result"])))
+                 prior["ad_account_id"], prior["status"], prior["entity_id"], encode(prior["result"]),
+                 result["status"], int(result.get("verified") is True), result.get("entity_id") or None))
             return cursor.rowcount == 1
 
     def _save_sync(
