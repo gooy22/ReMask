@@ -216,10 +216,13 @@ class AdsManagerLaunch:
             fields.append("ad_account_promotable_objects")
         row = await client.get("/act_" + account, {"fields": fields})
         business = row.get("business") if isinstance(row, dict) else None
+        secondary_id = row.get("account_id") if isinstance(row, dict) else None
         promotable = row.get("ad_account_promotable_objects") if isinstance(row, dict) else None
         pages = promotable.get("promotable_page_ids") if isinstance(promotable, dict) else None
         if (not isinstance(row, dict) or not isinstance(row.get("id"), str)
                 or row["id"].removeprefix("act_") != account
+                or (secondary_id is not None and (not isinstance(secondary_id, str)
+                    or secondary_id.removeprefix("act_") != account))
                 or not isinstance(business, dict) or business.get("id") != target["business_id"]):
             raise fail("ACCOUNT_SCOPE_UNVERIFIED", "Live account read did not confirm the selected Business relation")
         if type(row.get("account_status")) not in {int, str} or str(row["account_status"]) != "1":
