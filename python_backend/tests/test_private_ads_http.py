@@ -289,6 +289,23 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.claims, 1)
         self.assertEqual([row[0] for row in self.web.session.calls], ["GET", "POST"])
 
+    async def test_ambiguous_or_nonfinite_json_reply_is_never_accepted_as_account_proof(self):
+        bodies = [
+            b'{"id":"act_111111","account_id":"999999","account_id":"111111"}',
+            b'{"id":"act_111111","nested":{"state":1,"state":2}}',
+            b'{"id":"act_111111","estimate":NaN}',
+            b'{"id":"act_111111","estimate":Infinity}',
+        ]
+        for body in bodies:
+            with self.subTest(body=body):
+                self.web.session.response_body = body
+                with self.assertRaises(ProvisioningError) as caught:
+                    await self.client.get("/act_111111", {"fields": ["id", "account_id"]})
+                self.assertEqual(caught.exception.code, "PRIVATE_ADS_DRAFT_RESPONSE_INVALID")
+                self.assertNotIn(body.decode(), str(caught.exception))
+        self.assertEqual(self.claims, 0)
+        self.assertEqual(len(self.web.session.calls), len(bodies))
+
     async def test_http_rejection_without_json_still_preserves_received_status(self):
         self.web.session.response_status = 403
         self.web.session.response_body = b'<html>synthetic-private-content</html>'
