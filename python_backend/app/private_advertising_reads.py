@@ -182,7 +182,12 @@ class AdvertisingResourceStore:
             if (not isinstance(result, dict) or not isinstance(result.get("data"), list)
                     or any(not isinstance(item, dict) for item in result["data"])
                     or type(result.get("checked_at")) not in {int, float}
-                    or result.get("account_id") != values["ad_account_id"]):
+                    or result.get("account_id") != values["ad_account_id"]
+                    or result.get("checked_live") is not True
+                    or result.get("account_scope_verified") is not True
+                    or result.get("query_required") is True
+                    or result.get("truncated") is True
+                    or result.get("inventory_complete") is False):
                 return {"data": [], "availability": "NOT_LOADED", "checked_live": False,
                         "account_id": values["ad_account_id"], "_cache": {"hit": False, "cached_only": True}}
             # Do not expose historical permission flags as live proof.
