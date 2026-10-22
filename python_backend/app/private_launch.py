@@ -738,6 +738,17 @@ class PrivateLaunchStateStore:
                     data["result"] = {}
                 else:
                     data["result"] = decoded
+                    if data.get("status") == "SUCCESS":
+                        # SQLite status and the durable receipt are separate
+                        # sources of state. A parseable but contradictory
+                        # receipt must never be elevated to confirmed success.
+                        if (decoded.get("verified") is not True
+                                or ("status" in decoded and decoded["status"] != "SUCCESS")
+                                or ("entity_id" in decoded and
+                                    str(decoded.get("entity_id") or "") != str(data.get("entity_id") or ""))
+                                or ("verification" in evidence and
+                                    evidence["verification"].get("verified") is not True)):
+                            corrupt = True
             except (json.JSONDecodeError, TypeError, ValueError, RecursionError):
                 corrupt = True
                 data["result"] = {}
