@@ -95,9 +95,10 @@ class ExactAdvertisingSettingsTests(unittest.IsolatedAsyncioTestCase):
                       if row['field'] == 'targeting')
         for key, selected in override_targeting.items():
             self.assertEqual(target[key], selected, key)
-        # Independent fields not overridden stay inherited.
-        self.assertEqual(target['excluded_geo_locations'], base['adset']['targeting']['excluded_geo_locations'])
-        self.assertEqual(target['age_min'], 25)
+        # An explicit per-RK targeting object replaces the base object as a unit.
+        self.assertEqual(target, override_targeting)
+        self.assertNotIn('excluded_geo_locations', target)
+        self.assertNotIn('age_min', target)
         before = len(self.client.posts)
         self.owner.state = PrivateLaunchStateStore(self.owner.state.path)
         self.assertTrue((await self.launch())['draft_verified'])
