@@ -725,7 +725,15 @@ class PrivateLaunchStateStore:
         if raw:
             try:
                 decoded = _strict_json(str(raw))
-                if not isinstance(decoded, dict):
+                evidence = decoded.get("evidence", {}) if isinstance(decoded, dict) else None
+                if (not isinstance(decoded, dict)
+                        or not isinstance(evidence, dict)
+                        or any(key in evidence and not isinstance(evidence[key], dict)
+                               for key in ("receipt", "verification", "publication",
+                                           "response_error", "binding"))):
+                    # Valid JSON can still be a malformed operation receipt.
+                    # Do not let a nested scalar/list reach callers expecting
+                    # an independently verified evidence object.
                     corrupt = True
                     data["result"] = {}
                 else:
