@@ -192,7 +192,20 @@ function remaskPrivateTargetRows(config) {
         if($('launchDeliverySelect')?.value==='ACTIVE'||Object.values(requested).some(value=>value!=='PAUSED'))
             throw new Error('Для черновика выберите статус «На паузе».');
     }
-    if(Array.isArray(config?._targets))return JSON.parse(JSON.stringify(config._targets));
+    if(Array.isArray(config?._targets)){
+        // A precomputed target snapshot must not bypass the visible choice.
+        // Reject stale or hidden publication intent rather than silently
+        // reinterpreting a previously reviewed task.
+        const rows=JSON.parse(JSON.stringify(config._targets));
+        for(const row of rows){
+            const launch=row?.launch;
+            const mode=launch?.override?.execution_mode||
+                launch?.base?.execution_mode||launch?.execution_mode;
+            if(mode!==executionMode)
+                throw new Error('Режим создания изменился. Повторите проверку текущего плана.');
+        }
+        return rows;
+    }
     const ids=Array.isArray(config?.accountIds)?config.accountIds:
         (typeof selectedAccountIds==='function'?selectedAccountIds():[]);
     // Direct single-RK Launch and workspace/bulk Launch have different Page
