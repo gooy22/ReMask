@@ -11,6 +11,7 @@ import tempfile
 import time
 
 from .private_launch_extensions import fail, source_evidence
+from .private_ads_document import _strict_json
 
 RESOURCE_FIELDS = {
     "pages": {"id", "name"},
@@ -170,9 +171,9 @@ class AdvertisingResourceStore:
                 if not path.is_file() or path.stat().st_size > 2_000_000:
                     return None
                 try:
-                    data = json.loads(path.read_text())
+                    data = _strict_json(path.read_text())
                     return data if data.get("scope") == scope and data.get("resource") == name else None
-                except (OSError, ValueError, AttributeError):
+                except (OSError, ValueError, AttributeError, RecursionError, TypeError):
                     return None
             saved = await asyncio.to_thread(cached)
             if not saved:
