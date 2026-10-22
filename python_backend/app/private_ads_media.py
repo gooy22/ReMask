@@ -6,7 +6,7 @@ import re
 from .private_ads_draft import fail
 
 def _image_receipt(response, filename=None):
-    rows = response.get("images") if isinstance(response, dict) else None
+    rows = response.get("images") if isinstance(response, dict) and "error" not in response and "errors" not in response else None
     if not isinstance(rows, dict) or len(rows) != 1:
         raise fail("IMAGE_RECEIPT_UNAVAILABLE", "Image upload did not return one exact image")
     key, row = next(iter(rows.items()))
