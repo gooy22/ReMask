@@ -1376,12 +1376,24 @@ class PrivateLaunchService:
         checks = {}
         for resource, wanted in selections.items():
             result = await asyncio.wait_for(self.reads.read(web,resource,{"query":"","limit":500,**values}),timeout=65)
+            if (not isinstance(result, dict) or result.get("checked_live") is not True
+                    or result.get("account_scope_verified") is not True
+                    or str(result.get("account_id")) != str(values["ad_account_id"])
+                    or type(result.get("checked_at")) is not int
+                    or not time.time()-120 <= result["checked_at"] <= time.time()+5
+                    or not isinstance(result.get("source"), str) or not result["source"]
+                    or not isinstance(result.get("data"), list)):
+                raise ProvisioningError("PRIVATE_LAUNCH_ASSET_ACCESS_UNCONFIRMED",
+                    "Selected advertising resources require a fresh exact-account read",retryable=False)
             identity_field = "hash" if resource == "images" else "id"
-            found = {str(row.get(identity_field) or "") for row in result["data"]}
-            if not set(wanted) <= found:
+            found = {str(row.get(identity_field) or ""): row for row in result["data"] if isinstance(row, dict)}
+            if len(found) != len(result["data"]) or not set(wanted) <= set(found):
                 raise ProvisioningError("PRIVATE_LAUNCH_ASSET_ACCESS_UNCONFIRMED",
                     "Selected advertising resources are not confirmed for this exact account",retryable=False)
-            checks[resource] = {"verified":True,"selected":wanted,"checked_live":True}
+            checks[resource] = {"verified":True,"selected":wanted,"checked_live":True,
+                "source":result.get("source"),"checked_at":result.get("checked_at"),
+                "selected_details":[{"id":item,"label":str(found[item].get("name") or found[item].get("title") or item)}
+                    for item in wanted]}
         return checks
 
     async def _media_inputs(self, launch):

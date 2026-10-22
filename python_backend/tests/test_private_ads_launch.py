@@ -3,6 +3,7 @@ import hashlib
 import json
 from pathlib import Path
 import tempfile
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -410,6 +411,26 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
             self.owner.ads_manager.plan(profile_id='19', payload=candidate)
         self.session.facebook_web.assert_not_awaited()
         self.assertEqual(self.client.posts, [])
+
+    async def test_selected_asset_requires_fresh_scope_and_keeps_label_source_time_separate(self):
+        observed = {'data':[{'id':'123456','name':'Selected audience'}],
+            'account_id':'111111','account_scope_verified':True,'checked_live':True,
+            'checked_at':int(time.time()),'source':'ads_manager_private_http'}
+        with patch.object(self.owner.reads, 'read', new=AsyncMock(return_value=observed)):
+            checks = await self.owner._verify_assets(None, {'custom_audiences':['123456']},
+                {'ad_account_id':'111111'})
+        self.assertEqual(checks['custom_audiences']['selected'], ['123456'])
+        self.assertEqual(checks['custom_audiences']['selected_details'],
+            [{'id':'123456','label':'Selected audience'}])
+        self.assertEqual(checks['custom_audiences']['source'], 'ads_manager_private_http')
+        self.assertEqual(checks['custom_audiences']['checked_at'], observed['checked_at'])
+        for changed in ({'checked_live':False}, {'account_id':'999999'}, {'checked_at':0},
+                        {'data':[]}):
+            with self.subTest(changed=changed), patch.object(self.owner.reads, 'read',
+                    new=AsyncMock(return_value={**observed, **changed})):
+                with self.assertRaises(ProvisioningError):
+                    await self.owner._verify_assets(None, {'custom_audiences':['123456']},
+                        {'ad_account_id':'111111'})
 
     async def test_live_api_review_keeps_editor_acceptance_unverified(self):
         self.payload['launch']['execution_mode'] = 'DRAFT'
