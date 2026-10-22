@@ -262,7 +262,7 @@ class DraftClient:
             row = {"id": fragment_id, "account_id": "111111", "ad_draft_id": "555555",
                 "ad_object_id": ["777771", "777772", "777773"][index],
                 "ad_object_type": params["ad_object_type"], "values": params["values"],
-                "validation_status": "VALIDATED",
+                "validation_status": "VALIDATED", "active_errors": [],
                 "parent_ad_object_id": params.get("parent_ad_object_id")}
             self.fragments[fragment_id] = row
             return {"id": fragment_id}
@@ -324,6 +324,35 @@ class PublisherTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(self.client.fragments), 2)
             self.assertEqual(len(self.client.posts), 3)
         self.assertFalse(any(path.endswith('/publish') for path, _ in self.client.posts))
+
+    async def test_validated_fragment_without_complete_error_readback_never_advances(self):
+        original = self.client.get
+        shape = ["missing"]
+        async def read(path, params):
+            row = await original(path, params)
+            if row.get("ad_object_type") == "ad_set":
+                if shape[0] == "missing":
+                    row.pop("active_errors", None)
+                elif shape[0] == "null":
+                    row["active_errors"] = None
+                elif shape[0] == "malformed":
+                    row["active_errors"] = {"error_code": 1815857}
+            return row
+        self.client.get = read
+        for value in ("missing", "null", "malformed"):
+            shape[0] = value
+            with self.subTest(error_shape=value), self.assertRaises(ProvisioningError) as caught:
+                await self.publisher.run(self.client, name="source-flow", levels=self.levels,
+                                         verify_objects=self.verify, draft_only=True)
+            self.assertEqual(caught.exception.code, "PRIVATE_ADS_DRAFT_VALIDATION_PENDING")
+            self.assertEqual(len(self.client.posts), 3, "Incomplete proof cannot cause another POST")
+            self.assertEqual(set(self.client.fragments), {"111111", "222222"})
+        shape[0] = "complete"
+        result = await self.publisher.run(self.client, name="source-flow", levels=self.levels,
+                                          verify_objects=self.verify, draft_only=True)
+        self.assertEqual(result["status"], "SUCCESS")
+        self.assertEqual(len(self.client.posts), 4, "Resume may only create the not-yet-submitted Ad")
+        self.assertFalse(any(path.endswith("/publish") for path, _ in self.client.posts))
 
     async def test_profile38_bid_amount_error_is_retained_without_bid_or_objective_rewrite(self):
         self.levels['campaign'].update(objective='OUTCOME_TRAFFIC', daily_budget=500)
