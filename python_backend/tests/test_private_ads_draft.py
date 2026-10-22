@@ -308,6 +308,36 @@ class PublisherTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_READ_RELATION_MISMATCH')
         self.assertEqual(len(self.client.posts), 2)
 
+    async def test_duplicate_fragment_receipt_cannot_advance_to_ad(self):
+        original_post = self.client.post
+        async def post(path, params, **options):
+            result = await original_post(path, params, **options)
+            if path.endswith("/addraft_fragments") and params.get("ad_object_type") == "ad_set":
+                return {"id": "111111"}
+            return result
+        self.client.post = post
+        with self.assertRaises(ProvisioningError) as caught:
+            await self.publisher.run(self.client, name="source-flow", levels=self.levels,
+                                     verify_objects=self.verify, draft_only=True)
+        self.assertEqual(caught.exception.code, "PRIVATE_ADS_DRAFT_READ_RELATION_MISMATCH")
+        self.assertEqual(len(self.client.posts), 3)
+        self.assertFalse(any(path.endswith("/publish") for path, _ in self.client.posts))
+
+    async def test_explicit_active_fragment_readback_blocks_paused_draft(self):
+        original_read = self.client.get
+        async def read(path, params):
+            row = await original_read(path, params)
+            if row.get("ad_object_type") == "campaign":
+                row["status"] = "ACTIVE"
+            return row
+        self.client.get = read
+        with self.assertRaises(ProvisioningError) as caught:
+            await self.publisher.run(self.client, name="source-flow", levels=self.levels,
+                                     verify_objects=self.verify, draft_only=True)
+        self.assertEqual(caught.exception.code, "PRIVATE_ADS_DRAFT_DRAFT_DELIVERY_UNSAFE")
+        self.assertEqual(len(self.client.posts), 2)
+        self.assertFalse(any(path.endswith("/publish") for path, _ in self.client.posts))
+
     async def test_has_errors_without_error_details_stops_before_ad_or_publication(self):
         original = self.client.get
         async def read(path, params):
