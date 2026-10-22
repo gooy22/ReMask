@@ -76,3 +76,66 @@ class PixelReads(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(cached['data'], [{'id':'777771','name':'Pixel'}])
         self.assertFalse(cached['checked_live'])
         self.assertFalse(cached['account_scope_verified'])
+
+    async def test_partial_or_unverified_refresh_keeps_the_previous_confirmed_cache(self):
+        from pathlib import Path
+        from time import time
+        values = {'profile_id': '19', 'ad_account_id': '111111',
+                  'business_id': '222222', 'actor_id': '123456', 'query': '', 'limit': 100}
+        complete = {'data': [{'hash': 'saved-image-hash', 'name': 'Saved'}],
+                    'account_id': '111111', 'checked_live': True,
+                    'account_scope_verified': True, 'inventory_complete': True,
+                    'checked_at': int(time()), 'source': 'fixture'}
+        mock = SimpleNamespace(rows={'images': {'source': 'fixture'}},
+                               read=AsyncMock(return_value=complete))
+        with tempfile.TemporaryDirectory() as folder:
+            store = AdvertisingResourceStore(mock); store.root = Path(folder)
+            await store.get(name='images', values=values, actor_id='123456', force=True, web=object())
+            previous = await store.get(name='images', values=values, actor_id='123456')
+            self.assertEqual(previous['data'], complete['data'])
+            for changes in (
+                {'data': [], 'truncated': True},
+                {'data': [], 'query_required': True, 'checked_live': False},
+                {'data': [], 'inventory_complete': False},
+                {'data': [], 'account_scope_verified': False},
+            ):
+                with self.subTest(changes=changes):
+                    mock.read.return_value = {**complete, **changes}
+                    preview = await store.get(name='images', values=values,
+                                              actor_id='123456', force=True, web=object())
+                    self.assertTrue(preview['_cache']['stale'])
+                    cached = await store.get(name='images', values=values, actor_id='123456')
+                    self.assertEqual(cached['data'], complete['data'])
+                    self.assertFalse(cached['checked_live'])
+            mock.read.return_value = {**complete, 'account_id': '999999', 'data': []}
+            with self.assertRaises(ProvisioningError):
+                await store.get(name='images', values=values, actor_id='123456',
+                                force=True, web=object())
+            self.assertEqual((await store.get(name='images', values=values,
+                                              actor_id='123456'))['data'], complete['data'])
+
+    async def test_malformed_cached_resource_returns_unloaded_instead_of_live_proof(self):
+        from pathlib import Path
+        from time import time
+        import json
+        values = {'profile_id': '19', 'ad_account_id': '111111',
+                  'business_id': '222222', 'actor_id': '123456', 'query': ''}
+        response = {'data': [{'hash': 'fixture-hash'}], 'account_id': '111111',
+                    'checked_live': True, 'account_scope_verified': True,
+                    'checked_at': int(time())}
+        mock = SimpleNamespace(rows={'images': {'source': 'fixture'}},
+                               read=AsyncMock(return_value=response))
+        with tempfile.TemporaryDirectory() as folder:
+            store = AdvertisingResourceStore(mock); store.root = Path(folder)
+            await store.get(name='images', values=values, actor_id='123456', force=True, web=object())
+            path = next(Path(folder).glob('*.json'))
+            saved = json.loads(path.read_text())
+            for malformed in ({'data': [None], 'account_id': '111111'},
+                              {'data': [], 'account_id': '999999'},
+                              {'data': [], 'account_id': '111111', 'checked_at': 'now'}):
+                with self.subTest(malformed=malformed):
+                    saved['result'] = malformed
+                    path.write_text(json.dumps(saved))
+                    result = await store.get(name='images', values=values, actor_id='123456')
+                    self.assertEqual(result['availability'], 'NOT_LOADED')
+                    self.assertFalse(result['checked_live'])
