@@ -471,7 +471,14 @@ class AdsManagerPrivateHttp:
                     if response.status != 200:
                         raise AdsManagerResponseError({"http_status": response.status}) from None
                     raise fail("RESPONSE_INVALID", "Advertising response could not be decoded") from None
-                if isinstance(result, dict) and (result.get("error") or result.get("errors")):
+                if isinstance(result, dict) and (
+                        result.get("hasNext") is True or
+                        (isinstance(result.get("extensions"), dict) and
+                         result["extensions"].get("is_final") is False)):
+                    raise fail("RESPONSE_INCOMPLETE", "Meta returned an unfinished advertising response", True)
+                # The presence of an error envelope is a rejection even when
+                # its inner object/list is empty or malformed.
+                if isinstance(result, dict) and ("error" in result or "errors" in result):
                     error = result.get("error")
                     raise AdsManagerResponseError({**(error if isinstance(error, dict) else {}),
                                                    "http_status": response.status})
@@ -485,7 +492,7 @@ class AdsManagerPrivateHttp:
                 raise
             # Exception strings and URLs can include the session credential.
             raise fail("HTTP_UNAVAILABLE", "Advertising HTTP request did not return a usable response", True) from None
-        if not isinstance(result, dict) or result.get("error") or result.get("errors"):
+        if not isinstance(result, dict) or "error" in result or "errors" in result:
             raise fail("REQUEST_REJECTED", "Meta returned an advertising request error")
         if method == 'GET' and path == '/act_' + self.context.account_id:
             await self._confirm_account_alias(result)
