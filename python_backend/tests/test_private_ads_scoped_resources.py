@@ -124,6 +124,18 @@ class ResourceCases(unittest.IsolatedAsyncioTestCase):
         await self.catalog.read(self.web, 'pages', self.values)
         self.assertIn('ad_account_promotable_objects', self.calls[0][1]['fields'])
 
+    async def test_account_scope_rejects_conflicting_secondary_account_id(self):
+        self.account['account_id'] = '999999'
+        with self.assertRaises(ProvisioningError) as caught:
+            await self.catalog.read(self.web, 'pages', self.values)
+        self.assertIn('RESOURCE_SCOPE_MISMATCH', caught.exception.code)
+        self.account['account_id'] = '111111'
+        result = await self.catalog.read(self.web, 'pages', self.values)
+        self.assertEqual(result['account_id'], '111111')
+        self.account['account_id'] = 'act_111111'
+        result = await self.catalog.read(self.web, 'pages', self.values)
+        self.assertEqual(result['data'][0]['id'], '555555')
+
     async def test_exact_business_and_nested_promotable_pages_are_required(self):
         result = await self.catalog.pages(self.web, self.values)
         self.assertEqual(result['data'][0]['id'], '555555')
