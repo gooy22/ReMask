@@ -113,6 +113,21 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.client.uploads,0)
         self.assertEqual(self.client.posts,[])
 
+    async def test_launch_account_read_rejects_conflicting_secondary_id_before_mutation(self):
+        self.payload['launch']['execution_mode'] = 'DRAFT'
+        original = self.client.get
+        async def changed(path, params):
+            record = await original(path, params)
+            if path == '/act_111111':
+                record['account_id'] = '999999'
+            return record
+        self.client.get = changed
+        with self.assertRaises(ProvisioningError) as caught:
+            await self.launch()
+        self.assertIn('ACCOUNT_SCOPE_UNVERIFIED', caught.exception.code)
+        self.assertEqual(self.client.uploads, 0)
+        self.assertEqual(self.client.posts, [])
+
     async def test_real_draft_mode_verifies_fragments_without_payment_publish_or_delivery(self):
         self.payload['launch']['execution_mode'] = 'DRAFT'
         self.payload['launch']['adset']['targeting'] = {'geo_locations': {'countries': ['UA']},
