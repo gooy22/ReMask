@@ -115,6 +115,20 @@ class PixelReads(unittest.IsolatedAsyncioTestCase):
                 await catalog.read(SimpleNamespace(), 'pixels', values)
         self.assertEqual(client.get.await_count, 1)
 
+    async def test_pixel_account_lookup_rejects_conflicting_secondary_identity(self):
+        catalog = AdsManagerResourceCatalog(AdvertisingReadCatalog())
+        values = {'profile_id': '19', 'ad_account_id': '111111',
+                  'business_id': '222222', 'actor_id': '123456',
+                  'query': '', 'limit': 100}
+        client = self.client({'id': 'act_111111', 'account_id': '999999',
+                              'business': {'id': '222222'}})
+        with patch('app.private_ads_resources.AdsManagerPrivateHttp.open',
+                   new=AsyncMock(return_value=client)):
+            with self.assertRaises(ProvisioningError) as caught:
+                await catalog.read(SimpleNamespace(), 'pixels', values)
+        self.assertIn('RESOURCE_SCOPE_MISMATCH', caught.exception.code)
+        self.assertEqual(client.get.await_count, 1)
+
     async def test_existing_resource_cache_does_not_claim_live_pixel_access(self):
         from pathlib import Path
         catalog = AdsManagerResourceCatalog(AdvertisingReadCatalog())
