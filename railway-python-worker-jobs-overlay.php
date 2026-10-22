@@ -111,7 +111,10 @@ function rmx_pwj_worker_request(string $method, string $path, ?array $payload = 
     }
 
     $decoded = json_decode($raw, true);
-    if (!is_array($decoded)) throw new RuntimeException('PYTHON_WORKER_INVALID_JSON');
+    // Worker endpoints return JSON objects, never bare arrays. PHP's
+    // associative json_decode otherwise accepts both as PHP arrays.
+    if (!is_array($decoded) || !str_starts_with(ltrim($raw), '{'))
+        throw new RuntimeException('PYTHON_WORKER_INVALID_JSON');
     if ($status < 200 || $status >= 300) {
         // Upstream message text is untrusted and may contain tokens, URLs
         // or raw response fragments. Retain only safe, typed diagnostics.
