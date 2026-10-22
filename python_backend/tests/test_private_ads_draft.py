@@ -259,6 +259,29 @@ class JournalTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows[0]["status"], "RECONCILE_REQUIRED")
         self.assertFalse(rows[0]["result"]["verified"])
 
+    async def test_corrupted_success_evidence_cannot_reappear_as_verified_state(self):
+        key = OperationKey("ADS_MANAGER:DRAFT")
+        await self.state.save(launch_key="launch", profile_id="19",
+            business_id="222222", ad_account_id="111111", step=key,
+            status="SUCCESS", entity_id="333333",
+            result={"verified": True, "evidence": {"proof": "synthetic"}})
+        with self.state._connect() as con:
+            con.execute("UPDATE private_launch_steps SET result_json=? WHERE launch_key=? AND step=?",
+                        ('{"verified":true,"verified":false}', "launch", key.value))
+        projected = await self.state.step("launch", key)
+        self.assertEqual(projected["status"], "RECONCILE_REQUIRED")
+        self.assertEqual(projected["error_code"], "PRIVATE_LAUNCH_JOURNAL_CORRUPT")
+        self.assertIsNone(projected["entity_id"])
+        self.assertEqual(projected["result"], {})
+        rows = await self.state.all_steps("launch")
+        self.assertEqual(rows[0], projected)
+        with self.state._connect() as con:
+            stored = con.execute(
+                "SELECT status,entity_id FROM private_launch_steps WHERE launch_key=? AND step=?",
+                ("launch", key.value)).fetchone()
+        self.assertEqual(tuple(stored), ("SUCCESS", "333333"),
+                         "The journal must not be silently rewritten on read")
+
     async def test_corrupt_journal_never_restores_a_saved_receipt_or_replays(self):
         class Client:
             count = 0
