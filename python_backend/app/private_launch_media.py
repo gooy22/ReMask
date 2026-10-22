@@ -103,8 +103,8 @@ class LaunchMediaResolver:
                     async with client.post(self.url, headers={'X-Remask-Internal-Key':self.key},
                                            data=form, allow_redirects=False) as response:
                         payload = await response.json()
-                        if response.status != 200 or payload.get('ok') is not True:
-                            message = str(payload.get('error') or '')
+                        if not isinstance(payload, dict) or response.status != 200 or payload.get('ok') is not True:
+                            message = str(payload.get('error') or '') if isinstance(payload, dict) else ''
                             code = 'MEDIA_LIBRARY_QUOTA_EXCEEDED' if 'QUOTA_EXCEEDED' in message else 'MEDIA_LOCAL_PERSIST_FAILED'
                             raise ProvisioningError(code, 'Prepared media could not be saved in the managed library', retryable=False)
         except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as exc:
