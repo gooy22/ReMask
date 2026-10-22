@@ -193,6 +193,31 @@ class PixelReads(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await store.get(name='images', values=values,
                                               actor_id='123456'))['data'], complete['data'])
 
+    async def test_resource_timestamps_cannot_poison_or_replace_a_valid_cache(self):
+        from pathlib import Path
+        from time import time
+        values = {'profile_id': '19', 'ad_account_id': '111111',
+                  'business_id': '222222', 'actor_id': '123456', 'query': ''}
+        good = {'data': [{'hash': 'saved-media-hash'}], 'account_id': '111111',
+                'checked_live': True, 'account_scope_verified': True,
+                'checked_at': int(time())}
+        reader = SimpleNamespace(rows={'images': {'source': 'fixture'}},
+                                 read=AsyncMock(return_value=good))
+        with tempfile.TemporaryDirectory() as folder:
+            store = AdvertisingResourceStore(reader); store.root = Path(folder)
+            await store.get(name='images', values=values, actor_id='123456', force=True, web=object())
+            for malformed in (None, 'today', True, 0, -100, 1.5, float('nan'),
+                              int(time()) + 3600):
+                with self.subTest(timestamp=malformed):
+                    reader.read.return_value = {**good, 'data': [], 'checked_at': malformed}
+                    with self.assertRaises(ProvisioningError) as caught:
+                        await store.get(name='images', values=values, actor_id='123456',
+                                        force=True, web=object())
+                    self.assertIn('RESOURCE_READ_INCOMPLETE', caught.exception.code)
+                    snapshot = await store.get(name='images', values=values, actor_id='123456')
+                    self.assertEqual(snapshot['data'], good['data'])
+                    self.assertFalse(snapshot['checked_live'])
+
     async def test_malformed_cached_resource_returns_unloaded_instead_of_live_proof(self):
         from pathlib import Path
         from time import time
@@ -216,7 +241,11 @@ class PixelReads(unittest.IsolatedAsyncioTestCase):
                               {**response, 'inventory_complete': False},
                               {**response, 'query_required': True},
                               {**response, 'checked_live': False},
-                              {**response, 'account_scope_verified': False}):
+                              {**response, 'account_scope_verified': False},
+                              {**response, 'checked_at': True},
+                              {**response, 'checked_at': -1},
+                              {**response, 'checked_at': float('nan')},
+                              {**response, 'checked_at': int(time()) + 3600}):
                 with self.subTest(malformed=malformed):
                     saved['result'] = malformed
                     path.write_text(json.dumps(saved))
