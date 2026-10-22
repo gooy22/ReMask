@@ -197,6 +197,40 @@ class JournalTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(updated["status"], "SUCCESS")
         self.assertEqual(updated["result"]["evidence"]["owner"], "19")
 
+    async def test_successful_journal_proof_cannot_be_overwritten_by_a_stale_same_account_writer(self):
+        key = OperationKey("ADS_MANAGER:DRAFT")
+        args = {"launch_key": "launch", "profile_id": "19",
+                "business_id": "222222", "ad_account_id": "111111", "step": key}
+        verified = {"verified": True, "evidence": {"proof": "independent-read"}}
+        await self.state.save(**args, status="SUCCESS", entity_id="333333",
+                              result=verified, error_code="VERIFIED", submitted=True)
+        original = await self.state.step("launch", key)
+        stale = [
+            {"status": "RECONCILE_REQUIRED", "entity_id": "333333",
+             "result": {"verified": False}, "error_code": "READ_UNAVAILABLE", "submitted": True},
+            {"status": "BLOCKED", "entity_id": "333333",
+             "result": {"verified": False}, "error_code": "BLOCKED", "submitted": True},
+            {"status": "SUCCESS", "entity_id": "444444",
+             "result": verified, "error_code": "VERIFIED", "submitted": True},
+            {"status": "SUCCESS", "entity_id": "333333",
+             "result": {"verified": True, "evidence": {"proof": "untrusted"}},
+             "error_code": "VERIFIED", "submitted": True},
+            {"status": "SUCCESS", "entity_id": "333333",
+             "result": verified, "error_code": "VERIFIED", "submitted": False},
+            {"status": "SUCCESS", "entity_id": "333333",
+             "result": verified, "error_code": "SPOOFED", "submitted": True},
+        ]
+        for incoming in stale:
+            with self.subTest(incoming=incoming), self.assertRaises(ProvisioningError) as rejected:
+                await self.state.save(**args, **incoming)
+            self.assertEqual(rejected.exception.code, "PRIVATE_LAUNCH_SAVED_OPERATION_MISMATCH")
+            self.assertEqual(await self.state.step("launch", key), original)
+
+        # Exact idempotent evidence is safe to accept; no new POST is involved.
+        await self.state.save(**args, status="SUCCESS", entity_id="333333",
+                              result=verified, error_code="VERIFIED", submitted=True)
+        self.assertEqual(await self.state.step("launch", key), original)
+
     async def test_lost_reply_never_replays(self):
         class Client:
             count = 0
