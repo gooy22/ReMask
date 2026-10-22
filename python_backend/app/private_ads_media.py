@@ -12,7 +12,7 @@ def _image_receipt(response, filename=None):
     key, row = next(iter(rows.items()))
     if filename is not None and str(key).rsplit("/", 1)[-1] != filename:
         raise fail("IMAGE_RECEIPT_UNAVAILABLE", "Image upload receipt belongs to another filename")
-    image_hash = row.get("hash") if isinstance(row, dict) else None
+    image_hash = row.get("hash") if isinstance(row, dict) and "error" not in row and "errors" not in row else None
     if not isinstance(image_hash, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,160}", image_hash):
         raise fail("IMAGE_RECEIPT_UNAVAILABLE", "Image upload returned no valid image hash")
     return {"image_hash": image_hash}
@@ -22,7 +22,10 @@ async def verify_image(client, image_hash):
         raise fail("IMAGE_UNVERIFIED", "Selected image hash is malformed")
     response = await client.get("/act_" + client.context.account_id + "/adimages",
         {"hashes": [image_hash], "fields": ["account_id", "hash"], "limit": 2})
-    rows = response.get("data") if isinstance(response, dict) and "error" not in response and "errors" not in response else None
+    complete = (isinstance(response, dict) and "error" not in response and "errors" not in response
+                and isinstance(response.get("paging", {}), dict)
+                and not response.get("paging", {}).get("next"))
+    rows = response.get("data") if complete else None
     if (not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict)
             or rows[0].get("hash") != image_hash or not isinstance(rows[0].get("account_id"), str)
             or rows[0]["account_id"].removeprefix("act_") != client.context.account_id):
