@@ -399,6 +399,11 @@ class JournalTests(unittest.IsolatedAsyncioTestCase):
                           '{"untrusted_float":1e999,' + original[1:],
                           '{"untrusted_number":NaN,' + original[1:],
                           '[]', 'null', '1', '"scalar"',
+                          '{"evidence":[]}', '{"evidence":null}',
+                          '{"evidence":{"receipt":[]}}',
+                          '{"evidence":{"verification":false}}',
+                          '{"evidence":{"publication":null}}',
+                          '{"evidence":{"binding":"invalid"}}',
                           '[' * 1100 + '0' + ']' * 1100):
             with self.subTest(malformed=malformed[:35]):
                 with self.state._connect() as con:
