@@ -608,9 +608,18 @@ async function fetchAsset(resource,force=false){
     if(data?.profile!==profile||String(data?.account_id||'').replace(/^act_/,'')!==account||data?.resource!==resource)
       throw new Error('Assets получены для другого профиля, РК или типа ресурса.');
     if(!Array.isArray(data?.data)||
-       (force&&(data.checked_live!==true||data.account_scope_verified!==true)))
+       (force&&(data.checked_live!==true||data.account_scope_verified!==true||
+                data.query_required===true||data.truncated===true||data.inventory_complete===false)))
       throw new Error('Assets получены не полностью или не подтверждены для выбранного РК.');
-    if(generation===state.asset.generation)state.asset.cache.set(key,data);
+    // Keep saved preview rows distinct from complete live reads: an incomplete
+    // refresh must never replace the last account-scoped, live-confirmed list.
+    const saved=state.asset.cache.get(key);
+    const savedConfirmed=saved?.checked_live===true&&saved?.account_scope_verified===true&&
+      saved?.query_required!==true&&saved?.truncated!==true&&saved?.inventory_complete!==false;
+    if(generation===state.asset.generation&&(!savedConfirmed||
+       (data.checked_live===true&&data.account_scope_verified===true&&
+        data.query_required!==true&&data.truncated!==true&&data.inventory_complete!==false)))
+      state.asset.cache.set(key,data);
     return data;
   }).finally(()=>{if(state.asset.inflight.get(key)===pending)state.asset.inflight.delete(key);});
   pending.remaskPrivateForce=force===true;
