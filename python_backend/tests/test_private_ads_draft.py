@@ -13,6 +13,7 @@ from app.private_ads_draft import fragment_params, fragment_values_match, flatte
 from app.private_ads_http import context_from_document, AdsManagerResponseError
 from app.private_ads_state import AdsManagerSubmitter
 from app.private_ads_publication import AdsManagerDraftPublisher
+from app.private_ads_verify import _scope as object_read_scope
 from app.private_launch_extensions import OperationKey
 from app.private_launch import PrivateLaunchStateStore
 from app.provisioning.models import ProvisioningError
@@ -126,6 +127,15 @@ class WireTests(unittest.TestCase):
         row['data'][0]['fragment_statuses'] = row['data'][0]['fragment_statuses']['data']
         self.assertTrue(publication_status(row, operation_id='789012',
             fragment_ids=['111111', '222222', '333333'])['completed'])
+
+    def test_independent_object_scope_rejects_empty_error_envelopes(self):
+        record = {'id': '777771', 'account_id': '111111'}
+        object_read_scope(record, '111111', '777771')
+        for envelope in ({'error': {}}, {'errors': []}, {'error': None}):
+            with self.subTest(envelope=envelope):
+                with self.assertRaises(ProvisioningError) as caught:
+                    object_read_scope({**record, **envelope}, '111111', '777771')
+                self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_OBJECT_ID_MISMATCH')
 
     def test_async_handle_does_not_override_explicit_publication_rejection(self):
         for value in ({'success': False, 'async_request_set_id': '789012'}, {'async_request_set_id': '789012'}):
