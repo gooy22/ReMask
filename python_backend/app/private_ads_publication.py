@@ -95,9 +95,12 @@ class AdsManagerDraftPublisher:
                     raise fail("READ_SPEC_MISMATCH", "Saved draft settings differ from this Launch")
                 # Meta can expose HAS_ERRORS before returning its error list.
                 # A stored fragment is not a settled, valid configuration.
-                if row.get("active_errors") or row.get("validation_status") == "HAS_ERRORS":
+                active_errors = row.get("active_errors")
+                if row.get("validation_status") == "HAS_ERRORS" or (isinstance(active_errors, list) and active_errors):
                     raise fail("VALIDATION_ERRORS", "Meta returned active validation errors for the " + level + " draft")
-                if row.get("validation_status") != "VALIDATED":
+                # A response without an explicit empty error list is incomplete.
+                # VALIDATED alone is not proof that there are no active errors.
+                if row.get("validation_status") != "VALIDATED" or not isinstance(active_errors, list):
                     # Keep the accepted receipt. A retry reads this exact
                     # fragment through the original intent, without POST replay.
                     raise fail("VALIDATION_PENDING", "Meta has not confirmed validation of the " + level + " draft; resume its saved read", True)
@@ -108,7 +111,7 @@ class AdsManagerDraftPublisher:
                     "ad_object_id": objects[level], "fragment_saved": True,
                     "relationships_confirmed": True, "editor_verified": False,
                     "meta_validation_status": row.get("validation_status"),
-                    "active_errors_observed": "active_errors" in row})
+                    "active_errors_observed": True})
                 fragments.append(fragment_id);parent_id = objects[level]
             if draft_only:
                 return {"status": "SUCCESS", "draft_id": draft_id, "fragment_ids": fragments,
