@@ -70,6 +70,29 @@ class ResourceCases(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['data'],[{'id':'777777','name':'Exact employer','type':'work_employers'}])
         self.assertEqual(self.calls[-1][1]['whitelisted_types'],['work_employers'])
 
+    async def test_malformed_or_rejected_resource_envelopes_never_count_as_complete(self):
+        for resource, path in (
+            ("custom_audiences", "/act_111111/customaudiences"),
+            ("interests", "/act_111111/targetingbrowse"),
+        ):
+            for invalid in ([], None, {"data": [], "error": {}}, {"data": [], "errors": []}):
+                with self.subTest(resource=resource, invalid=invalid):
+                    self.responses[path] = invalid
+                    with self.assertRaises(ProvisioningError) as caught:
+                        await self.catalog.read(self.web, resource, self.values)
+                    self.assertIn("RESOURCE_READ_INCOMPLETE", caught.exception.code)
+
+    async def test_rejected_instagram_media_envelope_is_not_a_successful_empty_inventory(self):
+        self.responses["/act_111111/instagram_accounts"] = {"data": [{
+            "id": "888888", "id_v2": "888889", "has_create_ads_access": True,
+            "is_connected_to_ad_account": True}]}
+        for invalid in ([], {"data": [], "error": {}}, {"data": [], "errors": []}):
+            with self.subTest(invalid=invalid):
+                self.responses["/888889/advertisable_media"] = invalid
+                with self.assertRaises(ProvisioningError) as caught:
+                    await self.catalog.read(self.web, "instagram_media", self.values)
+                self.assertIn("RESOURCE_READ_INCOMPLETE", caught.exception.code)
+
     async def test_readonly_references_do_not_require_publishing_readiness(self):
         self.account['account_status']=2
         self.responses['/act_111111/targetingbrowse']={'data':[{'id':'777777','name':'Exact interest','type':'interests'}]}
