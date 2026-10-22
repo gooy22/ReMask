@@ -420,6 +420,29 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
         self.session.facebook_web.assert_not_awaited()
         self.assertEqual(self.client.posts, [])
 
+    async def test_staged_media_rejects_client_paths_urls_and_foreign_checksum_before_network(self):
+        self.payload['launch']['execution_mode'] = 'DRAFT'
+        creative = self.payload['launch']['creative']
+        del creative['media_library_id']
+        managed = {'id': self.media.id, 'sha256': self.media.sha256,
+                   'size_bytes': self.media.size_bytes,
+                   'media_type': 'image', 'mime_type': 'image/png'}
+        creative['staged_media'] = [managed]
+        valid_plan = self.owner.ads_manager.plan(profile_id='19', payload=self.payload)
+        self.assertEqual(valid_plan['local_media'], [
+            {'id':self.media.id, 'sha256':self.media.sha256}])
+        for change in ({'path':'/tmp/unreviewed.png'},
+                       {'url':'https://example.org/foreign-media'},
+                       {'id':'m-'+'f'*24},
+                       {'sha256':'b'*64},
+                       {'access_token':'fake-user-parameter'}):
+            with self.subTest(change=change):
+                creative['staged_media'] = [{**managed, **change}]
+                with self.assertRaises(ProvisioningError):
+                    self.owner.ads_manager.plan(profile_id='19', payload=self.payload)
+        self.session.facebook_web.assert_not_awaited()
+        self.assertEqual(self.client.posts, [])
+
     async def test_versioned_launch_acceptance_fixture_matches_request_projection(self):
         fixture_path = Path(__file__).parent / 'fixtures/launch/single-image-draft.json'
         accepted = json.loads(fixture_path.read_text())
