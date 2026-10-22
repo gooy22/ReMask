@@ -193,6 +193,28 @@ class PixelReads(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await store.get(name='images', values=values,
                                               actor_id='123456'))['data'], complete['data'])
 
+    async def test_duplicate_json_fields_in_disk_cache_are_not_loaded(self):
+        from pathlib import Path
+        from time import time
+        values = {'profile_id': '19', 'ad_account_id': '111111',
+                  'business_id': '222222', 'actor_id': '123456', 'query': ''}
+        result = {'data': [{'hash': 'cached-image'}], 'account_id': '111111',
+                  'checked_live': True, 'account_scope_verified': True,
+                  'checked_at': int(time())}
+        mock = SimpleNamespace(rows={'images': {'source': 'fixture'}},
+                               read=AsyncMock(return_value=result))
+        with tempfile.TemporaryDirectory() as folder:
+            store = AdvertisingResourceStore(mock); store.root = Path(folder)
+            await store.get(name='images', values=values, actor_id='123456', force=True, web=object())
+            path = next(Path(folder).glob('*.json'))
+            valid = path.read_text()
+            self.assertIn('"resource": "images"', valid)
+            path.write_text(valid.replace('"resource": "images"',
+                                          '"resource": "images", "resource": "images"', 1))
+            cached = await store.get(name='images', values=values, actor_id='123456')
+            self.assertEqual(cached['availability'], 'NOT_LOADED')
+            self.assertFalse(cached['checked_live'])
+
     async def test_resource_timestamps_cannot_poison_or_replace_a_valid_cache(self):
         from pathlib import Path
         from time import time
