@@ -197,6 +197,12 @@ console.log('Private Launch catalog and funding truth checks passed');
       if(body.action==='private_launch_review')
         return {ok:true,status:200,json:async()=>({ok:true,review:{
           ready:true,
+          configuration_valid:true,
+          checked_live:true,
+          api_preflight_ready:true,
+          editor_state:'EDITOR_UNVERIFIED',
+          missing_fields:[],
+          missing_contracts:[],
           profile_id:body.profile_id,
           preflight:{
             selected_payment_method:{
@@ -261,6 +267,12 @@ console.log('Private Launch catalog and funding truth checks passed');
   assert.equal(reviewRequests[1].body.launch.override.adset.targeting.age_max,35);
   assert.equal(reviewed[0].row.selected_payment_method.last4,'1111');
   assert.equal(reviewed[1].row.selected_payment_method.last4,'2222');
+  assert.equal(reviewed[0].review.checked_live,true);
+  assert.equal(reviewed[0].review.editor_state,'EDITOR_UNVERIFIED',
+    'API readiness must remain separate from native editor acceptance');
+  assert.deepEqual(Array.from(privateCtx.state.privateLaunchReadiness.targets,row=>row.editor_state),
+    ['EDITOR_UNVERIFIED','EDITOR_UNVERIFIED']);
+  assert.deepEqual(Array.from(privateCtx.state.privateLaunchReadiness.targets,row=>row.checked_live),[true,true]);
   assert.ok(requests.every(r=>r.body.doc_id===undefined&&r.body.fb_dtsg===undefined));
 
   // Real media preflight runs before the account/Meta readiness request and uses each target's exact launch.
