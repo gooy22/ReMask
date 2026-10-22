@@ -166,6 +166,7 @@ class JournalTests(unittest.IsolatedAsyncioTestCase):
         await self.state.save(**args, result={"evidence": {"verified": False}})
         prior = await self.state.step("launch", key)
         malformed = ActionResult.reconcile(key.value, code="SYNTHETIC_INVALID_READ",
+                                           message="Synthetic invalid journal result",
                                            evidence={"value": float("inf")})
         with self.assertRaises(ValueError):
             await self.state.finish_read(prior, malformed)
