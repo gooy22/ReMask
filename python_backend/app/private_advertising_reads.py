@@ -189,6 +189,7 @@ class AdvertisingResourceStore:
             rows = [{field: value for field, value in item.items() if field != "ad_account_page_access_verified"}
                     for item in result["data"]]
             return {**result, "data": rows, "checked_live": False, "account_scope_verified": False,
+                    "ad_account_page_access_verified": False,
                     "_cache": {"hit": True, "cached_only": True, "fetched_at": result["checked_at"],
                                "stale": time.time() - result["checked_at"] > 1800}}
         if web is None:
