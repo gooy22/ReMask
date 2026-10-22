@@ -12,6 +12,7 @@ assert.match(workerBridge, /\$request = \$path === 'media-inspect'[\s\S]*\['laun
   const assets=overlay.match(/<<<'ASSET_UI'\n([\s\S]*?)\nASSET_UI/)[1];
   const requests=[];
   let foreign=false,hold=null,partial=false,refreshFailed=false;
+  let truncated=false,queryRequired=false,inventoryIncomplete=false;
   const ctx={state:{asset:{profile:'19',accountId:'act_111111111',generation:1,cache:new Map(),inflight:new Map()}},
     post:input=>input,apiJson:async(url,input)=>{
       requests.push({url,input});
@@ -19,7 +20,8 @@ assert.match(workerBridge, /\$request = \$path === 'media-inspect'[\s\S]*\['laun
       if(refreshFailed)throw new Error('Synthetic Meta read failure');
       return {ok:true,profile:input.profile,account_id:foreign?'999999999':input.account_id.replace(/^act_/,''),
         resource:input.resource,data:partial?null:[{id:'555555555'}],
-        checked_live:input.force==='1',account_scope_verified:true};
+        checked_live:input.force==='1',account_scope_verified:true,
+        truncated,query_required:queryRequired,inventory_complete:!inventoryIncomplete};
     }};
   vm.createContext(ctx);vm.runInContext(assets,ctx);
   await ctx.fetchAsset('pages');
@@ -49,6 +51,16 @@ assert.match(workerBridge, /\$request = \$path === 'media-inspect'[\s\S]*\['laun
   await assert.rejects(()=>ctx.fetchAsset('images',true),/не полностью/);
   partial=false;
   assert.equal(await ctx.fetchAsset('images'),confirmed,'partial response must not erase confirmed assets');
+  for(const incomplete of ['truncated','queryRequired','inventoryIncomplete']){
+    if(incomplete==='truncated')truncated=true;
+    if(incomplete==='queryRequired')queryRequired=true;
+    if(incomplete==='inventoryIncomplete')inventoryIncomplete=true;
+    await assert.rejects(()=>ctx.fetchAsset('images',true),/не полностью/,
+      incomplete+' forced READ must not be treated as a complete account inventory');
+    truncated=false;queryRequired=false;inventoryIncomplete=false;
+    assert.equal(await ctx.fetchAsset('images'),confirmed,
+      incomplete+' must preserve the previous live-confirmed inventory');
+  }
   ctx.state.asset.accountId='';
   await assert.rejects(()=>ctx.fetchAsset('pages'),/Выберите один РК/);
   console.log('Private Workspace Assets keep exact RK scope, reject foreign responses and refresh independently.');
