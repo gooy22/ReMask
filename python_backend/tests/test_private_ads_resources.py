@@ -85,6 +85,30 @@ class PixelReads(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(cached['checked_live'])
         self.assertFalse(cached['account_scope_verified'])
 
+    async def test_cached_page_permissions_are_never_represented_as_live_proof(self):
+        from pathlib import Path
+        from time import time
+        values = {'profile_id': '19', 'ad_account_id': '111111',
+                  'business_id': '222222', 'actor_id': '123456', 'query': ''}
+        confirmed = {'data': [{'id': '555555', 'name': 'Saved Page',
+                               'ad_account_page_access_verified': True}],
+                     'account_id': '111111', 'checked_live': True,
+                     'account_scope_verified': True,
+                     'ad_account_page_access_verified': True,
+                     'checked_at': int(time())}
+        mock = SimpleNamespace(rows={'pages': {'source': 'fixture'}},
+                               read=AsyncMock(return_value=confirmed))
+        with tempfile.TemporaryDirectory() as folder:
+            store = AdvertisingResourceStore(mock); store.root = Path(folder)
+            observed = await store.get(name='pages', values=values,
+                                       actor_id='123456', force=True, web=object())
+            cached = await store.get(name='pages', values=values, actor_id='123456')
+        self.assertTrue(observed['ad_account_page_access_verified'])
+        self.assertFalse(cached['ad_account_page_access_verified'])
+        self.assertFalse(cached['account_scope_verified'])
+        self.assertFalse(cached['checked_live'])
+        self.assertNotIn('ad_account_page_access_verified', cached['data'][0])
+
     async def test_partial_or_unverified_refresh_keeps_the_previous_confirmed_cache(self):
         from pathlib import Path
         from time import time
