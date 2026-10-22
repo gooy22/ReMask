@@ -220,7 +220,7 @@ function remaskPrivateTargetRows(config) {
         if(!profile)throw new Error('Для РК не выбран профиль Facebook: '+accountId+'.');
         if(!/^\d{5,30}$/.test(businessId))throw new Error('Для РК не указан BM: '+accountId+'.');
         if(!/^\d{5,30}$/.test(pageId))throw new Error('Выберите страницу для РК '+accountId+'.');
-        const selectedPaymentMethod=remaskPrivateSelectedPayment(
+        const selectedPaymentMethod=executionMode==='DRAFT'?null:remaskPrivateSelectedPayment(
             profile,accountId
         );
         const override=JSON.parse(JSON.stringify(overrides[accountId]||overrides['act_'+accountId]||{}));

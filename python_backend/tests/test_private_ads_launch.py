@@ -392,6 +392,25 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(plan['editor_state'], 'EDITOR_UNVERIFIED')
         self.assertFalse(plan['checked_live'])
 
+    async def test_draft_unknown_sections_and_fields_fail_before_session_or_post(self):
+        self.payload['launch']['execution_mode'] = 'DRAFT'
+        invalid = [
+            ('launch', 'unreviewed_section', {}),
+            ('payload', 'unreviewed_field', 'ignored'),
+        ]
+        for location, key, value in invalid:
+            with self.subTest(location=location, key=key):
+                candidate = copy.deepcopy(self.payload)
+                (candidate['launch'] if location == 'launch' else candidate)[key] = value
+                with self.assertRaises(ProvisioningError):
+                    self.owner.ads_manager.plan(profile_id='19', payload=candidate)
+        candidate = copy.deepcopy(self.payload)
+        candidate['launch'] = {'base':candidate['launch'], 'override':{}, 'unreviewed_section':{}}
+        with self.assertRaises(ProvisioningError):
+            self.owner.ads_manager.plan(profile_id='19', payload=candidate)
+        self.session.facebook_web.assert_not_awaited()
+        self.assertEqual(self.client.posts, [])
+
     async def test_live_api_review_keeps_editor_acceptance_unverified(self):
         self.payload['launch']['execution_mode'] = 'DRAFT'
         result = await self.owner.review(profile_id='19', context=self.context, payload=self.payload,

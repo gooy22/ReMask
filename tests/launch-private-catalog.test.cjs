@@ -11,13 +11,15 @@ assert.match(workerBridge, /\$request = \$path === 'media-inspect'[\s\S]*\['laun
   const overlay=fs.readFileSync(path.join(__dirname,'..','railway-launch-private-catalog-overlay.php'),'utf8');
   const assets=overlay.match(/<<<'ASSET_UI'\n([\s\S]*?)\nASSET_UI/)[1];
   const requests=[];
-  let foreign=false,hold=null;
+  let foreign=false,hold=null,partial=false,refreshFailed=false;
   const ctx={state:{asset:{profile:'19',accountId:'act_111111111',generation:1,cache:new Map(),inflight:new Map()}},
     post:input=>input,apiJson:async(url,input)=>{
       requests.push({url,input});
       if(hold){const current=hold;hold=null;await current;}
+      if(refreshFailed)throw new Error('Synthetic Meta read failure');
       return {ok:true,profile:input.profile,account_id:foreign?'999999999':input.account_id.replace(/^act_/,''),
-        resource:input.resource,data:[{id:'555555555'}],checked_live:input.force==='1'};
+        resource:input.resource,data:partial?null:[{id:'555555555'}],
+        checked_live:input.force==='1',account_scope_verified:true};
     }};
   vm.createContext(ctx);vm.runInContext(assets,ctx);
   await ctx.fetchAsset('pages');
@@ -26,9 +28,10 @@ assert.match(workerBridge, /\$request = \$path === 'media-inspect'[\s\S]*\['laun
   await ctx.fetchAsset('pages');assert.equal(requests.length,1);
   ctx.state.asset.accountId='act_222222222';ctx.state.asset.generation++;
   await ctx.fetchAsset('pages');assert.equal(requests.length,2,'same-profile Pages cannot reuse another RK cache');
+  const savedPages=await ctx.fetchAsset('pages');
   foreign=true;
   await assert.rejects(()=>ctx.fetchAsset('pages',true),/другого профиля/);
-  assert.equal(ctx.state.asset.cache.has('19|pages|222222222'),false);
+  assert.equal(await ctx.fetchAsset('pages'),savedPages,'foreign refresh cannot replace the last scoped list');
   foreign=false;
   let release;hold=new Promise(resolve=>release=resolve);
   const cachedRead=ctx.fetchAsset('images');
@@ -37,6 +40,15 @@ assert.match(workerBridge, /\$request = \$path === 'media-inspect'[\s\S]*\['laun
   assert.equal((await refreshed).checked_live,true,'Refresh must perform a fresh READ after an older cached READ');
   const imageRequests=requests.filter(r=>r.input.resource==='images');
   assert.deepEqual(imageRequests.map(r=>r.input.force),['0','1']);
+  const confirmed=await ctx.fetchAsset('images');
+  refreshFailed=true;
+  await assert.rejects(()=>ctx.fetchAsset('images',true),/Synthetic Meta read failure/);
+  refreshFailed=false;
+  assert.equal(await ctx.fetchAsset('images'),confirmed,'failed refresh must retain the last confirmed list');
+  partial=true;
+  await assert.rejects(()=>ctx.fetchAsset('images',true),/не полностью/);
+  partial=false;
+  assert.equal(await ctx.fetchAsset('images'),confirmed,'partial response must not erase confirmed assets');
   ctx.state.asset.accountId='';
   await assert.rejects(()=>ctx.fetchAsset('pages'),/Выберите один РК/);
   console.log('Private Workspace Assets keep exact RK scope, reject foreign responses and refresh independently.');
@@ -330,6 +342,12 @@ console.log('Private Launch catalog and funding truth checks passed');
     ['1111','2222']
   );
   assert.ok(planned.request.profiles.every(row=>row.tasks[0].payload.doc_id===undefined));
+
+  config.payload.execution_mode='DRAFT';
+  const draftRows=privateCtx.remaskPrivateTargetRows(config);
+  assert.ok(draftRows.every(row=>row.selected_payment_method===undefined),
+    'draft review and worker input must omit payment selection');
+  delete config.payload.execution_mode;
 
   const reused=privateCtx.remaskPrivateJobRequest(config,reviewed);
   assert.equal(reused.reused,true);

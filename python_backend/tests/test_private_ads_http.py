@@ -4,6 +4,8 @@ import json
 from contextlib import asynccontextmanager
 import os
 from pathlib import Path
+import subprocess
+import sys
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -21,9 +23,18 @@ class Body:
 
 
 class LaunchTransportIsolationTests(unittest.TestCase):
+    def test_launch_import_graph_does_not_load_browser_automation(self):
+        completed = subprocess.run([sys.executable, '-W', 'ignore', '-c',
+            'import sys; import app.private_launch; import app.private_ads_launch; '
+            'assert "app.facebook_business_browser" not in sys.modules'],
+            cwd=Path(__file__).parents[1], env={**os.environ, 'PYTHONDONTWRITEBYTECODE':'1'},
+            capture_output=True, text=True, timeout=30)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
     def test_private_launch_transport_modules_have_no_browser_automation_imports(self):
         root = Path(__file__).parents[1] / 'app'
-        modules = ('private_ads_launch.py', 'private_ads_http.py', 'private_ads_draft.py',
+        modules = ('private_ads_launch.py', 'private_ads_http.py', 'private_ads_document.py',
+            'private_launch_read.py', 'private_ads_draft.py',
             'private_ads_state.py', 'private_ads_publication.py', 'private_launch_media.py',
             'private_ads_media.py', 'private_ads_video.py', 'private_ads_creative.py',
             'media_preflight.py')

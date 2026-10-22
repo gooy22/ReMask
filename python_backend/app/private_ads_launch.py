@@ -50,7 +50,7 @@ class AdsManagerLaunch:
         digest.update(BIDDING_MANIFEST.read_bytes())
         digest.update(Path(__file__).with_name('contracts').joinpath('media_layout_20261021.json').read_bytes())
         digest.update(Path(__file__).with_name('contracts').joinpath('private_ads_cta_20261021.json').read_bytes())
-        for name in ("private_ads_launch.py", "private_ads_http.py", "private_ads_draft.py",
+        for name in ("private_ads_launch.py", "private_ads_http.py", "private_ads_document.py", "private_ads_draft.py",
                      "private_ads_state.py", "private_ads_media.py", "private_ads_publication.py", "private_launch_media.py", "media_preflight.py", "private_ads_cta.py",
                      "private_ads_verify.py", "private_ads_creative.py", "private_ads_video.py", "private_ads_delivery.py", "private_ads_catalog.py", "private_ads_reads.py", "private_draft_pages.py", "private_ads_resources.py", "private_ads_helpers.py", "private_ads_preview.py", "private_ads_objectives.py", "private_ads_inspect.py", "private_ads_bidding.py", "private_ads_objective_wire.py", "private_ads_objective_repair.py"):
             digest.update(name.encode() + b"\0" + Path(__file__).with_name(name).read_bytes())
@@ -63,10 +63,18 @@ class AdsManagerLaunch:
             raise fail("INVALID_INPUT", "Advertising profile and configuration are required")
         target = {"profile_id": str(profile_id), **{key: identity(payload.get(key))
                   for key in ("business_id", "ad_account_id", "page_id")}}
-        launch = _effective_launch_payload(payload.get("launch"))
+        raw_launch = payload.get("launch")
+        if (isinstance(raw_launch, dict) and {"base", "override"} & set(raw_launch)
+                and set(raw_launch) - {"base", "override"}):
+            raise fail("INVALID_INPUT", "Launch overrides contain unsupported sections")
+        launch = _effective_launch_payload(raw_launch)
         mode = launch.get("execution_mode", "PUBLISH")
         if not isinstance(mode, str) or mode not in {"DRAFT", "PUBLISH"}:
             raise fail("INVALID_INPUT", "Choose DRAFT or PUBLISH execution")
+        if set(launch) - {"execution_mode", "campaign", "adset", "ad", "creative", "delivery"}:
+            raise fail("INVALID_INPUT", "Launch contains unsupported sections")
+        if mode == "DRAFT" and set(payload) - {"business_id", "ad_account_id", "page_id", "launch_key", "launch", "publish_saved_draft"}:
+            raise fail("INVALID_INPUT", "Draft input contains unsupported fields")
         if mode == "DRAFT" and any(value != "PAUSED" for value in launch.get("delivery", {}).values()):
             raise fail("INVALID_INPUT", "A Meta draft cannot request active delivery")
         for section in ("campaign", "adset"):
@@ -136,6 +144,8 @@ class AdsManagerLaunch:
         return target, launch, references, _launch_fingerprint(payload, target["page_id"])
 
     def plan(self, *, profile_id, payload):
+        if isinstance(payload, dict) and "publish_saved_draft" in payload:
+            raise fail("INVALID_INPUT", "Draft review cannot request publication")
         target, launch, references, fingerprint = self.prepare(profile_id, payload)
         draft_only = launch.get("execution_mode") == "DRAFT"
         contracts = self.status()["contracts"]

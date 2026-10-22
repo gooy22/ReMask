@@ -295,6 +295,19 @@ class PublisherTests(unittest.IsolatedAsyncioTestCase):
         return await self.publisher.run(self.client, name="source-flow", levels=self.levels,
                                         verify_objects=verify or self.verify)
 
+    async def test_campaign_fragment_with_foreign_parent_blocks_next_post(self):
+        original = self.client.get
+        async def read(path, params):
+            row = await original(path, params)
+            if row.get('ad_object_type') == 'campaign':
+                row['parent_ad_object_id'] = '999999'
+            return row
+        self.client.get = read
+        with self.assertRaises(ProvisioningError) as caught:
+            await self.launch()
+        self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_READ_RELATION_MISMATCH')
+        self.assertEqual(len(self.client.posts), 2)
+
     async def test_has_errors_without_error_details_stops_before_ad_or_publication(self):
         original = self.client.get
         async def read(path, params):

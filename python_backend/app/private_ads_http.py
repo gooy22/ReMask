@@ -15,7 +15,7 @@ import re
 from urllib.parse import parse_qs, urlsplit
 
 from .private_ads_draft import fail, flatten_params, identity
-from .private_inventory import _auth_gate, _json_payloads, _JSON_SCRIPT_RE, _response_only
+from .private_ads_document import _auth_gate, _json_payloads, _JSON_SCRIPT_RE, _response_only
 from .provisioning.models import ProvisioningError
 
 log = logging.getLogger("remask.private_ads_http")

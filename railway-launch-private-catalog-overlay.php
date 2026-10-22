@@ -594,7 +594,6 @@ async function fetchAsset(resource,force=false){
   if(!profile||!accountId)throw new Error('Выберите один РК для загрузки Assets.');
   const account=String(accountId).replace(/^act_/,'');
   const key=`${profile}|${resource}|${account}`;
-  if(force)state.asset.cache.delete(key);
   if(!force&&state.asset.cache.has(key))return state.asset.cache.get(key);
   if(state.asset.inflight.has(key)){
     const existing=state.asset.inflight.get(key);
@@ -608,6 +607,9 @@ async function fetchAsset(resource,force=false){
       account_id:accountId,force:force?'1':'0'})).then(data=>{
     if(data?.profile!==profile||String(data?.account_id||'').replace(/^act_/,'')!==account||data?.resource!==resource)
       throw new Error('Assets получены для другого профиля, РК или типа ресурса.');
+    if(!Array.isArray(data?.data)||
+       (force&&(data.checked_live!==true||data.account_scope_verified!==true)))
+      throw new Error('Assets получены не полностью или не подтверждены для выбранного РК.');
     if(generation===state.asset.generation)state.asset.cache.set(key,data);
     return data;
   }).finally(()=>{if(state.asset.inflight.get(key)===pending)state.asset.inflight.delete(key);});

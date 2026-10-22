@@ -89,7 +89,7 @@ class AdsManagerDraftPublisher:
                 self._account(row, scope["ad_account_id"])
                 if (row.get("id") != fragment_id or row.get("ad_draft_id") != draft_id
                         or row.get("ad_object_type") != level
-                        or (parent_id is not None and row.get("parent_ad_object_id") != parent_id)):
+                        or row.get("parent_ad_object_id") not in ((None, "") if parent_id is None else (parent_id,))):
                     raise fail("READ_RELATION_MISMATCH", "Draft fragment identity or parent is unconfirmed")
                 if not fragment_values_match(row.get("values"), values, business_id=scope["business_id"]):
                     raise fail("READ_SPEC_MISMATCH", "Saved draft settings differ from this Launch")
