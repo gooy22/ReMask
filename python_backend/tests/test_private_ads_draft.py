@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, patch
 from app.private_ads_draft import fragment_params, fragment_values_match, flatten_params, publication_receipt, publication_status, publish_params
 from app.private_ads_http import context_from_document, AdsManagerResponseError
 from app.private_ads_state import AdsManagerSubmitter
+from app.action_result import ActionResult
 from app.private_ads_publication import AdsManagerDraftPublisher
 from app.private_ads_verify import _scope as object_read_scope
 from app.private_launch_extensions import OperationKey
@@ -151,6 +152,24 @@ class JournalTests(unittest.IsolatedAsyncioTestCase):
         await self.state.init()
         self.sender = AdsManagerSubmitter(self.state, launch_key="launch", profile_id="19",
             business_id="222222", account_id="111111", actor_id="123456", launch_fingerprint="fixed-inputs", source_digest="source")
+
+    async def test_nonfinite_journal_evidence_is_rejected_before_sqlite_write(self):
+        key = OperationKey("ADS_MANAGER:DRAFT")
+        args = {"launch_key": "launch", "profile_id": "19",
+                "business_id": "222222", "ad_account_id": "111111",
+                "step": key, "status": "SUBMITTING"}
+        for invalid in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(value=str(invalid)), self.assertRaises(ValueError):
+                await self.state.save(**args, result={"evidence": {"value": invalid}})
+            self.assertIsNone(await self.state.step("launch", key))
+
+        await self.state.save(**args, result={"evidence": {"verified": False}})
+        prior = await self.state.step("launch", key)
+        malformed = ActionResult.reconcile(key.value, code="SYNTHETIC_INVALID_READ",
+                                           evidence={"value": float("inf")})
+        with self.assertRaises(ValueError):
+            await self.state.finish_read(prior, malformed)
+        self.assertEqual(await self.state.step("launch", key), prior)
 
     async def test_lost_reply_never_replays(self):
         class Client:
