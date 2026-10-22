@@ -61,6 +61,15 @@ assert.match(workerBridge, /\$request = \$path === 'media-inspect'[\s\S]*\['laun
     assert.equal(await ctx.fetchAsset('images'),confirmed,
       incomplete+' must preserve the previous live-confirmed inventory');
   }
+  for(const incomplete of ['truncated','queryRequired','inventoryIncomplete']){
+    if(incomplete==='truncated')truncated=true;
+    if(incomplete==='queryRequired')queryRequired=true;
+    if(incomplete==='inventoryIncomplete')inventoryIncomplete=true;
+    await assert.rejects(()=>ctx.fetchAsset('videos'),/не полностью/,
+      incomplete+' unforced READ must not be cached as a complete list');
+    assert.equal(ctx.state.asset.cache.has('19|videos|222222222'),false);
+    truncated=false;queryRequired=false;inventoryIncomplete=false;
+  }
   ctx.state.asset.accountId='';
   await assert.rejects(()=>ctx.fetchAsset('pages'),/Выберите один РК/);
   console.log('Private Workspace Assets keep exact RK scope, reject foreign responses and refresh independently.');
