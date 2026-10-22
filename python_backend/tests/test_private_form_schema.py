@@ -77,7 +77,10 @@ class CreativeOptionsTests(unittest.IsolatedAsyncioTestCase):
     async def test_image_instagram_actor_requires_account_membership_and_is_read_back(self):
         from unittest.mock import AsyncMock, patch
         self.payload['launch']['creative']['instagram_actor_id'] = '999991'
-        proof = {'data':[{'id':'999991'}], 'account_scope_verified':True,'checked_live':True}
+        from time import time
+        proof = {'data':[{'id':'999991','name':'Approved Instagram actor'}],
+            'account_id':'111111', 'account_scope_verified':True, 'checked_live':True,
+            'checked_at':int(time()), 'source':'ads_manager_private_http'}
         with patch.object(self.owner.reads, 'read', new=AsyncMock(return_value=proof)) as read:
             result = await self.launch()
         self.assertTrue(result['verified'])
