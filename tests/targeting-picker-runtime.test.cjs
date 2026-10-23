@@ -175,6 +175,22 @@ function fixture(){
   assert.equal(new URLSearchParams(bridged[0].options.body).get('offset'),'100',
     'Launch preserves page offsets through its installed account/template bridge');
   assert.equal(bridged[0].url,'ajax/metaTemplateTargetingSearch.php');
+  const scopedResponse={data:[],checked_live:true,account_scope_verified:true,
+    profile:'38',account_id:'111111',resource:'interests',offset:100,next_offset:200};
+  // The wrapped source function is a closure over the original mock: replace
+  // its returned value by constructing a fresh selected-account fixture.
+  const selected=fixture(),selectedCalls=[];
+  Object.assign(selected.ctx,{$:()=>null,URLSearchParams,state:{profile:'38'},
+    selectedAccountIds:()=>['111111'],targetMode:()=>false,
+    apiJson:async(url,options)=>{selectedCalls.push({url,options});return scopedResponse;}});
+  vm.runInContext(completionSource.slice(0,completionSource.indexOf('// A selected RK needs')),selected.ctx);
+  const selectedPage=await selected.ctx.apiJson('ajax/metaTemplateTargetingSearch.php',{
+    body:'type=interests&q=&limit=100&offset=100'
+  });
+  assert.equal(selectedCalls[0].url,'ajax/metaTargetingSearch.php',
+    'selected account routes paging through its own private Meta resource reader');
+  assert.equal(new URLSearchParams(selectedCalls[0].options.body).get('offset'),'100');
+  assert.equal(selectedPage.next_offset,200);
   console.log('Installed targeting API bridge: later page offset survives request routing.');
 
 
