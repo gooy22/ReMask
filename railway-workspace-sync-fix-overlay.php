@@ -1442,6 +1442,78 @@ function hierarchy_binding_put(
         @fclose($fp);
     }
 }
+
+function hierarchy_binding_put_many(string $profile, array $bindings): void
+{
+    // REMASK_BATCH_CONFIRMED_RK_BINDINGS_V1
+    // A normal HTTP Sync should not take a global JSON file lock and rewrite
+    // the complete store once per discovered RK.
+    $profile = trim($profile);
+    if ($profile === '') return;
+    $updates = [];
+    foreach ($bindings as $binding) {
+        if (!is_array($binding)) continue;
+        $businessId = trim((string)($binding['business_id'] ?? ''));
+        $accountId = trim((string)($binding['ad_account_id'] ?? ''));
+        if (!preg_match('/^\d{5,30}$/', $businessId)
+            || !preg_match('/^\d{5,30}$/', $accountId)
+            || $businessId === $accountId) continue;
+        // Keep the existing V2 per-business last-RK-wins layout. The
+        // source/confirmation semantics are unchanged by batching.
+        $updates[$businessId] = [
+            'business_id' => $businessId,
+            'ad_account_id' => $accountId,
+            'account_name' => trim((string)($binding['account_name'] ?? '')),
+            'updated_at' => time(),
+            'source' => 'python_worker_confirmed_entities_v2',
+        ];
+    }
+    if ($updates === []) return;
+    $file = hierarchy_binding_file();
+    $dir = dirname($file);
+    if (!is_dir($dir)) @mkdir($dir, 0700, true);
+    $fp = @fopen($file, 'c+');
+    if (!$fp) return;
+    try {
+        if (!@flock($fp, LOCK_EX)) return;
+        rewind($fp);
+        $raw = stream_get_contents($fp);
+        $decoded = is_string($raw) && trim($raw) !== '' ? json_decode($raw, true) : [];
+        $all = is_array($decoded) ? $decoded : [];
+        $row = is_array($all[$profile] ?? null) ? $all[$profile] : [];
+
+        $normalized = [];
+        if (isset($row['business_id']) || isset($row['ad_account_id'])) {
+            $bid = trim((string)($row['business_id'] ?? ''));
+            $aid = trim((string)($row['ad_account_id'] ?? ''));
+            if (preg_match('/^\d{5,30}$/', $bid)
+                && preg_match('/^\d{5,30}$/', $aid)) {
+                $normalized[$bid] = $row;
+            }
+        } else {
+            $items = $row['ad_accounts'] ?? $row;
+            foreach ((array)$items as $key => $item) {
+                if (!is_array($item)) continue;
+                $bid = trim((string)($item['business_id'] ?? $key));
+                $aid = trim((string)($item['ad_account_id'] ?? ''));
+                if (!preg_match('/^\d{5,30}$/', $bid)
+                    || !preg_match('/^\d{5,30}$/', $aid)) continue;
+                $normalized[$bid] = $item;
+            }
+        }
+        foreach ($updates as $bid => $item) $normalized[$bid] = $item;
+        $all[$profile] = ['ad_accounts' => $normalized];
+        $encoded = json_encode($all, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if (!is_string($encoded)) return;
+        ftruncate($fp, 0);
+        rewind($fp);
+        fwrite($fp, $encoded);
+        fflush($fp);
+    } finally {
+        @flock($fp, LOCK_UN);
+        @fclose($fp);
+    }
+}
 PHP_HELPERS;
 $hierarchyBaseSignature = <<<'PHP_SIG'
 function hierarchy_profile_snapshot_base(string $profile, ?array $workspaceMeta = null): array
@@ -1759,6 +1831,7 @@ $syncProfileReplacement = <<<'PHP'
         $seenBusiness = [];
         $seenAccount = [];
         $rkPartial = false;
+        $confirmedBindingBatch = [];
 
         // REMASK_LINEAR_EXISTING_RK_MERGE_V1
         // Index existing records once instead of rewalking all RKs for every
@@ -1833,12 +1906,11 @@ $syncProfileReplacement = <<<'PHP'
                 $adAccountRows[] = $row;
                 $accountsForBusiness[] = $row;
 
-                hierarchy_binding_put(
-                    $profile,
-                    $businessId,
-                    $accountId,
-                    trim((string)($row['name'] ?? ''))
-                );
+                $confirmedBindingBatch[] = [
+                    'business_id' => $businessId,
+                    'ad_account_id' => $accountId,
+                    'account_name' => trim((string)($row['name'] ?? '')),
+                ];
             }
 
             $businessRows[] = [
@@ -1854,6 +1926,9 @@ $syncProfileReplacement = <<<'PHP'
             ];
             $seenBusiness[$businessId] = true;
         }
+
+        // Persist the complete confirmed RK batch under one file lock.
+        hierarchy_binding_put_many($profile, $confirmedBindingBatch);
 
         // Provisioning bindings are historical state only. They are never
         // merged into the result of a live Meta synchronization.
