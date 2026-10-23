@@ -212,10 +212,10 @@ const source = fs.readFileSync('railway-python-worker-ui.js', 'utf8');
 
 // Terminal Job batches should update multiple profiles with one DOM render.
 (async()=>{
-  const applied=[];let redraws=0;
+  const applied=[],timingLogs=[];let redraws=0;
   const scope={
     post:value=>value,
-    console:{error(){}},
+    console:{error(){},info:line=>timingLogs.push(line)},
     async apiJson(url,payload){
       if(payload.profile==='3')throw Error('fixture snapshot failed');
       await new Promise(resolve=>setTimeout(resolve,2));
@@ -242,6 +242,17 @@ const source = fs.readFileSync('railway-python-worker-ui.js', 'utf8');
   assert.deepEqual(Array.from(failed),['3']);
   assert.deepEqual(applied.sort(),['1','2','4']);
   assert.equal(redraws,1);
+  assert.equal(timingLogs.length,1);
+  assert.ok(timingLogs[0].startsWith('[ReMask post-job refresh latency] '));
+  const timing=JSON.parse(timingLogs[0].split('] ')[1]);
+  assert.equal(timing.attempted,4);
+  assert.equal(timing.succeeded,3);
+  assert.equal(timing.failed,1);
+  for(const field of ['batch_wall_ms','profile_read_ms_sum','render_ms'])
+    assert.ok(Number.isFinite(timing[field]) && timing[field]>=0);
+  assert.deepEqual(Object.keys(timing).sort(),[
+    'attempted','batch_wall_ms','failed','profile_read_ms_sum','render_ms','succeeded'
+  ].sort(),'Timing logs must contain only allowlisted numeric fields');
   assert.equal(await scope.pythonWorkerRefreshProfile('1'),true);
   assert.equal(redraws,2,'A single-profile refresh must still redraw normally');
 })().catch(error=>{console.error(error);process.exitCode=1;});
