@@ -16,8 +16,11 @@ class WorkspaceSyncCoordinationTests(unittest.TestCase):
         code = source[start:end]
         self.assertIn('REMASK_LINEAR_EXISTING_RK_MERGE_V1', code)
         fixture = r'''
-function hierarchy_binding_put($profile,$business,$account,$name) {
-    $GLOBALS['recorded'][]=[$profile,$business,$account,$name];
+function hierarchy_binding_put_many($profile,$records) {
+    foreach ($records as $row) {
+        $GLOBALS['recorded'][]=[$profile, $row['business_id'],
+            $row['ad_account_id'], $row['account_name']];
+    }
 }
 $profile = 'fixture'; $businessRows = []; $adAccountRows = [];
 $seenBusiness = []; $seenAccount = []; $syncWarnings = [];
@@ -110,6 +113,36 @@ echo 'SAVED';
                 self.assertEqual(content[profile]['businesses'][0]['id'], business)
                 self.assertEqual(content[profile]['ad_accounts'][0]['id'], account)
                 self.assertEqual(content[profile]['profile']['name'], profile)
+
+    def test_batched_bindings_preserve_old_businesses_and_last_rk_wins(self):
+        source = (Path(__file__).resolve().parents[2] / 'railway-workspace-sync-fix-overlay.php').read_text()
+        start = source.index('function hierarchy_binding_file(): string')
+        end = source.index('PHP_HELPERS;', start)
+        with tempfile.TemporaryDirectory() as directory:
+            helpers = source[start:end].replace('/var/lib/remask', directory)
+            fixture = helpers + r'''
+hierarchy_binding_put_many('alpha',[
+    ['business_id'=>'1111111111','ad_account_id'=>'2222222222','account_name'=>'First'],
+    ['business_id'=>'1111111111','ad_account_id'=>'3333333333','account_name'=>'Second'],
+    ['business_id'=>'4444444444','ad_account_id'=>'5555555555','account_name'=>'Other'],
+]);
+hierarchy_binding_put_many('bravo',[
+    ['business_id'=>'7777777777','ad_account_id'=>'8888888888'],
+]);
+hierarchy_binding_put_many('alpha',[
+    ['business_id'=>'4444444444','ad_account_id'=>'6666666666'],
+]);
+echo json_encode([hierarchy_binding_get('alpha'),hierarchy_binding_get('bravo')]);
+'''
+            result = subprocess.run(['php', '-r', fixture],
+                                    capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            alpha, bravo = json.loads(result.stdout)
+            self.assertEqual({row['business_id']: row['ad_account_id'] for row in alpha},
+                {'1111111111':'3333333333', '4444444444':'6666666666'})
+            self.assertEqual(bravo[0]['ad_account_id'], '8888888888')
+            path = Path(directory) / 'workspace-provisioning-bindings.json'
+            self.assertEqual(set(json.loads(path.read_text())), {'alpha','bravo'})
 
     def test_busy_profile_never_starts_another_meta_read_and_other_profiles_are_free(self):
         source = (Path(__file__).resolve().parents[2] / 'railway-workspace-sync-fix-overlay.php').read_text()
