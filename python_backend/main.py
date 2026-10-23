@@ -23,7 +23,7 @@ from app.store import JobStore
 from app.facebook_business_browser import BROWSER_TERMINAL_ACCESS_CODES, BrowserBusinessError, FacebookBusinessBrowser
 from app.facebook_page_discovery import PageDiscoveryError, list_pages_via_private_graphql
 from app.private_inventory import private_inventory_snapshot
-from app.private_http_metrics import observe_profile_inventory, observe_profile_read
+from app.private_http_metrics import observe_profile_inventory, observe_profile_read, measure_phase
 from app.provisioning.models import ProvisioningError, ProvisioningStep
 from app.provisioning.meta_transport import MetaTransportRouter
 from app.provisioning.service import normalize_add_bm_payload
@@ -1742,10 +1742,11 @@ async def profile_live_inventory(
     # Sync transport cannot inherit that 30-90s retry horizon before Chromium
     # even opens, so impose one endpoint-level resolver wall-clock bound.
     try:
-        context=await asyncio.wait_for(
-            pool.resolver.resolve(clean_profile),
-            timeout=12.0,
-        )
+        with measure_phase('resolver'):
+            context=await asyncio.wait_for(
+                pool.resolver.resolve(clean_profile),
+                timeout=12.0,
+            )
     except asyncio.TimeoutError as exc:
         raise HTTPException(
             status_code=504,
@@ -2138,18 +2139,19 @@ async def profile_live_inventory(
                 facebook_web=await meta_transport.facebook_web()
                 facebook_web.defer_module_refresh=fast_sync
                 private_timeout=budget(32.0)
-                private_snapshot=await hard_deadline(
-                    private_inventory_snapshot(
-                        facebook_web,
-                        known_accounts_by_business=known_accounts_by_business,
-                        known_business_ids=known_business_ids,
-                        personal_scope_id=personal_scope_id,
-                        discover_businesses=not bool(requested_business_ids),
-                        execute_read_queries=True,
-                        fast_sync=fast_sync,
-                    ),
-                    private_timeout,
-                )
+                with measure_phase('inventory_read'):
+                    private_snapshot=await hard_deadline(
+                        private_inventory_snapshot(
+                            facebook_web,
+                            known_accounts_by_business=known_accounts_by_business,
+                            known_business_ids=known_business_ids,
+                            personal_scope_id=personal_scope_id,
+                            discover_businesses=not bool(requested_business_ids),
+                            execute_read_queries=True,
+                            fast_sync=fast_sync,
+                        ),
+                        private_timeout,
+                    )
             except Exception as exc:
                 log.info(
                     'live inventory profile=%s private-first unavailable=%s',
@@ -3725,7 +3727,8 @@ async def private_advertising_resources(profile_id: str, resource: str, account_
         raise HTTPException(status_code=400,detail='INVALID_ADVERTISING_RESOURCE_REQUEST')
     try:
         account = pool.private_launch._id(account_id, 'account_id')
-        context = await pool.resolver.resolve(profile)
+        with measure_phase('resolver'):
+            context = await pool.resolver.resolve(profile)
         rows = [row for row in (context.ad_accounts or []) if isinstance(row,dict)
                 and str(row.get('ad_account_id') or row.get('account_id') or row.get('id') or '').removeprefix('act_') == account]
         businesses = {str(row.get('business_id') or '') for row in rows if str(row.get('business_id') or '').isdigit()}
@@ -3740,14 +3743,16 @@ async def private_advertising_resources(profile_id: str, resource: str, account_
         actor = str(context.cookies.get('c_user') or '')
         cached = None
         if not force:
-            cached = await pool.private_launch.resources.get(name=resource,values=values,actor_id=actor)
+            with measure_phase('cache_lookup'):
+                cached = await pool.private_launch.resources.get(name=resource,values=values,actor_id=actor)
             if cached.get('availability') != 'NOT_LOADED' and not cached.get('_cache', {}).get('stale'):
                 return {'ok':True,'profile':profile,'resource':resource,**cached}
         try:
-            async with ProfileSession(context) as session:
-                web = await session.facebook_web()
-                web.private_only = True
-                result = await pool.private_launch.resources.get(name=resource,values=values,actor_id=actor,force=True,web=web)
+            with measure_phase('resource_read'):
+                async with ProfileSession(context) as session:
+                    web = await session.facebook_web()
+                    web.private_only = True
+                    result = await pool.private_launch.resources.get(name=resource,values=values,actor_id=actor,force=True,web=web)
         except (AuthenticationError, RemoteRequestError, ProxyError, ProvisioningError,
                 ProfileContextError, asyncio.TimeoutError):
             if force or not cached or not cached.get('data'):
@@ -3784,11 +3789,13 @@ async def private_template_reference(profile_id: str, operation: str, payload: d
         raise HTTPException(status_code=400, detail={'code':'TEMPLATE_HELPER_UNAVAILABLE'})
     try:
         async def read():
-            context = await pool.resolver.resolve(profile)
-            async with ProfileSession(context) as session:
-                web = await session.facebook_web()
-                web.private_only = True
-                return await read_template_reference(web, adapter.catalog, context, operation, payload)
+            with measure_phase('resolver'):
+                context = await pool.resolver.resolve(profile)
+            with measure_phase('profile_session'):
+                async with ProfileSession(context) as session:
+                    web = await session.facebook_web()
+                    web.private_only = True
+                    return await read_template_reference(web, adapter.catalog, context, operation, payload)
         result = await asyncio.wait_for(read(), timeout=32)
         return {'ok': True, **result}
     except AuthenticationError as error:
