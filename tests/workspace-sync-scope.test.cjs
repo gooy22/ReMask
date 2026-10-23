@@ -155,6 +155,24 @@ async function failedSyncPhaseTimingIsReportedWithoutMutatingWorkspace() {
   assert.ok(!logs[0].includes('cookie-do-not-log'));
 }
 
+async function incompleteSyncCannotApplyOrReportSuccess() {
+  for(const response of [null,{}, {profile:{name:'alpha'}}, {sync_complete:false}]){
+    let applied=0;
+    const elements=new Map();
+    const sandbox={state:{running:false,activeTab:'profiles'},selectedRows:()=>[{name:'alpha'}],
+      $:id=>{if(!elements.has(id))elements.set(id,{});return elements.get(id);},
+      updateSelectionUi(){},setProgress(){},render(){},Date,Math,setTimeout,clearTimeout,
+      post:payload=>payload,apiJson:async()=>response,
+      applySnapshot(){applied++;return true;},
+      concurrent:async(items,limit,fn)=>Promise.all(items.map(fn))};
+    vm.createContext(sandbox);vm.runInContext(source,sandbox);
+    await sandbox.syncSelection();
+    assert.equal(applied,0,'An incomplete response cannot replace confirmed Workspace state');
+    assert.match(elements.get('workspaceStatus').textContent,/не выполнена/);
+    assert.equal(sandbox.state.running,false);
+  }
+}
+
 async function stalledReconciliation() {
   const calls=[], elements=new Map(); let now=0, timerId=0;
   const timers=new Map();
@@ -244,6 +262,7 @@ async function independentProfilesRunInParallelButSameProfileSerial() {
   await sessionRefreshOutcome();
   await syncLatencyMetricsAreAggregateOnly();
   await failedSyncPhaseTimingIsReportedWithoutMutatingWorkspace();
+  await incompleteSyncCannotApplyOrReportSuccess();
   await independentProfilesRunInParallelButSameProfileSerial();
   await stalledReconciliation();
   const bm = await run('businesses',[{profile:'8',id:'1632909278268870'}]);

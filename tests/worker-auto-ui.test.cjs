@@ -219,9 +219,9 @@ const source = fs.readFileSync('railway-python-worker-ui.js', 'utf8');
     async apiJson(url,payload){
       if(payload.profile==='3')throw Error('fixture snapshot failed');
       await new Promise(resolve=>setTimeout(resolve,2));
-      return {profile:{name:payload.profile}};
+      return {snapshot_only:true,profile:{name:payload.profile}};
     },
-    applySnapshot:data=>applied.push(data.profile.name),
+    applySnapshot:data=>{applied.push(data.profile.name);return true;},
     render(){redraws++;},
     async pythonWorkerMapLimit(items,limit,worker){
       let next=0;
@@ -235,7 +235,7 @@ const source = fs.readFileSync('railway-python-worker-ui.js', 'utf8');
     },
   };
   vm.createContext(scope);
-  const start=source.indexOf('async function pythonWorkerRefreshProfile(');
+  const start=source.indexOf('const pythonWorkerProfileSnapshotReads =');
   vm.runInContext(source.slice(start,source.indexOf('\nasync function pythonWorkerStartBusiness',start)),scope);
   const failed=await scope.pythonWorkerRefreshSuccessfulProfiles(
     ['1','2','3','4','1'].map(profile_id=>({profile_id,status:'SUCCESS'})));
@@ -244,6 +244,41 @@ const source = fs.readFileSync('railway-python-worker-ui.js', 'utf8');
   assert.equal(redraws,1);
   assert.equal(await scope.pythonWorkerRefreshProfile('1'),true);
   assert.equal(redraws,2,'A single-profile refresh must still redraw normally');
+})().catch(error=>{console.error(error);process.exitCode=1;});
+
+// Overlapping local refreshes share only an in-flight read; every new completion
+// can read fresh state, and rejected/foreign snapshots cannot report success.
+(async()=>{
+  let calls=0,applied=0,redraws=0,release;
+  const scope={post:value=>value,console:{error(){}},
+    apiJson:async()=>{calls++;return await new Promise(resolve=>{release=resolve;});},
+    applySnapshot:()=>{applied++;return true;},render:()=>{redraws++;}};
+  vm.createContext(scope);
+  const start=source.indexOf('const pythonWorkerProfileSnapshotReads =');
+  vm.runInContext(source.slice(start,source.indexOf('\nasync function pythonWorkerStartBusiness',start)),scope);
+  const first=scope.pythonWorkerRefreshProfile('alpha');
+  const second=scope.pythonWorkerRefreshProfile('alpha');
+  assert.equal(calls,1,'Concurrent reads for the same profile must share one PHP request');
+  release({snapshot_only:true,profile:{name:'alpha'}});
+  assert.deepEqual(await Promise.all([first,second]),[true,true]);
+  assert.equal(applied,1);assert.equal(redraws,1);
+  const fresh=scope.pythonWorkerRefreshProfile('alpha',{render:false});
+  assert.equal(calls,2,'Settled requests must not cache a snapshot across Job completions');
+  release({snapshot_only:true,profile:{name:'alpha'}});assert.equal(await fresh,true);
+  assert.equal(applied,2);assert.equal(redraws,1);
+  for(const data of [{snapshot_only:true,profile:{name:'bravo'}},{profile:{name:'alpha'}}]){
+    const pending=scope.pythonWorkerRefreshProfile('alpha');release(data);
+    assert.equal(await pending,false);
+  }
+  scope.applySnapshot=()=>false;
+  const rejected=scope.pythonWorkerRefreshProfile('alpha');
+  release({snapshot_only:true,profile:{name:'alpha'}});assert.equal(await rejected,false);
+  assert.equal(applied,2);assert.equal(redraws,1);
+  scope.apiJson=async()=>{throw Error('synthetic local read failure');};
+  assert.equal(await scope.pythonWorkerRefreshProfile('alpha'),false);
+  scope.applySnapshot=()=>true;
+  scope.apiJson=async()=>({snapshot_only:true,profile:{name:'alpha'}});
+  assert.equal(await scope.pythonWorkerRefreshProfile('alpha'),true,'A failed read must release the in-flight entry');
 })().catch(error=>{console.error(error);process.exitCode=1;});
 
 // Both BM and RK context menus must expose the same automatic bulk action.

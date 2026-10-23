@@ -168,7 +168,7 @@ RUN set -eux; \
     grep -q 'REMASK_SYNC_PROFILE_AWARE_POOL_V1' /var/www/html/scripts/workspace.js; \
     grep -q 'REMASK_BUSINESS_TAB_SELECTED_SCOPE_V2' /var/www/html/scripts/workspace.js; \
     ! grep -q 'r=>syncBusinessSafe(r)' /var/www/html/scripts/workspace.js; \
-    /opt/remask-venv/bin/python -c "from pathlib import Path; s=Path('/var/www/html/scripts/workspace.js').read_text(encoding='utf-8'); a=s.index('const finishSyncResponse='); b=s.index('const syncProfileSafe=',a); q=s[a:b]; assert q.index('sync_complete===false') < q.index('syncApplySnapshot(d)'), 'failed sync mutates Workspace before failure check'" ; \
+    /opt/remask-venv/bin/python -c "from pathlib import Path; s=Path('/var/www/html/scripts/workspace.js').read_text(encoding='utf-8'); a=s.index('const finishSyncResponse='); b=s.index('const syncProfileSafe=',a); q=s[a:b]; assert q.index('sync_complete!==true') < q.index('syncApplySnapshot(d)'), 'unconfirmed sync mutates Workspace before failure check'" ; \
     grep -q 'REMASK_SYNC_CSRF_SAFE_TRANSPORT_V1' /var/www/html/scripts/workspace.js; \
     grep -q "action:'sync_result'" /var/www/html/scripts/workspace.js; \
     grep -q "hierarchy_sync_result_put" /var/www/html/ajax/metaHierarchy.php; \

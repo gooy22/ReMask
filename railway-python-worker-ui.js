@@ -1479,30 +1479,46 @@ function pythonWorkerBmRowConfig(dialog, profiles, fallbackName) {
   return result;
 }
 
+const pythonWorkerProfileSnapshotReads = new Map();
+
 async function pythonWorkerRefreshProfile(profileId, options) {
   if (typeof apiJson !== 'function' || typeof post !== 'function') {
     return false;
   }
+  const profile = String(profileId || '').trim();
+  if (!profile || typeof applySnapshot !== 'function') return false;
 
   // REMASK_POST_JOB_LOCAL_REFRESH_V1
   // Successful FP/BM/RK jobs already persist the exact confirmed IDs in ReMask.
   // Refresh Workspace from local state; never hit Facebook again just to render
   // the object that the worker itself has just confirmed.
+  let read = pythonWorkerProfileSnapshotReads.get(profile);
+  if (!read) {
+    read = {rendered: false};
+    read.pending = (async function() {
+      try {
+        const data = await apiJson('ajax/metaHierarchy.php', post({
+          action: 'snapshot_profile', profile: profile
+        }));
+        const returnedProfile = String(data?.profile?.name || data?.profile?.profile || data?.profile_name || '').trim();
+        if (data?.snapshot_only !== true || returnedProfile !== profile) return false;
+        return applySnapshot(data) === true;
+      } catch (error) {
+        console.error('[ReMask Worker UI] snapshot_profile failed for ' + profile + ':', error);
+        return false;
+      }
+    })();
+    pythonWorkerProfileSnapshotReads.set(profile, read);
+  }
   try {
-    const data = await apiJson(
-      'ajax/metaHierarchy.php',
-      post({
-        action: 'snapshot_profile',
-        profile: profileId
-      })
-    );
-
-    if (typeof applySnapshot === 'function') applySnapshot(data);
-    if (typeof render === 'function' && (!options || options.render !== false)) render();
-    return true;
-  } catch (error) {
-    console.error('[ReMask Worker UI] snapshot_profile failed for ' + profileId + ':', error);
-    return false;
+    const applied = await read.pending;
+    if (applied && !read.rendered && typeof render === 'function' && (!options || options.render !== false)) {
+      read.rendered = true;
+      render();
+    }
+    return applied;
+  } finally {
+    if (pythonWorkerProfileSnapshotReads.get(profile) === read) pythonWorkerProfileSnapshotReads.delete(profile);
   }
 }
 

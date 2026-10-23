@@ -448,13 +448,13 @@ async function syncSelection(){
     // A partial/failed browser result is diagnostic only. Keep the last
     // confirmed Workspace state untouched unless the full BM/RK/FP contract
     // completed successfully.
-    if(d && d.sync_complete===false){
+    if(!d || d.sync_complete!==true){
       return {
-        error:String(d.sync_error||'Private Business Suite inventory was inconclusive'),
-        error_kind:String(d.sync_error_kind||'PRIVATE_INCONCLUSIVE'),
+        error:String(d?.sync_error||'Private Business Suite inventory was inconclusive'),
+        error_kind:String(d?.sync_error_kind||'PRIVATE_INCONCLUSIVE'),
         profile,
         business_id,
-        sync_timings_ms:d.sync_timings_ms
+        sync_timings_ms:d?.sync_timings_ms
       };
     }
     const applied=syncApplySnapshot(d);
