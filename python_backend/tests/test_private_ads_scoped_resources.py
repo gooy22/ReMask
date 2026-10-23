@@ -70,6 +70,39 @@ class ResourceCases(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['data'],[{'id':'777777','name':'Exact employer','type':'work_employers'}])
         self.assertEqual(self.calls[-1][1]['whitelisted_types'],['work_employers'])
 
+    async def test_scoped_interest_pages_keep_all_ids_without_repeating_browse_request(self):
+        rows=[{'id':str(700000+i),'name':'Interest '+str(i),'type':'interests'}
+              for i in range(251)]
+        self.responses['/act_111111/targetingbrowse']={'data':rows}
+        first=await self.catalog.read(self.web,'interests',self.values)
+        second=await self.catalog.read(self.web,'interests',
+            {**self.values,'offset':100})
+        final=await self.catalog.read(self.web,'interests',
+            {**self.values,'offset':200})
+        self.assertEqual(len(first['data']),100)
+        self.assertEqual(first['next_offset'],100)
+        self.assertEqual(second['data'][0]['id'],'700100')
+        self.assertEqual(second['next_offset'],200)
+        self.assertEqual(len(final['data']),51)
+        self.assertIsNone(final['next_offset'])
+        self.assertEqual(final['data'][-1]['id'],'700250')
+        self.assertEqual(sum(path.endswith('/targetingbrowse') for path,_ in self.calls),1,
+            'later pages must reuse one bounded source snapshot, not reload the 20k-node tree')
+        self.assertEqual(sum(path=='/act_111111' for path,_ in self.calls),3,
+            'every page still verifies the exact account independently')
+        self.web.profile.cookies['c_user']='123457'
+        await self.catalog.read(self.web,'interests',{**self.values,'offset':100})
+        self.assertEqual(sum(path.endswith('/targetingbrowse') for path,_ in self.calls),2,
+            'a different actor must not consume the previous actor\'s tree')
+
+    async def test_scoped_interest_offset_validation_rejects_malformed_pages(self):
+        self.responses['/act_111111/targetingbrowse']={'data':[]}
+        for bad in (True,-1,50,20000,'100.0','1e2',None):
+            with self.subTest(offset=bad), self.assertRaises(ProvisioningError) as caught:
+                await self.catalog.read(self.web,'interests',{**self.values,'offset':bad})
+            self.assertIn('INVALID_RESOURCE_OFFSET',caught.exception.code)
+        self.assertFalse(any(path.endswith('/targetingbrowse') for path,_ in self.calls))
+
     async def test_scoped_resources_reject_conflicting_duplicate_ids(self):
         path = '/act_111111/customaudiences'
         first = {'id': '777777', 'name': 'Original audience'}
