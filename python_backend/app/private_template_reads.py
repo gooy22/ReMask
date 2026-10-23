@@ -64,9 +64,17 @@ async def _discover_sources(web, actor):
     # Reuse the installed, reviewed READ_BM/READ_RK modules. Their exact response
     # identities are only lookup hints until the fresh ACCOUNT_READ below.
     try:
-        business_proof = await read_business_inventory(web)
+        # The first inventory pass already proved these BM identities live.
+        # If RK enumeration was incomplete, retry only the exact RK READ,
+        # not the full BM discovery query again.
+        candidates = snapshot.get('discovered_business_ids') or []
+        if not isinstance(candidates, list):
+            candidates = []
+        if not candidates:
+            business_proof = await read_business_inventory(web)
+            candidates = list(business_proof.get('rows', {}))
         businesses = []
-        for raw in business_proof.get('rows', {}):
+        for raw in candidates:
             try:
                 business = identity(str(raw))
             except (ValueError, TypeError, ProvisioningError):
