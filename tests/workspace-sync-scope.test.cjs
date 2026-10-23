@@ -92,7 +92,7 @@ async function syncLatencyMetricsAreAggregateOnly() {
     applySnapshot:()=>true,
     async apiJson(){
       return {sync_complete:true,sync_timings_ms:{
-        php_context:12,worker_bridge:55,php_total:73,
+        php_context:12,worker_bridge:55,php_total:73,php_reconciliation:6,
         // Incoming arbitrary fields must never be logged:
         profile,proxy:'PRIVATE-CREDENTIAL'
       }};
@@ -112,12 +112,47 @@ async function syncLatencyMetricsAreAggregateOnly() {
   assert.equal(metric.php_context_ms_sum,12);
   assert.equal(metric.worker_bridge_ms_sum,55);
   assert.equal(metric.php_total_ms_sum,73);
+  assert.equal(metric.php_reconciliation_ms_sum,6);
   assert.ok(metric.ui_wall_ms>=0 && metric.ui_render_ms>=0);
   assert.equal(state.running,false);
   assert.equal(logs.length,1);
   assert.ok(logs[0].includes('[ReMask sync latency]'));
   assert.ok(!logs[0].includes(profile));
   assert.ok(!logs[0].includes('PRIVATE-CREDENTIAL'));
+}
+
+async function failedSyncPhaseTimingIsReportedWithoutMutatingWorkspace() {
+  const logs=[],elements=new Map();
+  const state={running:false,activeTab:'profiles'};
+  let applied=0;
+  const scope={
+    state,selectedRows:()=>[{name:'private-fixture'}],
+    $:id=>{if(!elements.has(id))elements.set(id,{});return elements.get(id);},
+    updateSelectionUi(){},setProgress(){},render(){},
+    Date,Math,setTimeout,clearTimeout,post:x=>x,
+    console:{info:(...x)=>logs.push(x.join(' '))},
+    applySnapshot(){applied++;throw Error('Failed sync must not apply');},
+    apiJson:async()=>({sync_complete:false,sync_error_kind:'PRIVATE_SYNC',
+      sync_error:'fixture failure',sync_timings_ms:{
+        php_context:100,worker_bridge:30100,php_total:30205,
+        secret:'cookie-do-not-log'
+      }}),
+    concurrent:async(items,limit,work)=>{
+      const result=[];
+      for(const item of items)result.push(await work(item));
+      return result;
+    },
+  };
+  vm.createContext(scope);vm.runInContext(source,scope);
+  await scope.syncSelection();
+  assert.equal(applied,0);
+  const timing=state.lastSyncTimingMs;
+  assert.equal(timing.php_context_ms_sum,100);
+  assert.equal(timing.worker_bridge_ms_sum,30100);
+  assert.equal(timing.php_total_ms_sum,30205);
+  assert.equal(timing.php_reported_count,1);
+  assert.equal(logs.length,1);
+  assert.ok(!logs[0].includes('cookie-do-not-log'));
 }
 
 async function stalledReconciliation() {
@@ -208,6 +243,7 @@ async function independentProfilesRunInParallelButSameProfileSerial() {
   businessOnlySnapshot();
   await sessionRefreshOutcome();
   await syncLatencyMetricsAreAggregateOnly();
+  await failedSyncPhaseTimingIsReportedWithoutMutatingWorkspace();
   await independentProfilesRunInParallelButSameProfileSerial();
   await stalledReconciliation();
   const bm = await run('businesses',[{profile:'8',id:'1632909278268870'}]);
