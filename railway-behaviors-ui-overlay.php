@@ -92,40 +92,52 @@ if(strpos($js,'REMASK_BEHAVIOR_UI_V1')===false){
     $ui=<<<'JS'
 /* REMASK_BEHAVIOR_UI_V1 */
 function ensureBehaviorTargetingUi() {
-    if ($('behaviorQuery')) return;
-    const interestInput = $('interestQuery');
-    if (!interestInput) return;
-    const interestBlock = interestInput.closest('.col-md-6, .col-md-5, .col-md-4, .col-lg-6, .col-lg-4, .form-group') || interestInput.parentElement;
-    if (!interestBlock) return;
+    let input = $('behaviorQuery');
+    let block = input?.closest('[data-remaskBehaviorTargeting]') || input?.parentElement || null;
+    if (!input) {
+        const interestInput = $('interestQuery');
+        if (!interestInput) return;
+        const interestBlock = interestInput.closest('.col-md-6, .col-md-5, .col-md-4, .col-lg-6, .col-lg-4, .form-group') || interestInput.parentElement;
+        if (!interestBlock) return;
 
-    const block = document.createElement('div');
-    block.className = interestBlock.className || 'col-md-6';
+        block = document.createElement('div');
+        block.className = interestBlock.className || 'col-md-6';
+        block.dataset.remaskBehaviorTargeting = '1';
+
+        const label = document.createElement('label');
+        label.htmlFor = 'behaviorQuery';
+        label.textContent = 'Поведение';
+
+        input = document.createElement('input');
+        input.id = 'behaviorQuery';
+        input.type = 'text';
+        input.className = interestInput.className || 'form-control';
+        input.placeholder = 'Найдите поведение по названию';
+        input.autocomplete = 'off';
+
+        block.appendChild(label);
+        block.appendChild(input);
+        interestBlock.insertAdjacentElement('afterend', block);
+    }
+    if (!block) return;
     block.dataset.remaskBehaviorTargeting = '1';
-
-    const label = document.createElement('label');
-    label.htmlFor = 'behaviorQuery';
-    label.textContent = 'Behaviors';
-
-    const input = document.createElement('input');
-    input.id = 'behaviorQuery';
-    input.type = 'text';
-    input.className = interestInput.className || 'form-control';
-    input.placeholder = 'Type behavior — search starts after 2 characters';
     input.autocomplete = 'off';
+    if (!input.placeholder) input.placeholder = 'Найдите поведение по названию';
 
-    const selected = document.createElement('div');
-    selected.id = 'selectedBehaviors';
-    selected.className = $('selectedInterests')?.className || 'mt-2';
-
-    const results = document.createElement('div');
-    results.id = 'behaviorResults';
-    results.className = $('interestResults')?.className || '';
-
-    block.appendChild(label);
-    block.appendChild(input);
-    block.appendChild(selected);
-    block.appendChild(results);
-    interestBlock.insertAdjacentElement('afterend', block);
+    let selected = $('selectedBehaviors');
+    if (!selected) {
+        selected = document.createElement('div');
+        selected.id = 'selectedBehaviors';
+        selected.className = $('selectedInterests')?.className || 'mt-2';
+        input.insertAdjacentElement('afterend', selected);
+    }
+    let results = $('behaviorResults');
+    if (!results) {
+        results = document.createElement('div');
+        results.id = 'behaviorResults';
+        results.className = $('interestResults')?.className || '';
+        selected.insertAdjacentElement('afterend', results);
+    }
     renderPills(selected, state.behaviors, 'behaviors');
 }
 
