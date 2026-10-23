@@ -1826,39 +1826,4 @@ loadPlacementCapabilities(false);
 
 // Template targeting uses an automatic server-side read context, never a publishing RK.
 
-if(globalThis.remaskMediaTools){
-    function remaskCreativeMediaSnapshot(){
-        const files=$('presetFormat').value==='CAROUSEL'?Array.from(carouselFiles):Array.from($('presetMedia').files||[]);
-        return {files,signature:JSON.stringify({format:$('presetFormat').value,id:$('creativeId').value,
-            values:Array.from(document.querySelectorAll('#creativeForm input,#creativeForm select,#creativeForm textarea'))
-                .filter(el=>!el.closest('#remaskMediaTools')).map(el=>[el.id,el.value,el.checked]),
-            cards:currentCarouselMeta(),prepared:remaskPreparedLibraryMedia})};
-    }
-    globalThis.remaskMediaTools.install($('singleSection'),async()=>{
-        const snapshot=remaskCreativeMediaSnapshot();
-        const assertCurrent=()=>{const now=remaskCreativeMediaSnapshot();
-            if(now.signature!==snapshot.signature||now.files.length!==snapshot.files.length||now.files.some((f,i)=>f!==snapshot.files[i]))
-                throw new Error('Медиа или настройки изменились. Повторите проверку');};
-        const format=$('presetFormat').value;
-        const rows=snapshot.files.length?await Promise.all(snapshot.files.map(globalThis.remaskMediaTools.stage)):
-            (remaskPreparedLibraryMedia||(format==='CAROUSEL'?editing?.carousel?.map(card=>({...card.media,id:card.media_library_id})):
-                (editing?.media?[{...editing.media,id:editing.media_library_id}]:[])))||[];
-        assertCurrent();
-        return {assertCurrent,creative:format==='CAROUSEL'?{format,carousel_media_library_ids:rows.map(row=>row.id)}:
-            {format,media_library_id:rows[0]?.id},targeting:buildMetaBuilder().targeting||{},cards:currentCarouselMeta()};
-    },async(media,index,captured)=>{
-        captured.assertCurrent();
-        const rows=captured.media.map(row=>({...row}));rows[index]=media;
-        remaskPreparedLibraryMedia=rows;
-        $('presetMedia').value='';$('presetCarousel').value='';carouselFiles=[];
-        if(captured.creative.format==='CAROUSEL'){
-            editing={...(editing||{}),format:'CAROUSEL',carousel:rows.map((row,i)=>({...captured.cards[i],media_library_id:row.id,media:row,
-                preview_url:'ajax/pythonWorkerJobs.php?action=private_launch_media_preview&id='+encodeURIComponent(row.id)}))};
-            renderCarousel();
-        }else{
-            editing={...(editing||{}),format:'SINGLE',media_library_id:media.id,media};
-            $('singlePreview').innerHTML=mediaHtml('ajax/pythonWorkerJobs.php?action=private_launch_media_preview&id='+encodeURIComponent(media.id),media.media_type);
-        }
-    });
-    for(const id of ['presetMedia','presetCarousel','presetFormat'])$(id).addEventListener('change',()=>{remaskPreparedLibraryMedia=null;});
-}
+// Media compatibility is handled automatically by the Launch save flow.
