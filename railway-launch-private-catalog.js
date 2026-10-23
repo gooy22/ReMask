@@ -505,65 +505,12 @@ function remaskPrivatePendingClear() {
     try{localStorage.removeItem(remaskPrivateLaunchPendingKey);}catch(_){}
 }
 function remaskPrivateRenderMediaPreflight(results,render=true) {
-    const entries=results.flatMap(entry=>(Array.isArray(entry.media_checks)?entry.media_checks:[])
-        .map(media=>({entry,media})));
-    if(!render||typeof document==='undefined'||!document.createElement)return;
-    const anchor=$('remaskPrivateAccountReviews')||$('launchResult')||$('reviewStatus');
-    if(!anchor?.parentNode)return;
-    let box=$('remaskPrivateMediaPreflight');
-    if(!entries.length){
-        if(box){box.replaceChildren();box.hidden=true;}
-        return;
-    }
-    if(!box){
-        box=document.createElement('div');box.id='remaskPrivateMediaPreflight';
-        box.className='mt-2';box.setAttribute('aria-label','Результаты локальной проверки медиа');
-        anchor.parentNode.insertBefore(box,anchor.nextSibling);
-    }
-    box.hidden=false;box.replaceChildren();
-    const heading=document.createElement('p');
-    heading.textContent='Проверка медиа перед запуском';
-    box.appendChild(heading);
-    const note=document.createElement('p');
-    note.textContent='Проверены реальные байты и локальная совместимость. Это не подтверждает принятие файла Meta.';
-    box.appendChild(note);
-    const list=document.createElement('ul');
-    for(const {entry,media} of entries){
-        const facts=media?.inspection||media?.facts||media?.compatibility?.facts||{};
-        const compatibility=media?.compatibility||media||{};
-        const warnings=Array.isArray(compatibility.warnings)?compatibility.warnings:[];
-        const valid=compatibility.locally_valid===true;
-        const dimensions=Number.isFinite(Number(facts.width))&&Number.isFinite(Number(facts.height))
-            ?Number(facts.width)+'×'+Number(facts.height):'размер неизвестен';
-        const ratio=Number.isFinite(Number(facts.aspect_ratio))
-            ?' · ratio '+Number(facts.aspect_ratio).toFixed(2):'';
-        const size=Number.isFinite(Number(facts.size_bytes))
-            ?' · '+(Number(facts.size_bytes)/1048576).toFixed(2)+' MiB':'';
-        const encoding=String(facts.encoding||facts.mime_type||media?.mime_type||'медиа');
-        const stateLabel=valid?(warnings.length?'ТРЕБУЕТСЯ ПРОВЕРКА РАЗМЕЩЕНИЯ':'ЛОКАЛЬНО ПРОВЕРЕНО'):'БЛОКИРУЕТ ЗАПУСК';
-        const item=document.createElement('li');
-        item.textContent='РК '+entry.row.ad_account_id+' · '+String(media?.id||'медиа')+' · '+encoding+
-            ' · '+dimensions+ratio+size+' · '+stateLabel;
-        list.appendChild(item);
-        if(!valid){
-            const detail=document.createElement('li');
-            const code=String(compatibility.code||entry.error_code||'MEDIA_PREFLIGHT_FAILED');
-            const message=String(compatibility.message||(code==='MEDIA_PREPARATION_REQUIRED'
-                ?'Подготовьте копию в PNG/JPEG или MP4 H.264/AAC, затем повторите проверку.'
-                :'Локальная проверка медиа не пройдена.'));
-            detail.textContent='РК '+entry.row.ad_account_id+' · '+code+': '+message;
-            list.appendChild(detail);
-        }
-        for(const warning of warnings){
-            const detail=document.createElement('li');
-            detail.textContent='РК '+entry.row.ad_account_id+' · '+String(warning.placement||'размещение')+
-                ' · рекомендация: '+String(warning.message||'проверьте кадрирование или поля')+
-                ' (это не установленный отказ Meta).';
-            list.appendChild(detail);
-        }
-    }
-    box.appendChild(list);
+    // Media is inspected automatically as part of Save Draft. Placement hints
+    // are not Meta errors and do not belong in the Launch result panel.
+    const box=$('remaskPrivateMediaPreflight');
+    if(box){box.replaceChildren();box.hidden=true;}
 }
+
 function remaskPrivateRenderReviewResults(results,render=true) {
     const targets=results.map(entry=>({profile_id:entry.row.profile,
         business_id:entry.row.business_id,ad_account_id:entry.row.ad_account_id,
@@ -576,30 +523,8 @@ function remaskPrivateRenderReviewResults(results,render=true) {
         review_attempted:entry.review_attempted!==false}));
     if(typeof state!=='undefined')state.privateLaunchReadiness={admission_policy:'all_required',targets};
     if(!render||typeof document==='undefined'||!document.createElement)return;
-    const anchor=$('launchResult')||$('reviewStatus');
-    if(!anchor?.parentNode)return;
-    let box=$('remaskPrivateAccountReviews');
-    if(!box){
-        box=document.createElement('div');box.id='remaskPrivateAccountReviews';
-        box.className='mt-2';box.setAttribute('aria-label','Последняя проверка рекламных кабинетов');
-        anchor.parentNode.insertBefore(box,anchor.nextSibling);
-    }
-    box.replaceChildren();
-    const heading=document.createElement('p');heading.textContent='Результаты последней проверки РК';
-    box.appendChild(heading);
-    const list=document.createElement('ul');
-    for(const target of targets){
-        const item=document.createElement('li');
-        const status=target.status==='READY'?'API preflight готов':target.error_code+': '+target.message;
-        const missing=[...target.missing_fields.map(value=>'field '+value),
-            ...target.missing_contracts.map(value=>'contract '+value)];
-        item.textContent='Профиль '+target.profile_id+' · РК '+target.ad_account_id+' · '+status+
-            ' · API live read: '+(target.checked_live?'выполнен':'не выполнялся')+
-            ' · Meta editor: '+target.editor_state+
-            (missing.length?' · Требуется: '+missing.join(', '):'');
-        list.appendChild(item);
-    }
-    box.appendChild(list);
+    const box=$('remaskPrivateAccountReviews');
+    if(box){box.replaceChildren();box.hidden=true;}
     remaskPrivateRenderMediaPreflight(results,render);
 }
 async function remaskPrivateReviewConfig(config,{render=true,assertCurrent=null}={}) {
@@ -962,8 +887,8 @@ async function remaskPrivateCreateJob() {
         remaskPrivateAssertCurrentConfig(config);
         if(!reviewed?.length)return null;
         const blocked=reviewed.filter(entry=>entry.review?.ready!==true);
-        if(blocked.length)throw new Error('Готовы '+(reviewed.length-blocked.length)+'/'+reviewed.length+
-            ' РК. Проверка не пройдена: '+blocked.map(entry=>entry.row.ad_account_id+': '+entry.error).join(' · '));
+        if(blocked.length)throw new Error('Черновик не сохранён для РК '+
+            blocked.map(entry=>entry.row.ad_account_id+': '+entry.error).join(' · ')+'.');
         const planned=remaskPrivateJobRequest(config,reviewed);
         remaskPrivateShow((planned.reused?'Повторяю сохранённую отправку':'Создаю')+
             ' задачу для '+reviewed.length+' РК…');
@@ -988,49 +913,28 @@ async function remaskPrivateCreateJob() {
 }
 
 const remaskOriginalValidateReady=validateReady;
+function remaskPrivateHideReviewControls() {
+    for (const id of ['reviewLaunch','serverDryRun','dryRunPlan']) {
+        const button=$(id);
+        if(button){button.hidden=true;button.setAttribute('aria-hidden','true');}
+    }
+}
 validateReady=function() {
     remaskOriginalValidateReady();
-    const readiness=remaskPrivateStructuralReadiness();
     const busy=remaskPrivateLaunchBusy||
         (typeof state!=='undefined'&&state.processingJob===true);
-    for (const id of ['reviewLaunch','launchButton','serverDryRun','dryRunPlan']) {
-        const button=$(id);
-        if(!button)continue;
-        // Form-completeness failures are reported by the click handler:
-        // Local plans and explicit Meta readiness are separate from creation.
-        // A disabled button prevented operators from reaching either handler.
-        // Only in-flight work disables the controls to prevent duplicate jobs.
+    remaskPrivateHideReviewControls();
+    const button=$('launchButton');
+    if(button){
         button.disabled=busy;
-        button.title=busy?'Подождите завершения текущей проверки.':
-            (readiness.ready?remaskPrivateLaunchNotice:
-            'Проверка при нажатии: '+readiness.reason);
+        button.title=busy?'Сохраняем черновик…':'';
+        if(remaskPrivateExecutionMode()==='DRAFT')button.textContent='Сохранить черновик';
     }
-    if($('remaskPrivateExecutionMode')&&$('launchButton')){
-        $('launchButton').textContent=$('remaskPrivateExecutionMode').value==='DRAFT'?'Сохранить черновик в Meta':'Создать рекламу';
-        $('launchButton').setAttribute?.('aria-label',$('launchButton').textContent);
-    }
-    // Keep validation visible before the click without blocking interaction.
-    // Never skip validation inside remaskPrivatePrepareConfig or server review.
-    const anchor=$('reviewLaunch')||$('launchButton');
-    if(anchor?.parentNode) {
-        let diagnostic=$('remaskPrivateDisabledReason');
-        if(!diagnostic) {
-            diagnostic=document.createElement('div');
-            diagnostic.id='remaskPrivateDisabledReason';
-            diagnostic.className='muted mt-2';
-            diagnostic.setAttribute('role','status');
-            diagnostic.setAttribute('aria-live','polite');
-            anchor.parentNode.appendChild(diagnostic);
-        }
-        diagnostic.hidden=readiness.ready||busy;
-        diagnostic.textContent=diagnostic.hidden?'':'Перед запуском проверьте: '+readiness.reason+
-            ' Нажатие на кнопку покажет результат проверки.';
-    }
+    if($('reviewStatus'))$('reviewStatus').textContent='';
+    const diagnostic=$('remaskPrivateDisabledReason');
+    if(diagnostic){diagnostic.replaceChildren();diagnostic.hidden=true;}
 };
 validateReady();
-if ($('reviewStatus')) $('reviewStatus').textContent=remaskPrivateLaunchNotice;
-if ($('reviewLaunch')) $('reviewLaunch').textContent='Проверить готовность в Meta';
-
 // Search remains attached to an explicitly selected RK/profile rather than
 // the old Graph token. The PHP bridge rejects an unbound account context.
 if(typeof apiJson==='function'){
@@ -1072,36 +976,17 @@ if(typeof document!=='undefined'&&document.createElement&&$('launchButton')?.par
 
 remaskPrivateInstallExecutionMode();
 
-if(globalThis.remaskMediaTools){
-    globalThis.remaskMediaTools.install($('creativeFormat')?.parentElement||$('media'),async()=>{
-        const config=await remaskPrivatePrepareConfig();
-        remaskPrivateAssertCurrentConfig(config);
-        return {creative:config.payload.creative,targeting:config.payload.adset?.targeting||{},
-            assertCurrent:()=>remaskPrivateAssertCurrentConfig(config)};
-    },async(media,index,captured)=>{
-        captured.assertCurrent();
-        const snapshot=bundleFormState();
-        const selected=captured.media.map(row=>({media_library_id:row.id,sha256:row.sha256}));
-        selected[index]={media_library_id:media.id,sha256:media.sha256};
-        snapshot.media=captured.creative.format==='CAROUSEL'
-            ?{format:'CAROUSEL',carousel:captured.creative.carousel_cards.map((card,i)=>({...card,...selected[i]}))}
-            :{format:'SINGLE',...selected[0]};
-        snapshot.media.checksums=selected.map(row=>({id:row.media_library_id,sha256:row.sha256}));
-        await applyBundleData(snapshot);
-    });
-}
-
+// Media compatibility runs automatically in the save flow. The manual
+// inspection/crop/pad panel is kept out of Launch; it is not a Meta action.
 // Capture before legacy handlers. Old metaLaunchReview/metaJobCreate endpoints
 // remain blocked, so no click can fall through to the token-based Graph path.
 if(typeof document!=='undefined'&&document.addEventListener){
     document.addEventListener('click',event=>{
-        const button=event.target?.closest?.('#reviewLaunch,#launchButton,#serverDryRun,#dryRunPlan');
+        const button=event.target?.closest?.('#launchButton');
         if(!button||button.disabled)return;
         event.preventDefault();
         event.stopPropagation();
         event.stopImmediatePropagation();
-        if(button.id==='launchButton')remaskPrivateCreateJob();
-        else if(button.id==='reviewLaunch')remaskPrivateReviewLive();
-        else remaskPrivateReviewOnly();
+        remaskPrivateCreateJob();
     },true);
 }
