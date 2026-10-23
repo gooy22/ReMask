@@ -27,8 +27,9 @@ def _bounded_limit(value, *, maximum=100):
 
 class _ReadClient:
     """Adapt catalog reads to the same fresh profile HTTP/2 sender as Launch."""
-    def __init__(self, web, catalog, values):
+    def __init__(self, web, catalog, values, *, reference_read=False):
         self.web, self.catalog = web, catalog
+        self.reference_read = bool(reference_read)
         self.account = identity(values["ad_account_id"])
         self.business = identity(values["business_id"])
         self.actor = identity(str(web.profile.cookies.get("c_user") or ""))
@@ -44,7 +45,8 @@ class _ReadClient:
             raise fail("INVALID_RESOURCE_ROUTE", "Resource request differs from its reviewed source")
         if self.http is None:
             self.http = await AdsManagerPrivateHttp.open(self.web, account_id=self.account,
-                business_id=self.business, actor_id=self.actor)
+                business_id=self.business, actor_id=self.actor,
+                reference_read=self.reference_read)
         return await self.http.get(path.removeprefix("/" + self.catalog.data["api_version"]), params or {})
 
     async def account_record(self, *, require_active=True, currency=False, pages=False, reference=False):
@@ -98,15 +100,15 @@ class AdsManagerReadCatalog:
         return {name:{"configured":name in self.rows, "transport":"ads_manager_private_http"}
                 for name in RESOURCE_FIELDS}
 
-    def client(self, web, values):
-        return _ReadClient(web, self.catalog, values)
+    def client(self, web, values, *, reference_read=False):
+        return _ReadClient(web, self.catalog, values, reference_read=reference_read)
 
     async def read(self, web, name, values):
         if name not in self.rows:
             raise fail("RESOURCE_CONTRACT_REQUIRED", "Reviewed account query is unavailable for " + name)
         _bounded_limit(values.get("limit", 100), maximum=20000)
-        client = self.client(web, values)
         reference = name in TARGETING_TYPES | {"locations","locales"}
+        client = self.client(web, values, reference_read=reference)
         draft_pages = name == "pages" and values.get("execution_mode") == "DRAFT"
         account = await client.account_record(require_active=not reference, pages=name == 'pages' and not draft_pages, reference=reference)
         if draft_pages:
