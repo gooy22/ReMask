@@ -539,33 +539,25 @@ class InstalledLaunchTests(unittest.TestCase):
         self.assertEqual([x['media_library_id'] for x in media['carousel']], [MEDIA_ID,second])
         self.assertEqual([x['headline'] for x in media['carousel']], ['First','Second'])
 
-    def test_launch_controls_expose_missing_account_on_click(self):
+    def test_launch_has_one_save_action_and_reports_missing_account_on_click(self):
         self.page.wait_for_function('fixtureLaunch.ready()')
-        self.page.wait_for_selector('#remaskPrivateDisabledReason:not([hidden])')
-        reason = self.page.locator('#remaskPrivateDisabledReason')
-        self.assertTrue(reason.is_visible())
-        self.assertIn('Select at least one ad account.', reason.inner_text())
-        for button_id in ('launchButton', 'reviewLaunch', 'dryRunPlan'):
-            button = self.page.locator('#' + button_id)
-            self.assertTrue(button.is_enabled())
-            self.assertIn('Select at least one ad account.', button.get_attribute('title'))
-        self.page.locator('#reviewLaunch').click()
+        self.assertEqual(self.page.locator('#remaskPrivateDisabledReason').count(), 0)
+        for button_id in ('reviewLaunch', 'serverDryRun', 'dryRunPlan'):
+            self.assertFalse(self.page.locator('#' + button_id).is_visible())
+        self.assertTrue(self.page.locator('#launchButton').is_enabled())
+        self.page.locator('#launchButton').click()
         self.page.wait_for_function(
             'document.querySelector("#launchResult").textContent.includes("Select at least one ad account.")')
         self.assertTrue(self.page.locator('#launchButton').is_enabled())
 
-    def test_launch_controls_expose_unavailable_goal_on_click(self):
+    def test_launch_reports_unsupported_goal_without_extra_review_controls(self):
         self.page.wait_for_function('fixtureLaunch.ready()')
         self.page.evaluate("fixtureSingleTarget('123456')")
         self.page.evaluate('(data)=>fixtureLaunch.restore(data)',
             {'fields': {'objective': 'LEGACY_TEST_OBJECTIVE'}})
-        self.page.wait_for_selector('#remaskPrivateDisabledReason:not([hidden])')
-        reason = self.page.locator('#remaskPrivateDisabledReason')
-        self.assertTrue(reason.is_visible())
-        self.assertIn('Сохранённая цель недоступна', reason.inner_text())
-        self.assertTrue(self.page.locator('#launchButton').is_enabled())
-        self.assertTrue(self.page.locator('#reviewLaunch').is_enabled())
-        self.page.locator('#reviewLaunch').click()
+        self.assertEqual(self.page.locator('#remaskPrivateDisabledReason').count(), 0)
+        self.assertFalse(self.page.locator('#reviewLaunch').is_visible())
+        self.page.locator('#launchButton').click()
         self.page.wait_for_function(
             'document.querySelector("#launchResult").textContent.includes("Сохранённая цель недоступна")')
         self.assertTrue(self.page.locator('#launchButton').is_enabled())
@@ -578,7 +570,7 @@ class InstalledLaunchTests(unittest.TestCase):
         self.assertEqual(self.page.locator('#objective').input_value(), self.preset_objective)
         self.assertTrue(self.page.locator('#remaskUnsupportedObjective').is_visible())
         self.assertTrue(self.page.locator('#launchButton').is_enabled())
-        self.assertTrue(self.page.locator('#reviewLaunch').is_enabled())
+        self.assertFalse(self.page.locator('#reviewLaunch').is_visible())
         self.page.evaluate('fixtureLaunch.geo()')
         with self.assertRaisesRegex(Exception, 'Сохранённая цель недоступна'):
             self.page.evaluate('fixtureLaunch.payload()')
@@ -601,7 +593,7 @@ class InstalledLaunchTests(unittest.TestCase):
         self.page.evaluate('(data)=>fixtureLaunch.restore(data)',
             {'fields':{'objective':disabled,'dailyBudget':'800','campaignName':'Keep name'}})
         self.assertEqual(self.page.locator('#objective').input_value(), disabled)
-        self.assertTrue(self.page.locator('#dryRunPlan').is_enabled())
+        self.assertFalse(self.page.locator('#dryRunPlan').is_visible())
         self.assertTrue(self.page.locator('#remaskUnsupportedObjective').is_visible())
         self.assertEqual(self.page.locator('#campaignName').input_value(), 'Keep name')
         self.assertEqual(self.page.locator('#dailyBudget').input_value(), '800')
@@ -774,9 +766,9 @@ class InstalledLaunchTests(unittest.TestCase):
         self.assertIn('доступ не проверен',self.page.locator('#page option[value="567890"]').inner_text())
         self.page.locator('#page').select_option('567890')
         self.page.evaluate('fixtureLaunch.geo()')
-        self.page.locator('#dryRunPlan').click()
+        self.page.evaluate('remaskPrivateReviewOnly()')
         self.page.wait_for_function('document.querySelector("#launchResult").textContent.includes("План подготовлен для 1 РК")')
-        self.page.locator('#reviewLaunch').click()
+        self.page.evaluate('remaskPrivateReviewLive()')
         self.page.wait_for_function('document.querySelector("#launchResult").textContent.includes("Проверка Meta: 0/1")')
         self.assertEqual(next(row for row in self.worker_requests if row['action']=='private_launch_review')['page_id'],'567890')
         self.assertFalse(any(row['action']=='create' for row in self.worker_requests))
@@ -796,22 +788,12 @@ class InstalledLaunchTests(unittest.TestCase):
         self.page.evaluate('fixtureLaunch.geo()')
         self.page.locator('#launchDeliverySelect').select_option('PAUSED')
 
-    def test_installed_local_media_preparation_requires_explicit_variant_selection(self):
+    def test_launch_hides_manual_media_check_and_keeps_file_selected(self):
         self.prepare_single_page_launch()
-        self.page.locator('#remaskMediaInspect').click()
-        self.page.wait_for_function('document.querySelector("#remaskMediaTools").textContent.includes("файл декодирован")')
-        self.page.locator('#remaskMediaMode').select_option('pad')
-        self.page.locator('#remaskMediaHeight').fill('1920')
-        self.page.locator('#remaskMediaPrepare').click()
-        self.page.wait_for_function('document.querySelector("#remaskMediaTools").textContent.includes("Вариант готов")')
+        self.assertEqual(self.page.locator('#remaskMediaTools').count(), 0)
         rows=self.page.evaluate('fixtureLaunch.preparedRows()')
-        self.assertEqual(rows[0]['launch']['base']['creative']['media_library_id'], MEDIA_ID,
-                         'preparation alone must not change the selected original')
-        self.page.locator('#remaskMediaUse').click()
-        self.page.wait_for_function('document.querySelector("#remaskMediaTools").textContent.includes("Выбран подготовленный")')
-        rows=self.page.evaluate('fixtureLaunch.preparedRows()')
-        self.assertEqual(rows[0]['launch']['base']['creative']['media_library_id'], 'm-'+'c'*24)
-        self.assertFalse(any(row['action'] in {'create','private_launch_review'} for row in self.worker_requests))
+        self.assertEqual(rows[0]['launch']['base']['creative']['media_library_id'], MEDIA_ID)
+        self.assertFalse(any(row['action']=='private_launch_media_inspect' for row in self.worker_requests))
 
     def test_selected_rk_searches_fresh_multiple_interests_and_preserves_ids_in_worker_plan(self):
         self.prepare_single_page_launch()
@@ -823,7 +805,7 @@ class InstalledLaunchTests(unittest.TestCase):
         self.assertEqual(lookup['profile'],['20'])
         self.assertEqual(lookup['account_id'],['123456'])
         self.assertEqual(lookup['execution_mode'],['DRAFT'])
-        self.page.locator('#dryRunPlan').click()
+        self.page.evaluate('remaskPrivateReviewOnly()')
         self.page.wait_for_function('document.querySelector("#launchResult").textContent.includes("План подготовлен для 1 РК")')
         plan=next(row for row in self.worker_requests if row['action']=='private_launch_plan')
         interests=plan['launch']['base']['adset']['targeting']['flexible_spec'][0]['interests']
@@ -854,7 +836,7 @@ class InstalledLaunchTests(unittest.TestCase):
         self.page.evaluate('fixtureSingleTarget("act_123456")')
         self.page.locator('#page option[value="345678"]').wait_for(state='attached')
         self.page.locator('#page').select_option('345678')
-        self.page.locator('#dryRunPlan').click()
+        self.page.evaluate('remaskPrivateReviewOnly()')
         self.page.wait_for_function('document.querySelector("#launchResult").textContent.includes("План подготовлен для 1 РК")')
         base=next(row for row in self.worker_requests if row['action']=='private_launch_plan')['launch']['base']
         target=base['adset']['targeting']
@@ -875,13 +857,13 @@ class InstalledLaunchTests(unittest.TestCase):
 
     def test_single_rk_selected_page_reaches_plan_and_independent_review(self):
         self.prepare_single_page_launch()
-        self.page.locator('#dryRunPlan').click()
+        self.page.evaluate('remaskPrivateReviewOnly()')
         self.page.wait_for_function('document.querySelector("#launchResult").textContent.includes("План подготовлен для 1 РК")')
         plan=next(row for row in self.worker_requests if row['action']=='private_launch_plan')
         self.assertEqual((plan['profile_id'],plan['ad_account_id'],plan['page_id']),('20','123456','345678'))
         self.assertEqual(plan['launch']['base']['creative']['page_id'],'345678')
         self.assertNotIn('official_params',plan['launch']['base']['creative'])
-        self.page.locator('#reviewLaunch').click()
+        self.page.evaluate('remaskPrivateReviewLive()')
         self.page.wait_for_function('document.querySelector("#launchResult").textContent.includes("Проверка Meta: 0/1")')
         review=next(row for row in self.worker_requests if row['action']=='private_launch_review')
         self.assertEqual(review['page_id'],'345678')
@@ -891,13 +873,13 @@ class InstalledLaunchTests(unittest.TestCase):
     def test_explicit_meta_readiness_can_succeed_in_both_modes_without_creating_a_job(self):
         self.prepare_single_page_launch()
         self.review_ready=True
-        self.assertEqual(self.page.locator('#reviewLaunch').inner_text(),'Проверить готовность в Meta')
+        self.assertFalse(self.page.locator('#reviewLaunch').is_visible())
         for mode in ('DRAFT','PUBLISH'):
             with self.subTest(mode=mode):
                 self.page.locator('#remaskPrivateExecutionMode').select_option(mode)
                 before=self.page.evaluate('fixtureLaunch.capture()')
                 self.worker_requests.clear()
-                self.page.locator('#reviewLaunch').click()
+                self.page.evaluate('remaskPrivateReviewLive()')
                 self.page.wait_for_function('document.querySelector("#launchResult").textContent.includes("Проверка Meta: 1/1")')
                 review=next(row for row in self.worker_requests if row['action']=='private_launch_review')
                 self.assertEqual((review['profile_id'],review['ad_account_id'],review['page_id']),('20','123456','345678'))

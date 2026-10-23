@@ -157,42 +157,31 @@ class WorkflowTests(unittest.TestCase):
         self.page.evaluate('testCreative.open({id:"fixture",name:"Estimate",meta_builder:{campaign:{objective:"OUTCOME_TRAFFIC"},adset:{daily_budget:200},targeting:{geo_locations:{countries:["US"]},age_min:21,age_max:55}}})')
         self.page.get_by_role('button',name='Аудитория',exact=True).click()
 
-    def test_prepared_carousel_card_preserves_order_copy_destination_and_individual_ctas(self):
-        self.creative(context=True, media_tools=True)
-        first='m-'+'a'*24; second='m-'+'b'*24; prepared='m-'+'c'*24
-        cards=[{'media_library_id':first,'media':{'id':first,'media_type':'image','original_name':'one.png'},
-                'headline':'First','description':'First copy','link':'https://example.com/one','call_to_action':'LEARN_MORE'},
-               {'media_library_id':second,'media':{'id':second,'media_type':'image','original_name':'two.png'},
-                'headline':'Second','description':'Second copy','link':'https://example.com/two','call_to_action':'SHOP_NOW'}]
-        self.page.evaluate('''({cards,first,second,prepared})=>{
-            const previous=window.fetch;
-            window.fetch=async(url,options={})=>{
-                if(!String(url).includes('pythonWorkerJobs.php'))return previous(url,options);
-                const body=JSON.parse(options.body);
-                const media=(id)=>({id,sha256:id.slice(2)[0].repeat(64),media_type:'image',mime_type:'image/png'});
-                const data=body.action==='private_launch_media_inspect'?{media:[first,second].map(id=>({
-                    ...media(id),inspection:{encoding:'PNG',width:80,height:40,size_bytes:100,requires_conversion:false},
-                    compatibility:{warnings:[]}}))}:{media:media(prepared),inspection:{width:80,height:80}};
-                return {ok:true,status:200,json:async()=>({ok:true,...data})};
+    def test_carousel_editor_has_no_manual_media_check_and_preserves_card_fields(self):
+        cards = [
+            {'headline': 'First', 'description': 'First desc', 'link': 'https://example.com/one', 'call_to_action': 'LEARN_MORE'},
+            {'headline': 'Second', 'description': 'Second desc', 'link': 'https://example.com/two', 'call_to_action': 'SHOP_NOW'},
+        ]
+        self.page.evaluate('''({cards})=>{
+            window.fixtureSaves=[];
+            const previous=window.fetch.bind(window);
+            window.fetch=async(url,options)=>{
+                if(!String(url).includes('creativeLibrary.php'))return previous(url,options);
+                const form=options.body;
+                window.fixtureSaves.push({prepared_media:form.get('prepared_media'),carousel_cards:form.get('carousel_cards')});
+                return {ok:true,status:200,json:async()=>({ok:true,items:[]})};
             };
             testCreative.open({id:'fixture',name:'Carousel',format:'CAROUSEL',carousel:cards,
                 message:'Primary',destination_url:'https://example.com/',cta:'LEARN_MORE',
                 meta_builder:{campaign:{objective:'OUTCOME_TRAFFIC'},adset:{daily_budget:200},targeting:{geo_locations:{countries:['US']}}}});
-        }''', {'cards':cards,'first':first,'second':second,'prepared':prepared})
+        }''', {'cards':cards})
         self.page.locator('.cr-tab[data-tab="creative"]').click()
+        self.assertEqual(self.page.locator('#remaskMediaTools').count(),0)
         self.assertEqual(self.page.locator('.car-cta').nth(1).input_value(),'SHOP_NOW')
-        self.page.locator('#remaskMediaInspect').click()
-        self.page.wait_for_function('document.querySelector("#remaskMediaCard").options.length===2')
-        self.page.locator('#remaskMediaMode').select_option('pad')
-        self.page.locator('#remaskMediaPrepare').click()
-        self.page.wait_for_function('document.querySelector("#remaskMediaTools").textContent.includes("Вариант готов")')
-        self.assertIsNone(self.page.evaluate('remaskPreparedLibraryMedia'))
-        self.page.locator('#remaskMediaUse').click()
-        self.page.wait_for_function('document.querySelector("#remaskMediaTools").textContent.includes("Выбран подготовленный")')
         self.page.locator('#saveCreative').click()
         self.page.wait_for_function('fixtureSaves.length===1')
         saved=self.page.evaluate('fixtureSaves[0]')
-        self.assertEqual(json.loads(saved['prepared_media']),[prepared,second])
+        self.assertIsNone(saved['prepared_media'])
         result=json.loads(saved['carousel_cards'])
         for key in ('headline','description','link','call_to_action'):
             self.assertEqual([row[key] for row in result],[row[key] for row in cards])

@@ -58,7 +58,7 @@ function fixture(size=30) {
     ctx.review=async()=>{entered();await new Promise(resolve=>release=resolve);return {review:{ready:true}};};
     const first=ctx.remaskPrivateReviewLive();
     await waiting;
-    assert.equal(controls.reviewLaunch.disabled,true);
+    assert.equal(controls.launchButton.disabled,true,'the sole Save Draft action is disabled during an in-flight review');
     assert.equal(await ctx.remaskPrivateReviewLive(),null,'duplicate clicks cannot submit another read batch');
     controls.remaskPrivateExecutionMode.value='PUBLISH';
     release();
