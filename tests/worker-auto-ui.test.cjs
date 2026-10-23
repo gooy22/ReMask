@@ -164,7 +164,8 @@ const source = fs.readFileSync('railway-python-worker-ui.js', 'utf8');
 // A failed final bundle step must still display locally confirmed CREATE IDs.
 (async()=>{
   const refreshed=[];
-  const local={pythonWorkerRefreshProfile:async profile=>{refreshed.push(profile);return true;}};
+  const local={pythonWorkerRefreshProfile:async profile=>{refreshed.push(profile);return true;},
+    pythonWorkerMapLimit:async(items,limit,worker)=>{for(let i=0;i<items.length;i++)await worker(items[i],i);}};
   vm.createContext(local);
   const begin=source.indexOf('async function pythonWorkerRefreshSuccessfulProfiles(');
   vm.runInContext(source.slice(begin,source.indexOf('\nasync function pythonWorkerStartBusiness',begin)),local);
@@ -174,6 +175,41 @@ const source = fs.readFileSync('railway-python-worker-ui.js', 'utf8');
   ]);
   assert.deepEqual(refreshed,['35','36']);
 })().catch(error=>{console.error(error);process.exitCode=1;});
+// Terminal Job local snapshots should refresh in parallel without overloading PHP.
+(async()=>{
+  let running=0,peak=0;
+  const started=[],completed=[];
+  const local={
+    async pythonWorkerRefreshProfile(profile){
+      started.push(profile);
+      running++;peak=Math.max(peak,running);
+      await new Promise(resolve=>setTimeout(resolve,4));
+      running--;
+      completed.push(profile);
+      return profile!=='2'&&profile!=='4';
+    },
+    async pythonWorkerMapLimit(items,limit,worker){
+      assert.equal(limit,3);
+      let next=0;
+      await Promise.all(Array.from({length:limit},async()=>{
+        while(true){
+          const i=next++;
+          if(i>=items.length)return;
+          await worker(items[i],i);
+        }
+      }));
+    },
+  };
+  vm.createContext(local);
+  const begin=source.indexOf('async function pythonWorkerRefreshSuccessfulProfiles(');
+  vm.runInContext(source.slice(begin,source.indexOf('\\nasync function pythonWorkerStartBusiness',begin)),local);
+  const items=['1','2','3','4','5','1'].map(profile_id=>({profile_id,status:'SUCCESS'}));
+  const errors=await local.pythonWorkerRefreshSuccessfulProfiles(items);
+  assert.equal(peak,3,'At most three local snapshots in flight');
+  assert.equal(started.length,5,'Duplicate profile snapshots are coalesced');
+  assert.deepEqual(Array.from(errors),['2','4'],'Failures retain the selection order');
+})().catch(error=>{console.error(error);process.exitCode=1;});
+
 // Both BM and RK context menus must expose the same automatic bulk action.
 for(const [tab,label] of [['businesses','Добавить RK'],['ad_accounts','Проверить Assets']]){
   let inserted;
