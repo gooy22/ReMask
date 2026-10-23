@@ -45,8 +45,11 @@ jobs:
             ffmpeg -version | head -n 1
             ffprobe -version | head -n 1
           else
-            sudo apt-get update
-            sudo apt-get install -y --no-install-recommends ffmpeg
+            bash .github/scripts/ubuntu-ci-mirrors.sh
+            sudo timeout --kill-after=10s 90s apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update
+            sudo timeout --kill-after=10s 180s apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -y --no-install-recommends ffmpeg
+            ffmpeg -version | head -n 1
+            ffprobe -version | head -n 1
           fi
       - name: Install backend dependencies
         run: |
@@ -150,6 +153,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Chromium fixture dependencies
         run: |
+          bash .github/scripts/ubuntu-ci-mirrors.sh
           python3 -m venv /tmp/remask-browser-regression
           /tmp/remask-browser-regression/bin/pip install -r python_backend/requirements.txt
           /tmp/remask-browser-regression/bin/pip install -r python_backend/requirements-browser-tests.txt
