@@ -18,7 +18,16 @@ from pathlib import Path
 import re
 import sys
 
-from .private_http_metrics import _RESOURCE_NAMES
+# Intentionally keep the analyzer on Python's standard library. The HTTP
+# recorder itself imports HTTPX; an offline diagnostic tool must not need it.
+# Regression tests require parity with the recorder's emitted resource labels.
+_RESOURCE_NAMES = frozenset({
+    "interests", "behaviors", "locations", "locales", "pages", "images",
+    "videos", "campaigns", "adsets", "ads", "pixels", "custom_audiences",
+    "conversion_goals", "instagram_accounts", "instagram_media",
+    "creatives", "insights", "college_years", "industries", "life_events",
+    "family_statuses", "user_device", "user_os",
+})
 
 MAX_LINE = 100_000
 MAX_SAMPLES_PER_GROUP = 250_000
