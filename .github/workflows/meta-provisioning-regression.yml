@@ -45,14 +45,7 @@ jobs:
             ffmpeg -version | head -n 1
             ffprobe -version | head -n 1
           else
-            # Use the official Ubuntu mirrors: the runner's Azure mirror can
-            # download codec packages so slowly that it consumes the whole job.
-            if [ -f /etc/apt/apt-mirrors.txt ]; then
-              printf '%s\n' 'https://archive.ubuntu.com/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
-            fi
-            if [ -f /etc/apt/apt-security-mirrors.txt ]; then
-              printf '%s\n' 'https://security.ubuntu.com/ubuntu/' | sudo tee /etc/apt/apt-security-mirrors.txt >/dev/null
-            fi
+            bash .github/scripts/ubuntu-ci-mirrors.sh
             sudo timeout --kill-after=10s 90s apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update
             sudo timeout --kill-after=10s 180s apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -y --no-install-recommends ffmpeg
             ffmpeg -version | head -n 1
@@ -160,6 +153,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Chromium fixture dependencies
         run: |
+          bash .github/scripts/ubuntu-ci-mirrors.sh
           python3 -m venv /tmp/remask-browser-regression
           /tmp/remask-browser-regression/bin/pip install -r python_backend/requirements.txt
           /tmp/remask-browser-regression/bin/pip install -r python_backend/requirements-browser-tests.txt
