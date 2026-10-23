@@ -194,4 +194,32 @@ function fixture(){
   console.log('Installed targeting API bridge: later page offset survives request routing.');
 
 
+
+  // A partially pre-rendered Launch form must still receive the missing
+  // behavior results and selected-item containers. This is the regression
+  // that used to be skipped by the early return when behaviorQuery existed.
+  const behaviorOverlay=read('railway-behaviors-ui-overlay.php');
+  const behaviorUi=behaviorOverlay.match(/\\$ui=<<<'JS'\\n([\\s\\S]*?)\\nJS;/)?.[1];
+  assert.ok(behaviorUi,'behavior UI installer must remain embedded in the runtime overlay');
+  const partial=fixture(), behaviorInput=new Input(), behaviorBlock=new Element();
+  behaviorInput.id='behaviorQuery';behaviorInput.placeholder='Поведение';
+  behaviorInput.parentElement=behaviorBlock;behaviorBlock.children.push(behaviorInput);
+  behaviorInput.insertAdjacentElement=(position,node)=>{
+    const index=behaviorBlock.children.indexOf(behaviorInput);
+    behaviorBlock.children.splice(index+1,0,node);node.parentElement=behaviorBlock;
+  };
+  partial.nodes.set('behaviorQuery',behaviorInput);
+  partial.nodes.set('selectedInterests',new Element());
+  partial.nodes.get('selectedInterests').className='pills';
+  partial.nodes.set('interestResults',new Element());
+  partial.ctx.$=id=>partial.nodes.get(id)||null;
+  partial.ctx.state={behaviors:[{id:'654321',name:'Fixture behavior'}]};
+  partial.ctx.renderPills=(box,rows)=>{box.rendered=rows.slice();};
+  vm.runInContext(behaviorUi+'\\nensureBehaviorTargetingUi();',partial.ctx);
+  assert.ok(partial.nodes.get('selectedBehaviors'),'partial Launch markup restores selected behavior container');
+  assert.ok(partial.nodes.get('behaviorResults'),'partial Launch markup restores behavior results container');
+  assert.equal(partial.nodes.get('selectedBehaviors').className,'pills');
+  assert.equal(partial.nodes.get('selectedBehaviors').rendered[0].id,'654321');
+  console.log('Launch behavior controls: partial DOM is repaired and selected values render.');
+
 })().catch(error=>{console.error(error);process.exitCode=1;});
