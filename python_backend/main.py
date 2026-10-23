@@ -23,7 +23,7 @@ from app.store import JobStore
 from app.facebook_business_browser import BROWSER_TERMINAL_ACCESS_CODES, BrowserBusinessError, FacebookBusinessBrowser
 from app.facebook_page_discovery import PageDiscoveryError, list_pages_via_private_graphql
 from app.private_inventory import private_inventory_snapshot
-from app.private_http_metrics import observe_profile_inventory
+from app.private_http_metrics import observe_profile_inventory, observe_profile_read
 from app.provisioning.models import ProvisioningError, ProvisioningStep
 from app.provisioning.meta_transport import MetaTransportRouter
 from app.provisioning.service import normalize_add_bm_payload
@@ -3709,6 +3709,7 @@ async def private_launch_media_prepare(payload: dict = Body(...)):
         raise HTTPException(status_code=422, detail={'code':exc.code,'message':str(exc),'retryable':False}) from exc
 
 @app.get('/api/v1/profiles/{profile_id}/advertising-resources',dependencies=[Depends(require_key)])
+@observe_profile_read
 async def private_advertising_resources(profile_id: str, resource: str, account_id: str,
                                         force: bool = False, query: str = '', limit: int = 100,
                                         offset: int = 0, execution_mode: str = 'PUBLISH'):
@@ -3768,6 +3769,7 @@ async def private_advertising_resources(profile_id: str, resource: str, account_
         raise HTTPException(status_code=504,detail='ADVERTISING_RESOURCE_READ_TIMEOUT') from exc
 
 @app.post('/api/v1/profiles/{profile_id}/template-reference/{operation}',dependencies=[Depends(require_key)])
+@observe_profile_read
 async def private_template_reference(profile_id: str, operation: str, payload: dict = Body(...)):
     from app.private_template_reads import read_template_reference, REFERENCE_TYPES
     from app.private_auth import private_auth_error
