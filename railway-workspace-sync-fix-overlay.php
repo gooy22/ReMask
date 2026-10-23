@@ -1084,9 +1084,17 @@ function hierarchy_created_accounts_apply_display(string $profile, array $snapsh
     $snapshot['ad_accounts'] = $rows;
     $snapshot['ad_accounts_count'] = count($rows);
     $snapshot['businesses_count'] = count($businessNames);
+    // REMASK_LINEAR_WORKSPACE_ACCOUNT_GROUPS_V1
+    // The Workspace snapshot is read repeatedly. Build BM→RK groups once
+    // rather than scanning all saved accounts for every displayed Business.
+    $accountsByBusiness = [];
+    foreach ($rows as $accountRow) {
+        if (!is_array($accountRow)) continue;
+        $bid = (string)($accountRow['business_id'] ?? '');
+        $accountsByBusiness[$bid][] = $accountRow;
+    }
     foreach ((array)($snapshot['businesses'] ?? []) as $i => $business) {
-        $accounts = array_values(array_filter($rows, static fn($row) =>
-            is_array($row) && (string)($row['business_id'] ?? '') === (string)($business['id'] ?? '')));
+        $accounts = $accountsByBusiness[(string)($business['id'] ?? '')] ?? [];
         $snapshot['businesses'][$i]['accounts'] = $accounts;
         $snapshot['businesses'][$i]['ad_account_count'] = count($accounts);
     }
