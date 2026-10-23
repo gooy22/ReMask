@@ -8,6 +8,10 @@ Credentials are private memory; neither receipts nor diagnostics include them.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from collections import OrderedDict
+from weakref import WeakValueDictionary
+import asyncio
+import time
 import json
 import hashlib
 import logging
@@ -20,6 +24,14 @@ from .private_ads_document import (_auth_gate, _json_payloads, _JSON_SCRIPT_RE,
 from .provisioning.models import ProvisioningError
 
 log = logging.getLogger("remask.private_ads_http")
+
+# Short-lived read-only Ads Manager bootstrap reuse. These are session
+# credentials, NEVER permission proof or a writable client. Every consuming
+# resource read still requires its own live exact-account GET.
+_REFERENCE_CONTEXT_TTL_SECONDS = 45.0
+_REFERENCE_CONTEXT_MAX_ENTRIES = 32
+_REFERENCE_CONTEXT_CACHE = OrderedDict()
+_REFERENCE_CONTEXT_LOCKS = WeakValueDictionary()
 
 # ServerJS.handle receives literal JSON, including in legacy requireLazy
 # script wrappers. Parse its data argument; never execute the wrapper.
@@ -224,7 +236,51 @@ class AdsManagerPrivateHttp:
                 and str(self.web.profile.cookies.get("c_user") or "") == self.context.actor_id)
 
     @classmethod
-    async def open(cls, web, *, account_id, business_id, actor_id):
+    async def open(cls, web, *, account_id, business_id, actor_id, reference_read=False):
+        account_id, business_id, actor_id = map(identity, (account_id, business_id, actor_id))
+        if not reference_read:
+            # Mutation-capable paths keep their original fresh-document contract.
+            return await cls._open_uncached(web, account_id=account_id,
+                business_id=business_id, actor_id=actor_id, refresh_modules=True)
+        profile = web.profile
+        if str(profile.cookies.get("c_user") or "") != actor_id:
+            raise fail("ACTOR_MISMATCH", "Advertising request belongs to another profile")
+        name = str(getattr(profile, "name", "") or "")
+        proxy = str(getattr(profile, "proxy", "") or "")
+        if not name or not proxy:
+            # Explicit direct-test leases and unnamed sessions are never shared.
+            client = await cls._open_uncached(web, account_id=account_id,
+                business_id=business_id, actor_id=actor_id, refresh_modules=False)
+            client.read_only = True
+            return client
+        digest = hashlib.sha256(json.dumps([name, proxy,
+            str(getattr(profile, "user_agent", "") or ""), profile.cookies,
+            actor_id, business_id, account_id], sort_keys=True,
+            separators=(",", ":")).encode()).hexdigest()
+        lock = _REFERENCE_CONTEXT_LOCKS.setdefault(digest, asyncio.Lock())
+        async with lock:
+            now = time.monotonic()
+            cached = _REFERENCE_CONTEXT_CACHE.get(digest)
+            if cached is not None and now - cached[0] <= _REFERENCE_CONTEXT_TTL_SECONDS:
+                client = cls(web, cached[1])
+                client.document_origin = cached[2]
+                client.read_only = True
+                if client._profile_matches():
+                    _REFERENCE_CONTEXT_CACHE.move_to_end(digest)
+                    return client
+            _REFERENCE_CONTEXT_CACHE.pop(digest, None)
+            client = await cls._open_uncached(web, account_id=account_id,
+                business_id=business_id, actor_id=actor_id, refresh_modules=False)
+            client.read_only = True
+            _REFERENCE_CONTEXT_CACHE[digest] = (time.monotonic(),
+                client.context, client.document_origin)
+            _REFERENCE_CONTEXT_CACHE.move_to_end(digest)
+            while len(_REFERENCE_CONTEXT_CACHE) > _REFERENCE_CONTEXT_MAX_ENTRIES:
+                _REFERENCE_CONTEXT_CACHE.popitem(last=False)
+            return client
+
+    @classmethod
+    async def _open_uncached(cls, web, *, account_id, business_id, actor_id, refresh_modules):
         account_id, business_id, actor_id = map(identity, (account_id, business_id, actor_id))
         web.private_only = True
         if str(web.profile.cookies.get("c_user") or "") != actor_id:
@@ -265,7 +321,7 @@ class AdsManagerPrivateHttp:
             log.warning("ads_bootstrap rejected profile=%s code=%s", getattr(web.profile, "name", ""), error.code)
             raise
         refresh = getattr(web, 'refresh_reviewed_modules', None)
-        if callable(refresh):
+        if refresh_modules and callable(refresh):
             await refresh(body, final_url)
         client = cls(web, context)
         client.document_origin = final.scheme + '://' + final.hostname
