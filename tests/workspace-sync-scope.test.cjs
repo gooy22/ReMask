@@ -80,6 +80,46 @@ async function run(activeTab, rows) {
   return JSON.parse(JSON.stringify(calls));
 }
 
+async function syncLatencyMetricsAreAggregateOnly() {
+  const logs=[],elements=new Map(),profile='fixture-private-profile';
+  const state={running:false,activeTab:'profiles'};
+  const sandbox={
+    state,selectedRows:()=>[{name:profile}],
+    $:id=>{if(!elements.has(id))elements.set(id,{});return elements.get(id);},
+    updateSelectionUi(){},setProgress(){},render(){},
+    Date,Math,setTimeout,clearTimeout,post:payload=>payload,
+    console:{info:(...args)=>logs.push(args.join(' '))},
+    applySnapshot:()=>true,
+    async apiJson(){
+      return {sync_complete:true,sync_timings_ms:{
+        php_context:12,worker_bridge:55,php_total:73,
+        // Incoming arbitrary fields must never be logged:
+        profile,proxy:'PRIVATE-CREDENTIAL'
+      }};
+    },
+    async concurrent(items,limit,fn){
+      const result=[];
+      for(const item of items)result.push(await fn(item));
+      return result;
+    },
+  };
+  vm.createContext(sandbox);vm.runInContext(source,sandbox);
+  await sandbox.syncSelection();
+  const metric=state.lastSyncTimingMs;
+  assert.equal(metric.ui_http_calls,1);
+  assert.equal(metric.ui_http_parallel_peak,1);
+  assert.equal(metric.ui_apply_count,1);
+  assert.equal(metric.php_context_ms_sum,12);
+  assert.equal(metric.worker_bridge_ms_sum,55);
+  assert.equal(metric.php_total_ms_sum,73);
+  assert.ok(metric.ui_wall_ms>=0 && metric.ui_render_ms>=0);
+  assert.equal(state.running,false);
+  assert.equal(logs.length,1);
+  assert.ok(logs[0].includes('[ReMask sync latency]'));
+  assert.ok(!logs[0].includes(profile));
+  assert.ok(!logs[0].includes('PRIVATE-CREDENTIAL'));
+}
+
 async function stalledReconciliation() {
   const calls=[], elements=new Map(); let now=0, timerId=0;
   const timers=new Map();
@@ -167,6 +207,7 @@ async function independentProfilesRunInParallelButSameProfileSerial() {
   snapshotPreservation();
   businessOnlySnapshot();
   await sessionRefreshOutcome();
+  await syncLatencyMetricsAreAggregateOnly();
   await independentProfilesRunInParallelButSameProfileSerial();
   await stalledReconciliation();
   const bm = await run('businesses',[{profile:'8',id:'1632909278268870'}]);
