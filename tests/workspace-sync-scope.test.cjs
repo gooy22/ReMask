@@ -112,10 +112,62 @@ async function stalledReconciliation() {
   assert.match(elements.get('workspaceStatus').textContent,/Failed to fetch/);
 }
 
+async function independentProfilesRunInParallelButSameProfileSerial() {
+  const rows=[
+    {profile:'alpha',id:'1111111111'},
+    {profile:'alpha',id:'2222222222'},
+    {profile:'bravo',id:'3333333333'},
+    {profile:'charlie',id:'4444444444'},
+  ];
+  const active=new Set(),calls=[],finished=[],progress=[];
+  let peak=0,sameProfileOverlap=false,poolLimit=0;
+  const elements=new Map();
+  const scope={
+    state:{running:false,activeTab:'businesses'},selectedRows:()=>rows,
+    $:id=>{if(!elements.has(id))elements.set(id,{});return elements.get(id);},
+    updateSelectionUi(){},render(){},setProgress:(done,total)=>progress.push([done,total]),
+    post:value=>value,applySnapshot:()=>true,Date,Math,setTimeout,clearTimeout,
+    async apiJson(url,input){
+      if(input.action!=='sync_profile')throw Error('Unexpected network route');
+      calls.push({profile:input.profile,business:input.business_id});
+      if(active.has(input.profile))sameProfileOverlap=true;
+      active.add(input.profile);
+      peak=Math.max(peak,active.size);
+      await new Promise(resolve=>setTimeout(resolve,3));
+      active.delete(input.profile);
+      finished.push(input.profile+'|'+input.business_id);
+      return {sync_complete:true};
+    },
+    async concurrent(items,limit,worker){
+      poolLimit=limit;
+      let next=0;
+      await Promise.all(Array.from({length:Math.min(limit,items.length)},async()=>{
+        for(;;){
+          const index=next++;
+          if(index>=items.length)return;
+          await worker(items[index]);
+        }
+      }));
+      return [];
+    },
+  };
+  vm.createContext(scope);vm.runInContext(source,scope);
+  await scope.syncSelection();
+  assert.equal(poolLimit,2,'At most two independent profile reads per browser');
+  assert.equal(peak,2,'Independent profiles must actually overlap');
+  assert.equal(sameProfileOverlap,false,'The same profile must remain serial');
+  assert.equal(calls.length,4,'Every selected BM must still be visited');
+  assert.deepEqual(finished.filter(x=>x.startsWith('alpha|')),
+    ['alpha|1111111111','alpha|2222222222']);
+  assert.deepEqual(progress.at(-1),[4,4]);
+  assert.equal(scope.state.running,false);
+}
+
 (async()=>{
   snapshotPreservation();
   businessOnlySnapshot();
   await sessionRefreshOutcome();
+  await independentProfilesRunInParallelButSameProfileSerial();
   await stalledReconciliation();
   const bm = await run('businesses',[{profile:'8',id:'1632909278268870'}]);
   assert.equal(bm.length,1);
