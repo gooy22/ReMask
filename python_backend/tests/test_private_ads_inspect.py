@@ -26,6 +26,8 @@ class SavedDraftInspectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['execution_mode'], 'DRAFT_INSPECT')
         self.assertEqual(result['draft_objects'], {'campaign':'777771', 'ad_set':'777772', 'ad':'777773'})
         self.assertTrue(result['fragment_storage_verified'])
+        self.assertTrue(result['meta_validation_complete'])
+        self.assertTrue(result['draft_verified'])
         self.assertFalse(result['editor_verified'])
         self.assertIsNone(result['published'])
         self.assertEqual(result['fragment_reads'][0]['submitted_values']['objective'], 'LINK_CLICKS')
@@ -104,8 +106,32 @@ class SavedDraftInspectionTests(unittest.IsolatedAsyncioTestCase):
         post.assert_not_called(); payment.assert_not_called()
         self.assertEqual([row['validation_status'] for row in result['fragment_reads']],
                          ['VALIDATED', 'VALIDATED', 'HAS_ERRORS'])
+        self.assertFalse(result['meta_validation_complete'])
+        self.assertTrue(result['meta_validation_errors_present'])
+        self.assertFalse(result['draft_verified'])
         self.assertEqual(result['mutation_posts'], 0)
         self.assertFalse(result['editor_verified'])
+        self.assertEqual(await self.owner.state.all_steps('image-launch'), before)
+
+    async def test_unsettled_validation_cannot_be_reported_as_verified_draft(self):
+        await self.saved()
+        original = self.client.get
+
+        async def pending_validation(path, params):
+            row = await original(path, params)
+            if row.get('ad_object_type') == 'ad_set':
+                row.pop('active_errors', None)
+            return row
+
+        self.client.get = pending_validation
+        before = copy.deepcopy(await self.owner.state.all_steps('image-launch'))
+        with patch.object(self.client, 'post', new=AsyncMock(side_effect=AssertionError('No POST'))) as post:
+            report = await self.launch()
+        post.assert_not_awaited()
+        self.assertTrue(report['fragment_storage_verified'])
+        self.assertFalse(report['meta_validation_complete'])
+        self.assertFalse(report['meta_validation_errors_present'])
+        self.assertFalse(report['draft_verified'])
         self.assertEqual(await self.owner.state.all_steps('image-launch'), before)
 
     async def test_lost_draft_reply_returns_local_journal_diagnostic_without_meta_reads(self):
