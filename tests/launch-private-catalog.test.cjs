@@ -290,7 +290,7 @@ console.log('Private Launch catalog and funding truth checks passed');
   privateCtx.remaskPrivateCreateJob=()=>routed.push('create');
   for(const id of ['reviewLaunch','dryRunPlan','serverDryRun']){
     let stopped=0;
-    captureHandler({target:{closest:()=>({id,disabled:false})},
+    captureHandler({target:{closest:selector=>selector==='#launchButton'?null:({id,disabled:false})},
       preventDefault(){stopped++;},stopPropagation(){stopped++;},stopImmediatePropagation(){stopped++;}});
     assert.equal(stopped,0,'hidden review controls are not user actions');
   }
