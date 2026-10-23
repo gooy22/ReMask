@@ -10,12 +10,14 @@ transport failure. Decoded chunks never returned to the caller are excluded.
 from __future__ import annotations
 
 from collections import Counter
+from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from functools import wraps
 import asyncio
 import json
 import logging
+import secrets
 import time
 
 import httpx
@@ -31,6 +33,9 @@ _OPERATIONS = frozenset({'private_launch', 'private_delivery', 'provision', 'pro
     'prepare', 'prepare_profile', 'proxy_check', 'transparent_post', 'sync_profile',
     'template_reference', 'resource_other'} | {'resource_' + name for name in _RESOURCE_NAMES})
 MAX_RESPONSE_REFERENCES = 512
+_PHASES = frozenset({'resolver', 'cache_lookup', 'profile_session', 'reference_discovery',
+    'reference_read', 'ads_document', 'account_proof', 'meta_read', 'inventory_read',
+    'resource_read', 'queue_wait', 'profile_lock', 'store_read', 'store_write'})
 _ERRORS = (httpx.TimeoutException, TimeoutError, httpx.ProxyError,
     httpx.ConnectError, httpx.ReadError, httpx.WriteError, httpx.ProtocolError,
     httpx.DecodingError, httpx.TooManyRedirects)
@@ -55,7 +60,10 @@ class OperationTraffic:
     profile_id: str
     operation: str
     started: float = field(default_factory=time.monotonic)
+    trace_id: str = field(default_factory=lambda: secrets.token_hex(6))
     active: bool = True
+    phase_ms: Counter = field(default_factory=Counter)
+    phase_count: Counter = field(default_factory=Counter)
     request_scopes: int = 0
     completed_request_scopes: int = 0
     request_attempts: int = 0
@@ -75,6 +83,9 @@ class OperationTraffic:
 
     def snapshot(self, *, outcome='observed'):
         return {'operation': self.operation, 'outcome': outcome,
+            'trace_id': self.trace_id,
+            'phase_ms': {k:round(v, 3) for k,v in sorted(self.phase_ms.items())},
+            'phase_count': dict(sorted(self.phase_count.items())),
             'operation_wall_ms': round((time.monotonic() - self.started) * 1000, 3),
             'request_scopes': self.request_scopes,
             'completed_request_scopes': self.completed_request_scopes,
@@ -97,6 +108,26 @@ class OperationTraffic:
             'byte_scope': 'http_response_body_not_tls_headers_or_proxy_billing',
             'transport_coverage': 'PrivateHttpClient_only',
             'request_body_bytes_measured': False}
+
+
+@contextmanager
+def measure_phase(name):
+    """Measure an allowlisted wall-time phase within a currently active scope.
+
+    Does not capture profile credentials, endpoint URLs, request fields, or
+    arbitrary labels. Nested/concurrent phase durations may overlap; they
+    must not be summed to infer the total operation wall-time.
+    """
+    operation = _current_operation.get()
+    enabled = (name in _PHASES and operation is not None and operation.active)
+    started = time.monotonic() if enabled else None
+    try:
+        yield
+    finally:
+        if (enabled and operation.active and
+                _current_operation.get() is operation):
+            operation.phase_ms[name] += (time.monotonic() - started) * 1000
+            operation.phase_count[name] += 1
 
 
 def begin_operation(profile_id, action):
