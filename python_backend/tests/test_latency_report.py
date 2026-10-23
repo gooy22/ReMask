@@ -105,10 +105,11 @@ class LatencyReportTests(unittest.TestCase):
         self.assertEqual(result["groups"]["post_job.batch_wall_ms"]["count"], 2)
         self.assertEqual(result["groups"]["post_job.batch_wall_ms"]["slow_count"], 1)
         self.assertEqual(result["groups"]["post_job.render_ms"]["max_ms"], 12)
-        self.assertEqual(result["groups"]["post_job.attempted"]["max_ms"], 5)
+        self.assertEqual(result["post_job_profile_totals"],
+                         {"attempted": 7, "succeeded": 5, "failed": 2})
         self.assertEqual(result["ignored_lines"], 1)
         self.assertNotIn("SECRET", json.dumps(result))
-        self.assertNotIn("profile", json.dumps(result))
+        self.assertNotIn("post_job.attempted", json.dumps(result))
 
     def test_invalid_overlong_untrusted_and_unknown_labels_do_not_leak(self):
         bad = [
