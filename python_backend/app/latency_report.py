@@ -18,6 +18,8 @@ from pathlib import Path
 import re
 import sys
 
+from .private_http_metrics import _RESOURCE_NAMES
+
 MAX_LINE = 100_000
 MAX_SAMPLES_PER_GROUP = 250_000
 MAX_DURATION_MS = 3_600_000
@@ -73,7 +75,10 @@ def _operation(name):
         return None
     if name in KNOWN_OPERATIONS:
         return name
-    if re.fullmatch(r"resource_[a-z_]{1,48}", name):
+    # A raw log is untrusted input. Accept only resource categories emitted
+    # by the actual HTTP metrics recorder; never echo arbitrary labels in the
+    # aggregate report (including accidentally logged private identifiers).
+    if name.startswith("resource_") and name[9:] in _RESOURCE_NAMES:
         return name
     return None
 
