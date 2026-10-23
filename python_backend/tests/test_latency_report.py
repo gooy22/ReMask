@@ -86,6 +86,30 @@ class LatencyReportTests(unittest.TestCase):
         for private in ("SECRET-ID", "SECRET-COOKIE", "PRIVATE-PROFILE", "token"):
             self.assertNotIn(private, serialized)
 
+    def test_post_job_refresh_reports_ui_read_and_render_without_identity(self):
+        lines = [
+            "2026 [ReMask post-job refresh latency] " + json.dumps({
+                "batch_wall_ms": 30050, "profile_read_ms_sum": 67000,
+                "render_ms": 12, "attempted": 5, "succeeded": 3,
+                "failed": 2, "profile": "SECRET-PROFILE",
+                "cookie": "SECRET-COOKIE", "url": "SECRET-URL",
+            }),
+            "[ReMask post-job refresh latency] " + json.dumps({
+                "batch_wall_ms": 120, "profile_read_ms_sum": 160,
+                "render_ms": 3, "attempted": 2, "succeeded": 2,
+                "failed": 0, "resource": "SECRET-RESOURCE",
+            }),
+            "[ReMask post-job refresh latency] invalid-json",
+        ]
+        result = summarize(lines)
+        self.assertEqual(result["groups"]["post_job.batch_wall_ms"]["count"], 2)
+        self.assertEqual(result["groups"]["post_job.batch_wall_ms"]["slow_count"], 1)
+        self.assertEqual(result["groups"]["post_job.render_ms"]["max_ms"], 12)
+        self.assertEqual(result["groups"]["post_job.attempted"]["max_ms"], 5)
+        self.assertEqual(result["ignored_lines"], 1)
+        self.assertNotIn("SECRET", json.dumps(result))
+        self.assertNotIn("profile", json.dumps(result))
+
     def test_invalid_overlong_untrusted_and_unknown_labels_do_not_leak(self):
         bad = [
             "private_http_operation {bad-json",
