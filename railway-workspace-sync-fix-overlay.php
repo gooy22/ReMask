@@ -1726,6 +1726,22 @@ $syncProfileReplacement = <<<'PHP'
         $seenAccount = [];
         $rkPartial = false;
 
+        // REMASK_LINEAR_EXISTING_RK_MERGE_V1
+        // Index existing records once instead of rewalking all RKs for every
+        // confirmed RK. Keep the first matching row as the legacy loop did.
+        $savedByBusiness = [];
+        $savedByBusinessAndId = [];
+        foreach ((array)($existingSnapshot['ad_accounts'] ?? []) as $oldAccount) {
+            if (!is_array($oldAccount)) continue;
+            $oldBusiness = (string)($oldAccount['business_id'] ?? '');
+            $oldId = preg_replace('/^act_/', '',
+                (string)($oldAccount['id'] ?? $oldAccount['account_id'] ?? ''));
+            $savedByBusiness[$oldBusiness][] = $oldAccount;
+            if (!array_key_exists($oldId, $savedByBusinessAndId[$oldBusiness] ?? [])) {
+                $savedByBusinessAndId[$oldBusiness][$oldId] = $oldAccount;
+            }
+        }
+
         foreach ((array)($liveInventory['businesses'] ?? []) as $liveBusiness) {
             if (!is_array($liveBusiness)) continue;
             $businessId = trim((string)($liveBusiness['id'] ?? ''));
@@ -1737,11 +1753,17 @@ $syncProfileReplacement = <<<'PHP'
             if (!empty($liveBusiness['ad_accounts_partial'])) {
                 $rkPartial = true;
                 $syncWarnings[] = 'Проверены отдельные РК. Полный список РК этого BM не подтверждён; остальные сохранённые строки сохранены без новой проверки.';
-                foreach ((array)($existingSnapshot['ad_accounts'] ?? []) as $oldAccount) {
-                    if (!is_array($oldAccount) || (string)($oldAccount['business_id'] ?? '') !== $businessId) continue;
-                    $oldId = preg_replace('/^act_/', '', (string)($oldAccount['id'] ?? $oldAccount['account_id'] ?? ''));
-                    $freshIds = array_map(static fn($row) => preg_replace('/^act_/', '', (string)($row['id'] ?? $row['account_id'] ?? '')), (array)($liveBusiness['ad_accounts'] ?? []));
-                    if ($oldId === '' || in_array($oldId, $freshIds, true)) continue;
+                $freshIdSet = [];
+                foreach ((array)($liveBusiness['ad_accounts'] ?? []) as $freshAccount) {
+                    if (!is_array($freshAccount)) continue;
+                    $freshId = preg_replace('/^act_/', '',
+                        (string)($freshAccount['id'] ?? $freshAccount['account_id'] ?? ''));
+                    $freshIdSet[$freshId] = true;
+                }
+                foreach ($savedByBusiness[$businessId] ?? [] as $oldAccount) {
+                    $oldId = preg_replace('/^act_/', '',
+                        (string)($oldAccount['id'] ?? $oldAccount['account_id'] ?? ''));
+                    if ($oldId === '' || isset($freshIdSet[$oldId])) continue;
                     $oldAccount['_sync_preserved'] = true;
                     $adAccountRows[] = $oldAccount;
                     $seenAccount[$oldId] = true;
@@ -1763,15 +1785,12 @@ $syncProfileReplacement = <<<'PHP'
                 // An ID-only fast revalidation cannot rename a known RK or
                 // discard its Business asset alias. Keep identity metadata only
                 // for the same canonical RK in this exact profile and BM.
-                foreach ((array)($existingSnapshot['ad_accounts'] ?? []) as $knownAccount) {
-                    if (!is_array($knownAccount) || (string)($knownAccount['business_id'] ?? '') !== $businessId) continue;
-                    $knownId = preg_replace('/^act_/', '', (string)($knownAccount['id'] ?? $knownAccount['account_id'] ?? ''));
-                    if ($knownId !== $accountId) continue;
+                $knownAccount = $savedByBusinessAndId[$businessId][$accountId] ?? null;
+                if (is_array($knownAccount)) {
                     $freshName = trim((string)($row['name'] ?? ''));
                     $knownName = trim((string)($knownAccount['name'] ?? ''));
                     if (($freshName === '' || preg_match('/^(?:act_)?\d{5,30}$/', $freshName)) && $knownName !== '' && !preg_match('/^(?:act_)?\d{5,30}$/', $knownName)) $row['name'] = $knownName;
                     if (empty($row['business_asset_id']) && !empty($knownAccount['business_asset_id'])) $row['business_asset_id'] = $knownAccount['business_asset_id'];
-                    break;
                 }
                 $row['_business_edge'] = (string)($row['_source'] ?? 'business_suite_browser_live_inventory');
                 if (!array_key_exists('funding', $row)) $row['funding'] = null;
