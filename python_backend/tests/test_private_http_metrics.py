@@ -66,7 +66,32 @@ class PrivateHttpMetricsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(record['phase_count'], {'account_proof': 1, 'resolver': 2})
         self.assertGreater(record['phase_ms']['resolver'], 0)
         self.assertGreaterEqual(record['phase_ms']['account_proof'], 0)
-        self.assertRegex(record['trace_id'], r'^[0-9a-f]{12}
+        self.assertRegex(record['trace_id'], r'^[0-9a-f]{12}')
+        self.assertNotIn('SECRET', str(captured.output))
+        with measure_phase('resolver'):
+            await asyncio.sleep(0)
+        self.assertEqual(metric.phase_count['resolver'], 2)
+
+    async def test_timing_cannot_modify_a_finished_or_unrelated_operation(self):
+        first, token = begin_operation('one', 'sync_profile')
+        try:
+            with measure_phase('resolver'):
+                second, second_token = begin_operation('two', 'sync_profile')
+                try:
+                    with measure_phase('reference_read'):
+                        await asyncio.sleep(0)
+                finally:
+                    end_operation(second, second_token, outcome='success')
+        finally:
+            end_operation(first, token, outcome='success')
+        self.assertEqual(first.phase_count['resolver'], 1)
+        self.assertNotIn('reference_read', first.phase_count)
+        self.assertEqual(second.phase_count['reference_read'], 1)
+        with measure_phase('resolver'):
+            await asyncio.sleep(0)
+        self.assertEqual(first.phase_count['resolver'], 1)
+
+    async def test_real_gzip_stream_counts_encoded_body_separately_from_decoded_delivery(self):
         payload = b'compressible text ' * 1024
         encoded = gzip.compress(payload)
         requests = []
