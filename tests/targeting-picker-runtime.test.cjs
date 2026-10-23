@@ -149,7 +149,7 @@ function fixture(){
   assert.equal(resultBox.children.at(-1).textContent,'Показать ещё 100 вариантов',
     'template picker exposes next-page control instead of hiding all but 100 IDs');
   resultBox.children.at(-1).fire('click');
-  assert.equal(pageRequests.at(-1).options.body.offset,100,'later page requests retain a bounded offset');
+  assert.equal(pageRequests.at(-1).options.offset,100,'later page requests retain a bounded offset');
   pageReplies.shift()({data:[{id:'100002',name:'Second interest',path:['Category','Second']}],
     next_offset:null,offset:100,truncated:false,source:'private_meta_template_reference'});
   await settle();
