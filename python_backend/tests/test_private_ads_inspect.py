@@ -161,6 +161,38 @@ class SavedDraftInspectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result['relationships_confirmed'])
         self.assertEqual(await self.owner.state.all_steps('image-launch'), before)
 
+    async def test_interrupted_draft_can_be_inspected_then_resumed_to_three_paused_levels(self):
+        self.payload['launch']['execution_mode'] = 'DRAFT'
+        original_get = self.client.get
+        async def interrupted(path, params):
+            if path == '/addraftfragment_222222':
+                from app.private_ads_draft import fail
+                raise fail('READ_PENDING', 'synthetic interrupted Ad Set verification', True)
+            return await original_get(path, params)
+        self.client.get = interrupted
+        with self.assertRaises(ProvisioningError):
+            await self.launch()
+        self.client.get = original_get
+        self.assertEqual(len(self.client.posts), 3)  # draft, campaign, ad set
+        self.payload['reconcile_only'] = True
+        with patch.object(self.client, 'post',
+                          new=AsyncMock(side_effect=AssertionError('Inspection cannot POST'))) as post:
+            report = await self.launch()
+        post.assert_not_called()
+        self.assertEqual(report['status'], 'RECONCILE_REQUIRED')
+        self.assertEqual(report['pending_stage'], {'stage': 'FRAGMENT_AD', 'reason': 'NOT_SUBMITTED'})
+        self.assertEqual([row['level'] for row in report['fragment_reads']], ['campaign', 'ad_set'])
+        self.payload.pop('reconcile_only')
+        final = await self.launch()
+        repeated = await self.launch()
+        self.assertTrue(final['draft_verified'])
+        self.assertEqual(final['draft_id'], '555555')
+        self.assertEqual(len(final['fragment_ids']), 3)
+        self.assertEqual(final['fragment_ids'], repeated['fragment_ids'])
+        self.assertEqual(len(self.client.posts), 4)  # exactly one create per level
+        self.assertFalse(final['published'])
+        self.assertFalse(final['editor_verified'])
+
     async def test_unavailable_object_read_records_exact_rejection_without_claiming_absence(self):
         from app.private_ads_http import AdsManagerResponseError
         await self.saved()
