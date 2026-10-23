@@ -90,13 +90,15 @@ assert.equal(label({account_status:1,is_prepay_account:true,balance:0}),'PREPAY 
 assert.equal(label({account_status:1,is_prepay_account:true}),'PREPAY EMPTY');
 assert.equal(label({account_status:1,is_prepay_account:true,balance:100}),'PREPAY BALANCE');
 assert.equal(label({account_status:1,funding_source_details:{id:'123'}}),'SOURCE SAVED');
-// An incomplete form must not deadlock the user: click handlers report
-// validation failures before any worker CREATE operation is possible.
+// Launch exposes one draft action. Intermediate review buttons and diagnostics
+// stay out of the operator UI; the save handler still runs validation internally.
 assert.equal(controls.launchButton.disabled,false);
-assert.equal(controls.reviewLaunch.disabled,false);
-assert.equal(controls.dryRunPlan.disabled,false);
-assert.match(controls.launchButton.title,/Проверка при нажатии/);
-assert.match(controls.reviewStatus.textContent,/Подготовьте план рекламы/);
+assert.equal(controls.reviewLaunch.hidden,true);
+assert.equal(controls.dryRunPlan.hidden,true);
+assert.equal(controls.serverDryRun.hidden,true);
+assert.equal(controls.launchButton.textContent,'Сохранить черновик');
+assert.equal(controls.reviewLaunch.title,'');
+assert.equal(controls.reviewStatus.textContent,'');
 assert.equal(controls.preflight.textContent,'Загрузить сохранённые РК');
 console.log('Private Launch catalog and funding truth checks passed');
 
@@ -265,11 +267,11 @@ console.log('Private Launch catalog and funding truth checks passed');
   vm.createContext(privateCtx);vm.runInContext(source,privateCtx);
 
   assert.equal(buttons.launchButton.disabled,false,'structurally complete private selection should enable Launch');
-  assert.equal(buttons.reviewLaunch.disabled,false);
+  assert.equal(buttons.reviewLaunch.hidden,true);
   privateCtx.state.processingJob=true;
   privateCtx.validateReady();
   assert.equal(buttons.launchButton.disabled,true,'busy worker must still prevent duplicate submission');
-  assert.equal(buttons.reviewLaunch.disabled,true);
+  assert.equal(buttons.reviewLaunch.hidden,true);
   privateCtx.state.processingJob=false;
   privateCtx.validateReady();
   assert.equal(buttons.launchButton.disabled,false);
@@ -279,13 +281,17 @@ console.log('Private Launch catalog and funding truth checks passed');
   privateCtx.remaskPrivateReviewLive=()=>routed.push('meta-readiness');
   privateCtx.remaskPrivateReviewOnly=()=>routed.push('local-plan');
   privateCtx.remaskPrivateCreateJob=()=>routed.push('create');
-  for(const id of ['reviewLaunch','dryRunPlan','serverDryRun','launchButton']){
+  for(const id of ['reviewLaunch','dryRunPlan','serverDryRun']){
     let stopped=0;
     captureHandler({target:{closest:()=>({id,disabled:false})},
       preventDefault(){stopped++;},stopPropagation(){stopped++;},stopImmediatePropagation(){stopped++;}});
-    assert.equal(stopped,3,'legacy submission handlers must remain blocked');
+    assert.equal(stopped,0,'hidden review controls are not user actions');
   }
-  assert.deepEqual(routed,['meta-readiness','local-plan','local-plan','create']);
+  let stopped=0;
+  captureHandler({target:{closest:()=>({id:'launchButton',disabled:false})},
+    preventDefault(){stopped++;},stopPropagation(){stopped++;},stopImmediatePropagation(){stopped++;}});
+  assert.equal(stopped,3,'the Save Draft action owns Launch submission');
+  assert.deepEqual(routed,['create']);
   [privateCtx.remaskPrivateReviewLive,privateCtx.remaskPrivateReviewOnly,privateCtx.remaskPrivateCreateJob]=originals;
 
   const originalFetch=privateCtx.fetch;
