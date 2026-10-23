@@ -1693,6 +1693,10 @@ $syncProfileReplacement = <<<'PHP'
             throw new InvalidArgumentException('invalid business_id');
         }
 
+        // Auth/CSRF and input validation are complete. Release only the
+        // operator session; the per-profile Sync lock below remains required.
+        if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
+
         // REMASK_PRIVATE_BROWSER_SYNC_V1
         // Workspace sync is sourced only from the profile-bound Business Suite
         // browser worker. Official Graph /me, me/adaccounts and BM Graph edges
