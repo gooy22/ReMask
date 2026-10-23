@@ -163,6 +163,11 @@ class SavedDraftInspectionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_interrupted_draft_can_be_inspected_then_resumed_to_three_paused_levels(self):
         self.payload['launch']['execution_mode'] = 'DRAFT'
+        targeting = {'geo_locations': {'countries': ['UA']}, 'age_min': 23, 'age_max': 33,
+                     'locales': [52],
+                     'interests': [{'id': '6003139266461', 'name': 'Physical fitness'}],
+                     'behaviors': [{'id': '6015548561283', 'name': 'Chrome'}]}
+        self.payload['launch']['adset']['targeting'] = targeting
         original_get = self.client.get
         async def interrupted(path, params):
             if path == '/addraftfragment_222222':
@@ -182,6 +187,8 @@ class SavedDraftInspectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report['status'], 'RECONCILE_REQUIRED')
         self.assertEqual(report['pending_stage'], {'stage': 'FRAGMENT_AD', 'reason': 'NOT_SUBMITTED'})
         self.assertEqual([row['level'] for row in report['fragment_reads']], ['campaign', 'ad_set'])
+        self.assertEqual(report['fragment_reads'][1]['submitted_values']['targeting'], targeting)
+        self.assertEqual(report['fragment_reads'][1]['fresh_values']['targeting'], targeting)
         self.payload.pop('reconcile_only')
         final = await self.launch()
         repeated = await self.launch()
