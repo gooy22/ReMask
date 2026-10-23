@@ -335,9 +335,16 @@ final class RemaskAdvertisingAssetBridge
         if ($key==='') throw new RuntimeException('ADVERTISING_WORKER_UNAVAILABLE');
         $query=trim((string)($input['q'] ?? ''));
         if (strlen($query)>200) throw new InvalidArgumentException('ADVERTISING_QUERY_TOO_LONG');
+        $rawOffset=(string)($input['offset'] ?? '0');
+        if (!preg_match('/^(0|[1-9][0-9]{0,4})$/D',$rawOffset)
+            || (int)$rawOffset>19900 || (int)$rawOffset%100!==0)
+            throw new InvalidArgumentException('INVALID_TARGETING_OFFSET');
+        $offset=(int)$rawOffset;
+        if ($offset && (!in_array($resource,self::targetingTypes(),true) && !in_array($resource,['interests','behaviors'],true)
+                || $query!=='')) throw new InvalidArgumentException('INVALID_TARGETING_OFFSET');
         if (session_status()===PHP_SESSION_ACTIVE) session_write_close();
         $params=http_build_query(['resource'=>$resource,'account_id'=>$account,'force'=>$force?'true':'false',
-            'query'=>$query,'limit'=>max(1,min(500,(int)($input['limit'] ?? 100))),
+            'query'=>$query,'limit'=>max(1,min(500,(int)($input['limit'] ?? 100))), 'offset'=>$offset,
             'execution_mode'=>(string)($input['execution_mode'] ?? 'DRAFT')],'','&',PHP_QUERY_RFC3986);
         $context=stream_context_create(['http'=>['method'=>'GET','timeout'=>85,'ignore_errors'=>true,
             'follow_location'=>0,'header'=>"Accept: application/json\r\nX-Remask-Worker-Key: ".$key."\r\n"]]);
