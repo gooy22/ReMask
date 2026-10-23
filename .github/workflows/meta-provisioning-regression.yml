@@ -39,8 +39,15 @@ jobs:
       REMASK_DOC_ID_STORE: /tmp/remask-regression-state/facebook-web/docids.json
     steps:
       - uses: actions/checkout@v4
-      - name: Install media inspection tools
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - name: Ensure media inspection tools
+        run: |
+          if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then
+            ffmpeg -version | head -n 1
+            ffprobe -version | head -n 1
+          else
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends ffmpeg
+          fi
       - name: Install backend dependencies
         run: |
           python3 -m venv /tmp/remask-regression
