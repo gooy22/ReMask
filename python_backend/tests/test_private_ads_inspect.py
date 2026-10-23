@@ -272,6 +272,49 @@ class SavedDraftInspectionTests(unittest.IsolatedAsyncioTestCase):
             await self.launch()
         self.assertEqual(len(self.client.posts), 4)
 
+    async def test_unreviewed_historical_source_is_inspectable_but_cannot_resume_mutations(self):
+        current = self.owner.ads_manager.source_digest
+        historical = 'b' * 64
+        self.owner.ads_manager.source_digest = historical
+        await self.saved()
+        self.owner.ads_manager.source_digest = current
+        before = copy.deepcopy(await self.owner.state.all_steps('image-launch'))
+        with patch.object(self.client, 'post',
+                          new=AsyncMock(side_effect=AssertionError('No writes'))) as post:
+            report = await self.launch()
+            self.assertEqual(report['status'], 'SUCCESS')
+            self.assertEqual(report['recovered_source_digest'], historical)
+            self.assertFalse(report['source_reviewed_for_mutation'])
+            self.payload.pop('reconcile_only')
+            with self.assertRaises(ProvisioningError) as rejected:
+                await self.launch()
+            self.assertEqual(rejected.exception.code, 'PRIVATE_ADS_DRAFT_SAVED_OPERATION_MISMATCH')
+        post.assert_not_called()
+        self.assertEqual(await self.owner.state.all_steps('image-launch'), before)
+
+    async def test_inspection_rejects_empty_error_envelopes_and_secondary_account_mismatch(self):
+        await self.saved()
+        original = self.client.get
+        scenarios = [
+            ('/act_111111', {'error': {}}),
+            ('/act_111111', {'errors': []}),
+            ('/act_111111', {'account_id': '999999'}),
+            ('/addraft_555555', {'error': None}),
+            ('/addraftfragment_111111', {'errors': []}),
+        ]
+        for path, fields in scenarios:
+            async def tampered(route, params):
+                row = await original(route, params)
+                return {**row, **fields} if route == path else row
+            self.client.get = tampered
+            with self.subTest(path=path, fields=fields), \
+                    patch.object(self.client, 'post',
+                                 new=AsyncMock(side_effect=AssertionError('No POST'))) as post:
+                with self.assertRaises(ProvisioningError):
+                    await self.launch()
+                post.assert_not_called()
+        self.client.get = original
+
     async def test_meta_validation_error_is_recorded_without_claiming_editability(self):
         await self.saved()
         self.client.fragments['222222']['active_errors'] = [{'code':100}]
