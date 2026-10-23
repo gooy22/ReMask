@@ -16,7 +16,7 @@ apiJson = async function(url, options = {}) {
             && (typeof options.body === 'string' || typeof options.body?.get === 'function')) {
         const input = typeof options.body === 'string' ? new URLSearchParams(options.body) : options.body;
         const body = new URLSearchParams();
-        for (const key of ['type','q','limit']) {
+        for (const key of ['type','q','limit','offset']) {
             const value = input.get(key);
             if (value !== null) body.set(key, value);
         }
