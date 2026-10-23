@@ -160,6 +160,8 @@ class AdvertisingResourceStore:
         if name not in RESOURCE_FIELDS:
             raise fail("RESOURCE_UNAVAILABLE", "Unsupported advertising resource")
         scope = {key: values.get(key, "") for key in ("profile_id", "business_id", "ad_account_id", "query", "limit", "execution_mode")}
+        if name in TARGETING_TYPES:
+            scope["offset"] = values.get("offset", 0)
         scope["contract_digest"] = hashlib.sha256(json.dumps(self.catalog.rows.get(name),
             sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         scope["actor_id"] = actor_id
