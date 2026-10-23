@@ -1520,14 +1520,16 @@ async function pythonWorkerRefreshSuccessfulProfiles(items) {
       .filter(Boolean)
   ));
 
-  const unconfirmed = [];
-
-  for (const profileId of profiles) {
+  // REMASK_POST_JOB_BOUNDED_LOCAL_REFRESH_V1
+  // These requests only read saved local snapshots, never Meta. Fetch
+  // independent profiles concurrently, but cap PHP load and preserve the
+  // original profile ordering for any failed-refresh diagnostics.
+  const unconfirmed = new Array(profiles.length);
+  await pythonWorkerMapLimit(profiles, 3, async function(profileId, index) {
     const ok = await pythonWorkerRefreshProfile(profileId);
-    if (!ok) unconfirmed.push(profileId);
-  }
-
-  return unconfirmed;
+    if (!ok) unconfirmed[index] = profileId;
+  });
+  return unconfirmed.filter(Boolean);
 }
 
 async function pythonWorkerStartBusiness(bmName, options) {
