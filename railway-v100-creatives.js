@@ -10,6 +10,7 @@ let pendingMetaBuilder = null;
 let metaCapabilities = null;
 let audienceEstimateTimer = null;
 let audienceEstimateSeq = 0;
+const creativeTargetingPages = {};
 let placementCapabilitiesTimer = null;
 let placementCapabilitiesSeq = 0;
 let metaPlacementOptions = {};
@@ -747,6 +748,7 @@ function closeCreativeTargetResults(kind) {
     creativeTargetingTimers[kind] = 0;
     creativeTargetingControllers[kind]?.abort();
     creativeTargetingControllers[kind] = null;
+    delete creativeTargetingPages[kind];
     const cfg = creativeTargetSearchConfig(kind);
     const box = cfg ? $(cfg.results) : null;
     if (!box) return;
@@ -754,7 +756,7 @@ function closeCreativeTargetResults(kind) {
     box.innerHTML = '';
 }
 
-function renderCreativeTargetResults(kind, items, truncated = false) {
+function renderCreativeTargetResults(kind, items, truncated = false, nextOffset = null) {
     const cfg = creativeTargetSearchConfig(kind);
     const box = cfg ? $(cfg.results) : null;
     if (!box) return;
@@ -764,7 +766,7 @@ function renderCreativeTargetResults(kind, items, truncated = false) {
         box.classList.add('open');
         return;
     }
-    for (const item of items.slice(0,100)) {
+    for (const item of items) {
         const row = document.createElement('button');
         row.type = 'button';
         row.dataset.remaskTargetChoice = '1';
@@ -780,19 +782,27 @@ function renderCreativeTargetResults(kind, items, truncated = false) {
         });
         box.appendChild(row);
     }
-    if(items.length>100 || truncated){
+    if(Number.isSafeInteger(nextOffset) && nextOffset>0){
+        const more=document.createElement('button');more.type='button';
+        more.className='cr-target-result';more.dataset.remaskTargetMore='1';
+        more.textContent='Показать ещё 100 вариантов';
+        more.addEventListener('click',()=>searchCreativeTargeting(kind,nextOffset));
+        box.appendChild(more);
+    } else if(truncated){
         const hint=document.createElement('div');hint.className='cr-target-empty';
         hint.textContent='Введите название, чтобы сузить список.';box.appendChild(hint);
     }
     box.classList.add('open');
 }
 
-async function searchCreativeTargeting(kind) {
+async function searchCreativeTargeting(kind, offset = 0) {
     const cfg = creativeTargetSearchConfig(kind);
     if (!cfg) return;
     const input = $(cfg.input);
     const results = $(cfg.results);
     const query = String(input?.value || '').trim();
+    if (offset && (creativeTargetingPages[kind]?.query !== query ||
+            creativeTargetingPages[kind]?.next_offset !== offset)) return;
 
     clearTimeout(creativeTargetingTimers[kind]);
     creativeTargetingTimers[kind] = 0;
@@ -801,7 +811,8 @@ async function searchCreativeTargeting(kind) {
 
     const controller = new AbortController();
     creativeTargetingControllers[kind] = controller;
-    if (results) {
+    if (results && !offset) {
+        delete creativeTargetingPages[kind];
         results.innerHTML = '<div class="cr-target-empty">Ищу в Meta…</div>';
         results.classList.add('open');
     }
@@ -809,7 +820,8 @@ async function searchCreativeTargeting(kind) {
     const params = new URLSearchParams();
     params.set('type', cfg.apiType);
     params.set('q', query);
-    params.set('limit', '25');
+    params.set('limit', '100');
+    if(offset)params.set('offset',String(offset));
 
     try {
         const data = await api('ajax/metaTemplateTargetingSearch.php', {
@@ -818,12 +830,24 @@ async function searchCreativeTargeting(kind) {
             body:params.toString(),
             signal:controller.signal
         });
-        if (creativeTargetingControllers[kind] !== controller) return;
+        if (creativeTargetingControllers[kind] !== controller || String(input?.value||'').trim()!==query) return;
+        if(offset && (data?.offset !== offset || !Array.isArray(data?.data)))
+            throw new Error('Страница справочника устарела');
         const rows = Array.isArray(data) ? data
             : Array.isArray(data?.data) ? data.data
             : Array.isArray(data?.items) ? data.items
             : [];
-        renderCreativeTargetResults(kind, rows, data?.truncated === true);
+        const previous=offset?(creativeTargetingPages[kind]?.items||[]):[];
+        const seen=new Set(previous.map(row=>String(row.type||'')+':'+String(row.id||row.key)));
+        const all=previous.slice();
+        for(const row of rows){
+            const id=String(row.type||'')+':'+String(row.id||row.key);
+            if(!seen.has(id)){seen.add(id);all.push(row);}
+        }
+        const next=Number.isSafeInteger(data?.next_offset)&&data.next_offset>offset
+            && data.next_offset<=19900 ? data.next_offset : null;
+        creativeTargetingPages[kind]={query,items:all,next_offset:next};
+        renderCreativeTargetResults(kind, all, data?.truncated === true, next);
         if (data?.source==='private_meta_template_reference' && data.reference_checked_at && results) {
             const hint=document.createElement('div');hint.className='cr-target-empty';
             hint.textContent='Сохранённые данные Meta · '+new Date(data.reference_checked_at*1000).toLocaleString('ru-RU')+
