@@ -487,8 +487,14 @@ if __name__ == '__main__':
                     end_operation(second, second_token, outcome='success')
         finally:
             end_operation(first, token, outcome='success')
-        self.assertNotIn('resolver', first.phase_count)
+        # The outer first span legitimately resumes when the nested scope
+        # restores its context. It must never count the second scope's phase.
+        self.assertEqual(first.phase_count['resolver'], 1)
+        self.assertNotIn('reference_read', first.phase_count)
         self.assertEqual(second.phase_count['reference_read'], 1)
+        with measure_phase('resolver'):
+            await asyncio.sleep(0)
+        self.assertEqual(first.phase_count['resolver'], 1)
 
     async def test_real_gzip_stream_counts_encoded_body_separately_from_decoded_delivery(self):
         payload = b'compressible text ' * 1024
