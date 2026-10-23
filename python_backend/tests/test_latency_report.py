@@ -38,6 +38,24 @@ class LatencyReportTests(unittest.TestCase):
         self.assertNotIn("PRIVATE-PROFILE", json.dumps(report))
         self.assertNotIn("PRIVATE-TRACE", json.dumps(report))
 
+    def test_unknown_resource_labels_are_not_exported_or_grouped(self):
+        payloads = [
+            {"operation":"resource_interests", "operation_wall_ms":120,
+             "outcome":"success"},
+            {"operation":"resource_personal_identifier_secret", "operation_wall_ms":30000,
+             "outcome":"failed"},
+            {"operation":"resource_OTHER", "operation_wall_ms":1000,
+             "outcome":"failed"},
+            {"operation":"resource_a"*1000, "operation_wall_ms":1000,
+             "outcome":"failed"},
+        ]
+        lines=["private_http_operation " + json.dumps(payload) for payload in payloads]
+        report=summarize(lines)
+        self.assertEqual(list(report["groups"]), ["http.resource_interests"])
+        self.assertEqual(report["groups"]["http.resource_interests"]["p50_ms"], 120)
+        self.assertEqual(report["ignored_lines"], 3)
+        self.assertNotIn("personal_identifier_secret", json.dumps(report))
+
     def test_ui_php_and_dispatcher_are_separate_samples(self):
         lines = [
             "2026 [ReMask sync latency] " + json.dumps({
