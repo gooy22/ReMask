@@ -52,7 +52,7 @@ echo json_encode(['accounts'=>$adAccountRows,
         output = json.loads(result.stdout)
         records = output['accounts']
         self.assertEqual([row['id'] for row in records],
-                         ['3333333333', '2222222222', '5555555555', '8888888888'])
+                         ['act_3333333333', '2222222222', '5555555555', '8888888888'])
         self.assertTrue(records[0]['_sync_preserved'])
         self.assertEqual(records[1]['name'], 'Saved RK Name')
         self.assertEqual(records[1]['business_asset_id'], 'saved-asset')
