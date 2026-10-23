@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 import time
 import json
+import copy
 
 from .private_ads_catalog import identity
 from .private_ads_draft import fail
@@ -273,9 +274,9 @@ class AdsManagerReadCatalog:
         cached = self._browse_cache.get(cache_key)
         if cached and time.time() - cached[0] <= 180:
             records = cached[1]
-            return {"data": [dict(row) for row in records[offset:offset + limit]],
+            return {"data": copy.deepcopy(records[offset:offset + limit]),
                 "account_id": client.account, "account_scope_verified": True,
-                "checked_live": True, "checked_at": int(time.time()),
+                "checked_live": True, "checked_at": int(cached[0]),
                 "source": "private_meta_targetingbrowse",
                 "catalog_count": len(records), "offset": offset,
                 "next_offset": offset + limit if offset + limit < len(records) else None,
@@ -325,7 +326,7 @@ class AdsManagerReadCatalog:
         if len(self._browse_cache) > 8:
             oldest = min(self._browse_cache, key=lambda key: self._browse_cache[key][0])
             del self._browse_cache[oldest]
-        return {"data":[dict(row) for row in records[offset:offset+limit]],
+        return {"data":copy.deepcopy(records[offset:offset+limit]),
                 "account_id":client.account, "account_scope_verified":True,
                 "checked_live":True, "checked_at":int(time.time()), "source":"private_meta_targetingbrowse",
                 "catalog_count":len(records), "offset":offset,
