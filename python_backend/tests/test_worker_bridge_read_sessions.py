@@ -32,7 +32,7 @@ class WorkerReadSessionTests(unittest.TestCase):
 
             def do_GET(handler):
                 requests.append((handler.path, handler.headers.get("X-Remask-Worker-Key")))
-                if handler.path in {"/health", "/api/v1/jobs/fixture-job"}:
+                if handler.path in {"/health", "/api/v1/jobs/fixture-job", "/fixture-sync"}:
                     entered.set()
                     release.wait(6)
                 payload = {"ok": True, "ready": True, "service": "remask-python-worker",
@@ -64,6 +64,20 @@ class WorkerReadSessionTests(unittest.TestCase):
         source = (ROOT / "railway-python-worker-jobs-overlay.php").read_text()
         php = re.search(r"<<<'PHP_CODE'\n(.*?)\nPHP_CODE;", source, re.S).group(1)
         (self.root / "ajax/pythonWorkerJobs.php").write_text(php)
+        sync_source = (ROOT / "railway-workspace-sync-fix-overlay.php").read_text()
+        sync = sync_source.split("$syncProfileReplacement = <<<'PHP'\n", 1)[1].split("\nPHP;", 1)[0]
+        stub = ("<?php require __DIR__.'/../checkpassword.php';"
+                "$action='sync_profile'; $input=['profile'=>'fixture'];"
+                "class MetaEndpoint {static function ok($data){"
+                "header('Content-Type: application/json');"
+                "echo json_encode(['ok'=>true,'data'=>$data]);exit;}}"
+                "function hierarchy_sync_result_put(...$args){}"
+                "function hierarchy_profile_sync_lock($profile){"
+                '$ctx=stream_context_create(["http"=>["header"=>'
+                '"X-Remask-Worker-Key: fixture-server-key\\r\\n"]]);'
+                "file_get_contents(getenv('REMASK_PYTHON_WORKER_URL').'/fixture-sync',false,$ctx);"
+                "return false;}")
+        (self.root / "ajax/fixtureSync.php").write_text(stub + sync)
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
             port = sock.getsockname()[1]
@@ -104,7 +118,8 @@ class WorkerReadSessionTests(unittest.TestCase):
         suffix = "?action=" + action
         if action == "status":
             suffix += "&job_id=fixture-job"
-        request = urllib.request.Request(self.url + suffix,
+        url = self.url.rsplit("/", 1)[0] + "/fixtureSync.php" if action == "fixture_sync" else self.url + suffix
+        request = urllib.request.Request(url,
             headers={"Cookie": "PHPSESSID=remask-session-fixture"})
         with self.opener.open(request, timeout=timeout) as response:
             return json.load(response)
@@ -133,3 +148,6 @@ class WorkerReadSessionTests(unittest.TestCase):
 
     def test_slow_status_does_not_block_same_session_csrf_or_lose_token(self):
         self.assert_nonblocking_read("status")
+
+    def test_slow_sync_does_not_block_same_session_csrf_or_lose_token(self):
+        self.assert_nonblocking_read("fixture_sync")
