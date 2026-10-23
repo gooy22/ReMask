@@ -8,6 +8,10 @@ Credentials are private memory; neither receipts nor diagnostics include them.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from collections import OrderedDict
+from weakref import WeakValueDictionary
+import asyncio
+import time
 import json
 import hashlib
 import logging
@@ -15,10 +19,19 @@ import re
 from urllib.parse import parse_qs, urlsplit
 
 from .private_ads_draft import fail, flatten_params, identity
-from .private_inventory import _auth_gate, _json_payloads, _JSON_SCRIPT_RE, _response_only
+from .private_ads_document import (_auth_gate, _json_payloads, _JSON_SCRIPT_RE,
+                                   _response_only, _strict_json, _strict_json_decoder)
 from .provisioning.models import ProvisioningError
 
 log = logging.getLogger("remask.private_ads_http")
+
+# Short-lived read-only Ads Manager bootstrap reuse. These are session
+# credentials, NEVER permission proof or a writable client. Every consuming
+# resource read still requires its own live exact-account GET.
+_REFERENCE_CONTEXT_TTL_SECONDS = 45.0
+_REFERENCE_CONTEXT_MAX_ENTRIES = 32
+_REFERENCE_CONTEXT_CACHE = OrderedDict()
+_REFERENCE_CONTEXT_LOCKS = WeakValueDictionary()
 
 # ServerJS.handle receives literal JSON, including in legacy requireLazy
 # script wrappers. Parse its data argument; never execute the wrapper.
@@ -29,7 +42,7 @@ _SERVERJS_HANDLE = re.compile(
 
 def _ads_document_payloads(body):
     payloads = _json_payloads(body)
-    decoder = json.JSONDecoder()
+    decoder = _strict_json_decoder()
     for script in _JSON_SCRIPT_RE.finditer(body):
         source = script.group(1)
         for call in _SERVERJS_HANDLE.finditer(source):
@@ -40,6 +53,11 @@ def _ads_document_payloads(body):
             if isinstance(value, dict) and source[end:].lstrip().startswith(")"):
                 payloads.append(_response_only(value))
     return payloads
+
+
+def _strict_response_json(raw):
+    """Reject ambiguous Meta HTTP replies before deriving any scope evidence."""
+    return _strict_json(raw)
 
 
 class AdsManagerResponseError(ProvisioningError):
@@ -79,7 +97,12 @@ class AdsManagerResponseError(ProvisioningError):
         message = "Meta rejected the advertising request"
         if details:
             message += " (" + ", ".join(details) + ")"
-        super().__init__("PRIVATE_ADS_DRAFT_REQUEST_REJECTED", message, retryable=False)
+        # HTTP 429 is a rate limit, not a permanent field validation error.
+        # The durable submit journal still blocks replay of any claimed POST;
+        # only independent READ/reconciliation may be retried.
+        limited = safe.get("http_status") == 429
+        super().__init__("PRIVATE_ADS_DRAFT_RATE_LIMITED" if limited else
+            "PRIVATE_ADS_DRAFT_REQUEST_REJECTED", message, retryable=limited)
 
 
 def _walk(value, depth=0):
@@ -213,7 +236,51 @@ class AdsManagerPrivateHttp:
                 and str(self.web.profile.cookies.get("c_user") or "") == self.context.actor_id)
 
     @classmethod
-    async def open(cls, web, *, account_id, business_id, actor_id):
+    async def open(cls, web, *, account_id, business_id, actor_id, reference_read=False):
+        account_id, business_id, actor_id = map(identity, (account_id, business_id, actor_id))
+        if not reference_read:
+            # Mutation-capable paths keep their original fresh-document contract.
+            return await cls._open_uncached(web, account_id=account_id,
+                business_id=business_id, actor_id=actor_id, refresh_modules=True)
+        profile = web.profile
+        if str(profile.cookies.get("c_user") or "") != actor_id:
+            raise fail("ACTOR_MISMATCH", "Advertising request belongs to another profile")
+        name = str(getattr(profile, "name", "") or "")
+        proxy = str(getattr(profile, "proxy", "") or "")
+        if not name or not proxy:
+            # Explicit direct-test leases and unnamed sessions are never shared.
+            client = await cls._open_uncached(web, account_id=account_id,
+                business_id=business_id, actor_id=actor_id, refresh_modules=False)
+            client.read_only = True
+            return client
+        digest = hashlib.sha256(json.dumps([name, proxy,
+            str(getattr(profile, "user_agent", "") or ""), profile.cookies,
+            actor_id, business_id, account_id], sort_keys=True,
+            separators=(",", ":")).encode()).hexdigest()
+        lock = _REFERENCE_CONTEXT_LOCKS.setdefault(digest, asyncio.Lock())
+        async with lock:
+            now = time.monotonic()
+            cached = _REFERENCE_CONTEXT_CACHE.get(digest)
+            if cached is not None and now - cached[0] <= _REFERENCE_CONTEXT_TTL_SECONDS:
+                client = cls(web, cached[1])
+                client.document_origin = cached[2]
+                client.read_only = True
+                if client._profile_matches():
+                    _REFERENCE_CONTEXT_CACHE.move_to_end(digest)
+                    return client
+            _REFERENCE_CONTEXT_CACHE.pop(digest, None)
+            client = await cls._open_uncached(web, account_id=account_id,
+                business_id=business_id, actor_id=actor_id, refresh_modules=False)
+            client.read_only = True
+            _REFERENCE_CONTEXT_CACHE[digest] = (time.monotonic(),
+                client.context, client.document_origin)
+            _REFERENCE_CONTEXT_CACHE.move_to_end(digest)
+            while len(_REFERENCE_CONTEXT_CACHE) > _REFERENCE_CONTEXT_MAX_ENTRIES:
+                _REFERENCE_CONTEXT_CACHE.popitem(last=False)
+            return client
+
+    @classmethod
+    async def _open_uncached(cls, web, *, account_id, business_id, actor_id, refresh_modules):
         account_id, business_id, actor_id = map(identity, (account_id, business_id, actor_id))
         web.private_only = True
         if str(web.profile.cookies.get("c_user") or "") != actor_id:
@@ -254,7 +321,7 @@ class AdsManagerPrivateHttp:
             log.warning("ads_bootstrap rejected profile=%s code=%s", getattr(web.profile, "name", ""), error.code)
             raise
         refresh = getattr(web, 'refresh_reviewed_modules', None)
-        if callable(refresh):
+        if refresh_modules and callable(refresh):
             await refresh(body, final_url)
         client = cls(web, context)
         client.document_origin = final.scheme + '://' + final.hostname
@@ -363,8 +430,8 @@ class AdsManagerPrivateHttp:
             text = raw.decode("utf-8").strip()
             if text.startswith("for (;;);"):
                 text = text[len("for (;;);"):].lstrip()
-            result = json.loads(text)
-            if not isinstance(result, dict) or result.get("error") or result.get("errors"):
+            result = _strict_response_json(text)
+            if not isinstance(result, dict) or "error" in result or "errors" in result:
                 code = result.get("error") if isinstance(result, dict) else None
                 log.warning("ads_session_renewal rejected profile=%s code=%s",
                     self._profile_name, code if type(code) is int else "unavailable")
@@ -445,12 +512,19 @@ class AdsManagerPrivateHttp:
                 if len(raw) > 2_000_000:
                     raise fail("RESPONSE_TOO_LARGE", "Advertising response exceeds its body budget")
                 try:
-                    result = json.loads(raw)
+                    result = _strict_response_json(raw)
                 except (ValueError, UnicodeDecodeError):
                     if response.status != 200:
                         raise AdsManagerResponseError({"http_status": response.status}) from None
                     raise fail("RESPONSE_INVALID", "Advertising response could not be decoded") from None
-                if isinstance(result, dict) and (result.get("error") or result.get("errors")):
+                if isinstance(result, dict) and (
+                        result.get("hasNext") is True or
+                        (isinstance(result.get("extensions"), dict) and
+                         result["extensions"].get("is_final") is False)):
+                    raise fail("RESPONSE_INCOMPLETE", "Meta returned an unfinished advertising response", True)
+                # The presence of an error envelope is a rejection even when
+                # its inner object/list is empty or malformed.
+                if isinstance(result, dict) and ("error" in result or "errors" in result):
                     error = result.get("error")
                     raise AdsManagerResponseError({**(error if isinstance(error, dict) else {}),
                                                    "http_status": response.status})
@@ -464,7 +538,7 @@ class AdsManagerPrivateHttp:
                 raise
             # Exception strings and URLs can include the session credential.
             raise fail("HTTP_UNAVAILABLE", "Advertising HTTP request did not return a usable response", True) from None
-        if not isinstance(result, dict) or result.get("error") or result.get("errors"):
+        if not isinstance(result, dict) or "error" in result or "errors" in result:
             raise fail("REQUEST_REJECTED", "Meta returned an advertising request error")
         if method == 'GET' and path == '/act_' + self.context.account_id:
             await self._confirm_account_alias(result)

@@ -11,13 +11,17 @@ assert.match(workerBridge, /\$request = \$path === 'media-inspect'[\s\S]*\['laun
   const overlay=fs.readFileSync(path.join(__dirname,'..','railway-launch-private-catalog-overlay.php'),'utf8');
   const assets=overlay.match(/<<<'ASSET_UI'\n([\s\S]*?)\nASSET_UI/)[1];
   const requests=[];
-  let foreign=false,hold=null;
+  let foreign=false,hold=null,partial=false,refreshFailed=false;
+  let truncated=false,queryRequired=false,inventoryIncomplete=false;
   const ctx={state:{asset:{profile:'19',accountId:'act_111111111',generation:1,cache:new Map(),inflight:new Map()}},
     post:input=>input,apiJson:async(url,input)=>{
       requests.push({url,input});
       if(hold){const current=hold;hold=null;await current;}
+      if(refreshFailed)throw new Error('Synthetic Meta read failure');
       return {ok:true,profile:input.profile,account_id:foreign?'999999999':input.account_id.replace(/^act_/,''),
-        resource:input.resource,data:[{id:'555555555'}],checked_live:input.force==='1'};
+        resource:input.resource,data:partial?null:[{id:'555555555'}],
+        checked_live:input.force==='1',account_scope_verified:true,
+        truncated,query_required:queryRequired,inventory_complete:!inventoryIncomplete};
     }};
   vm.createContext(ctx);vm.runInContext(assets,ctx);
   await ctx.fetchAsset('pages');
@@ -26,9 +30,10 @@ assert.match(workerBridge, /\$request = \$path === 'media-inspect'[\s\S]*\['laun
   await ctx.fetchAsset('pages');assert.equal(requests.length,1);
   ctx.state.asset.accountId='act_222222222';ctx.state.asset.generation++;
   await ctx.fetchAsset('pages');assert.equal(requests.length,2,'same-profile Pages cannot reuse another RK cache');
+  const savedPages=await ctx.fetchAsset('pages');
   foreign=true;
   await assert.rejects(()=>ctx.fetchAsset('pages',true),/другого профиля/);
-  assert.equal(ctx.state.asset.cache.has('19|pages|222222222'),false);
+  assert.equal(await ctx.fetchAsset('pages'),savedPages,'foreign refresh cannot replace the last scoped list');
   foreign=false;
   let release;hold=new Promise(resolve=>release=resolve);
   const cachedRead=ctx.fetchAsset('images');
@@ -37,6 +42,34 @@ assert.match(workerBridge, /\$request = \$path === 'media-inspect'[\s\S]*\['laun
   assert.equal((await refreshed).checked_live,true,'Refresh must perform a fresh READ after an older cached READ');
   const imageRequests=requests.filter(r=>r.input.resource==='images');
   assert.deepEqual(imageRequests.map(r=>r.input.force),['0','1']);
+  const confirmed=await ctx.fetchAsset('images');
+  refreshFailed=true;
+  await assert.rejects(()=>ctx.fetchAsset('images',true),/Synthetic Meta read failure/);
+  refreshFailed=false;
+  assert.equal(await ctx.fetchAsset('images'),confirmed,'failed refresh must retain the last confirmed list');
+  partial=true;
+  await assert.rejects(()=>ctx.fetchAsset('images',true),/не полностью/);
+  partial=false;
+  assert.equal(await ctx.fetchAsset('images'),confirmed,'partial response must not erase confirmed assets');
+  for(const incomplete of ['truncated','queryRequired','inventoryIncomplete']){
+    if(incomplete==='truncated')truncated=true;
+    if(incomplete==='queryRequired')queryRequired=true;
+    if(incomplete==='inventoryIncomplete')inventoryIncomplete=true;
+    await assert.rejects(()=>ctx.fetchAsset('images',true),/не полностью/,
+      incomplete+' forced READ must not be treated as a complete account inventory');
+    truncated=false;queryRequired=false;inventoryIncomplete=false;
+    assert.equal(await ctx.fetchAsset('images'),confirmed,
+      incomplete+' must preserve the previous live-confirmed inventory');
+  }
+  for(const incomplete of ['truncated','queryRequired','inventoryIncomplete']){
+    if(incomplete==='truncated')truncated=true;
+    if(incomplete==='queryRequired')queryRequired=true;
+    if(incomplete==='inventoryIncomplete')inventoryIncomplete=true;
+    await assert.rejects(()=>ctx.fetchAsset('videos'),/не полностью/,
+      incomplete+' unforced READ must not be cached as a complete list');
+    assert.equal(ctx.state.asset.cache.has('19|videos|222222222'),false);
+    truncated=false;queryRequired=false;inventoryIncomplete=false;
+  }
   ctx.state.asset.accountId='';
   await assert.rejects(()=>ctx.fetchAsset('pages'),/Выберите один РК/);
   console.log('Private Workspace Assets keep exact RK scope, reject foreign responses and refresh independently.');
@@ -79,6 +112,14 @@ console.log('Private Launch catalog and funding truth checks passed');
     targetMode:()=>perTarget,bindingFor:()=>binding};
   vm.createContext(ctx);vm.runInContext(source,ctx);
   const config={accountIds:ids,payload:{creative:{page_id:page.value}}};
+  assert.equal(ctx.remaskPrivateExecutionMode(config),'DRAFT',
+    'when the visible selector is absent, stored configuration cannot imply PUBLISH');
+  assert.equal(ctx.remaskPrivateTargetRows(config)[0].launch.base.execution_mode,'DRAFT');
+  const precomputed={...config,_targets:[{launch:{base:{execution_mode:'PUBLISH'},override:{}}}]};
+  assert.throws(()=>ctx.remaskPrivateTargetRows(precomputed),/Режим создания изменился/,
+    'a saved precomputed PUBLISH target must never bypass a DRAFT UI choice');
+  precomputed._targets[0].launch.base.execution_mode='DRAFT';
+  assert.equal(ctx.remaskPrivateTargetRows(precomputed)[0].launch.base.execution_mode,'DRAFT');
   assert.equal(ctx.remaskPrivateTargetRows(config)[0].page_id,page.value,
     'single RK must submit the selected visible Page, not a stale/empty bulk binding');
   config.payload.creative.format='INSTAGRAM_POST';
@@ -120,6 +161,9 @@ console.log('Private Launch catalog and funding truth checks passed');
     '111111111':{page_id:'333333333'},
     '222222222':{page_id:'444444444'}
   };
+  // Existing publication-flow fixtures deliberately opt into publish.
+  // A missing selector must never carry implicit publication intent.
+  buttons.remaskPrivateExecutionMode={value:'PUBLISH'};
   const config={
     accountIds:['111111111','222222222'],
     payload:{
@@ -197,6 +241,12 @@ console.log('Private Launch catalog and funding truth checks passed');
       if(body.action==='private_launch_review')
         return {ok:true,status:200,json:async()=>({ok:true,review:{
           ready:true,
+          configuration_valid:true,
+          checked_live:true,
+          api_preflight_ready:true,
+          editor_state:'EDITOR_UNVERIFIED',
+          missing_fields:[],
+          missing_contracts:[],
           profile_id:body.profile_id,
           preflight:{
             selected_payment_method:{
@@ -261,6 +311,12 @@ console.log('Private Launch catalog and funding truth checks passed');
   assert.equal(reviewRequests[1].body.launch.override.adset.targeting.age_max,35);
   assert.equal(reviewed[0].row.selected_payment_method.last4,'1111');
   assert.equal(reviewed[1].row.selected_payment_method.last4,'2222');
+  assert.equal(reviewed[0].review.checked_live,true);
+  assert.equal(reviewed[0].review.editor_state,'EDITOR_UNVERIFIED',
+    'API readiness must remain separate from native editor acceptance');
+  assert.deepEqual(Array.from(privateCtx.state.privateLaunchReadiness.targets,row=>row.editor_state),
+    ['EDITOR_UNVERIFIED','EDITOR_UNVERIFIED']);
+  assert.deepEqual(Array.from(privateCtx.state.privateLaunchReadiness.targets,row=>row.checked_live),[true,true]);
   assert.ok(requests.every(r=>r.body.doc_id===undefined&&r.body.fb_dtsg===undefined));
 
   // Real media preflight runs before the account/Meta readiness request and uses each target's exact launch.
@@ -318,6 +374,13 @@ console.log('Private Launch catalog and funding truth checks passed');
     ['1111','2222']
   );
   assert.ok(planned.request.profiles.every(row=>row.tasks[0].payload.doc_id===undefined));
+
+  buttons.remaskPrivateExecutionMode.value='DRAFT';
+  const draftRows=privateCtx.remaskPrivateTargetRows(config);
+  assert.ok(draftRows.every(row=>row.selected_payment_method===undefined
+      && row.launch.base.execution_mode==='DRAFT'),
+    'the explicit draft selector must omit payment selection and be serialized');
+  buttons.remaskPrivateExecutionMode.value='PUBLISH';
 
   const reused=privateCtx.remaskPrivateJobRequest(config,reviewed);
   assert.equal(reused.reused,true);

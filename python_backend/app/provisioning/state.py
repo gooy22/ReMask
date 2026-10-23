@@ -102,7 +102,9 @@ class ProvisioningStateStore:
         con = sqlite3.connect(self.path, timeout=30)
         try:
             con.row_factory = sqlite3.Row
-            con.execute("PRAGMA journal_mode=WAL")
+            # WAL is persistent for the SQLite file. The initialization
+            # routine below configures it once; frequent state reads and
+            # checkpoint writes retain per-connection FK enforcement.
             con.execute("PRAGMA foreign_keys=ON")
             with con:
                 yield con
@@ -114,6 +116,7 @@ class ProvisioningStateStore:
 
     def _init_sync(self) -> None:
         with self._connect() as con:
+            con.execute("PRAGMA journal_mode=WAL")
             con.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS provisioning_entities (

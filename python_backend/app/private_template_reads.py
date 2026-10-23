@@ -11,6 +11,7 @@ from .private_ads_helpers import read_form_helper
 from .private_ads_reads import AdsManagerReadCatalog
 from .private_advertising_reads import TARGETING_TYPES
 from .private_inventory import private_inventory_snapshot, inventory_diagnostic_summary
+from .private_http_metrics import measure_phase
 from .private_launch import PrivateLaunchContractStore
 from .provisioning.models import ProvisioningError
 from .static_meta_inventory import read_business_inventory, read_ad_account_inventory
@@ -44,7 +45,7 @@ def _pairs(rows, actor):
 async def _discover_sources(web, actor):
     snapshot = await private_inventory_snapshot(web,
         known_accounts_by_business={}, known_business_ids=set(), personal_scope_id=actor,
-        execute_read_queries=True)
+        execute_read_queries=True, fast_sync=True)
     rows = [row for business in snapshot.get('businesses', [])
             for row in business.get('ad_accounts', [])]
     pairs = _pairs(rows, actor)
@@ -63,9 +64,17 @@ async def _discover_sources(web, actor):
     # Reuse the installed, reviewed READ_BM/READ_RK modules. Their exact response
     # identities are only lookup hints until the fresh ACCOUNT_READ below.
     try:
-        business_proof = await read_business_inventory(web)
+        # The first inventory pass already proved these BM identities live.
+        # If RK enumeration was incomplete, retry only the exact RK READ,
+        # not the full BM discovery query again.
+        candidates = snapshot.get('discovered_business_ids') or []
+        if not isinstance(candidates, list):
+            candidates = []
+        if not candidates:
+            business_proof = await read_business_inventory(web)
+            candidates = list(business_proof.get('rows', {}))
         businesses = []
-        for raw in business_proof.get('rows', {}):
+        for raw in candidates:
             try:
                 business = identity(str(raw))
             except (ValueError, TypeError, ProvisioningError):
@@ -124,7 +133,8 @@ async def read_template_reference(web, catalog, context, operation, inputs):
     pairs = ([cached[1]] if cached and now-cached[0] < 1800 else [])
     pairs += [pair for pair in _pairs(context.ad_accounts or [], actor) if pair not in pairs]
     if not pairs:
-        pairs = await asyncio.wait_for(_discover_sources(web, actor), timeout=18)
+        with measure_phase('reference_discovery'):
+            pairs = await asyncio.wait_for(_discover_sources(web, actor), timeout=18)
     # Exact fresh ACCOUNT_READ still confirms every selected pair. A stale or
     # foreign pair can fall through to another pair from this same profile.
     last = None
@@ -137,11 +147,13 @@ async def read_template_reference(web, catalog, context, operation, inputs):
             if operation in REFERENCE_TYPES:
                 if len(values['query']) > 200:
                     raise fail('INVALID_TARGETING_QUERY', 'Targeting query is too long')
-                result = await AdsManagerReadCatalog(catalog).read(web, operation, values)
+                with measure_phase('reference_read'):
+                    result = await AdsManagerReadCatalog(catalog).read(web, operation, values)
                 result = {**result, 'profile': profile, 'business_id': business,
                           'transport': 'private_http_h2', 'browser_started': False}
             else:
-                result = await read_form_helper(web, catalog, values, operation, inputs)
+                with measure_phase('reference_read'):
+                    result = await read_form_helper(web, catalog, values, operation, inputs)
         except ProvisioningError as error:
             if not error.code.endswith('RESOURCE_SCOPE_MISMATCH'):
                 raise

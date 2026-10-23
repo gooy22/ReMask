@@ -26,7 +26,10 @@ class AdsManagerDraftPublisher:
         if not prior:
             raise fail("RECONCILE_REQUIRED", "Draft verification has no saved submission")
         evidence = copy.deepcopy(prior.get("result", {}).get("evidence", {}))
-        evidence["verification"] = {"verified": True, "source": "independent_private_ads_http", **proof}
+        if (not isinstance(proof, dict) or ("verified" in proof and proof["verified"] is not True)
+                or ("source" in proof and proof["source"] != "independent_private_ads_http")):
+            raise fail("READ_PENDING", "Independent verification metadata contradicts its proof source")
+        evidence["verification"] = {**proof, "verified": True, "source": "independent_private_ads_http"}
         result = ActionResult.success(prior["step"], entity_id=prior.get("entity_id") or "",
             code="PRIVATE_ADS_DRAFT_READ_CONFIRMED", evidence=evidence)
         if not await state.finish_read(prior, result):
@@ -34,7 +37,7 @@ class AdsManagerDraftPublisher:
 
     @staticmethod
     def _account(row, account_id):
-        if (not isinstance(row, dict) or row.get("error") or row.get("errors")
+        if (not isinstance(row, dict) or "error" in row or "errors" in row
                 or not isinstance(row.get("account_id"), str)
                 or row["account_id"].removeprefix("act_") != account_id):
             raise fail("READ_SCOPE_MISMATCH", "Draft response belongs to another advertising account")
@@ -85,19 +88,26 @@ class AdsManagerDraftPublisher:
                     path="/" + draft_id + "/addraft_fragments", params=params,
                     receipt=lambda row: {"fragment_id": identity(row.get("id"))})
                 fragment_id = receipt["fragment_id"]
+                if fragment_id in fragments:
+                    raise fail("READ_RELATION_MISMATCH", "Draft hierarchy reused a fragment identity")
                 row = await client.get("/addraftfragment_" + fragment_id, {"fields": FRAGMENT_FIELDS})
                 self._account(row, scope["ad_account_id"])
                 if (row.get("id") != fragment_id or row.get("ad_draft_id") != draft_id
                         or row.get("ad_object_type") != level
-                        or (parent_id is not None and row.get("parent_ad_object_id") != parent_id)):
+                        or row.get("parent_ad_object_id") not in ((None, "") if parent_id is None else (parent_id,))):
                     raise fail("READ_RELATION_MISMATCH", "Draft fragment identity or parent is unconfirmed")
                 if not fragment_values_match(row.get("values"), values, business_id=scope["business_id"]):
                     raise fail("READ_SPEC_MISMATCH", "Saved draft settings differ from this Launch")
+                if row.get("status") == "ACTIVE":
+                    raise fail("DRAFT_DELIVERY_UNSAFE", "Saved draft fragment reports active delivery")
                 # Meta can expose HAS_ERRORS before returning its error list.
                 # A stored fragment is not a settled, valid configuration.
-                if row.get("active_errors") or row.get("validation_status") == "HAS_ERRORS":
+                active_errors = row.get("active_errors")
+                if row.get("validation_status") == "HAS_ERRORS" or (isinstance(active_errors, list) and active_errors):
                     raise fail("VALIDATION_ERRORS", "Meta returned active validation errors for the " + level + " draft")
-                if row.get("validation_status") != "VALIDATED":
+                # A response without an explicit empty error list is incomplete.
+                # VALIDATED alone is not proof that there are no active errors.
+                if row.get("validation_status") != "VALIDATED" or not isinstance(active_errors, list):
                     # Keep the accepted receipt. A retry reads this exact
                     # fragment through the original intent, without POST replay.
                     raise fail("VALIDATION_PENDING", "Meta has not confirmed validation of the " + level + " draft; resume its saved read", True)
@@ -108,13 +118,13 @@ class AdsManagerDraftPublisher:
                     "ad_object_id": objects[level], "fragment_saved": True,
                     "relationships_confirmed": True, "editor_verified": False,
                     "meta_validation_status": row.get("validation_status"),
-                    "active_errors_observed": "active_errors" in row})
+                    "active_errors_observed": True})
                 fragments.append(fragment_id);parent_id = objects[level]
             if draft_only:
                 return {"status": "SUCCESS", "draft_id": draft_id, "fragment_ids": fragments,
                     "draft_objects": objects, "draft_verified": True, "published": False,
                     "fragment_storage_verified": True, "relationships_confirmed": True,
-                    "editor_verified": False,
+                    "editor_verified": False, "editor_state": "EDITOR_UNVERIFIED",
                     "verified": False, "delivery_running_verified": False, "browser_started": False,
                     "verification_source": "independent_private_ads_http",
                     "transport": "private_ads_manager_http_h2"}

@@ -4,30 +4,53 @@ from __future__ import annotations
 import re
 import time
 import json
+import copy
 
 from .private_ads_catalog import identity
 from .private_ads_draft import fail
 from .private_ads_http import AdsManagerPrivateHttp
+from .private_http_metrics import measure_phase
 from .private_advertising_reads import RESOURCE_FIELDS, TARGETING_TYPES
+
+
+def _bounded_limit(value, *, maximum=100):
+    """Accept explicit positive integer page limits, never booleans or coercions."""
+    if type(value) is int:
+        requested = value
+    elif isinstance(value, str) and re.fullmatch(r"[0-9]{1,9}", value):
+        requested = int(value)
+    else:
+        raise fail("INVALID_RESOURCE_LIMIT", "Resource row limit must be a positive integer")
+    if requested < 1:
+        raise fail("INVALID_RESOURCE_LIMIT", "Resource row limit must be positive")
+    return min(maximum, requested)
 
 
 class _ReadClient:
     """Adapt catalog reads to the same fresh profile HTTP/2 sender as Launch."""
-    def __init__(self, web, catalog, values):
+    def __init__(self, web, catalog, values, *, reference_read=False):
         self.web, self.catalog = web, catalog
+        self.reference_read = bool(reference_read)
         self.account = identity(values["ad_account_id"])
         self.business = identity(values["business_id"])
         self.actor = identity(str(web.profile.cookies.get("c_user") or ""))
         self.http = None
 
     async def request(self, name, *, values=None, params=None):
-        row, path = self.catalog.route(name, {"ad_account_id": self.account, **(values or {})})
+        if values is not None and not isinstance(values, dict):
+            raise fail("INVALID_RESOURCE_ROUTE", "Resource route values must be an object")
+        if values and "ad_account_id" in values and identity(values["ad_account_id"]) != self.account:
+            raise fail("RESOURCE_SCOPE_MISMATCH", "Resource route cannot change the selected account")
+        row, path = self.catalog.route(name, {**(values or {}), "ad_account_id": self.account})
         if row["method"] != "GET" or set(params or {}) - set(row["params"]):
             raise fail("INVALID_RESOURCE_ROUTE", "Resource request differs from its reviewed source")
         if self.http is None:
-            self.http = await AdsManagerPrivateHttp.open(self.web, account_id=self.account,
-                business_id=self.business, actor_id=self.actor)
-        return await self.http.get(path.removeprefix("/" + self.catalog.data["api_version"]), params or {})
+            with measure_phase('ads_document'):
+                self.http = await AdsManagerPrivateHttp.open(self.web, account_id=self.account,
+                    business_id=self.business, actor_id=self.actor,
+                    reference_read=self.reference_read)
+        with measure_phase('account_proof' if name == 'ACCOUNT_READ' else 'meta_read'):
+            return await self.http.get(path.removeprefix("/" + self.catalog.data["api_version"]), params or {})
 
     async def account_record(self, *, require_active=True, currency=False, pages=False, reference=False):
         fields = ["id", "account_id", "business"]
@@ -39,8 +62,13 @@ class _ReadClient:
             fields.append("currency")
         row = await self.request("ACCOUNT_READ", params={"fields":
             fields})
+        if not isinstance(row, dict):
+            raise fail("RESOURCE_READ_INCOMPLETE", "Account scope read returned no account object")
         business = row.get("business")
+        secondary_id = row.get("account_id")
         if (not isinstance(row.get("id"), str) or row["id"].removeprefix("act_") != self.account
+                or (secondary_id is not None and (not isinstance(secondary_id, str)
+                    or secondary_id.removeprefix("act_") != self.account))
                 or not isinstance(business, dict) or business.get("id") != self.business):
             raise fail("RESOURCE_SCOPE_MISMATCH", "Resource account did not confirm the exact Business")
         if require_active and (type(row.get("account_status")) not in {int, str} or str(row["account_status"]) != "1"):
@@ -51,6 +79,9 @@ class _ReadClient:
 class AdsManagerReadCatalog:
     def __init__(self, catalog):
         self.catalog = catalog
+        # A bounded account/actor-scoped browse snapshot prevents a 20k-node
+        # Meta request for every "show more" click in the audience picker.
+        self._browse_cache = {}
         self.rows = {"pages": {"source": "ad_account_promotable_objects.promotable_page_ids",
                                "catalog_digest": catalog.digest}}
         for name, route in {"images":"IMAGE_READ", "videos":"VIDEO_READ",
@@ -72,14 +103,15 @@ class AdsManagerReadCatalog:
         return {name:{"configured":name in self.rows, "transport":"ads_manager_private_http"}
                 for name in RESOURCE_FIELDS}
 
-    def client(self, web, values):
-        return _ReadClient(web, self.catalog, values)
+    def client(self, web, values, *, reference_read=False):
+        return _ReadClient(web, self.catalog, values, reference_read=reference_read)
 
     async def read(self, web, name, values):
         if name not in self.rows:
             raise fail("RESOURCE_CONTRACT_REQUIRED", "Reviewed account query is unavailable for " + name)
-        client = self.client(web, values)
+        _bounded_limit(values.get("limit", 100), maximum=20000)
         reference = name in TARGETING_TYPES | {"locations","locales"}
+        client = self.client(web, values, reference_read=reference)
         draft_pages = name == "pages" and values.get("execution_mode") == "DRAFT"
         account = await client.account_record(require_active=not reference, pages=name == 'pages' and not draft_pages, reference=reference)
         if draft_pages:
@@ -92,7 +124,7 @@ class AdsManagerReadCatalog:
             return await self.browse_targeting(client, name, values)
         if name == "instagram_media":
             actors = await self.read(web,"instagram_accounts",{**values,"query":""})
-            records, seen = [], set()
+            records, seen = [], {}
             requests = 0
             for actor in actors["data"]:
                 actor_id = identity(actor.get("id_v2"),"Instagram user V2")
@@ -103,15 +135,25 @@ class AdsManagerReadCatalog:
                     if requests > 25:
                         raise fail("RESOURCE_READ_INCOMPLETE", "Instagram media exceeded its total request budget", True)
                     response = await client.request("INSTAGRAM_MEDIA_READ",values={"instagram_id":actor_id},params=params)
+                    if not isinstance(response, dict) or "error" in response or "errors" in response:
+                        raise fail("RESOURCE_READ_INCOMPLETE", "Instagram media response is not a complete resource object")
                     items = response.get("data")
                     if not isinstance(items,list) or any(not isinstance(r,dict) for r in items):
                         raise fail("RESOURCE_READ_INCOMPLETE", "Advertisable Instagram media read is incomplete")
                     for row in items:
+                        if ("account_id" in row and row["account_id"] != client.account
+                                or "instagram_actor_id" in row and row["instagram_actor_id"] != actor["id"]
+                                or "instagram_user_id" in row and row["instagram_user_id"] != actor_id):
+                            raise fail("RESOURCE_SCOPE_MISMATCH", "Instagram media returned a foreign account or actor")
                         key = identity(row.get("id"),"Instagram media")
-                        if key not in seen:
-                            seen.add(key)
-                            records.append({**{k:v for k,v in row.items() if k in RESOURCE_FIELDS[name]},
-                                "instagram_actor_id": actor["id"], "instagram_user_id": actor_id})
+                        projected = {**{k:v for k,v in row.items() if k in RESOURCE_FIELDS[name]},
+                            "instagram_actor_id": actor["id"], "instagram_user_id": actor_id}
+                        if key in seen:
+                            if seen[key] != projected:
+                                raise fail("RESOURCE_READ_INCOMPLETE", "Instagram media returned conflicting resource identities")
+                            continue
+                        seen[key] = projected
+                        records.append(projected)
                         if len(records) > 500:
                             raise fail("RESOURCE_READ_INCOMPLETE", "Instagram media exceeded its account row budget")
                     paging = response.get("paging") or {}
@@ -139,11 +181,11 @@ class AdsManagerReadCatalog:
                 if name in TARGETING_TYPES else self.catalog.data.get("resource_fields", {}).get(name))
             if not isinstance(fields, list) or not fields:
                 raise fail("RESOURCE_CONTRACT_REQUIRED", "Source field projection is missing for " + name)
-            records, seen, cursors = [], set(), set()
+            records, seen, cursors = [], {}, set()
             fields = list(fields)
             if name == "instagram_accounts":
                 fields.append("is_connected_to_ad_account.ad_account_id("+client.account+")")
-            params = {"fields":fields, "limit":min(100, int(values.get("limit",100)))}
+            params = {"fields":fields, "limit":_bounded_limit(values.get("limit",100))}
             if name == "instagram_accounts": params["business_id"] = client.business
             if name in TARGETING_TYPES | {"locations"}:
                 query = str(values.get("query") or "").strip()
@@ -152,7 +194,7 @@ class AdsManagerReadCatalog:
                         "checked_live":False,"checked_at":int(time.time()),"query_required":True,
                         "source":"ads_manager_private_http"}
                 if name == "locations":
-                    params = {"type":"adgeolocation","qs":[query],"limit":min(100,int(values.get("limit",100))),
+                    params = {"type":"adgeolocation","qs":[query],"limit":_bounded_limit(values.get("limit",100)),
                         "ad_account_id":client.account,"place_fallback":True,"bulk_upload":False}
                 else:
                     params.update(accountId=client.account,q=query,
@@ -161,6 +203,8 @@ class AdsManagerReadCatalog:
             if name == "insights": params.update(level="ad",date_preset="last_30d")
             for _ in range(5):
                 response = await client.request(route, params=params)
+                if not isinstance(response, dict) or "error" in response or "errors" in response:
+                    raise fail("RESOURCE_READ_INCOMPLETE", "Account resource response is not a complete object")
                 items = response.get("data")
                 if not isinstance(items, list) or len(items) > 500:
                     raise fail("RESOURCE_READ_INCOMPLETE", "Account edge returned an incomplete resource list")
@@ -184,9 +228,6 @@ class AdsManagerReadCatalog:
                         raise fail("RESOURCE_READ_INCOMPLETE", "Account resource has no exact identity")
                     if "account_id" in row and row["account_id"] != client.account:
                         raise fail("RESOURCE_SCOPE_MISMATCH", "Account edge returned a foreign resource")
-                    if key in seen:
-                        continue
-                    seen.add(key)
                     clean = {k:v for k,v in row.items() if k in RESOURCE_FIELDS[name]}
                     if name in TARGETING_TYPES: clean["id"]=key
                     if name in {"locations","locales"}: clean.update(id=key,key=key)
@@ -194,6 +235,11 @@ class AdsManagerReadCatalog:
                         clean["pixel_id"] = identity(row["pixel"].get("id"),"pixel")
                     if name == "ads" and isinstance(row.get("creative"),dict):
                         clean["creative_id"] = identity(row["creative"].get("id"), "creative")
+                    if key in seen:
+                        if seen[key] != clean:
+                            raise fail("RESOURCE_READ_INCOMPLETE", "Account resource identity has conflicting values")
+                        continue
+                    seen[key] = clean
                     records.append(clean)
                     if len(records) > 500:
                         raise fail("RESOURCE_READ_INCOMPLETE", "Account resource list exceeded its row budget")
@@ -218,12 +264,35 @@ class AdsManagerReadCatalog:
                 "checked_live":True, "checked_at":int(time.time()), "source":"ads_manager_private_http"}
 
     async def browse_targeting(self, client, name, values):
-        """The recovered sender returns a flat tree; headings have no selectable ID."""
+        """Page a complete flat tree; headings have no selectable ID."""
+        raw_offset = values.get("offset", 0)
+        if type(raw_offset) is int:
+            offset = raw_offset
+        elif isinstance(raw_offset, str) and re.fullmatch(r"(0|[1-9][0-9]{0,4})", raw_offset):
+            offset = int(raw_offset)
+        else:
+            raise fail("INVALID_RESOURCE_OFFSET", "Targeting offset must be a page boundary")
+        if offset < 0 or offset > 19900 or offset % 100:
+            raise fail("INVALID_RESOURCE_OFFSET", "Targeting offset must be a page boundary")
+        limit = _bounded_limit(values.get("limit", 100), maximum=20000)
+        cache_key = (client.actor, client.business, client.account, name)
+        cached = self._browse_cache.get(cache_key)
+        if cached and time.time() - cached[0] <= 180:
+            records = cached[1]
+            return {"data": copy.deepcopy(records[offset:offset + limit]),
+                "account_id": client.account, "account_scope_verified": True,
+                "checked_live": True, "checked_at": int(cached[0]),
+                "source": "private_meta_targetingbrowse",
+                "catalog_count": len(records), "offset": offset,
+                "next_offset": offset + limit if offset + limit < len(records) and (offset + limit) % 100 == 0 else None,
+                "truncated": offset + limit < len(records)}
         response = await client.request("TARGETING_BROWSE", params={
             "fields":["raw_name","id","name","type","path","key","parent","description",
                       "audience_size_lower_bound","audience_size_upper_bound"],
             "include_nodes":True, "whitelisted_types":[name], "is_exclusion":False,
             "is_reserved":False, "regulated_categories":[], "regulated_countries":[]})
+        if not isinstance(response, dict) or "error" in response or "errors" in response:
+            raise fail("RESOURCE_READ_INCOMPLETE", "Resource browse response is incomplete", True)
         rows = response.get("data")
         paging = response.get("paging", {})
         if (not isinstance(rows, list) or len(rows) > 20000
@@ -257,10 +326,17 @@ class AdsManagerReadCatalog:
             if key in seen:
                 continue
             seen.add(key); records.append(clean)
-        limit = max(1, min(20000, int(values.get("limit", 100))))
-        return {"data":records[:limit], "account_id":client.account, "account_scope_verified":True,
+        self._browse_cache[cache_key] = (time.time(), records)
+        # Bound the cross-account cache. Expired/older trees are evicted first.
+        if len(self._browse_cache) > 8:
+            oldest = min(self._browse_cache, key=lambda key: self._browse_cache[key][0])
+            del self._browse_cache[oldest]
+        return {"data":copy.deepcopy(records[offset:offset+limit]),
+                "account_id":client.account, "account_scope_verified":True,
                 "checked_live":True, "checked_at":int(time.time()), "source":"private_meta_targetingbrowse",
-                "catalog_count":len(records), "truncated":len(records)>limit}
+                "catalog_count":len(records), "offset":offset,
+                "next_offset":offset+limit if offset+limit<len(records) and (offset+limit)%100==0 else None,
+                "truncated":offset+limit<len(records)}
 
     async def pages(self, web, values):
         result = await self.read(web, "pages", values)

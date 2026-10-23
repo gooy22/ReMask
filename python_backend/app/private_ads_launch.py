@@ -50,7 +50,7 @@ class AdsManagerLaunch:
         digest.update(BIDDING_MANIFEST.read_bytes())
         digest.update(Path(__file__).with_name('contracts').joinpath('media_layout_20261021.json').read_bytes())
         digest.update(Path(__file__).with_name('contracts').joinpath('private_ads_cta_20261021.json').read_bytes())
-        for name in ("private_ads_launch.py", "private_ads_http.py", "private_ads_draft.py",
+        for name in ("private_ads_launch.py", "private_ads_http.py", "private_ads_document.py", "private_ads_draft.py",
                      "private_ads_state.py", "private_ads_media.py", "private_ads_publication.py", "private_launch_media.py", "media_preflight.py", "private_ads_cta.py",
                      "private_ads_verify.py", "private_ads_creative.py", "private_ads_video.py", "private_ads_delivery.py", "private_ads_catalog.py", "private_ads_reads.py", "private_draft_pages.py", "private_ads_resources.py", "private_ads_helpers.py", "private_ads_preview.py", "private_ads_objectives.py", "private_ads_inspect.py", "private_ads_bidding.py", "private_ads_objective_wire.py", "private_ads_objective_repair.py"):
             digest.update(name.encode() + b"\0" + Path(__file__).with_name(name).read_bytes())
@@ -63,10 +63,39 @@ class AdsManagerLaunch:
             raise fail("INVALID_INPUT", "Advertising profile and configuration are required")
         target = {"profile_id": str(profile_id), **{key: identity(payload.get(key))
                   for key in ("business_id", "ad_account_id", "page_id")}}
-        launch = _effective_launch_payload(payload.get("launch"))
-        mode = launch.get("execution_mode", "PUBLISH")
+        raw_launch = payload.get("launch")
+        if isinstance(raw_launch, dict) and {"base", "override"} & set(raw_launch):
+            if set(raw_launch) - {"base", "override"}:
+                raise fail("INVALID_INPUT", "Launch overrides contain unsupported sections")
+            # A per-account setting must never silently change the selected
+            # operation from saving a draft into publishing an advertisement.
+            override = raw_launch.get("override")
+            if isinstance(override, dict) and "execution_mode" in override:
+                raise fail("INVALID_INPUT", "Launch execution mode must be chosen at plan level")
+        launch = _effective_launch_payload(raw_launch)
+        # Never infer permission to publish from an omitted mode.
+        # A caller must explicitly choose an execution intent before any
+        # live session/bootstrap or media mutation is attempted.
+        mode = launch.get("execution_mode")
         if not isinstance(mode, str) or mode not in {"DRAFT", "PUBLISH"}:
             raise fail("INVALID_INPUT", "Choose DRAFT or PUBLISH execution")
+        if set(launch) - {"execution_mode", "campaign", "adset", "ad", "creative", "delivery"}:
+            raise fail("INVALID_INPUT", "Launch contains unsupported sections")
+        if mode == "DRAFT":
+            # The job store adds an empty task variables map; the plan endpoint
+            # carries profile_id. Neither is an advertising wire input.
+            # Saved-draft commands are explicit boolean control flags, not
+            # additional draft-create fields.
+            allowed_root = {"business_id", "ad_account_id", "page_id", "launch_key",
+                            "launch", "profile_id", "variables", "publish_saved_draft",
+                            "repair_objective", "reconcile_only"}
+            commands = ("publish_saved_draft", "repair_objective", "reconcile_only")
+            if (set(payload) - allowed_root
+                    or ("profile_id" in payload and str(payload["profile_id"]) != str(profile_id))
+                    or ("variables" in payload and payload["variables"] != {})
+                    or any(name in payload and payload[name] is not True for name in commands)
+                    or sum(name in payload for name in commands) > 1):
+                raise fail("INVALID_INPUT", "Draft input contains unsupported fields")
         if mode == "DRAFT" and any(value != "PAUSED" for value in launch.get("delivery", {}).values()):
             raise fail("INVALID_INPUT", "A Meta draft cannot request active delivery")
         for section in ("campaign", "adset"):
@@ -136,14 +165,40 @@ class AdsManagerLaunch:
         return target, launch, references, _launch_fingerprint(payload, target["page_id"])
 
     def plan(self, *, profile_id, payload):
+        if isinstance(payload, dict) and "publish_saved_draft" in payload:
+            raise fail("INVALID_INPUT", "Draft review cannot request publication")
         target, launch, references, fingerprint = self.prepare(profile_id, payload)
         draft_only = launch.get("execution_mode") == "DRAFT"
+        contracts = self.status()["contracts"]
+        missing_contracts = [name for name, row in contracts.items()
+                             if row.get("active") is not True or row.get("configured") is not True]
+        creative_format = launch["creative"].get("format", "SINGLE")
+        if creative_format not in self.status()["creative_formats"]:
+            missing_contracts.append("CREATIVE_FORMAT_" + str(creative_format))
+        for resource in self.owner._asset_selections(launch, bool(references)):
+            if resource not in self.owner.reads.rows:
+                missing_contracts.append("READ_" + resource.upper())
+        bid_campaign, bid_adset, bidding = native_bidding(launch["campaign"], launch["adset"])
+        bidding_fields = {"bid_strategy", "bid_amount", "is_autobid",
+                          "is_average_price_pacing", "pacing_type"}
+        bidding_representation = {
+            "budget_owner": bidding["budget_level"],
+            "selected": {"campaign_strategy": launch["campaign"].get("bid_strategy"),
+                         "adset_strategy": launch["adset"].get("bid_strategy"),
+                         "adset_bid_amount": launch["adset"].get("bid_amount")},
+            "private_campaign": {key: value for key, value in bid_campaign.items()
+                                 if key in bidding_fields},
+            "private_adset": {key: value for key, value in bid_adset.items()
+                              if key in bidding_fields},
+            "checked_live": False, "editor_state": "EDITOR_UNVERIFIED"}
         return {"configuration_valid": True, "ready": False, "checked_live": False,
+            "editor_state": "EDITOR_UNVERIFIED", "missing_fields": [],
             "objective_representation": {"selected": launch["campaign"].get("objective"),
                 "private_campaign": {key: value for key, value in self.objective_wire.campaign(launch["campaign"]).items()
                     if key in {"objective", "is_odax_campaign_group"}},
                 "editor_state": "EDITOR_UNVERIFIED"},
-            "mutation_posts": 0, "target": target, "creative_format": launch["creative"].get("format", "SINGLE"),
+            "bidding_representation": bidding_representation,
+            "mutation_posts": 0, "target": target, "creative_format": creative_format,
             "delivery": launch.get("delivery", {key: "PAUSED" for key in ("campaign", "adset", "ad")}),
             "steps": [{"stage": stage, "label": label} for stage, label in
                 (("MEDIA", "Медиа рекламы"), ("DRAFT", "Черновик рекламы"),
@@ -152,7 +207,7 @@ class AdsManagerLaunch:
                 if not (draft_only and stage == "PUBLISH")],
             "execution_mode": "DRAFT" if draft_only else "PUBLISH",
             "local_media": references, "media_resolution_required": bool(references),
-            "missing_contracts": [], "protocol": "private_ads_manager_versioned",
+            "missing_contracts": missing_contracts, "protocol": "private_ads_manager_versioned",
             "launch": launch, "launch_fingerprint": fingerprint, "source_revision": SOURCE_REVISION}
 
     async def _preflight(self, client, web, payload, target, *, publication_required=False):
@@ -169,10 +224,13 @@ class AdsManagerLaunch:
             fields.append("ad_account_promotable_objects")
         row = await client.get("/act_" + account, {"fields": fields})
         business = row.get("business") if isinstance(row, dict) else None
+        secondary_id = row.get("account_id") if isinstance(row, dict) else None
         promotable = row.get("ad_account_promotable_objects") if isinstance(row, dict) else None
         pages = promotable.get("promotable_page_ids") if isinstance(promotable, dict) else None
         if (not isinstance(row, dict) or not isinstance(row.get("id"), str)
                 or row["id"].removeprefix("act_") != account
+                or (secondary_id is not None and (not isinstance(secondary_id, str)
+                    or secondary_id.removeprefix("act_") != account))
                 or not isinstance(business, dict) or business.get("id") != target["business_id"]):
             raise fail("ACCOUNT_SCOPE_UNVERIFIED", "Live account read did not confirm the selected Business relation")
         if type(row.get("account_status")) not in {int, str} or str(row["account_status"]) != "1":
@@ -345,8 +403,13 @@ class AdsManagerLaunch:
                                          transport=SimpleNamespace(session=session))
         target, launch, fingerprint, actor, client, media, proof = await self._prepare_live(
             profile_id=profile_id, context=context, session=transport.session, payload=payload)
-        return {"ready": not proof["payment_selection_required"], **target, "launch": launch,
-            "ready_for": launch.get("execution_mode", "PUBLISH"),
+        return {"ready": not proof["payment_selection_required"],
+            "configuration_valid": True, "checked_live": True,
+            "editor_state": "EDITOR_UNVERIFIED", "missing_fields": [], "missing_contracts": [],
+            "api_preflight_ready": proof.get("draft_ready") is True if launch.get("execution_mode") == "DRAFT"
+                else not proof["payment_selection_required"],
+            **target, "launch": launch,
+            "ready_for": launch["execution_mode"],
             "preflight": proof, "protocol": "private_ads_manager_versioned",
             "source_revision": SOURCE_REVISION, "contracts": self.status()["contracts"]}
 

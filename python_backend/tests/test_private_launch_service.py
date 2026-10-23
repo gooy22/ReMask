@@ -645,7 +645,9 @@ class PrivateLaunchTests(unittest.IsolatedAsyncioTestCase):
                     "ad": {"name": "Base ad"},
                 },
                 "override": {
+                    "campaign": {"name": "RK campaign"},
                     "adset": {"targeting": {"age_max": 35}},
+                    "ad": {"name": "RK ad"},
                     "creative": {"message": "RK override"},
                 },
             },
@@ -668,7 +670,9 @@ class PrivateLaunchTests(unittest.IsolatedAsyncioTestCase):
         # Contract placeholders see the exact per-RK targeting object. Replacing
         # targeting must not silently inherit fields from the base account.
         effective = __import__("app.private_launch", fromlist=["_effective_launch_payload"])._effective_launch_payload(payload["launch"])
+        self.assertEqual(effective["campaign"]["name"], "RK campaign")
         self.assertEqual(effective["adset"]["targeting"], {"age_max": 35})
+        self.assertEqual(effective["ad"]["name"], "RK ad")
         self.assertEqual(effective["creative"]["message"], "RK override")
         self.assertEqual(effective["creative"]["name"], "Base creative")
         self.assertEqual(self.web.graphql.await_args_list[1].args[1]["input"]["targeting"], {"age_max": 35})

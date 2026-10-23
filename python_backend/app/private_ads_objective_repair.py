@@ -54,8 +54,12 @@ def _report(level, fragment_id, row):
 async def repair_saved_objective(adapter, *, profile_id, context, session, payload):
     if payload.get('repair_objective') is not True or 'reconcile_only' in payload:
         raise fail('INVALID_INPUT', 'Objective repair must be explicitly selected independently of inspection')
-    target, key, fingerprint, actor, source, draft_id, fragments = await saved_draft_intent(
+    target, key, fingerprint, actor, source, draft_id, fragments, pending = await saved_draft_intent(
         adapter, profile_id=profile_id, context=context, payload=payload)
+    # Diagnostic inspection may inspect a partial prefix; a write-capable
+    # objective correction must retain the complete immutable hierarchy.
+    if pending is not None or draft_id is None or len(fragments) != len(LEVELS):
+        raise fail('RECONCILE_REQUIRED', 'Objective repair requires all saved draft receipts and verified relationships')
     # This is the reviewed controlled attempt, not a generic journal upgrader.
     if source != REVIEWED_SOURCE:
         raise fail('REPAIR_SOURCE_UNREVIEWED', 'Only the reviewed retained sender is eligible for objective repair')

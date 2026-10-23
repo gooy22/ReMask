@@ -148,12 +148,25 @@ def fragment_values_match(rows, expected, *, business_id=None, old_values=None):
     wanted = dict(expected)
     if "acting_business_id" in fields and business_id is not None:
         wanted["acting_business_id"] = business_id
+    def unique_members(pairs):
+        parsed = {}
+        for name, item in pairs:
+            if name in parsed:
+                raise ValueError("Ambiguous duplicate field in saved JSON")
+            parsed[name] = item
+        return parsed
+
+    def reject_constant(_value):
+        raise ValueError("Non-finite saved JSON")
+
     def matches(actual, value):
         if _same(actual, value):
             return True
         if isinstance(actual, str):
             try:
-                return _same(json.loads(actual), value)
+                parsed = json.loads(actual, object_pairs_hook=unique_members,
+                                    parse_constant=reject_constant)
+                return _same(parsed, value)
             except (TypeError, ValueError):
                 pass
         return False

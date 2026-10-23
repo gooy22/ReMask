@@ -164,7 +164,8 @@ const source = fs.readFileSync('railway-python-worker-ui.js', 'utf8');
 // A failed final bundle step must still display locally confirmed CREATE IDs.
 (async()=>{
   const refreshed=[];
-  const local={pythonWorkerRefreshProfile:async profile=>{refreshed.push(profile);return true;}};
+  const local={pythonWorkerRefreshProfile:async profile=>{refreshed.push(profile);return true;},
+    pythonWorkerMapLimit:async(items,limit,worker)=>{for(let i=0;i<items.length;i++)await worker(items[i],i);}};
   vm.createContext(local);
   const begin=source.indexOf('async function pythonWorkerRefreshSuccessfulProfiles(');
   vm.runInContext(source.slice(begin,source.indexOf('\nasync function pythonWorkerStartBusiness',begin)),local);
@@ -174,6 +175,123 @@ const source = fs.readFileSync('railway-python-worker-ui.js', 'utf8');
   ]);
   assert.deepEqual(refreshed,['35','36']);
 })().catch(error=>{console.error(error);process.exitCode=1;});
+// Terminal Job local snapshots should refresh in parallel without overloading PHP.
+(async()=>{
+  let running=0,peak=0;
+  const started=[],completed=[];
+  const local={
+    async pythonWorkerRefreshProfile(profile){
+      started.push(profile);
+      running++;peak=Math.max(peak,running);
+      await new Promise(resolve=>setTimeout(resolve,4));
+      running--;
+      completed.push(profile);
+      return profile!=='2'&&profile!=='4';
+    },
+    async pythonWorkerMapLimit(items,limit,worker){
+      assert.equal(limit,3);
+      let next=0;
+      await Promise.all(Array.from({length:limit},async()=>{
+        while(true){
+          const i=next++;
+          if(i>=items.length)return;
+          await worker(items[i],i);
+        }
+      }));
+    },
+  };
+  vm.createContext(local);
+  const begin=source.indexOf('async function pythonWorkerRefreshSuccessfulProfiles(');
+  vm.runInContext(source.slice(begin,source.indexOf('\nasync function pythonWorkerStartBusiness',begin)),local);
+  const items=['1','2','3','4','5','1'].map(profile_id=>({profile_id,status:'SUCCESS'}));
+  const errors=await local.pythonWorkerRefreshSuccessfulProfiles(items);
+  assert.equal(peak,3,'At most three local snapshots in flight');
+  assert.equal(started.length,5,'Duplicate profile snapshots are coalesced');
+  assert.deepEqual(Array.from(errors),['2','4'],'Failures retain the selection order');
+})().catch(error=>{console.error(error);process.exitCode=1;});
+
+// Terminal Job batches should update multiple profiles with one DOM render.
+(async()=>{
+  const applied=[],timingLogs=[];let redraws=0;
+  const scope={
+    post:value=>value,
+    console:{error(){},info:line=>timingLogs.push(line)},
+    async apiJson(url,payload){
+      if(payload.profile==='3')throw Error('fixture snapshot failed');
+      await new Promise(resolve=>setTimeout(resolve,2));
+      return {snapshot_only:true,profile:{name:payload.profile}};
+    },
+    applySnapshot:data=>{applied.push(data.profile.name);return true;},
+    render(){redraws++;},
+    async pythonWorkerMapLimit(items,limit,worker){
+      let next=0;
+      await Promise.all(Array.from({length:limit},async()=>{
+        while(true){
+          const i=next++;
+          if(i>=items.length)return;
+          await worker(items[i],i);
+        }
+      }));
+    },
+  };
+  vm.createContext(scope);
+  const start=source.indexOf('const pythonWorkerProfileSnapshotReads =');
+  vm.runInContext(source.slice(start,source.indexOf('\nasync function pythonWorkerStartBusiness',start)),scope);
+  const failed=await scope.pythonWorkerRefreshSuccessfulProfiles(
+    ['1','2','3','4','1'].map(profile_id=>({profile_id,status:'SUCCESS'})));
+  assert.deepEqual(Array.from(failed),['3']);
+  assert.deepEqual(applied.sort(),['1','2','4']);
+  assert.equal(redraws,1);
+  assert.equal(timingLogs.length,1);
+  assert.ok(timingLogs[0].startsWith('[ReMask post-job refresh latency] '));
+  const timing=JSON.parse(timingLogs[0].split('] ')[1]);
+  assert.equal(timing.attempted,4);
+  assert.equal(timing.succeeded,3);
+  assert.equal(timing.failed,1);
+  for(const field of ['batch_wall_ms','profile_read_ms_sum','render_ms'])
+    assert.ok(Number.isFinite(timing[field]) && timing[field]>=0);
+  assert.deepEqual(Object.keys(timing).sort(),[
+    'attempted','batch_wall_ms','failed','profile_read_ms_sum','render_ms','succeeded'
+  ].sort(),'Timing logs must contain only allowlisted numeric fields');
+  assert.equal(await scope.pythonWorkerRefreshProfile('1'),true);
+  assert.equal(redraws,2,'A single-profile refresh must still redraw normally');
+})().catch(error=>{console.error(error);process.exitCode=1;});
+
+// Overlapping local refreshes share only an in-flight read; every new completion
+// can read fresh state, and rejected/foreign snapshots cannot report success.
+(async()=>{
+  let calls=0,applied=0,redraws=0,release;
+  const scope={post:value=>value,console:{error(){}},
+    apiJson:async()=>{calls++;return await new Promise(resolve=>{release=resolve;});},
+    applySnapshot:()=>{applied++;return true;},render:()=>{redraws++;}};
+  vm.createContext(scope);
+  const start=source.indexOf('const pythonWorkerProfileSnapshotReads =');
+  vm.runInContext(source.slice(start,source.indexOf('\nasync function pythonWorkerStartBusiness',start)),scope);
+  const first=scope.pythonWorkerRefreshProfile('alpha');
+  const second=scope.pythonWorkerRefreshProfile('alpha');
+  assert.equal(calls,1,'Concurrent reads for the same profile must share one PHP request');
+  release({snapshot_only:true,profile:{name:'alpha'}});
+  assert.deepEqual(await Promise.all([first,second]),[true,true]);
+  assert.equal(applied,1);assert.equal(redraws,1);
+  const fresh=scope.pythonWorkerRefreshProfile('alpha',{render:false});
+  assert.equal(calls,2,'Settled requests must not cache a snapshot across Job completions');
+  release({snapshot_only:true,profile:{name:'alpha'}});assert.equal(await fresh,true);
+  assert.equal(applied,2);assert.equal(redraws,1);
+  for(const data of [{snapshot_only:true,profile:{name:'bravo'}},{profile:{name:'alpha'}}]){
+    const pending=scope.pythonWorkerRefreshProfile('alpha');release(data);
+    assert.equal(await pending,false);
+  }
+  scope.applySnapshot=()=>false;
+  const rejected=scope.pythonWorkerRefreshProfile('alpha');
+  release({snapshot_only:true,profile:{name:'alpha'}});assert.equal(await rejected,false);
+  assert.equal(applied,2);assert.equal(redraws,1);
+  scope.apiJson=async()=>{throw Error('synthetic local read failure');};
+  assert.equal(await scope.pythonWorkerRefreshProfile('alpha'),false);
+  scope.applySnapshot=()=>true;
+  scope.apiJson=async()=>({snapshot_only:true,profile:{name:'alpha'}});
+  assert.equal(await scope.pythonWorkerRefreshProfile('alpha'),true,'A failed read must release the in-flight entry');
+})().catch(error=>{console.error(error);process.exitCode=1;});
+
 // Both BM and RK context menus must expose the same automatic bulk action.
 for(const [tab,label] of [['businesses','Добавить RK'],['ad_accounts','Проверить Assets']]){
   let inserted;

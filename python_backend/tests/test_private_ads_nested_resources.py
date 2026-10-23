@@ -37,8 +37,12 @@ class NestedAudienceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_confirmed_nested_resources_keep_logic_and_are_read_once(self):
         expected = self.configure()
-        inventory = {'data': [{'id': value} for value in ('123451', '123452', '123453')],
-                     'checked_live': True, 'account_scope_verified': True}
+        from time import time
+        inventory = {'data': [{'id': value, 'name': 'Selected audience ' + value}
+                              for value in ('123451', '123452', '123453')],
+                     'account_id': '111111', 'source': 'ads_manager_private_http',
+                     'checked_at': int(time()), 'checked_live': True,
+                     'account_scope_verified': True, 'inventory_complete': True}
         selected = self.owner._asset_selections(self.payload['launch'], True)
         self.assertEqual(set(selected['custom_audiences']), {'123451', '123452', '123453'})
         self.assertEqual(len(selected['custom_audiences']), 3)

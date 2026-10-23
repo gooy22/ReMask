@@ -70,6 +70,86 @@ class ResourceCases(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['data'],[{'id':'777777','name':'Exact employer','type':'work_employers'}])
         self.assertEqual(self.calls[-1][1]['whitelisted_types'],['work_employers'])
 
+    async def test_scoped_interest_pages_keep_all_ids_without_repeating_browse_request(self):
+        rows=[{'id':str(700000+i),'name':'Interest '+str(i),'type':'interests'}
+              for i in range(251)]
+        self.responses['/act_111111/targetingbrowse']={'data':rows}
+        first=await self.catalog.read(self.web,'interests',self.values)
+        second=await self.catalog.read(self.web,'interests',
+            {**self.values,'offset':100})
+        final=await self.catalog.read(self.web,'interests',
+            {**self.values,'offset':200})
+        self.assertEqual(len(first['data']),100)
+        self.assertEqual(first['next_offset'],100)
+        self.assertEqual(second['data'][0]['id'],'700100')
+        self.assertEqual(second['next_offset'],200)
+        self.assertEqual(len(final['data']),51)
+        self.assertIsNone(final['next_offset'])
+        self.assertEqual(final['data'][-1]['id'],'700250')
+        self.assertEqual(sum(path.endswith('/targetingbrowse') for path,_ in self.calls),1,
+            'later pages must reuse one bounded source snapshot, not reload the 20k-node tree')
+        self.assertEqual(sum(path=='/act_111111' for path,_ in self.calls),3,
+            'every page still verifies the exact account independently')
+        self.web.profile.cookies['c_user']='123457'
+        await self.catalog.read(self.web,'interests',{**self.values,'offset':100})
+        self.assertEqual(sum(path.endswith('/targetingbrowse') for path,_ in self.calls),2,
+            'a different actor must not consume the previous actor\'s tree')
+
+    async def test_behavior_tree_uses_the_same_account_scoped_pagination(self):
+        self.responses['/act_111111/targetingbrowse']={'data':[
+            {'id':str(800000+i),'name':'Behavior '+str(i),'type':'behaviors'}
+            for i in range(105)]}
+        first=await self.catalog.read(self.web,'behaviors',self.values)
+        second=await self.catalog.read(self.web,'behaviors',{**self.values,'offset':100})
+        self.assertEqual(first['next_offset'],100)
+        self.assertEqual([row['id'] for row in second['data']],
+                         [str(800100+i) for i in range(5)])
+        self.assertIsNone(second['next_offset'])
+        self.assertEqual(sum(path.endswith('/targetingbrowse') for path,_ in self.calls),1)
+
+    async def test_scoped_interest_offset_validation_rejects_malformed_pages(self):
+        self.responses['/act_111111/targetingbrowse']={'data':[]}
+        for bad in (True,-1,50,20000,'100.0','1e2',None):
+            with self.subTest(offset=bad), self.assertRaises(ProvisioningError) as caught:
+                await self.catalog.read(self.web,'interests',{**self.values,'offset':bad})
+            self.assertIn('INVALID_RESOURCE_OFFSET',caught.exception.code)
+        self.assertFalse(any(path.endswith('/targetingbrowse') for path,_ in self.calls))
+
+    async def test_scoped_resources_reject_conflicting_duplicate_ids(self):
+        path = '/act_111111/customaudiences'
+        first = {'id': '777777', 'name': 'Original audience'}
+        same_id = {'id': '777777', 'name': 'Different audience'}
+        self.responses[path] = {'data': [first, same_id]}
+        with self.assertRaises(ProvisioningError) as caught:
+            await self.catalog.read(self.web, 'custom_audiences', self.values)
+        self.assertIn('RESOURCE_READ_INCOMPLETE', caught.exception.code)
+        self.responses[path] = {'data': [first, dict(first)]}
+        result = await self.catalog.read(self.web, 'custom_audiences', self.values)
+        self.assertEqual(result['data'], [first])
+
+    async def test_malformed_or_rejected_resource_envelopes_never_count_as_complete(self):
+        for resource, path in (
+            ("custom_audiences", "/act_111111/customaudiences"),
+            ("interests", "/act_111111/targetingbrowse"),
+        ):
+            for invalid in ([], None, {"data": [], "error": {}}, {"data": [], "errors": []}):
+                with self.subTest(resource=resource, invalid=invalid):
+                    self.responses[path] = invalid
+                    with self.assertRaises(ProvisioningError) as caught:
+                        await self.catalog.read(self.web, resource, self.values)
+                    self.assertIn("RESOURCE_READ_INCOMPLETE", caught.exception.code)
+
+    async def test_rejected_instagram_media_envelope_is_not_a_successful_empty_inventory(self):
+        self.responses["/act_111111/instagram_accounts"] = {"data": [{
+            "id": "888888", "id_v2": "888889", "has_create_ads_access": True,
+            "is_connected_to_ad_account": True}]}
+        for invalid in ([], {"data": [], "error": {}}, {"data": [], "errors": []}):
+            with self.subTest(invalid=invalid):
+                self.responses["/888889/advertisable_media"] = invalid
+                with self.assertRaises(ProvisioningError) as caught:
+                    await self.catalog.read(self.web, "instagram_media", self.values)
+                self.assertIn("RESOURCE_READ_INCOMPLETE", caught.exception.code)
+
     async def test_readonly_references_do_not_require_publishing_readiness(self):
         self.account['account_status']=2
         self.responses['/act_111111/targetingbrowse']={'data':[{'id':'777777','name':'Exact interest','type':'interests'}]}
@@ -89,6 +169,18 @@ class ResourceCases(unittest.IsolatedAsyncioTestCase):
         await self.catalog.read(self.web, 'pages', self.values)
         self.assertIn('ad_account_promotable_objects', self.calls[0][1]['fields'])
 
+    async def test_account_scope_rejects_conflicting_secondary_account_id(self):
+        self.account['account_id'] = '999999'
+        with self.assertRaises(ProvisioningError) as caught:
+            await self.catalog.read(self.web, 'pages', self.values)
+        self.assertIn('RESOURCE_SCOPE_MISMATCH', caught.exception.code)
+        self.account['account_id'] = '111111'
+        result = await self.catalog.read(self.web, 'pages', self.values)
+        self.assertEqual(result['account_id'], '111111')
+        self.account['account_id'] = 'act_111111'
+        result = await self.catalog.read(self.web, 'pages', self.values)
+        self.assertEqual(result['data'][0]['id'], '555555')
+
     async def test_exact_business_and_nested_promotable_pages_are_required(self):
         result = await self.catalog.pages(self.web, self.values)
         self.assertEqual(result['data'][0]['id'], '555555')
@@ -103,6 +195,57 @@ class ResourceCases(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ProvisioningError):
             await self.catalog.read(self.web, 'pixels', self.values)
         self.assertEqual([path for path, _ in self.calls], ['/act_111111', '/act_111111/adspixels', '/act_111111/adspixels'])
+
+    async def test_invalid_resource_page_limits_fail_before_meta_http(self):
+        for limit in (0, -1, True, False, 1.5, 'NaN', '0', '', None, [], {}):
+            with self.subTest(limit=limit):
+                with self.assertRaises(ProvisioningError) as caught:
+                    await self.catalog.read(self.web, 'custom_audiences', {**self.values, 'limit': limit})
+                self.assertIn('INVALID_RESOURCE_LIMIT', caught.exception.code)
+                self.assertEqual(self.calls, [])
+        self.responses['/act_111111/customaudiences'] = {'data': []}
+        rows = await self.catalog.read(self.web, 'custom_audiences', {**self.values, 'limit': '10'})
+        self.assertEqual(rows['data'], [])
+        self.assertEqual(self.calls[-1][1]['limit'], 10)
+
+    async def test_resource_route_rejects_foreign_account_without_http(self):
+        reader = self.catalog.client(self.web, self.values)
+        with self.assertRaises(ProvisioningError) as caught:
+            await reader.request("INSTAGRAM_MEDIA_READ",
+                                 values={"instagram_id": "888889", "ad_account_id": "999999"})
+        self.assertIn("RESOURCE_SCOPE_MISMATCH", caught.exception.code)
+        self.assertEqual(self.calls, [])
+
+    async def test_missing_account_object_fails_with_scoped_resource_error(self):
+        for missing in (None, [], "not an account"):
+            with self.subTest(missing=missing):
+                self.account = missing
+                with self.assertRaises(ProvisioningError) as caught:
+                    await self.catalog.read(self.web, "pages", self.values)
+                self.assertIn("RESOURCE_READ_INCOMPLETE", caught.exception.code)
+
+    async def test_instagram_media_rejects_foreign_account_actor_and_conflicting_duplicate(self):
+        actors_path = "/act_111111/instagram_accounts"
+        media_path = "/888889/advertisable_media"
+        self.responses[actors_path] = {"data": [{
+            "id": "888888", "id_v2": "888889", "has_create_ads_access": True,
+            "is_connected_to_ad_account": True}]}
+        rows = [
+            [{"id": "777777", "account_id": "999999"}],
+            [{"id": "777777", "instagram_actor_id": "999999"}],
+            [{"id": "777777", "instagram_user_id": "999999"}],
+            [{"id": "777777", "caption": "first"}, {"id": "777777", "caption": "changed"}],
+        ]
+        for selection in rows:
+            with self.subTest(rows=selection):
+                self.responses[media_path] = {"data": selection}
+                with self.assertRaises(ProvisioningError):
+                    await self.catalog.read(self.web, "instagram_media", self.values)
+        self.responses[media_path] = {"data": [{"id": "777777", "caption": "same"},
+                                               {"id": "777777", "caption": "same"}]}
+        confirmed = await self.catalog.read(self.web, "instagram_media", self.values)
+        self.assertEqual(len(confirmed["data"]), 1)
+        self.assertEqual(confirmed["data"][0]["instagram_actor_id"], "888888")
 
     async def test_instagram_media_carries_its_eligible_account_actor(self):
         self.responses['/act_111111/instagram_accounts'] = {'data': [
@@ -156,3 +299,17 @@ class ResourceCases(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(result['data']),601)
         self.assertFalse(result['truncated'])
         self.assertEqual(result['catalog_count'],601)
+
+    async def test_reference_sender_is_read_only_but_owned_asset_sender_is_not(self):
+        from app.private_ads_reads import _ReadClient
+        with patch('app.private_ads_reads.AdsManagerPrivateHttp.open',
+                   new=AsyncMock(return_value=self.client)) as opened:
+            reference = _ReadClient(self.web, self.catalog.catalog, self.values,
+                                    reference_read=True)
+            await reference.account_record(reference=True)
+            self.assertTrue(opened.await_args.kwargs['reference_read'])
+            owned = _ReadClient(self.web, self.catalog.catalog, self.values)
+            await owned.account_record()
+            self.assertFalse(opened.await_args.kwargs['reference_read'])
+        self.assertEqual([call[0] for call in self.calls[-2:]],
+                         ['/act_111111', '/act_111111'])

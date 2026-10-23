@@ -101,6 +101,19 @@ try {
     $reference->put('interests','',array_replace($proof,['data'=>$many]),1000);
     expect($reference->search('interests','Interest 600',1001)['data'][0]['id']==='700600',
         'search finds leaves after the old 500-row cache boundary');
+    $firstPage=$reference->get('interests','',1001,0);
+    $secondPage=$reference->get('interests','',1001,100);
+    $lastPage=$reference->get('interests','',1001,600);
+    expect(count($firstPage['data'])===100 && $firstPage['next_offset']===100
+        && $firstPage['data'][0]['id']==='700000','first catalog page has exact saved IDs');
+    expect(count($secondPage['data'])===100 && $secondPage['next_offset']===200
+        && $secondPage['data'][0]['id']==='700100','second catalog page exposes the next 100 options');
+    expect(count($lastPage['data'])===1 && $lastPage['next_offset']===null
+        && $lastPage['data'][0]['id']==='700600','the last page retains the final saved leaf');
+    $filteredPage=$reference->search('interests','Interest',1001,100);
+    expect($filteredPage['data'][0]['id']==='700100' && $filteredPage['next_offset']===200,
+        'cached query search can page later matching results');
+
     expect($reference->search('interests','Interest 600',1000+86401)['reference_stale']===true,
         'genuine cached labels remain searchable after one day without claiming live eligibility');
     expect($reference->search('interests','Not in the browse tree',1001)===null,
@@ -127,6 +140,14 @@ expect(count(RemaskModuleTargetingReference::search('locales','',$manifest)['dat
 expect(RemaskModuleTargetingReference::search('locales','no such language exists',$manifest)['data']===[],
     'complete language map misses do not fall through to network profiles');
 expect(RemaskModuleTargetingReference::search('locations','Ukraine',$manifest)['data'][0]['key']==='UA','country English alias preserves ISO key');
+$catalogPage1=RemaskModuleTargetingReference::search('locations','',$manifest,0);
+$catalogPage2=RemaskModuleTargetingReference::search('locations','',$manifest,100);
+expect($catalogPage1['next_offset']===100 && count($catalogPage1['data'])===100,
+    'installed Meta region catalog shows its first page');
+expect($catalogPage2['offset']===100 && count($catalogPage2['data'])>0
+    && $catalogPage1['data'][0]['id']!==$catalogPage2['data'][0]['id'],
+    'installed Meta region catalog exposes later entries without profile binding');
+
 expect(RemaskModuleTargetingReference::search('locations','unsupported city query',$manifest)===null,'unknown cities still require live source');
 $seen=[];
 $available=RemaskTemplateTargetingContext::resolve($profiles,static function($name) use (&$seen,$catalogs) {

@@ -14,7 +14,7 @@ import httpx
 from app import runner
 from app.models import CreateJobRequest
 from app.private_http import PrivateHttpClient
-from app.private_http_metrics import begin_operation, end_operation
+from app.private_http_metrics import begin_operation, end_operation, observe_profile_read, measure_phase
 from app.runner import WorkerPool
 from app.store import JobStore
 
@@ -46,6 +46,50 @@ class PrivateHttpMetricsTests(unittest.IsolatedAsyncioTestCase):
             client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler),
                 event_hooks=hooks, trust_env=False)
         return client
+
+    async def test_operation_phase_metrics_are_scoped_allowlisted_and_sanitized(self):
+        with self.assertLogs('remask_worker', level='INFO') as captured:
+            metric, token = begin_operation('fixture', 'sync_profile')
+            try:
+                with measure_phase('resolver'):
+                    await asyncio.sleep(0.001)
+                with measure_phase('account_proof'):
+                    await asyncio.sleep(0)
+                with measure_phase('resolver'):
+                    await asyncio.sleep(0)
+                with measure_phase('SECRET-cookie-or-url'):
+                    await asyncio.sleep(0)
+            finally:
+                end_operation(metric, token, outcome='success')
+        record = json.loads(next(line.split('private_http_operation ', 1)[1]
+            for line in captured.output if 'private_http_operation ' in line))
+        self.assertEqual(record['phase_count'], {'account_proof': 1, 'resolver': 2})
+        self.assertGreater(record['phase_ms']['resolver'], 0)
+        self.assertGreaterEqual(record['phase_ms']['account_proof'], 0)
+        self.assertRegex(record['trace_id'], r'^[0-9a-f]{12}')
+        self.assertNotIn('SECRET', str(captured.output))
+        with measure_phase('resolver'):
+            await asyncio.sleep(0)
+        self.assertEqual(metric.phase_count['resolver'], 2)
+
+    async def test_timing_cannot_modify_a_finished_or_unrelated_operation(self):
+        first, token = begin_operation('one', 'sync_profile')
+        try:
+            with measure_phase('resolver'):
+                second, second_token = begin_operation('two', 'sync_profile')
+                try:
+                    with measure_phase('reference_read'):
+                        await asyncio.sleep(0)
+                finally:
+                    end_operation(second, second_token, outcome='success')
+        finally:
+            end_operation(first, token, outcome='success')
+        self.assertEqual(first.phase_count['resolver'], 1)
+        self.assertNotIn('reference_read', first.phase_count)
+        self.assertEqual(second.phase_count['reference_read'], 1)
+        with measure_phase('resolver'):
+            await asyncio.sleep(0)
+        self.assertEqual(first.phase_count['resolver'], 1)
 
     async def test_real_gzip_stream_counts_encoded_body_separately_from_decoded_delivery(self):
         payload = b'compressible text ' * 1024
@@ -422,6 +466,47 @@ class PrivateHttpMetricsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reports[0]['outcome'],'failed')
         self.assertEqual(reports[0]['request_scopes'],0)
         self.assertNotIn('SECRET',str(captured.output))
+
+
+
+    async def test_direct_reference_metrics_separate_sources_without_exposing_query(self):
+        import main as api
+        for handler in (api.private_advertising_resources, api.private_template_reference):
+            self.assertEqual(inspect.signature(handler), inspect.signature(handler.__wrapped__))
+        client = await self.client(lambda request: httpx.Response(200, stream=Chunks([b'five!'])))
+        @observe_profile_read
+        async def read(*, profile_id, resource=None, query='SECRET query'):
+            async with client.get('https://www.facebook.com/') as response:
+                await response.text()
+            return {'ok': True}
+        with self.assertLogs('remask_worker', level='INFO') as captured:
+            await read(profile_id='fixture', resource='interests')
+            await read(profile_id='fixture', resource='not-a-registered-resource')
+            await read(profile_id='fixture')
+        reports = [json.loads(line.split('private_http_operation ',1)[1])
+                   for line in captured.output if 'private_http_operation ' in line]
+        self.assertEqual([row['operation'] for row in reports],
+                         ['resource_interests', 'resource_other', 'template_reference'])
+        self.assertEqual([row['encoded_response_body_bytes'] for row in reports], [5,5,5])
+        self.assertTrue(all(row['complete'] for row in reports))
+        self.assertNotIn('SECRET query',str(captured.output))
+
+
+    async def test_interactive_resolver_bound_prevents_long_retry_chain(self):
+        import main as api
+        async def unavailable(profile):
+            await asyncio.sleep(360)
+        slow=AsyncMock(side_effect=unavailable)
+        with patch.object(api,'pool',SimpleNamespace(resolver=SimpleNamespace(resolve=slow))):
+            with patch.object(api,'_READ_CONTEXT_BUDGET_SECONDS',0.01):
+                with self.assertRaises(asyncio.TimeoutError):
+                    await api._resolve_read_profile('fixture')
+        self.assertEqual(slow.await_count,1)
+        good=AsyncMock(return_value='verified profile fixture')
+        with patch.object(api,'pool',SimpleNamespace(resolver=SimpleNamespace(resolve=good))):
+            result=await api._resolve_read_profile('fixture')
+        self.assertEqual(result,'verified profile fixture')
+        good.assert_awaited_once_with('fixture')
 
 
 if __name__ == '__main__':

@@ -18,6 +18,35 @@ from app.provisioning.models import ProvisioningError
 from tests import test_private_ads_launch as launch_fixture
 
 
+class MediaBridgeErrorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_media_persistence_rejects_non_object_bridge_response(self):
+        class Response:
+            status = 200
+            def __init__(self, payload): self.payload = payload
+            async def __aenter__(self): return self
+            async def __aexit__(self, *args): return False
+            async def json(self): return self.payload
+
+        class Session:
+            def __init__(self, payload): self.payload = payload
+            async def __aenter__(self): return self
+            async def __aexit__(self, *args): return False
+            def post(self, *args, **kwargs): return Response(self.payload)
+
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / 'safe-media.png'
+            source.write_bytes(b'synthetic local content')
+            resolver = LaunchMediaResolver()
+            resolver.key = 'fixture-bridge-key'
+            for invalid in ([], None, 'not-an-object', 42):
+                with self.subTest(payload=invalid), patch(
+                        'app.private_launch_media.aiohttp.ClientSession',
+                        return_value=Session(invalid)):
+                    with self.assertRaises(ProvisioningError) as caught:
+                        await resolver.persist(source, 'safe-media.png')
+                    self.assertEqual(caught.exception.code, 'MEDIA_LOCAL_PERSIST_FAILED')
+
+
 class MediaInspectionTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

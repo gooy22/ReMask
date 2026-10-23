@@ -27,6 +27,7 @@ from .facebook_docids import (
     upsert_candidate,
 )
 from .private_launch_read import inspect_pages
+from .private_ads_document import _strict_json
 from .static_payment_read import inspect_methods
 from .private_auth import private_auth_error
 from .provisioning.models import ProvisioningError
@@ -695,9 +696,15 @@ class PrivateLaunchStateStore:
 
     async def all_steps(self, launch_key):
         def read():
+            # A single SQLite statement produces one coherent journal snapshot.
+            # Opening a fresh connection for every step could mix pre/post-CAS
+            # states and would amplify contention on an account with many steps.
             with self._connect() as con:
-                names = [row[0] for row in con.execute("SELECT step FROM private_launch_steps WHERE launch_key=?", (launch_key,))]
-            return [self._step_sync(launch_key, name) for name in names]
+                rows = con.execute(
+                    "SELECT * FROM private_launch_steps WHERE launch_key=? ORDER BY step",
+                    (launch_key,),
+                ).fetchall()
+            return [self._decode_step_row(row) for row in rows]
         return await asyncio.to_thread(read)
 
     def _step_sync(self, launch_key: str, step: str) -> dict[str, Any] | None:
@@ -706,17 +713,56 @@ class PrivateLaunchStateStore:
                 "SELECT * FROM private_launch_steps WHERE launch_key=? AND step=?",
                 (launch_key, step),
             ).fetchone()
+        return self._decode_step_row(row)
+
+    @staticmethod
+    def _decode_step_row(row) -> dict[str, Any] | None:
         if row is None:
             return None
         data = dict(row)
         raw = data.pop("result_json", None)
+        corrupt = False
         if raw:
             try:
-                data["result"] = json.loads(str(raw))
-            except (json.JSONDecodeError, TypeError, ValueError):
+                decoded = _strict_json(str(raw))
+                evidence = decoded.get("evidence", {}) if isinstance(decoded, dict) else None
+                if (not isinstance(decoded, dict)
+                        or not isinstance(evidence, dict)
+                        or any(key in evidence and not isinstance(evidence[key], dict)
+                               for key in ("receipt", "verification", "publication",
+                                           "response_error", "binding"))):
+                    # Valid JSON can still be a malformed operation receipt.
+                    # Do not let a nested scalar/list reach callers expecting
+                    # an independently verified evidence object.
+                    corrupt = True
+                    data["result"] = {}
+                else:
+                    data["result"] = decoded
+                    if data.get("status") == "SUCCESS":
+                        # SQLite status and the durable receipt are separate
+                        # sources of state. A parseable but contradictory
+                        # receipt must never be elevated to confirmed success.
+                        if (decoded.get("verified") is not True
+                                or ("status" in decoded and decoded["status"] != "SUCCESS")
+                                or ("entity_id" in decoded and
+                                    str(decoded.get("entity_id") or "") != str(data.get("entity_id") or ""))
+                                or ("verification" in evidence and
+                                    evidence["verification"].get("verified") is not True)):
+                            corrupt = True
+            except (json.JSONDecodeError, TypeError, ValueError, RecursionError):
+                corrupt = True
                 data["result"] = {}
         else:
             data["result"] = {}
+            corrupt = data.get("status") == "SUCCESS"
+        if corrupt:
+            # Never expose a persisted SUCCESS as authoritative when its
+            # independent result evidence cannot be decoded or trusted.
+            # This is a read projection only, not an on-disk rewrite.
+            data["result"] = {}
+            data["status"] = "RECONCILE_REQUIRED"
+            data["entity_id"] = None
+            data["error_code"] = "PRIVATE_LAUNCH_JOURNAL_CORRUPT"
         return data
 
     async def save(
@@ -752,15 +798,18 @@ class PrivateLaunchStateStore:
         return await asyncio.to_thread(self._finish_read_sync, prior, result.as_dict())
 
     def _finish_read_sync(self, prior: dict[str, Any], result: dict[str, Any]) -> bool:
-        encode = lambda value: json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        encode = lambda value: json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
         with self._connect() as con:
             cursor = con.execute("""UPDATE private_launch_steps
                 SET status=?,entity_id=?,result_json=?,error_code=?,submitted=1,updated_at=?
                 WHERE launch_key=? AND step=? AND profile_id=? AND business_id=? AND ad_account_id=?
-                    AND status=? AND entity_id IS ? AND result_json=?""",
+                    AND status=? AND entity_id IS ? AND result_json=?
+                    AND (status != 'SUCCESS'
+                         OR (? = 'SUCCESS' AND ? = 1 AND entity_id IS ?))""",
                 (result["status"], result.get("entity_id") or None, encode(result), result["code"], int(time.time()),
                  prior["launch_key"], prior["step"], prior["profile_id"], prior["business_id"],
-                 prior["ad_account_id"], prior["status"], prior["entity_id"], encode(prior["result"])))
+                 prior["ad_account_id"], prior["status"], prior["entity_id"], encode(prior["result"]),
+                 result["status"], int(result.get("verified") is True), result.get("entity_id") or None))
             return cursor.rowcount == 1
 
     def _save_sync(
@@ -778,7 +827,7 @@ class PrivateLaunchStateStore:
     ) -> None:
         now = int(time.time())
         submitted_db = None if submitted is None else (1 if submitted else 0)
-        encoded = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+        encoded = json.dumps(result, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
         with self._connect() as con:
             # INSERT is the durable ownership claim. Two worker processes can
             # both pass the earlier read/preflight; only one may cross CREATE.
@@ -788,7 +837,21 @@ class PrivateLaunchStateStore:
                     result_json=excluded.result_json,
                     error_code=excluded.error_code,
                     submitted=excluded.submitted,
-                    updated_at=excluded.updated_at"""
+                    updated_at=CASE
+                        WHEN private_launch_steps.status='SUCCESS' THEN private_launch_steps.updated_at
+                        ELSE excluded.updated_at
+                    END
+                WHERE private_launch_steps.profile_id=excluded.profile_id
+                    AND private_launch_steps.business_id=excluded.business_id
+                    AND private_launch_steps.ad_account_id=excluded.ad_account_id
+                    AND (
+                        private_launch_steps.status != 'SUCCESS'
+                        OR (excluded.status = 'SUCCESS'
+                            AND private_launch_steps.entity_id IS excluded.entity_id
+                            AND private_launch_steps.result_json = excluded.result_json
+                            AND private_launch_steps.error_code IS excluded.error_code
+                            AND private_launch_steps.submitted IS excluded.submitted)
+                    )"""
             cursor = con.execute(
                 """
                 INSERT INTO private_launch_steps(
@@ -811,9 +874,12 @@ class PrivateLaunchStateStore:
                     now,
                 ),
             )
-            if status == "SUBMITTING" and cursor.rowcount != 1:
-                raise ProvisioningError("PRIVATE_LAUNCH_RECONCILE_REQUIRED",
-                    f"{step} already has a durable submit claim; concurrent CREATE is blocked", retryable=False)
+            if cursor.rowcount != 1:
+                if status == "SUBMITTING":
+                    raise ProvisioningError("PRIVATE_LAUNCH_RECONCILE_REQUIRED",
+                        f"{step} already has a durable submit claim; concurrent CREATE is blocked", retryable=False)
+                raise ProvisioningError("PRIVATE_LAUNCH_SAVED_OPERATION_MISMATCH",
+                    "A journal step belongs to another target or has an immutable verified result", retryable=False)
 
 
 def _lookup(value: Any, path: str) -> Any:
@@ -1376,12 +1442,27 @@ class PrivateLaunchService:
         checks = {}
         for resource, wanted in selections.items():
             result = await asyncio.wait_for(self.reads.read(web,resource,{"query":"","limit":500,**values}),timeout=65)
+            if (not isinstance(result, dict) or result.get("checked_live") is not True
+                    or result.get("account_scope_verified") is not True
+                    or str(result.get("account_id")) != str(values["ad_account_id"])
+                    or type(result.get("checked_at")) is not int
+                    or not time.time()-120 <= result["checked_at"] <= time.time()+5
+                    or not isinstance(result.get("source"), str) or not result["source"]
+                    or not isinstance(result.get("data"), list)
+                    or result.get("query_required") is True
+                    or result.get("truncated") is True
+                    or result.get("inventory_complete") is False):
+                raise ProvisioningError("PRIVATE_LAUNCH_ASSET_ACCESS_UNCONFIRMED",
+                    "Selected advertising resources require a fresh exact-account read",retryable=False)
             identity_field = "hash" if resource == "images" else "id"
-            found = {str(row.get(identity_field) or "") for row in result["data"]}
-            if not set(wanted) <= found:
+            found = {str(row.get(identity_field) or ""): row for row in result["data"] if isinstance(row, dict)}
+            if len(found) != len(result["data"]) or not set(wanted) <= set(found):
                 raise ProvisioningError("PRIVATE_LAUNCH_ASSET_ACCESS_UNCONFIRMED",
                     "Selected advertising resources are not confirmed for this exact account",retryable=False)
-            checks[resource] = {"verified":True,"selected":wanted,"checked_live":True}
+            checks[resource] = {"verified":True,"selected":wanted,"checked_live":True,
+                "source":result.get("source"),"checked_at":result.get("checked_at"),
+                "selected_details":[{"id":item,"label":str(found[item].get("name") or found[item].get("title") or item)}
+                    for item in wanted]}
         return checks
 
     async def _media_inputs(self, launch):

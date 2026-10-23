@@ -1,7 +1,11 @@
 import copy
+import ast
 import json
 from contextlib import asynccontextmanager
 import os
+from pathlib import Path
+import subprocess
+import sys
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -16,6 +20,37 @@ class Body:
     def __init__(self, payload):self.payload = payload
     async def read(self, size):
         return self.payload
+
+
+class LaunchTransportIsolationTests(unittest.TestCase):
+    def test_launch_import_graph_does_not_load_browser_automation(self):
+        completed = subprocess.run([sys.executable, '-W', 'ignore', '-c',
+            'import sys; import app.private_launch; import app.private_ads_launch; '
+            'assert "app.facebook_business_browser" not in sys.modules'],
+            cwd=Path(__file__).parents[1], env={**os.environ, 'PYTHONDONTWRITEBYTECODE':'1'},
+            capture_output=True, text=True, timeout=30)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_private_launch_transport_modules_have_no_browser_automation_imports(self):
+        root = Path(__file__).parents[1] / 'app'
+        modules = ('private_ads_launch.py', 'private_ads_http.py', 'private_ads_document.py',
+            'private_launch_read.py', 'private_ads_draft.py',
+            'private_ads_state.py', 'private_ads_publication.py', 'private_launch_media.py',
+            'private_ads_media.py', 'private_ads_video.py', 'private_ads_creative.py',
+            'media_preflight.py')
+        for name in modules:
+            source = (root / name).read_text()
+            tree = ast.parse(source, filename=name)
+            imported = []
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    imported.extend(alias.name for alias in node.names)
+                elif isinstance(node, ast.ImportFrom):
+                    imported.append(node.module or '')
+            with self.subTest(module=name):
+                self.assertFalse(any('facebook_business_browser' in item or 'playwright' in item.casefold()
+                                     for item in imported), imported)
+                self.assertNotIn('FacebookBusinessBrowser', source)
 
 
 class Session:
@@ -59,6 +94,33 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         context = context_from_document(body, account_id="111111", business_id="222222", actor_id="123456")
         self.assertEqual(context.application_id, "119211728144504")
         self.assertNotIn("synthetic-session-value", repr(context))
+
+    def test_strict_http_decoder_accepts_bytes_and_rejects_ambiguous_bytes(self):
+        from app.private_ads_http import _strict_response_json
+        self.assertEqual(_strict_response_json(b'{"account_id":"111111"}'),
+                         {'account_id': '111111'})
+        for body in (b'{"id":"111111","id":"999999"}',
+                     b'{"size":1e999}', b'{"size":NaN}'):
+            with self.subTest(body=body), self.assertRaises(ValueError):
+                _strict_response_json(body)
+
+    def test_bootstrap_json_rejects_ambiguous_fields_in_json_and_serverjs(self):
+        from app.private_ads_document import _json_payloads
+        from app.private_ads_http import _ads_document_payloads
+        ambiguous = '{"define":[],"define":[["CurrentUserInitialData",[],{"USER_ID":"999999"}]]}'
+        self.assertEqual(_json_payloads(ambiguous), [])
+        server_js = '<script>requireLazy(["ServerJS"],function(s){s.handle(' + ambiguous + ');});</script>'
+        self.assertEqual(_ads_document_payloads(server_js), [])
+        for invalid in ('{"data":NaN}', '{"data":Infinity}', '{"data":-Infinity}',
+                        '{"data":1e999}', '{"data":-1e999}'):
+            with self.subTest(invalid=invalid):
+                self.assertEqual(_json_payloads(invalid), [])
+
+    def test_nested_encoded_bootstrap_json_with_duplicate_fields_is_not_interpreted(self):
+        from app.private_ads_document import _json_payloads
+        embedded = '{"id":"111111","id":"999999"}'
+        rows = _json_payloads(json.dumps({'data': embedded}))
+        self.assertEqual(rows, [{'data': embedded}])
 
     def test_arbitrary_javascript_wrapper_cannot_initialize_credentials(self):
         body = '<script>untrusted.handle(' + document() + ');</script>'
@@ -116,6 +178,32 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
                 await AdsManagerPrivateHttp.open(self.web,
                     account_id='111111',business_id='222222',actor_id='123456')
             self.assertEqual(calls,['POST'])
+
+    async def test_session_renewal_rejects_duplicate_tokens_and_empty_error_envelopes(self):
+        payload = json.loads(document()); payload['require'] = []
+        async def missing(url, **kwargs):
+            return 200, json.dumps(payload), url
+        self.web.fetch_text = missing
+        async def bootstrap():
+            return SimpleNamespace(actor_id='123456', fb_dtsg='synthetic-csrf')
+        self.web.bootstrap = bootstrap
+        normal = {'payload': {'access_token': 'synthetic-renewed-session',
+                              'client_id': '119211728144504'}}
+        duplicated = ('{"payload":{"access_token":"synthetic-renewed-session",'
+                      '"access_token":"other-session","client_id":"119211728144504"}}')
+        errors = json.dumps({**normal, 'errors': []})
+        for raw in (duplicated, errors):
+            calls = []
+            @asynccontextmanager
+            async def request(method, url, **options):
+                calls.append(method)
+                yield SimpleNamespace(http_version='HTTP/2', status=200,
+                                      content=Body(raw.encode()))
+            self.web.session.request = request
+            with self.subTest(raw=raw), self.assertRaises(ProvisioningError):
+                await AdsManagerPrivateHttp.open(self.web,
+                    account_id='111111', business_id='222222', actor_id='123456')
+            self.assertEqual(calls, ['POST'])
 
     async def test_session_renewal_rejects_wrong_bootstrap_actor_before_post(self):
         payload = json.loads(document());payload['require'] = []
@@ -233,6 +321,62 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
                 'error_subcode':1815753, 'type':'OAuthException', 'is_transient':False})
             self.assertIn('code=100', str(error))
             self.assertNotIn('synthetic-', str(error))
+
+    async def test_http_429_is_classified_without_replaying_or_leaking_response(self):
+        self.web.session.response_status = 429
+        self.web.session.response_body = json.dumps({"error": {
+            "code": 4, "type": "OAuthException", "message": "synthetic-private-secret",
+            "fbtrace_id": "synthetic-private-trace"}}).encode()
+        for method in ("GET", "POST"):
+            with self.subTest(method=method), self.assertRaises(ProvisioningError) as caught:
+                if method == "GET":
+                    await self.client.get("/act_111111", {"fields": ["id"]})
+                else:
+                    await self.client.post("/act_111111/addrafts", {}, before_submit=self.claim)
+            error = caught.exception
+            self.assertEqual(error.code, "PRIVATE_ADS_DRAFT_RATE_LIMITED")
+            self.assertTrue(error.retryable)
+            self.assertEqual(error.diagnostic, {"http_status": 429,
+                "code": 4, "type": "OAuthException"})
+            self.assertNotIn("synthetic-private", str(error))
+        self.assertEqual(self.claims, 1)
+        self.assertEqual([row[0] for row in self.web.session.calls], ["GET", "POST"])
+
+    async def test_empty_error_envelopes_and_unfinished_responses_fail_closed(self):
+        responses = [
+            ({"id":"act_111111", "error":{}}, "PRIVATE_ADS_DRAFT_REQUEST_REJECTED"),
+            ({"id":"act_111111", "errors":[]}, "PRIVATE_ADS_DRAFT_REQUEST_REJECTED"),
+            ({"id":"act_111111", "data":[], "hasNext":True}, "PRIVATE_ADS_DRAFT_RESPONSE_INCOMPLETE"),
+            ({"id":"act_111111", "extensions":{"is_final":False}},
+             "PRIVATE_ADS_DRAFT_RESPONSE_INCOMPLETE"),
+        ]
+        for value, code in responses:
+            with self.subTest(value=value):
+                self.web.session.response_body = json.dumps(value).encode()
+                with self.assertRaises(ProvisioningError) as caught:
+                    await self.client.get("/act_111111", {"fields":["id"]})
+                self.assertEqual(caught.exception.code, code)
+        self.assertEqual(self.claims, 0)
+        self.assertEqual(len(self.web.session.calls), len(responses))
+
+    async def test_ambiguous_or_nonfinite_json_reply_is_never_accepted_as_account_proof(self):
+        bodies = [
+            b'{"id":"act_111111","account_id":"999999","account_id":"111111"}',
+            b'{"id":"act_111111","nested":{"state":1,"state":2}}',
+            b'{"id":"act_111111","estimate":NaN}',
+            b'{"id":"act_111111","estimate":Infinity}',
+            b'{"id":"act_111111","estimate":1e999}',
+            b'{"id":"act_111111","estimate":-1e999}',
+        ]
+        for body in bodies:
+            with self.subTest(body=body):
+                self.web.session.response_body = body
+                with self.assertRaises(ProvisioningError) as caught:
+                    await self.client.get("/act_111111", {"fields": ["id", "account_id"]})
+                self.assertEqual(caught.exception.code, "PRIVATE_ADS_DRAFT_RESPONSE_INVALID")
+                self.assertNotIn(body.decode(), str(caught.exception))
+        self.assertEqual(self.claims, 0)
+        self.assertEqual(len(self.web.session.calls), len(bodies))
 
     async def test_http_rejection_without_json_still_preserves_received_status(self):
         self.web.session.response_status = 403
@@ -531,3 +675,151 @@ class PublishedReads(unittest.IsolatedAsyncioTestCase):
             self.rows["777774"]["object_story_spec"][field] = value
             with self.subTest(field=field), self.assertRaises(ProvisioningError):
                 await verify_published_objects(self.client, self.objects, self.levels)
+
+ 
+class ReadOnlyReferenceBootstrapReuseTests(unittest.IsolatedAsyncioTestCase):
+    """A warm reference search does not replay Ads Manager HTML/CDN downloads."""
+
+    async def asyncSetUp(self):
+        from app.private_ads_http import _REFERENCE_CONTEXT_CACHE
+        _REFERENCE_CONTEXT_CACHE.clear()
+        self.addCleanup(_REFERENCE_CONTEXT_CACHE.clear)
+        self.web = Web()
+        self.web.profile.name = "reference-profile-fixture"
+        self.web.profile.user_agent = "reference-UA"
+        self.web.fetch_text = AsyncMock(wraps=self.web.fetch_text)
+        self.web.refresh_reviewed_modules = AsyncMock()
+
+    async def open_reference(self):
+        return await AdsManagerPrivateHttp.open(self.web, account_id="111111",
+            business_id="222222", actor_id="123456", reference_read=True)
+
+    async def test_two_reference_reads_open_one_document_and_never_refresh_cdn(self):
+        from app.private_ads_catalog import AdsManagerRouteCatalog
+        from app.private_ads_reads import _ReadClient
+        self.web.session.response_body = (b'{"id":"act_111111","account_status":1,'
+            b'"business":{"id":"222222"}}')
+        catalog = AdsManagerRouteCatalog()
+        for _ in range(2):
+            reader = _ReadClient(self.web, catalog,
+                {"ad_account_id":"111111","business_id":"222222"},
+                reference_read=True)
+            row = await reader.account_record(reference=True)
+            self.assertEqual(row["id"], "act_111111")
+            self.assertTrue(reader.http.read_only)
+        self.assertEqual(self.web.fetch_text.await_count, 1)
+        self.assertEqual(len(self.web.session.calls), 2)  # Fresh account proof on EACH read.
+        self.web.refresh_reviewed_modules.assert_not_awaited()
+
+    async def test_parallel_reference_reads_coalesce_html_fetch(self):
+        import asyncio
+        results = await asyncio.gather(*(self.open_reference() for _ in range(8)))
+        self.assertTrue(all(client.read_only for client in results))
+        self.assertEqual(self.web.fetch_text.await_count, 1)
+
+    async def test_cookie_account_and_expired_cache_must_reinitialize(self):
+        from app.private_ads_http import _REFERENCE_CONTEXT_CACHE, _REFERENCE_CONTEXT_TTL_SECONDS
+        await self.open_reference()
+        self.web.profile.cookies["xs"] = "changed"
+        await self.open_reference()
+        self.assertEqual(self.web.fetch_text.await_count, 2)
+        key = next(reversed(_REFERENCE_CONTEXT_CACHE))
+        observed, context, origin = _REFERENCE_CONTEXT_CACHE[key]
+        _REFERENCE_CONTEXT_CACHE[key] = (observed - _REFERENCE_CONTEXT_TTL_SECONDS - 1, context, origin)
+        await self.open_reference()
+        self.assertEqual(self.web.fetch_text.await_count, 3)
+        await AdsManagerPrivateHttp.open(self.web, account_id="333333",
+            business_id="222222", actor_id="123456", reference_read=True)
+        self.assertEqual(self.web.fetch_text.await_count, 4)
+
+    async def test_reference_client_cannot_post_and_launch_open_is_always_fresh(self):
+        client = await self.open_reference()
+        async def claim():
+            self.fail("Reference-only sender must never claim a write")
+        with self.assertRaises(ProvisioningError):
+            await client.post("/act_111111/campaigns", {}, before_submit=claim)
+        self.assertEqual(len(self.web.session.calls), 0)
+        other = await AdsManagerPrivateHttp.open(self.web, account_id="111111",
+            business_id="222222", actor_id="123456")
+        self.assertFalse(other.read_only)
+        self.assertEqual(self.web.fetch_text.await_count, 2)
+        self.assertEqual(self.web.refresh_reviewed_modules.await_count, 1)
+
+    async def test_benchmark_old_vs_reused_reference_traffic_fixture(self):
+        """Controlled encoded-body comparison; NEVER proxy provider billing.
+
+        The legacy path deliberately keeps CDN maintenance disabled here:
+        savings come solely from avoiding repeat Ads Manager document reads.
+        The selected account is still read independently on each iteration.
+        """
+        import gzip
+        import hashlib
+        from app.private_ads_http import _REFERENCE_CONTEXT_CACHE
+
+        # Synthetic document with a large unrelated field. This is not
+        # captured Meta HTML, and its compressed size is not a production
+        # observation. The same payload is used in each scenario.
+        source = json.loads(document())
+        source["synthetic_padding"] = "".join(
+            hashlib.sha256(str(i).encode()).hexdigest() for i in range(1024))
+        page = json.dumps(source, separators=(",", ":"))
+        account = (b'{"id":"act_111111","account_id":"111111",'
+                   b'"business":{"id":"222222"}}')
+        html_wire_fixture_bytes = len(gzip.compress(page.encode(), mtime=0))
+        account_fixture_bytes = len(account)
+
+        async def scenario(*, count, optimized):
+            _REFERENCE_CONTEXT_CACHE.clear()
+            web = Web()
+            web.profile.name = "benchmark-profile"
+            web.profile.user_agent = "fixture-UA"
+            web.session.response_body = account
+            documents = []
+            async def fetch_page(url, **kwargs):
+                documents.append(url)
+                return (200, page, url)
+            web.fetch_text = fetch_page
+            web.refresh_reviewed_modules = AsyncMock()
+            for _ in range(count):
+                if optimized:
+                    client = await AdsManagerPrivateHttp.open(web,
+                        account_id="111111", business_id="222222",
+                        actor_id="123456", reference_read=True)
+                else:
+                    # Same code path as legacy open, without optional CDN work.
+                    client = await AdsManagerPrivateHttp._open_uncached(web,
+                        account_id="111111", business_id="222222",
+                        actor_id="123456", refresh_modules=False)
+                    client.read_only = True
+                result = await client.get("/act_111111",
+                    {"fields":["id","account_id","business"]})
+                self.assertEqual(result["account_id"], "111111")
+                self.assertEqual(result["business"]["id"], "222222")
+            return {
+                "html_gets": len(documents),
+                "account_gets": len(web.session.calls),
+                "fixture_encoded_response_bytes":
+                    len(documents) * html_wire_fixture_bytes
+                    + len(web.session.calls) * account_fixture_bytes,
+                "fixture_decoded_response_bytes":
+                    len(documents) * len(page.encode())
+                    + len(web.session.calls) * account_fixture_bytes,
+                "cdn_refreshes": web.refresh_reviewed_modules.await_count,
+            }
+
+        for count in (2, 5, 10):
+            legacy = await scenario(count=count, optimized=False)
+            reused = await scenario(count=count, optimized=True)
+            self.assertEqual(legacy["html_gets"], count)
+            self.assertEqual(reused["html_gets"], 1)
+            self.assertEqual(legacy["account_gets"], count)
+            self.assertEqual(reused["account_gets"], count)
+            self.assertEqual(legacy["cdn_refreshes"], 0)
+            self.assertEqual(reused["cdn_refreshes"], 0)
+            self.assertLess(reused["fixture_encoded_response_bytes"],
+                            legacy["fixture_encoded_response_bytes"])
+            print("REMASK_TRAFFIC_FIXTURE " + json.dumps({
+                "reads": count, "legacy": legacy, "optimized": reused,
+                "fixture_gzip_doc_bytes": html_wire_fixture_bytes,
+                "scope": "synthetic_gzip_body_only_not_proxy_billing"
+            }, sort_keys=True), flush=True)

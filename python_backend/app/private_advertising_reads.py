@@ -11,6 +11,7 @@ import tempfile
 import time
 
 from .private_launch_extensions import fail, source_evidence
+from .private_ads_document import _strict_json
 
 RESOURCE_FIELDS = {
     "pages": {"id", "name"},
@@ -159,6 +160,8 @@ class AdvertisingResourceStore:
         if name not in RESOURCE_FIELDS:
             raise fail("RESOURCE_UNAVAILABLE", "Unsupported advertising resource")
         scope = {key: values.get(key, "") for key in ("profile_id", "business_id", "ad_account_id", "query", "limit", "execution_mode")}
+        if name in TARGETING_TYPES:
+            scope["offset"] = values.get("offset", 0)
         scope["contract_digest"] = hashlib.sha256(json.dumps(self.catalog.rows.get(name),
             sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         scope["actor_id"] = actor_id
@@ -167,27 +170,61 @@ class AdvertisingResourceStore:
         path = self.root / (key + ".json")
         if not force:
             def cached():
-                if not path.is_file() or path.stat().st_size > 2_000_000:
-                    return None
                 try:
-                    data = json.loads(path.read_text())
+                    # File replacement/deletion can race both is_file and stat.
+                    # A lost cache file is an ordinary cache miss, not a 500.
+                    if not path.is_file() or path.stat().st_size > 2_000_000:
+                        return None
+                    data = _strict_json(path.read_text())
                     return data if data.get("scope") == scope and data.get("resource") == name else None
-                except (OSError, ValueError, AttributeError):
+                except (OSError, ValueError, AttributeError, RecursionError, TypeError):
                     return None
             saved = await asyncio.to_thread(cached)
             if not saved:
                 return {"data": [], "availability": "NOT_LOADED", "checked_live": False,
                         "account_id": values["ad_account_id"], "_cache": {"hit": False, "cached_only": True}}
-            result = saved["result"]
+            result = saved.get("result")
+            if (not isinstance(result, dict) or not isinstance(result.get("data"), list)
+                    or any(not isinstance(item, dict) for item in result["data"])
+                    or type(result.get("checked_at")) is not int
+                    or not 0 < result["checked_at"] <= int(time.time()) + 300
+                    or result.get("account_id") != values["ad_account_id"]
+                    or result.get("checked_live") is not True
+                    or result.get("account_scope_verified") is not True
+                    or result.get("query_required") is True
+                    or result.get("truncated") is True
+                    or result.get("inventory_complete") is False):
+                return {"data": [], "availability": "NOT_LOADED", "checked_live": False,
+                        "account_id": values["ad_account_id"], "_cache": {"hit": False, "cached_only": True}}
             # Do not expose historical permission flags as live proof.
             rows = [{field: value for field, value in item.items() if field != "ad_account_page_access_verified"}
                     for item in result["data"]]
             return {**result, "data": rows, "checked_live": False, "account_scope_verified": False,
+                    "ad_account_page_access_verified": False,
                     "_cache": {"hit": True, "cached_only": True, "fetched_at": result["checked_at"],
                                "stale": time.time() - result["checked_at"] > 1800}}
         if web is None:
             raise fail("HTTP_SESSION_REQUIRED", "Refreshing advertising resources requires the profile HTTP session")
         result = await asyncio.wait_for(self.catalog.read(web, name, values), timeout=65)
+        if (not isinstance(result, dict) or type(result.get("checked_at")) is not int
+                or not 0 < result["checked_at"] <= int(time.time()) + 300):
+            raise fail("RESOURCE_READ_INCOMPLETE", "Resource refresh has no valid collection time")
+        if (not isinstance(result.get("data"), list)
+                or any(not isinstance(item, dict) for item in result["data"]) 
+                or result.get("account_id") != values["ad_account_id"]):
+            raise fail("RESOURCE_SCOPE_MISMATCH", "Resource refresh did not return a complete scoped account result")
+        # Browsing may intentionally return a preview, query-required response,
+        # or a truncated selection. It is not a full confirmed inventory and
+        # must never overwrite an older complete account-scoped cache.
+        complete = (result.get("checked_live") is True
+                    and result.get("account_scope_verified") is True
+                    and result.get("query_required") is not True
+                    and result.get("truncated") is not True
+                    and result.get("inventory_complete") is not False
+                    and not (name in TARGETING_TYPES and values.get("offset", 0)))
+        if not complete:
+            return {**result, "_cache": {"hit": False, "cached_only": False,
+                    "fetched_at": result.get("checked_at"), "stale": True}}
         def save():
             self.root.mkdir(parents=True, exist_ok=True)
             descriptor, temporary = tempfile.mkstemp(dir=self.root, suffix=".tmp")

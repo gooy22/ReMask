@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "source_sha": "d55851e37c7ae6ec3bcd6cf8e746ce1ce940e81a",
+  "checked_live": false,
+  "editor_state": "EDITOR_UNVERIFIED",
+  "field_contract": {
+    "derived": ["budget_owner:campaign when campaign budget is supplied; adset when adset budget is supplied"],
+    "required": ["business_id", "ad_account_id", "page_id", "launch.campaign.name", "launch.campaign.objective", "launch.adset.name", "launch.adset.optimization_goal", "launch.adset.billing_event", "launch.adset.targeting.geo_locations", "launch.ad.name", "launch.creative.name", "launch.creative.message", "launch.creative.link", "launch.creative.format", "one_of:launch.creative.media_library_id,launch.creative.existing_image_hash,launch.creative.existing_video_id,launch.creative.existing_creative_id", "one_of:launch.campaign.daily_budget,launch.campaign.lifetime_budget,launch.adset.daily_budget,launch.adset.lifetime_budget"],
+    "optional": ["launch.adset.destination_type:required_for_objective_contract", "launch.campaign.bid_strategy", "launch.adset.bid_strategy", "launch.adset.bid_amount:required_for_supported_capped_strategy", "launch.adset.targeting.age_min", "launch.adset.targeting.age_max", "launch.adset.targeting.genders", "launch.adset.targeting.locales", "launch.adset.targeting.interests", "launch.adset.targeting.behaviors", "launch.adset.targeting.custom_audiences", "launch.adset.targeting.excluded_custom_audiences", "launch.adset.targeting.flexible_spec", "launch.adset.targeting.exclusions", "launch.adset.targeting.publisher_platforms", "launch.adset.targeting.facebook_positions", "launch.adset.targeting.instagram_positions", "launch.adset.targeting.messenger_positions", "launch.adset.targeting.audience_network_positions", "launch.creative.headline", "launch.creative.description", "launch.creative.call_to_action", "launch.creative.url_tags"],
+    "read_only": ["launch.campaign.id", "launch.adset.id", "launch.ad.id"],
+    "unsupported": ["payment mutation/verification", "publish", "activate", "unreviewed object or targeting fields", "effective_* targeting fields", "arbitrary filesystem paths", "arbitrary media URLs", "foreign or unmanaged media IDs", "unimplemented creative formats"]
+  },
+  "payload": {
+    "business_id": "222222", "ad_account_id": "111111", "page_id": "555555",
+    "launch_key": "fixture-only-single-image-draft",
+    "launch": {
+      "execution_mode": "DRAFT",
+      "campaign": {"name": "Fixture campaign", "objective": "OUTCOME_TRAFFIC", "daily_budget": 2000},
+      "adset": {"name": "Fixture ad set", "optimization_goal": "LINK_CLICKS", "billing_event": "IMPRESSIONS", "destination_type": "WEBSITE", "targeting": {"geo_locations": {"countries": ["UA"]}, "age_min": 23, "age_max": 33}},
+      "ad": {"name": "Fixture ad"},
+      "creative": {"name": "Fixture creative", "message": "Fixture text", "link": "https://example.com/fixture", "headline": "Fixture headline", "format": "SINGLE", "existing_image_hash": "fixtureimagehash1234567890"}
+    }
+  },
+  "expected_request_projection": {
+    "campaign": {"name": "Fixture campaign", "objective": "LINK_CLICKS", "daily_budget": 2000, "status": "PAUSED", "bid_strategy": "LOWEST_COST_WITHOUT_CAP", "is_autobid": true, "is_average_price_pacing": false, "is_odax_campaign_group": true},
+    "ad_set": {"name": "Fixture ad set", "optimization_goal": "LINK_CLICKS", "billing_event": "IMPRESSIONS", "destination_type": "WEBSITE", "targeting": {"geo_locations": {"countries": ["UA"]}, "age_min": 23, "age_max": 33}, "status": "PAUSED"},
+    "ad": {"name": "Fixture ad", "status": "PAUSED", "creative_page_id": "555555", "image_hash": "fixtureimagehash1234567890"}
+  }
+}

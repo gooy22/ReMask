@@ -40,6 +40,7 @@ class TemplateReferenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.helper.await_args.args[2]['business_id'], '222222')
         self.assertEqual(self.helper.await_args.args[2]['ad_account_id'], '111111')
         self.assertTrue(self.discovery.await_args.kwargs['execute_read_queries'])
+        self.assertTrue(self.discovery.await_args.kwargs['fast_sync'])
         self.assertEqual(self.discovery.await_args.kwargs['personal_scope_id'],'999999')
 
     async def test_cached_hint_still_requires_fresh_account_read_and_cookie_change_rediscovers(self):
@@ -60,6 +61,28 @@ class TemplateReferenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.helper.await_args.args[2]['business_id'], '222222')
         self.assertTrue(result['account_scope_verified'])
         self.assertEqual(self.context.ad_accounts, [])
+
+    async def test_discovered_business_hints_avoid_second_business_listing(self):
+        self.discovery.return_value = {
+            'businesses': [], 'discovered_business_ids': ['222222'],
+            'diagnostics': []}
+        self.accounts.return_value = {'ids': ['111111'], 'complete': False}
+        result = await self.read()
+        self.businesses.assert_not_awaited()
+        self.accounts.assert_awaited_once_with(self.web, '222222', '')
+        self.assertTrue(result['account_scope_verified'])
+        self.assertEqual(self.helper.await_count, 1)
+
+    async def test_discovered_business_hints_still_require_fresh_account_proof(self):
+        self.discovery.return_value = {
+            'businesses': [], 'discovered_business_ids': ['222222'],
+            'diagnostics': []}
+        self.accounts.return_value = {'ids': ['111111'], 'complete': False}
+        self.helper.return_value['account_scope_verified'] = False
+        with self.assertRaises(ProvisioningError):
+            await self.read()
+        self.businesses.assert_not_awaited()
+        self.assertEqual(_sources, {})
 
     async def test_native_discovery_never_substitutes_personal_scope_or_invalid_ids(self):
         self.discovery.return_value={'businesses':[]}

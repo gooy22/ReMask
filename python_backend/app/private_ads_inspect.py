@@ -102,9 +102,8 @@ async def saved_draft_intent(adapter, *, profile_id, context, payload):
     await adapter.owner.state.init()
     rows = await adapter.owner.state.all_steps(key)
     saved = {row["step"]: row for row in rows}
-    required = {"ADS_MANAGER:DRAFT", *("ADS_MANAGER:FRAGMENT_" + level.upper() for level in LEVELS)}
-    if not required <= set(saved) or "ADS_MANAGER:PUBLISH" in saved:
-        raise fail("RECONCILE_REQUIRED", "Inspection requires the saved unpublished draft hierarchy; no POST was sent")
+    if "ADS_MANAGER:DRAFT" not in saved or "ADS_MANAGER:PUBLISH" in saved:
+        raise fail("RECONCILE_REQUIRED", "Inspection requires a saved unpublished draft intent; no POST was sent")
     sources = set()
     for row in rows:
         evidence = row.get("result", {}).get("evidence", {})
@@ -115,36 +114,80 @@ async def saved_draft_intent(adapter, *, profile_id, context, payload):
                 or not isinstance(source, str) or not re.fullmatch(r"[a-f0-9]{64}", source)):
             raise fail("SAVED_OPERATION_MISMATCH", "Inspection target, actor or configuration differs from the saved intent")
         sources.add(source)
-    if len(sources) != 1 or not sources <= {adapter.source_digest, *READ_ONLY_DRAFT_PREDECESSORS}:
-        raise fail("SAVED_OPERATION_MISMATCH", "Saved draft sender has not been reviewed for read-only inspection")
-    draft = saved["ADS_MANAGER:DRAFT"].get("result", {}).get("evidence", {}).get("receipt", {})
-    draft_id = identity(draft.get("draft_id"))
+    if len(sources) != 1:
+        raise fail("SAVED_OPERATION_MISMATCH", "Saved draft journal mixes source revisions")
+    # Any single source revision may be INSPECTED, but never resumed for
+    # mutation from this path. Each read rechecks the actor/account/parents/
+    # exact saved fields; only the mutation sender enforces reviewed digests.
+
+    # Inspect a contiguous saved prefix, not only the completed hierarchy.
+    # A lost response has no safe entity handle: report it explicitly instead
+    # of guessing an ID, creating a second draft or hiding earlier progress.
+    operations = [("DRAFT", "draft_id")] + [
+        ("FRAGMENT_" + level.upper(), "fragment_id") for level in LEVELS
+    ]
     fragments = []
-    for level in LEVELS:
-        evidence = saved["ADS_MANAGER:FRAGMENT_" + level.upper()].get("result", {}).get("evidence", {})
-        fragment_id = identity(evidence.get("receipt", {}).get("fragment_id"))
+    draft_id, pending = None, None
+    for index, (operation, handle) in enumerate(operations):
+        name = "ADS_MANAGER:" + operation
+        row = saved.get(name)
+        if row is None:
+            pending = {"stage": operation, "reason": "NOT_SUBMITTED"}
+        else:
+            receipt = row.get("result", {}).get("evidence", {}).get("receipt", {})
+            if not isinstance(receipt, dict) or not receipt.get(handle):
+                pending = {"stage": operation, "reason": "UNKNOWN_REMOTE_RESULT"}
+        if pending:
+            if any("ADS_MANAGER:" + later in saved for later, _ in operations[index + 1:]):
+                raise fail("SAVED_OPERATION_MISMATCH", "Draft journal contains an impossible skipped stage")
+            break
+        identifier = identity(receipt[handle])
+        if operation == "DRAFT":
+            draft_id = identifier
+            continue
+        level = LEVELS[index - 1]
+        evidence = row.get("result", {}).get("evidence", {})
         values = evidence.get("binding", {}).get("values")
         if not isinstance(values, dict) or not values:
             raise fail("RECONCILE_REQUIRED", "A saved fragment has no exact submitted field binding")
         confirmed_object = evidence.get("verification", {}).get("ad_object_id")
         if confirmed_object is not None:
             identity(confirmed_object)
-        fragments.append((level, fragment_id, copy.deepcopy(values), confirmed_object))
-    return target, key, fingerprint, actor, next(iter(sources)), draft_id, fragments
+        fragments.append((level, identifier, copy.deepcopy(values), confirmed_object))
+    return target, key, fingerprint, actor, next(iter(sources)), draft_id, fragments, pending
 
 
 async def inspect_saved_draft(adapter, *, profile_id, context, session, payload):
     if payload.get("reconcile_only") is not True or "repair_objective" in payload:
         raise fail("INVALID_INPUT", "Saved draft inspection must be explicitly read-only")
-    target, key, fingerprint, actor, source, draft_id, fragments = await saved_draft_intent(
+    target, key, fingerprint, actor, source, draft_id, fragments, pending = await saved_draft_intent(
         adapter, profile_id=profile_id, context=context, payload=payload)
+    if draft_id is None:
+        # There is no exact READ handle, so inspection must not even open an
+        # advertising session. The journal's uncertainty is the result.
+        return {"status": "RECONCILE_REQUIRED", "execution_mode": "DRAFT_INSPECT",
+            **target, "launch_key": key, "draft_id": None, "draft_objects": {},
+            "fragment_reads": [], "object_reads": [], "fragment_storage_verified": False,
+            "relationships_confirmed": False, "editor_verified": False, "published": None,
+            "pending_stage": pending, "uninspected_levels": list(LEVELS),
+            "missing_direct_objects": [], "launch_fingerprint_verified": True,
+            "actor_verified": True, "payment_checked_live": False, "mutation_posts": 0,
+            "source": "saved_account_scoped_journal", "recovered_source_digest": source,
+            "source_reviewed_for_mutation": source in {adapter.source_digest, *READ_ONLY_DRAFT_PREDECESSORS}}
     web = await session.facebook_web()
     client = await AdsManagerPrivateHttp.open(web, account_id=target["ad_account_id"],
         business_id=target["business_id"], actor_id=actor)
     client.read_only = True
     account = await client.get("/act_" + target["ad_account_id"], {"fields": ["id", "account_id", "business"]})
-    if (not isinstance(account.get("id"), str) or account["id"].removeprefix("act_") != target["ad_account_id"]
-            or not isinstance(account.get("business"), dict) or account["business"].get("id") != target["business_id"]):
+    secondary_account = account.get("account_id") if isinstance(account, dict) else None
+    if (not isinstance(account, dict) or "error" in account or "errors" in account
+            or not isinstance(account.get("id"), str)
+            or account["id"].removeprefix("act_") != target["ad_account_id"]
+            or (secondary_account is not None and
+                (not isinstance(secondary_account, str) or
+                 secondary_account.removeprefix("act_") != target["ad_account_id"]))
+            or not isinstance(account.get("business"), dict)
+            or account["business"].get("id") != target["business_id"]):
         raise fail("READ_SCOPE_MISMATCH", "Fresh account read did not confirm the saved Business")
     draft = await client.get("/addraft_" + draft_id, {"fields": ["id", "account_id", "author_id", "ownership_type"]})
     adapter_scope(draft, target["ad_account_id"])
@@ -224,17 +267,25 @@ async def inspect_saved_draft(adapter, *, profile_id, context, session, payload)
                     "missing_fields": sorted(set(spec) - set(actual)), "publication_verified": False})
     # The job result persists this evidence. Original mutation receipts and
     # fingerprints remain untouched, even if Meta reports a validation error.
-    return {"status": "SUCCESS", "execution_mode": "DRAFT_INSPECT", **target, "launch_key": key,
+    complete = pending is None and len(fragments) == len(LEVELS)
+    inspected = [row["level"] for row in reads]
+    inspected_objects = inspected + (["creative"] if "ad" in inspected else [])
+    return {"status": "SUCCESS" if complete else "RECONCILE_REQUIRED",
+        "execution_mode": "DRAFT_INSPECT", **target, "launch_key": key,
         "draft_id": draft_id, "draft_objects": objects, "fragment_reads": reads,
-        "fragment_storage_verified": True, "relationships_confirmed": True, "object_reads": object_reads,
-        "missing_direct_objects": [level for level in (*LEVELS, "creative")
+        "fragment_storage_verified": complete, "relationships_confirmed": True,
+        "pending_stage": pending, "uninspected_levels": [level for level in LEVELS if level not in inspected],
+        "object_reads": object_reads,
+        "missing_direct_objects": [level for level in inspected_objects
             if not any(row["level"] == level and row["available"] for row in object_reads)],
         "launch_fingerprint_verified": True, "actor_verified": True,
         "editor_verified": False, "published": None, "payment_checked_live": False,
-        "mutation_posts": 0, "source": "independent_private_ads_http", "recovered_source_digest": source}
+        "mutation_posts": 0, "source": "independent_private_ads_http",
+        "recovered_source_digest": source,
+        "source_reviewed_for_mutation": source in {adapter.source_digest, *READ_ONLY_DRAFT_PREDECESSORS}}
 
 
 def adapter_scope(row, account):
-    if (not isinstance(row, dict) or row.get("error") or row.get("errors")
+    if (not isinstance(row, dict) or "error" in row or "errors" in row
             or not isinstance(row.get("account_id"), str) or row["account_id"].removeprefix("act_") != account):
         raise fail("READ_SCOPE_MISMATCH", "Fresh draft read returned another advertising account")

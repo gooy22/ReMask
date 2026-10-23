@@ -2,7 +2,7 @@ name: Build ReMask recovery image
 
 on:
   push:
-    branches: [main]
+    branches: [main, codex/launch-offline-hardening]
     paths:
       - Dockerfile
       - docker-start.sh
@@ -13,6 +13,10 @@ on:
       - .deploy/**
       - .github/workflows/remask-recovery-image.yml
   workflow_dispatch:
+
+concurrency:
+  group: remask-recovery-image-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -37,6 +41,6 @@ jobs:
           file: ./Dockerfile
           push: true
           tags: |
-            ghcr.io/gooy22/remask:recovery
             ghcr.io/gooy22/remask:${{ github.sha }}
+            ghcr.io/gooy22/remask:${{ github.ref_name == 'main' && 'recovery' || 'recovery-pr' }}
           provenance: false

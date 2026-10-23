@@ -11,8 +11,7 @@ import time
 import asyncio
 from urllib.parse import parse_qs, urlsplit
 
-from .private_inventory import _auth_gate, _json_payloads
-from .page_access_inspection import promotable_pages, response_shape
+from .private_ads_document import _auth_gate, _json_payloads
 from .provisioning.models import ProvisioningError
 
 
@@ -31,6 +30,7 @@ def _final_tree(value):
 async def inspect_pages(web, *, account: str, business_id: str) -> dict:
     # Import validation shared with the static billing catalog.
     from .static_payment_read import _identity
+    from .page_access_inspection import promotable_pages, response_shape
     account, business_id = _identity(account), _identity(business_id)
     web.private_only = True
     url = ("https://adsmanager.facebook.com/adsmanager/manage/campaigns"

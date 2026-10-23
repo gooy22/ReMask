@@ -335,10 +335,17 @@ final class RemaskAdvertisingAssetBridge
         if ($key==='') throw new RuntimeException('ADVERTISING_WORKER_UNAVAILABLE');
         $query=trim((string)($input['q'] ?? ''));
         if (strlen($query)>200) throw new InvalidArgumentException('ADVERTISING_QUERY_TOO_LONG');
+        $rawOffset=(string)($input['offset'] ?? '0');
+        if (!preg_match('/^(0|[1-9][0-9]{0,4})$/D',$rawOffset)
+            || (int)$rawOffset>19900 || (int)$rawOffset%100!==0)
+            throw new InvalidArgumentException('INVALID_TARGETING_OFFSET');
+        $offset=(int)$rawOffset;
+        if ($offset && (!in_array($resource,self::targetingTypes(),true) && !in_array($resource,['interests','behaviors'],true)
+                || $query!=='')) throw new InvalidArgumentException('INVALID_TARGETING_OFFSET');
         if (session_status()===PHP_SESSION_ACTIVE) session_write_close();
         $params=http_build_query(['resource'=>$resource,'account_id'=>$account,'force'=>$force?'true':'false',
-            'query'=>$query,'limit'=>max(1,min(500,(int)($input['limit'] ?? 100))),
-            'execution_mode'=>(string)($input['execution_mode'] ?? 'PUBLISH')],'','&',PHP_QUERY_RFC3986);
+            'query'=>$query,'limit'=>max(1,min(500,(int)($input['limit'] ?? 100))), 'offset'=>$offset,
+            'execution_mode'=>(string)($input['execution_mode'] ?? 'DRAFT')],'','&',PHP_QUERY_RFC3986);
         $context=stream_context_create(['http'=>['method'=>'GET','timeout'=>85,'ignore_errors'=>true,
             'follow_location'=>0,'header'=>"Accept: application/json\r\nX-Remask-Worker-Key: ".$key."\r\n"]]);
         $raw=@file_get_contents($base.'/api/v1/profiles/'.rawurlencode($profile).'/advertising-resources?'.$params,false,$context);
@@ -594,7 +601,6 @@ async function fetchAsset(resource,force=false){
   if(!profile||!accountId)throw new Error('Выберите один РК для загрузки Assets.');
   const account=String(accountId).replace(/^act_/,'');
   const key=`${profile}|${resource}|${account}`;
-  if(force)state.asset.cache.delete(key);
   if(!force&&state.asset.cache.has(key))return state.asset.cache.get(key);
   if(state.asset.inflight.has(key)){
     const existing=state.asset.inflight.get(key);
@@ -608,7 +614,19 @@ async function fetchAsset(resource,force=false){
       account_id:accountId,force:force?'1':'0'})).then(data=>{
     if(data?.profile!==profile||String(data?.account_id||'').replace(/^act_/,'')!==account||data?.resource!==resource)
       throw new Error('Assets получены для другого профиля, РК или типа ресурса.');
-    if(generation===state.asset.generation)state.asset.cache.set(key,data);
+    if(!Array.isArray(data?.data)||data.query_required===true||
+       data.truncated===true||data.inventory_complete===false||
+       (force&&(data.checked_live!==true||data.account_scope_verified!==true)))
+      throw new Error('Assets получены не полностью или не подтверждены для выбранного РК.');
+    // Keep saved preview rows distinct from complete live reads: an incomplete
+    // refresh must never replace the last account-scoped, live-confirmed list.
+    const saved=state.asset.cache.get(key);
+    const savedConfirmed=saved?.checked_live===true&&saved?.account_scope_verified===true&&
+      saved?.query_required!==true&&saved?.truncated!==true&&saved?.inventory_complete!==false;
+    if(generation===state.asset.generation&&(!savedConfirmed||
+       (data.checked_live===true&&data.account_scope_verified===true&&
+        data.query_required!==true&&data.truncated!==true&&data.inventory_complete!==false)))
+      state.asset.cache.set(key,data);
     return data;
   }).finally(()=>{if(state.asset.inflight.get(key)===pending)state.asset.inflight.delete(key);});
   pending.remaskPrivateForce=force===true;

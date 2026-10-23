@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import re
 import time
 
 from .private_ads_draft import fail, identity
@@ -13,12 +14,23 @@ PIXEL_READ = {"edge": "adspixels", "fields": ["id", "name", "is_unavailable"],
 
 async def read_pixels(client, *, query="", limit=500):
     """Never follow credential-bearing next URLs; keep the exact account route."""
+    if type(limit) is int:
+        selected_limit = limit
+    elif isinstance(limit, str) and re.fullmatch(r"[0-9]{1,9}", limit):
+        selected_limit = int(limit)
+    else:
+        raise fail("INVALID_RESOURCE_LIMIT", "Pixel row limit must be a positive integer")
+    if selected_limit < 1 or not isinstance(query, str) or len(query) > 256:
+        raise fail("INVALID_RESOURCE_LIMIT", "Pixel query or row limit is invalid")
+    limit = min(500, selected_limit)
     rows, cursors, seen = [], set(), {}
     params = {"fields": PIXEL_READ["fields"], "limit": PIXEL_READ["limit"]}
     path = "/act_" + identity(client.context.account_id) + "/adspixels"
     for _ in range(5):
         response = await client.get(path, params)
-        items = response.get("data") if isinstance(response, dict) and not (response.get("error") or response.get("errors")) else None
+        # An empty error envelope is still a failed response; truthiness does
+        # not prove the HTTP body was a successful resource inventory.
+        items = response.get("data") if isinstance(response, dict) and "error" not in response and "errors" not in response else None
         if not isinstance(items, list) or len(items) > 500:
             raise fail("RESOURCE_READ_INCOMPLETE", "Account pixel rows are incomplete", True)
         for row in items:
@@ -77,6 +89,8 @@ class AdsManagerResourceCatalog:
         row = await client.get("/act_" + client.context.account_id, {"fields": ["id", "account_id", "business"]})
         if (not isinstance(row, dict) or row.get("id") not in
                 {client.context.account_id, "act_" + client.context.account_id}
+                or ("account_id" in row and (not isinstance(row["account_id"], str)
+                    or row["account_id"].removeprefix("act_") != client.context.account_id))
                 or not isinstance(row.get("business"), dict)
                 or row["business"].get("id") != client.context.business_id):
             raise fail("RESOURCE_SCOPE_MISMATCH", "Pixel read did not confirm the selected account/Business")

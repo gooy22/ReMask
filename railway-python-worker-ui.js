@@ -1479,30 +1479,46 @@ function pythonWorkerBmRowConfig(dialog, profiles, fallbackName) {
   return result;
 }
 
-async function pythonWorkerRefreshProfile(profileId) {
+const pythonWorkerProfileSnapshotReads = new Map();
+
+async function pythonWorkerRefreshProfile(profileId, options) {
   if (typeof apiJson !== 'function' || typeof post !== 'function') {
     return false;
   }
+  const profile = String(profileId || '').trim();
+  if (!profile || typeof applySnapshot !== 'function') return false;
 
   // REMASK_POST_JOB_LOCAL_REFRESH_V1
   // Successful FP/BM/RK jobs already persist the exact confirmed IDs in ReMask.
   // Refresh Workspace from local state; never hit Facebook again just to render
   // the object that the worker itself has just confirmed.
+  let read = pythonWorkerProfileSnapshotReads.get(profile);
+  if (!read) {
+    read = {rendered: false};
+    read.pending = (async function() {
+      try {
+        const data = await apiJson('ajax/metaHierarchy.php', post({
+          action: 'snapshot_profile', profile: profile
+        }));
+        const returnedProfile = String(data?.profile?.name || data?.profile?.profile || data?.profile_name || '').trim();
+        if (data?.snapshot_only !== true || returnedProfile !== profile) return false;
+        return applySnapshot(data) === true;
+      } catch (error) {
+        console.error('[ReMask Worker UI] snapshot_profile failed for ' + profile + ':', error);
+        return false;
+      }
+    })();
+    pythonWorkerProfileSnapshotReads.set(profile, read);
+  }
   try {
-    const data = await apiJson(
-      'ajax/metaHierarchy.php',
-      post({
-        action: 'snapshot_profile',
-        profile: profileId
-      })
-    );
-
-    if (typeof applySnapshot === 'function') applySnapshot(data);
-    if (typeof render === 'function') render();
-    return true;
-  } catch (error) {
-    console.error('[ReMask Worker UI] snapshot_profile failed for ' + profileId + ':', error);
-    return false;
+    const applied = await read.pending;
+    if (applied && !read.rendered && typeof render === 'function' && (!options || options.render !== false)) {
+      read.rendered = true;
+      render();
+    }
+    return applied;
+  } finally {
+    if (pythonWorkerProfileSnapshotReads.get(profile) === read) pythonWorkerProfileSnapshotReads.delete(profile);
   }
 }
 
@@ -1520,14 +1536,43 @@ async function pythonWorkerRefreshSuccessfulProfiles(items) {
       .filter(Boolean)
   ));
 
-  const unconfirmed = [];
+  // REMASK_POST_JOB_BOUNDED_LOCAL_REFRESH_V1
+  // These requests only read saved local snapshots, never Meta. Fetch
+  // independent profiles concurrently, but cap PHP load and preserve the
+  // original profile ordering for any failed-refresh diagnostics.
+  const timingStart = Date.now();
+  let profileReadMs = 0;
+  let successful = 0;
+  const unconfirmed = new Array(profiles.length);
+  await pythonWorkerMapLimit(profiles, 3, async function(profileId, index) {
+    const readStarted = Date.now();
+    const ok = await pythonWorkerRefreshProfile(profileId, {render: false});
+    profileReadMs += Math.max(0, Date.now() - readStarted);
+    if (!ok) unconfirmed[index] = profileId;
+    else successful++;
+  });
+  // State application is synchronous; one final render avoids a full
+  // Workspace redraw after each independently returned local snapshot.
+  const renderStarted = Date.now();
+  if (successful > 0 && typeof render === 'function') render();
+  const renderMs = Math.max(0, Date.now() - renderStarted);
 
-  for (const profileId of profiles) {
-    const ok = await pythonWorkerRefreshProfile(profileId);
-    if (!ok) unconfirmed.push(profileId);
-  }
-
-  return unconfirmed;
+  // REMASK_POST_JOB_REFRESH_TIMING_V1
+  // Numeric-only diagnostic: no profile IDs, URL, response, or task details.
+  // Sum of overlapping reads can exceed batch wall time by design.
+  try {
+    if (typeof console !== 'undefined' && typeof console.info === 'function') {
+      console.info('[ReMask post-job refresh latency] ' + JSON.stringify({
+        batch_wall_ms: Math.max(0, Date.now() - timingStart),
+        profile_read_ms_sum: profileReadMs,
+        render_ms: renderMs,
+        attempted: profiles.length,
+        succeeded: successful,
+        failed: profiles.length - successful
+      }));
+    }
+  } catch (_) { /* Logging must not affect completed Job outcome. */ }
+  return unconfirmed.filter(Boolean);
 }
 
 async function pythonWorkerStartBusiness(bmName, options) {

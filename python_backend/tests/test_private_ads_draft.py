@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import asyncio
 import json
 from pathlib import Path
 import tempfile
@@ -11,7 +12,9 @@ from unittest.mock import AsyncMock, patch
 from app.private_ads_draft import fragment_params, fragment_values_match, flatten_params, publication_receipt, publication_status, publish_params
 from app.private_ads_http import context_from_document, AdsManagerResponseError
 from app.private_ads_state import AdsManagerSubmitter
+from app.action_result import ActionResult
 from app.private_ads_publication import AdsManagerDraftPublisher
+from app.private_ads_verify import _scope as object_read_scope
 from app.private_launch_extensions import OperationKey
 from app.private_launch import PrivateLaunchStateStore
 from app.provisioning.models import ProvisioningError
@@ -109,11 +112,31 @@ class WireTests(unittest.TestCase):
         rows[-1]["new_value"] = 0
         self.assertFalse(fragment_values_match(rows, expected))
 
+    def test_saved_fragment_json_rejects_ambiguous_duplicate_keys(self):
+        desired = {'targeting': {'age_min': 23, 'age_max': 33}}
+        row = {'field': 'targeting', 'old_value': None,
+               'new_value': '{"age_min":23,"age_max":33}'}
+        self.assertTrue(fragment_values_match([row], desired))
+        for bad in ('{"age_min":23,"age_min":23,"age_max":33}',
+                    '{"age_min":23,"age_max":33,"extra":NaN}',
+                    '{"age_min":23,"age_max":33,"extra":Infinity}'):
+            with self.subTest(bad=bad):
+                self.assertFalse(fragment_values_match([{**row, 'new_value': bad}], desired))
+
     def test_raw_fragment_status_array_is_verified_without_ui_cache_wrapper(self):
         row = completed()
         row['data'][0]['fragment_statuses'] = row['data'][0]['fragment_statuses']['data']
         self.assertTrue(publication_status(row, operation_id='789012',
             fragment_ids=['111111', '222222', '333333'])['completed'])
+
+    def test_independent_object_scope_rejects_empty_error_envelopes(self):
+        record = {'id': '777771', 'account_id': '111111'}
+        object_read_scope(record, '111111', '777771')
+        for envelope in ({'error': {}}, {'errors': []}, {'error': None}):
+            with self.subTest(envelope=envelope):
+                with self.assertRaises(ProvisioningError) as caught:
+                    object_read_scope({**record, **envelope}, '111111', '777771')
+                self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_OBJECT_ID_MISMATCH')
 
     def test_async_handle_does_not_override_explicit_publication_rejection(self):
         for value in ({'success': False, 'async_request_set_id': '789012'}, {'async_request_set_id': '789012'}):
@@ -130,6 +153,177 @@ class JournalTests(unittest.IsolatedAsyncioTestCase):
         self.sender = AdsManagerSubmitter(self.state, launch_key="launch", profile_id="19",
             business_id="222222", account_id="111111", actor_id="123456", launch_fingerprint="fixed-inputs", source_digest="source")
 
+    async def test_nonfinite_journal_evidence_is_rejected_before_sqlite_write(self):
+        key = OperationKey("ADS_MANAGER:DRAFT")
+        args = {"launch_key": "launch", "profile_id": "19",
+                "business_id": "222222", "ad_account_id": "111111",
+                "step": key, "status": "SUBMITTING"}
+        for invalid in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(value=str(invalid)), self.assertRaises(ValueError):
+                await self.state.save(**args, result={"evidence": {"value": invalid}})
+            self.assertIsNone(await self.state.step("launch", key))
+
+        await self.state.save(**args, result={"evidence": {"verified": False}})
+        prior = await self.state.step("launch", key)
+        malformed = ActionResult.reconcile(key.value, code="SYNTHETIC_INVALID_READ",
+                                           message="Synthetic invalid journal result",
+                                           evidence={"value": float("inf")})
+        with self.assertRaises(ValueError):
+            await self.state.finish_read(prior, malformed)
+        self.assertEqual(await self.state.step("launch", key), prior)
+
+    async def test_journal_update_cannot_cross_profile_business_or_account_scope(self):
+        key = OperationKey("ADS_MANAGER:DRAFT")
+        args = {"launch_key": "launch", "profile_id": "19",
+                "business_id": "222222", "ad_account_id": "111111",
+                "step": key, "status": "RECONCILE_REQUIRED",
+                "result": {"evidence": {"owner": "19"}}}
+        await self.state.save(**args)
+        original = await self.state.step("launch", key)
+        for field, foreign in (("profile_id", "20"), ("business_id", "999999"),
+                               ("ad_account_id", "888888")):
+            with self.subTest(field=field):
+                with self.assertRaises(ProvisioningError) as rejected:
+                    await self.state.save(**{**args, field: foreign,
+                                            "status": "SUCCESS",
+                                            "result": {"verified": True}})
+                self.assertEqual(rejected.exception.code,
+                                 "PRIVATE_LAUNCH_SAVED_OPERATION_MISMATCH")
+                self.assertEqual(await self.state.step("launch", key), original)
+
+        await self.state.save(**{**args, "status": "SUCCESS",
+                                 "result": {"verified": True, "evidence": {"owner": "19", "verified": True}}})
+        updated = await self.state.step("launch", key)
+        self.assertEqual(updated["status"], "SUCCESS")
+        self.assertEqual(updated["result"]["evidence"]["owner"], "19")
+
+    async def test_successful_journal_proof_cannot_be_overwritten_by_a_stale_same_account_writer(self):
+        key = OperationKey("ADS_MANAGER:DRAFT")
+        args = {"launch_key": "launch", "profile_id": "19",
+                "business_id": "222222", "ad_account_id": "111111", "step": key}
+        verified = {"verified": True, "evidence": {"proof": "independent-read"}}
+        await self.state.save(**args, status="SUCCESS", entity_id="333333",
+                              result=verified, error_code="VERIFIED", submitted=True)
+        original = await self.state.step("launch", key)
+        stale = [
+            {"status": "RECONCILE_REQUIRED", "entity_id": "333333",
+             "result": {"verified": False}, "error_code": "READ_UNAVAILABLE", "submitted": True},
+            {"status": "BLOCKED", "entity_id": "333333",
+             "result": {"verified": False}, "error_code": "BLOCKED", "submitted": True},
+            {"status": "SUCCESS", "entity_id": "444444",
+             "result": verified, "error_code": "VERIFIED", "submitted": True},
+            {"status": "SUCCESS", "entity_id": "333333",
+             "result": {"verified": True, "evidence": {"proof": "untrusted"}},
+             "error_code": "VERIFIED", "submitted": True},
+            {"status": "SUCCESS", "entity_id": "333333",
+             "result": verified, "error_code": "VERIFIED", "submitted": False},
+            {"status": "SUCCESS", "entity_id": "333333",
+             "result": verified, "error_code": "SPOOFED", "submitted": True},
+        ]
+        for incoming in stale:
+            with self.subTest(incoming=incoming), self.assertRaises(ProvisioningError) as rejected:
+                await self.state.save(**args, **incoming)
+            self.assertEqual(rejected.exception.code, "PRIVATE_LAUNCH_SAVED_OPERATION_MISMATCH")
+            self.assertEqual(await self.state.step("launch", key), original)
+
+        # Exact idempotent evidence is safe to accept; no new POST is involved.
+        await self.state.save(**args, status="SUCCESS", entity_id="333333",
+                              result=verified, error_code="VERIFIED", submitted=True)
+        self.assertEqual(await self.state.step("launch", key), original)
+
+    async def test_journal_list_is_one_account_scoped_snapshot_even_with_corrupt_step(self):
+        first, second = OperationKey("ADS_MANAGER:DRAFT"), OperationKey("ADS_MANAGER:FRAGMENT_AD")
+        args = {"profile_id": "19", "business_id": "222222", "ad_account_id": "111111"}
+        await self.state.save(**args, launch_key="launch", step=first,
+                              status="SUCCESS", entity_id="333333",
+                              result={"verified": True, "evidence": {"proof": "known"}},
+                              error_code="CONFIRMED", submitted=True)
+        await self.state.save(**args, launch_key="launch", step=second,
+                              status="SUBMITTING", result={"verified": False}, submitted=None)
+        await self.state.save(**args, launch_key="other", step=first,
+                              status="SUBMITTING", result={"verified": False}, submitted=None)
+        with self.state._connect() as con:
+            con.execute("UPDATE private_launch_steps SET result_json=? WHERE launch_key=? AND step=?",
+                        ('{"verified":true,"verified":false}', "launch", first.value))
+
+        connections = []
+        connect = self.state._connect
+        def counted_connect():
+            connections.append(True)
+            return connect()
+        with patch.object(self.state, "_connect", side_effect=counted_connect):
+            rows = await self.state.all_steps("launch")
+        self.assertEqual(len(connections), 1)
+        self.assertEqual([row["step"] for row in rows], [first.value, second.value])
+        self.assertEqual(rows[0]["status"], "RECONCILE_REQUIRED")
+        self.assertEqual(rows[0]["error_code"], "PRIVATE_LAUNCH_JOURNAL_CORRUPT")
+        self.assertIsNone(rows[0]["entity_id"])
+        self.assertEqual(rows[1]["status"], "SUBMITTING")
+        self.assertEqual(len(await self.state.all_steps("other")), 1)
+
+    async def test_parseable_but_contradictory_success_cannot_be_trusted(self):
+        key = OperationKey("ADS_MANAGER:DRAFT")
+        args = {"launch_key": "launch", "profile_id": "19",
+                "business_id": "222222", "ad_account_id": "111111",
+                "step": key, "status": "SUCCESS", "entity_id": "333333",
+                "result": {"verified": True, "evidence": {}}, "submitted": True}
+        await self.state.save(**args)
+        with self.state._connect() as con:
+            original = con.execute("SELECT result_json FROM private_launch_steps WHERE launch_key=? AND step=?",
+                                   ("launch", key.value)).fetchone()[0]
+        cases = [
+            {"verified": False, "evidence": {}},
+            {"evidence": {}},
+            {"verified": True, "status": "RECONCILE_REQUIRED", "evidence": {}},
+            {"verified": True, "entity_id": "999999", "evidence": {}},
+            {"verified": True, "evidence": {"verification": {"verified": False}}},
+        ]
+        for payload in cases:
+            with self.subTest(payload=payload):
+                with self.state._connect() as con:
+                    con.execute("UPDATE private_launch_steps SET result_json=? WHERE launch_key=? AND step=?",
+                                (json.dumps(payload), "launch", key.value))
+                row = await self.state.step("launch", key)
+                self.assertEqual(row["status"], "RECONCILE_REQUIRED")
+                self.assertEqual(row["error_code"], "PRIVATE_LAUNCH_JOURNAL_CORRUPT")
+                self.assertIsNone(row["entity_id"])
+                self.assertEqual(row["result"], {})
+        with self.state._connect() as con:
+            con.execute("UPDATE private_launch_steps SET result_json=? WHERE launch_key=? AND step=?",
+                        (original, "launch", key.value))
+        self.assertEqual((await self.state.step("launch", key))["status"], "SUCCESS")
+
+    async def test_late_read_cannot_downgrade_or_change_confirmed_success(self):
+        key = OperationKey("ADS_MANAGER:PUBLISH")
+        args = {"launch_key": "launch", "profile_id": "19",
+                "business_id": "222222", "ad_account_id": "111111", "step": key}
+        initial = ActionResult.success(key.value, entity_id="333333", code="READ_CONFIRMED",
+                                       evidence={"verification": {"verified": True}})
+        await self.state.save(**args, status="SUCCESS", entity_id="333333",
+                              result=initial.as_dict(), error_code=initial.code, submitted=True)
+        original = await self.state.step("launch", key)
+
+        pending = ActionResult.reconcile(key.value, code="READ_PENDING",
+                                         message="A stale read returned no proof", submitted=True)
+        pending.entity_id = "333333"
+        self.assertFalse(await self.state.finish_read(original, pending))
+        self.assertEqual(await self.state.step("launch", key), original)
+
+        changed_identity = ActionResult.success(key.value, entity_id="444444",
+                                                code="READ_CONFIRMED", evidence={})
+        self.assertFalse(await self.state.finish_read(original, changed_identity))
+        self.assertEqual(await self.state.step("launch", key), original)
+
+        renewed = ActionResult.success(key.value, entity_id="333333",
+                                       code="READ_CONFIRMED",
+                                       evidence={"verification": {"verified": True, "fresh": True}})
+        self.assertTrue(await self.state.finish_read(original, renewed))
+        newest = await self.state.step("launch", key)
+        self.assertEqual(newest["status"], "SUCCESS")
+        self.assertEqual(newest["entity_id"], "333333")
+        self.assertTrue(newest["result"]["evidence"]["verification"]["fresh"])
+        self.assertFalse(await self.state.finish_read(original, renewed))
+
     async def test_lost_reply_never_replays(self):
         class Client:
             count = 0
@@ -141,6 +335,40 @@ class JournalTests(unittest.IsolatedAsyncioTestCase):
                 await self.sender.submit(client, operation="DRAFT", path="/act_111111/addrafts",
                     params={"name": "test"}, receipt=lambda row: {"draft_id": row["id"]})
         self.assertEqual(client.count, 1)
+
+    async def test_concurrent_workers_claim_before_dispatch_and_only_one_post_wins(self):
+        class Client:
+            def __init__(inner):
+                inner.dispatches = 0
+                inner.barrier = asyncio.Event()
+                inner.arrivals = 0
+
+            async def post(inner, path, params, *, before_submit, files):
+                inner.arrivals += 1
+                if inner.arrivals == 2:
+                    inner.barrier.set()
+                await inner.barrier.wait()
+                await before_submit()
+                inner.dispatches += 1
+                return {"id": "333333"}
+
+        client = Client()
+        senders = [AdsManagerSubmitter(self.state, launch_key="launch", profile_id="19",
+            business_id="222222", account_id="111111", actor_id="123456",
+            launch_fingerprint="fixed-inputs", source_digest="source") for _ in range(2)]
+        async def submit(sender):
+            try:
+                return await sender.submit(client, operation="DRAFT", path="/act_111111/addrafts",
+                    params={"name": "test"}, receipt=lambda row: {"draft_id": row["id"]})
+            except ProvisioningError as exc:
+                return exc.code
+        results = await asyncio.gather(*(submit(sender) for sender in senders))
+        self.assertEqual(client.dispatches, 1)
+        self.assertEqual(sum(isinstance(value, dict) for value in results), 1)
+        self.assertEqual(sum(value == "PRIVATE_LAUNCH_RECONCILE_REQUIRED" for value in results), 1)
+        rows = await self.state.all_steps("launch")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["status"], "RECONCILE_REQUIRED")
 
     async def test_saved_receipt_survives_reopen_without_second_post(self):
         class Client:
@@ -157,6 +385,68 @@ class JournalTests(unittest.IsolatedAsyncioTestCase):
         rows = await self.state.all_steps("launch")
         self.assertEqual(rows[0]["status"], "RECONCILE_REQUIRED")
         self.assertFalse(rows[0]["result"]["verified"])
+
+    async def test_corrupted_success_evidence_cannot_reappear_as_verified_state(self):
+        key = OperationKey("ADS_MANAGER:DRAFT")
+        await self.state.save(launch_key="launch", profile_id="19",
+            business_id="222222", ad_account_id="111111", step=key,
+            status="SUCCESS", entity_id="333333",
+            result={"verified": True, "evidence": {"proof": "synthetic"}})
+        with self.state._connect() as con:
+            con.execute("UPDATE private_launch_steps SET result_json=? WHERE launch_key=? AND step=?",
+                        ('{"verified":true,"verified":false}', "launch", key.value))
+        projected = await self.state.step("launch", key)
+        self.assertEqual(projected["status"], "RECONCILE_REQUIRED")
+        self.assertEqual(projected["error_code"], "PRIVATE_LAUNCH_JOURNAL_CORRUPT")
+        self.assertIsNone(projected["entity_id"])
+        self.assertEqual(projected["result"], {})
+        rows = await self.state.all_steps("launch")
+        self.assertEqual(rows[0], projected)
+        with self.state._connect() as con:
+            stored = con.execute(
+                "SELECT status,entity_id FROM private_launch_steps WHERE launch_key=? AND step=?",
+                ("launch", key.value)).fetchone()
+        self.assertEqual(tuple(stored), ("SUCCESS", "333333"),
+                         "The journal must not be silently rewritten on read")
+
+    async def test_corrupt_journal_never_restores_a_saved_receipt_or_replays(self):
+        class Client:
+            count = 0
+            async def post(inner, path, params, *, before_submit, files):
+                inner.count += 1
+                await before_submit()
+                return {"id": "333333"}
+
+        client = Client()
+        kwargs = {"operation": "DRAFT", "path": "/act_111111/addrafts",
+                  "params": {"name": "test"},
+                  "receipt": lambda row: {"draft_id": row["id"]}}
+        self.assertEqual((await self.sender.submit(client, **kwargs))["draft_id"], "333333")
+        with self.state._connect() as con:
+            original = con.execute(
+                "SELECT result_json FROM private_launch_steps WHERE launch_key=? AND step=?",
+                ("launch", "ADS_MANAGER:DRAFT")).fetchone()[0]
+        self.assertIn('"status":', original)
+        for malformed in ('{"status":"SUCCESS",' + original[1:],
+                          '{"untrusted_float":1e999,' + original[1:],
+                          '{"untrusted_number":NaN,' + original[1:],
+                          '[]', 'null', '1', '"scalar"',
+                          '{"evidence":[]}', '{"evidence":null}',
+                          '{"evidence":{"receipt":[]}}',
+                          '{"evidence":{"verification":false}}',
+                          '{"evidence":{"publication":null}}',
+                          '{"evidence":{"binding":"invalid"}}',
+                          '[' * 1100 + '0' + ']' * 1100):
+            with self.subTest(malformed=malformed[:35]):
+                with self.state._connect() as con:
+                    con.execute("UPDATE private_launch_steps SET result_json=? WHERE launch_key=? AND step=?",
+                                (malformed, "launch", "ADS_MANAGER:DRAFT"))
+                self.sender.state = PrivateLaunchStateStore(Path(self.tmp.name) / "state.sqlite")
+                saved = await self.sender.state.step("launch", OperationKey("ADS_MANAGER:DRAFT"))
+                self.assertEqual(saved["result"], {})
+                with self.assertRaises(ProvisioningError):
+                    await self.sender.submit(client, **kwargs)
+                self.assertEqual(client.count, 1, "A corrupt journal cannot cause another submission")
 
     async def test_explicit_rejection_survives_restart_without_post_replay(self):
         class Client:
@@ -180,6 +470,29 @@ class JournalTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(rows[0]['result']['verified'])
         self.assertNotIn('synthetic-secret', json.dumps(rows))
         self.assertEqual(rows[0]['result']['evidence']['receipt'], {})
+
+    async def test_rate_limited_claim_survives_restart_without_post_replay(self):
+        class Client:
+            count = 0
+            async def post(inner, path, params, *, before_submit, files):
+                await before_submit()
+                inner.count += 1
+                raise AdsManagerResponseError({"http_status": 429, "code": 4,
+                    "message": "synthetic-rate-limit-private-response"})
+        client = Client()
+        for _ in range(2):
+            self.sender.state = PrivateLaunchStateStore(Path(self.tmp.name)/"state.sqlite")
+            with self.assertRaises(ProvisioningError) as caught:
+                await self.sender.submit(client, operation="DRAFT", path="/act_111111/addrafts",
+                    params={"name": "rate-limit-test"},
+                    receipt=lambda row: {"draft_id": row["id"]})
+            self.assertEqual(caught.exception.code, "PRIVATE_ADS_DRAFT_RATE_LIMITED")
+            self.assertTrue(caught.exception.retryable)
+        self.assertEqual(client.count, 1, "A retryable rate-limit must not replay a claimed CREATE")
+        rows = await self.state.all_steps("launch")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["result"]["evidence"]["receipt"], {})
+        self.assertNotIn("synthetic-rate-limit", json.dumps(rows))
 
     async def test_changed_inputs_cannot_reuse_receipt(self):
         class Client:
@@ -227,7 +540,7 @@ class DraftClient:
             row = {"id": fragment_id, "account_id": "111111", "ad_draft_id": "555555",
                 "ad_object_id": ["777771", "777772", "777773"][index],
                 "ad_object_type": params["ad_object_type"], "values": params["values"],
-                "validation_status": "VALIDATED",
+                "validation_status": "VALIDATED", "active_errors": [],
                 "parent_ad_object_id": params.get("parent_ad_object_id")}
             self.fragments[fragment_id] = row
             return {"id": fragment_id}
@@ -260,6 +573,140 @@ class PublisherTests(unittest.IsolatedAsyncioTestCase):
         return await self.publisher.run(self.client, name="source-flow", levels=self.levels,
                                         verify_objects=verify or self.verify)
 
+    async def test_draft_account_scope_rejects_empty_error_envelopes(self):
+        good = {'id': '555555', 'account_id': '111111'}
+        self.publisher._account(good, '111111')
+        for envelope in ({'error': {}}, {'errors': []}, {'error': None}):
+            with self.subTest(envelope=envelope):
+                with self.assertRaises(ProvisioningError) as caught:
+                    self.publisher._account({**good, **envelope}, '111111')
+                self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_READ_SCOPE_MISMATCH')
+
+    async def test_confirmation_refuses_contradictory_verification_metadata(self):
+        await self.sender.submit(self.client, operation='DRAFT',
+            path='/act_111111/addrafts', params={'name': 'source-flow'},
+            receipt=lambda row: {'draft_id': row['id']})
+        for proof in ({'verified': False}, {'source': 'untrusted'}, {'verified': None}):
+            with self.subTest(proof=proof):
+                with self.assertRaises(ProvisioningError) as caught:
+                    await self.publisher._confirm('DRAFT', proof)
+                self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_READ_PENDING')
+        step = await self.state.step('launch', OperationKey('ADS_MANAGER:DRAFT'))
+        self.assertNotEqual(step['status'], 'SUCCESS')
+        await self.publisher._confirm('DRAFT', {'verified': True})
+        confirmed = await self.state.step('launch', OperationKey('ADS_MANAGER:DRAFT'))
+        self.assertEqual(confirmed['status'], 'SUCCESS')
+        self.assertEqual(confirmed['result']['evidence']['verification']['source'],
+                         'independent_private_ads_http')
+
+    async def test_campaign_fragment_with_foreign_parent_blocks_next_post(self):
+        original = self.client.get
+        async def read(path, params):
+            row = await original(path, params)
+            if row.get('ad_object_type') == 'campaign':
+                row['parent_ad_object_id'] = '999999'
+            return row
+        self.client.get = read
+        with self.assertRaises(ProvisioningError) as caught:
+            await self.launch()
+        self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_READ_RELATION_MISMATCH')
+        self.assertEqual(len(self.client.posts), 2)
+
+    async def test_unknown_post_reply_at_every_draft_stage_never_replays_creation(self):
+        stages = ("draft", "campaign", "ad_set", "ad")
+        for stage in stages:
+            with self.subTest(stage=stage):
+                state = PrivateLaunchStateStore(Path(self.tmp.name) / ("lost-" + stage + ".sqlite"))
+                await state.init()
+                sender = AdsManagerSubmitter(state, launch_key="lost-" + stage,
+                    profile_id="19", business_id="222222", account_id="111111",
+                    actor_id="123456", launch_fingerprint="fixed-inputs", source_digest="source")
+                publisher = AdsManagerDraftPublisher(sender)
+                client = DraftClient()
+                original = client.post
+                lost = [False]
+                async def post(path, params, *, before_submit, files):
+                    result = await original(path, params, before_submit=before_submit, files=files)
+                    matches = ((stage == "draft" and path.endswith("/addrafts")) or
+                        (path.endswith("/addraft_fragments") and params.get("ad_object_type") == stage))
+                    if matches and not lost[0]:
+                        lost[0] = True
+                        raise TimeoutError("Synthetic response loss after server accepted the mutation")
+                    return result
+                client.post = post
+                for _ in range(2):
+                    with self.assertRaises(ProvisioningError) as caught:
+                        await publisher.run(client, name="source-flow", levels=self.levels,
+                                            verify_objects=self.verify, draft_only=True)
+                    self.assertEqual(caught.exception.code, "PRIVATE_ADS_DRAFT_RECONCILE_REQUIRED")
+                    self.assertTrue(lost[0])
+                expected_posts = stages.index(stage) + 1
+                self.assertEqual(len(client.posts), expected_posts)
+                self.assertFalse(any(path.endswith("/publish") for path, _ in client.posts))
+
+    async def test_interrupted_read_at_every_draft_stage_resumes_without_repeating_post(self):
+        stages = ("draft", "campaign", "ad_set", "ad")
+        for stage in stages:
+            with self.subTest(stage=stage):
+                state = PrivateLaunchStateStore(Path(self.tmp.name) / ("read-" + stage + ".sqlite"))
+                await state.init()
+                sender = AdsManagerSubmitter(state, launch_key="read-" + stage,
+                    profile_id="19", business_id="222222", account_id="111111",
+                    actor_id="123456", launch_fingerprint="fixed-inputs", source_digest="source")
+                publisher = AdsManagerDraftPublisher(sender)
+                client = DraftClient()
+                original = client.get
+                interrupted = [False]
+                async def get(path, params):
+                    is_target = ((stage == "draft" and path == "/addraft_555555") or
+                        (stage != "draft" and path.startswith("/addraftfragment_") and
+                         client.fragments.get(path.removeprefix("/addraftfragment_"), {}).get("ad_object_type") == stage))
+                    if is_target and not interrupted[0]:
+                        interrupted[0] = True
+                        raise ConnectionError("Synthetic independent read was interrupted")
+                    return await original(path, params)
+                client.get = get
+                with self.assertRaises(ConnectionError):
+                    await publisher.run(client, name="source-flow", levels=self.levels,
+                                        verify_objects=self.verify, draft_only=True)
+                self.assertTrue(interrupted[0])
+                result = await publisher.run(client, name="source-flow", levels=self.levels,
+                                             verify_objects=self.verify, draft_only=True)
+                self.assertTrue(result["draft_verified"])
+                self.assertEqual(len(client.posts), 4)
+                self.assertEqual(len(client.fragments), 3)
+                self.assertFalse(any(path.endswith("/publish") for path, _ in client.posts))
+
+    async def test_duplicate_fragment_receipt_cannot_advance_to_ad(self):
+        original_post = self.client.post
+        async def post(path, params, **options):
+            result = await original_post(path, params, **options)
+            if path.endswith("/addraft_fragments") and params.get("ad_object_type") == "ad_set":
+                return {"id": "111111"}
+            return result
+        self.client.post = post
+        with self.assertRaises(ProvisioningError) as caught:
+            await self.publisher.run(self.client, name="source-flow", levels=self.levels,
+                                     verify_objects=self.verify, draft_only=True)
+        self.assertEqual(caught.exception.code, "PRIVATE_ADS_DRAFT_READ_RELATION_MISMATCH")
+        self.assertEqual(len(self.client.posts), 3)
+        self.assertFalse(any(path.endswith("/publish") for path, _ in self.client.posts))
+
+    async def test_explicit_active_fragment_readback_blocks_paused_draft(self):
+        original_read = self.client.get
+        async def read(path, params):
+            row = await original_read(path, params)
+            if row.get("ad_object_type") == "campaign":
+                row["status"] = "ACTIVE"
+            return row
+        self.client.get = read
+        with self.assertRaises(ProvisioningError) as caught:
+            await self.publisher.run(self.client, name="source-flow", levels=self.levels,
+                                     verify_objects=self.verify, draft_only=True)
+        self.assertEqual(caught.exception.code, "PRIVATE_ADS_DRAFT_DRAFT_DELIVERY_UNSAFE")
+        self.assertEqual(len(self.client.posts), 2)
+        self.assertFalse(any(path.endswith("/publish") for path, _ in self.client.posts))
+
     async def test_has_errors_without_error_details_stops_before_ad_or_publication(self):
         original = self.client.get
         async def read(path, params):
@@ -276,6 +723,35 @@ class PublisherTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(self.client.fragments), 2)
             self.assertEqual(len(self.client.posts), 3)
         self.assertFalse(any(path.endswith('/publish') for path, _ in self.client.posts))
+
+    async def test_validated_fragment_without_complete_error_readback_never_advances(self):
+        original = self.client.get
+        shape = ["missing"]
+        async def read(path, params):
+            row = await original(path, params)
+            if row.get("ad_object_type") == "ad_set":
+                if shape[0] == "missing":
+                    row.pop("active_errors", None)
+                elif shape[0] == "null":
+                    row["active_errors"] = None
+                elif shape[0] == "malformed":
+                    row["active_errors"] = {"error_code": 1815857}
+            return row
+        self.client.get = read
+        for value in ("missing", "null", "malformed"):
+            shape[0] = value
+            with self.subTest(error_shape=value), self.assertRaises(ProvisioningError) as caught:
+                await self.publisher.run(self.client, name="source-flow", levels=self.levels,
+                                         verify_objects=self.verify, draft_only=True)
+            self.assertEqual(caught.exception.code, "PRIVATE_ADS_DRAFT_VALIDATION_PENDING")
+            self.assertEqual(len(self.client.posts), 3, "Incomplete proof cannot cause another POST")
+            self.assertEqual(set(self.client.fragments), {"111111", "222222"})
+        shape[0] = "complete"
+        result = await self.publisher.run(self.client, name="source-flow", levels=self.levels,
+                                          verify_objects=self.verify, draft_only=True)
+        self.assertEqual(result["status"], "SUCCESS")
+        self.assertEqual(len(self.client.posts), 4, "Resume may only create the not-yet-submitted Ad")
+        self.assertFalse(any(path.endswith("/publish") for path, _ in self.client.posts))
 
     async def test_profile38_bid_amount_error_is_retained_without_bid_or_objective_rewrite(self):
         self.levels['campaign'].update(objective='OUTCOME_TRAFFIC', daily_budget=500)

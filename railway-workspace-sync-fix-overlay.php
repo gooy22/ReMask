@@ -296,6 +296,17 @@ async function syncSelection(){
   if(!rows.length)return;
 
   state.running=true;
+  // REMASK_SYNC_UI_LATENCY_V1 - only aggregated timings; no profile IDs,
+  // query contents, cookies, proxy credentials or response payloads.
+  const syncUiStarted=Date.now();
+  const timing={ui_wall_ms:0,ui_http_ms_sum:0,ui_http_calls:0,
+    ui_http_parallel_peak:0,ui_apply_ms_sum:0,ui_apply_count:0,
+    ui_render_ms:0,php_reported_count:0,php_total_ms_sum:0,
+    php_context_ms_sum:0,php_reconciliation_ms_sum:0,worker_bridge_ms_sum:0,
+    worker_reported_count:0,worker_total_ms_sum:0,worker_profile_context_ms_sum:0,
+    worker_durable_state_ms_sum:0,worker_http_session_ms_sum:0,
+    worker_inventory_ms_sum:0,worker_page_enrichment_ms_sum:0};
+  let activeHttp=0;
   updateSelectionUi();
   $('workspaceStatus').textContent=`Доп. синхронизация: 0/${rows.length}`;
 
@@ -365,7 +376,27 @@ async function syncSelection(){
   // the current auth/CSRF contract. If the mobile browser drops the long
   // request, request_id reconciliation below reads the server-side result
   // instead of bypassing CSRF with a second custom fetch implementation.
-  const syncApiJson=async(url,body)=>apiJson(url,body);
+  const syncApiJson=async(url,body)=>{
+    const began=Date.now();
+    timing.ui_http_calls++;
+    activeHttp++;
+    timing.ui_http_parallel_peak=Math.max(timing.ui_http_parallel_peak,activeHttp);
+    try{
+      return await apiJson(url,body);
+    }finally{
+      activeHttp--;
+      timing.ui_http_ms_sum+=Math.max(0,Date.now()-began);
+    }
+  };
+  const syncApplySnapshot=(data)=>{
+    const began=Date.now();
+    try{
+      return applySnapshot(data);
+    }finally{
+      timing.ui_apply_count++;
+      timing.ui_apply_ms_sum+=Math.max(0,Date.now()-began);
+    }
+  };
 
   // REMASK_SYNC_RESULT_RECONCILIATION_V1
   const syncRequestId=()=>{
@@ -390,7 +421,7 @@ async function syncSelection(){
         ),Math.min(3000,remaining));
         if(!d||d.pending===true)continue;
         if(d.sync_complete===true){
-          const applied=applySnapshot(d);
+          const applied=syncApplySnapshot(d);
           if(!applied){
             return {
               error:'Live Meta sync finished but reconciled snapshot was not applied',
@@ -403,7 +434,8 @@ async function syncSelection(){
         return {
           error:String(d.sync_error||'Private Meta sync failed after client reconnect'),
           error_kind:String(d.sync_error_kind||'PRIVATE_SYNC'),
-          profile
+          profile,
+          sync_timings_ms:d.sync_timings_ms
         };
       }catch(error){
         if(error?.code==='SYNC_TIMEOUT')break;
@@ -419,15 +451,16 @@ async function syncSelection(){
     // A partial/failed browser result is diagnostic only. Keep the last
     // confirmed Workspace state untouched unless the full BM/RK/FP contract
     // completed successfully.
-    if(d && d.sync_complete===false){
+    if(!d || d.sync_complete!==true){
       return {
-        error:String(d.sync_error||'Private Business Suite inventory was inconclusive'),
-        error_kind:String(d.sync_error_kind||'PRIVATE_INCONCLUSIVE'),
+        error:String(d?.sync_error||'Private Business Suite inventory was inconclusive'),
+        error_kind:String(d?.sync_error_kind||'PRIVATE_INCONCLUSIVE'),
         profile,
-        business_id
+        business_id,
+        sync_timings_ms:d?.sync_timings_ms
       };
     }
-    const applied=applySnapshot(d);
+    const applied=syncApplySnapshot(d);
     if(d && d.sync_complete===true && !applied){
       return {
         error:'Live Meta sync returned success but Workspace snapshot was not applied',
@@ -491,38 +524,58 @@ async function syncSelection(){
     }
   };
 
-  // REMASK_SYNC_BROWSER_SERIAL_V1
-  // Production is intentionally one Chromium lease in a 1 GB container.
-  // Match client request concurrency to that capacity instead of queueing
-  // three long HTTP requests behind one browser semaphore.
-  const syncConcurrency=1;
+  // REMASK_SYNC_PROFILE_AWARE_POOL_V1
+  // HTTP-only inventory no longer leases Chromium. Run at most two distinct
+  // profile sessions concurrently; the PHP per-profile lock remains the
+  // authority, and selected BMs on the SAME profile remain strictly serial.
+  // Bound the number of simultaneous Meta reads in the 1 GB runtime.
+  const syncConcurrency=2;
+  const concurrentByProfile=async(targets, profileOf, worker, progress)=>{
+    const grouped=new Map();
+    targets.forEach((target,index)=>{
+      const profile=String(profileOf(target)||'').trim();
+      if(!grouped.has(profile))grouped.set(profile,[]);
+      grouped.get(profile).push({target,index});
+    });
+    const ordered=new Array(targets.length);
+    let completed=0;
+    await concurrent([...grouped.values()],Math.min(syncConcurrency,grouped.size),
+      async group=>{
+        for(const entry of group){
+          try{
+            ordered[entry.index]=await worker(entry.target);
+          }catch(error){
+            const failure=classifySyncError(error);
+            ordered[entry.index]={error:failure.message,error_kind:failure.kind,
+              profile:String(profileOf(entry.target)||'')};
+          }
+          completed++;
+          progress(completed,targets.length);
+        }
+      });
+    return ordered;
+  };
 
   try{
     let results=[];
     if(tab==='profiles'){
-      results=await concurrent(
-        rows,
-        syncConcurrency,
-        r=>syncProfileSafe(r.name),
+      results=await concurrentByProfile(
+        rows,r=>r.name,r=>syncProfileSafe(r.name),
         (done,total)=>{$('workspaceStatus').textContent=`Синхронизация FB: ${done}/${total}`;setProgress(done,total)}
       );
     }else if(tab==='businesses'){
       // REMASK_BUSINESS_TAB_SELECTED_SCOPE_V2
       // Selected BM rows are explicit targets. The server merges live
       // siblings from the confirmed snapshot after checking this exact BM.
-      results=await concurrent(
-        rows,
-        syncConcurrency,
-        row=>syncBusinessSafe(row),
+      results=await concurrentByProfile(
+        rows,row=>row.profile,row=>syncBusinessSafe(row),
         (done,total)=>{$('workspaceStatus').textContent=`Синхронизация BM: ${done}/${total}`;setProgress(done,total)}
       );
     }else if(tab==='ad_accounts'){
       const businesses=[...new Map(rows.filter(r=>r.profile && r.business_id)
         .map(r=>[`${r.profile}:${r.business_id}`,{profile:r.profile,id:r.business_id}])).values()];
-      results=await concurrent(
-        businesses,
-        syncConcurrency,
-        row=>syncBusinessSafe(row),
+      results=await concurrentByProfile(
+        businesses,row=>row.profile,row=>syncBusinessSafe(row),
         (done,total)=>{$('workspaceStatus').textContent=`Синхронизация RK: ${done}/${total}`;setProgress(done,total)}
       );
     }else{
@@ -551,8 +604,42 @@ async function syncSelection(){
     }else{
       $('workspaceStatus').textContent='Синхронизация Meta завершена.';
     }
+    const renderStarted=Date.now();
     render();
+    timing.ui_render_ms=Math.max(0,Date.now()-renderStarted);
+    for(const item of results){
+      const server=item&&item.sync_timings_ms;
+      if(!server||typeof server!=='object')continue;
+      timing.php_reported_count++;
+      for(const [source,dest] of [
+        ['php_total','php_total_ms_sum'],['php_context','php_context_ms_sum'],
+        ['php_reconciliation','php_reconciliation_ms_sum'],['worker_bridge','worker_bridge_ms_sum']]){
+        const value=server[source];
+        if(typeof value==='number'&&Number.isFinite(value)&&value>=0)timing[dest]+=value;
+      }
+      const worker=server.worker;
+      if(!worker||typeof worker!=='object')continue;
+      timing.worker_reported_count++;
+      // These are overlapping phase sums, not a decomposition of UI wall time.
+      // Never copy meta_reads: it contains per-Business identity metadata.
+      for(const [source,dest] of [
+        ['total','worker_total_ms_sum'],['profile_context','worker_profile_context_ms_sum'],
+        ['durable_state','worker_durable_state_ms_sum'],['http_session','worker_http_session_ms_sum'],
+        ['inventory','worker_inventory_ms_sum'],['page_enrichment','worker_page_enrichment_ms_sum']]){
+        const value=worker[source];
+        if(typeof value==='number'&&Number.isFinite(value)&&value>=0)timing[dest]+=value;
+      }
+    }
   }finally{
+    timing.ui_wall_ms=Math.max(0,Date.now()-syncUiStarted);
+    timing.ui_http_pending=activeHttp;
+    timing.ui_http_complete=activeHttp===0;
+    // A timed-out request may still finish after the UI deadline. Retain the
+    // measured state at completion instead of mutating an already logged result.
+    state.lastSyncTimingMs={...timing};
+    if(typeof console!=='undefined'&&typeof console.info==='function'){
+      console.info('[ReMask sync latency]',JSON.stringify(state.lastSyncTimingMs));
+    }
     state.running=false;
     updateSelectionUi();
   }
@@ -872,6 +959,13 @@ function hierarchy_sync_result_put(
 
         // Store only status metadata. The actual snapshot is rebuilt from
         // current account state + last confirmed live inventory on read.
+        $timings = [];
+        foreach (['php_context', 'worker_bridge', 'php_reconciliation', 'php_total'] as $phase) {
+            $value = $result['sync_timings_ms'][$phase] ?? null;
+            if ((is_int($value) || is_float($value)) && is_finite((float)$value) && $value >= 0) {
+                $timings[$phase] = $value;
+            }
+        }
         $all[$requestId] = [
             'profile' => $profile,
             'updated_at' => $now,
@@ -879,6 +973,7 @@ function hierarchy_sync_result_put(
             'sync_complete' => ($result['sync_complete'] ?? false) === true,
             'sync_error_kind' => trim((string)($result['sync_error_kind'] ?? '')),
             'sync_error' => trim((string)($result['sync_error'] ?? '')),
+            'sync_timings_ms' => $timings,
         ];
 
         $encoded = json_encode(
@@ -908,7 +1003,15 @@ function hierarchy_sync_result_get(
         || $profile === ''
     ) return [];
 
-    $raw = @file_get_contents(hierarchy_sync_result_file());
+    $fp = @fopen(hierarchy_sync_result_file(), 'r');
+    if (!$fp) return [];
+    try {
+        if (!@flock($fp, LOCK_SH)) return [];
+        $raw = stream_get_contents($fp);
+    } finally {
+        @flock($fp, LOCK_UN);
+        @fclose($fp);
+    }
     if (!is_string($raw) || trim($raw) === '') return [];
     $all = json_decode($raw, true);
     if (!is_array($all)) return [];
@@ -981,9 +1084,17 @@ function hierarchy_created_accounts_apply_display(string $profile, array $snapsh
     $snapshot['ad_accounts'] = $rows;
     $snapshot['ad_accounts_count'] = count($rows);
     $snapshot['businesses_count'] = count($businessNames);
+    // REMASK_LINEAR_WORKSPACE_ACCOUNT_GROUPS_V1
+    // The Workspace snapshot is read repeatedly. Build BM→RK groups once
+    // rather than scanning all saved accounts for every displayed Business.
+    $accountsByBusiness = [];
+    foreach ($rows as $accountRow) {
+        if (!is_array($accountRow)) continue;
+        $bid = (string)($accountRow['business_id'] ?? '');
+        $accountsByBusiness[$bid][] = $accountRow;
+    }
     foreach ((array)($snapshot['businesses'] ?? []) as $i => $business) {
-        $accounts = array_values(array_filter($rows, static fn($row) =>
-            is_array($row) && (string)($row['business_id'] ?? '') === (string)($business['id'] ?? '')));
+        $accounts = $accountsByBusiness[(string)($business['id'] ?? '')] ?? [];
         $snapshot['businesses'][$i]['accounts'] = $accounts;
         $snapshot['businesses'][$i]['ad_account_count'] = count($accounts);
     }
@@ -1072,7 +1183,15 @@ function hierarchy_live_snapshot_file(): string
 function hierarchy_live_snapshot_all(): array
 {
     $file = hierarchy_live_snapshot_file();
-    $raw = @file_get_contents($file);
+    $fp = @fopen($file, 'r');
+    if (!$fp) return [];
+    try {
+        if (!@flock($fp, LOCK_SH)) return [];
+        $raw = stream_get_contents($fp);
+    } finally {
+        @flock($fp, LOCK_UN);
+        @fclose($fp);
+    }
     if (!is_string($raw) || trim($raw) === '') return [];
     $json = json_decode($raw, true);
     return is_array($json) ? $json : [];
@@ -1355,6 +1474,78 @@ function hierarchy_binding_put(
         @fclose($fp);
     }
 }
+
+function hierarchy_binding_put_many(string $profile, array $bindings): void
+{
+    // REMASK_BATCH_CONFIRMED_RK_BINDINGS_V1
+    // A normal HTTP Sync should not take a global JSON file lock and rewrite
+    // the complete store once per discovered RK.
+    $profile = trim($profile);
+    if ($profile === '') return;
+    $updates = [];
+    foreach ($bindings as $binding) {
+        if (!is_array($binding)) continue;
+        $businessId = trim((string)($binding['business_id'] ?? ''));
+        $accountId = trim((string)($binding['ad_account_id'] ?? ''));
+        if (!preg_match('/^\d{5,30}$/', $businessId)
+            || !preg_match('/^\d{5,30}$/', $accountId)
+            || $businessId === $accountId) continue;
+        // Keep the existing V2 per-business last-RK-wins layout. The
+        // source/confirmation semantics are unchanged by batching.
+        $updates[$businessId] = [
+            'business_id' => $businessId,
+            'ad_account_id' => $accountId,
+            'account_name' => trim((string)($binding['account_name'] ?? '')),
+            'updated_at' => time(),
+            'source' => 'python_worker_confirmed_entities_v2',
+        ];
+    }
+    if ($updates === []) return;
+    $file = hierarchy_binding_file();
+    $dir = dirname($file);
+    if (!is_dir($dir)) @mkdir($dir, 0700, true);
+    $fp = @fopen($file, 'c+');
+    if (!$fp) return;
+    try {
+        if (!@flock($fp, LOCK_EX)) return;
+        rewind($fp);
+        $raw = stream_get_contents($fp);
+        $decoded = is_string($raw) && trim($raw) !== '' ? json_decode($raw, true) : [];
+        $all = is_array($decoded) ? $decoded : [];
+        $row = is_array($all[$profile] ?? null) ? $all[$profile] : [];
+
+        $normalized = [];
+        if (isset($row['business_id']) || isset($row['ad_account_id'])) {
+            $bid = trim((string)($row['business_id'] ?? ''));
+            $aid = trim((string)($row['ad_account_id'] ?? ''));
+            if (preg_match('/^\d{5,30}$/', $bid)
+                && preg_match('/^\d{5,30}$/', $aid)) {
+                $normalized[$bid] = $row;
+            }
+        } else {
+            $items = $row['ad_accounts'] ?? $row;
+            foreach ((array)$items as $key => $item) {
+                if (!is_array($item)) continue;
+                $bid = trim((string)($item['business_id'] ?? $key));
+                $aid = trim((string)($item['ad_account_id'] ?? ''));
+                if (!preg_match('/^\d{5,30}$/', $bid)
+                    || !preg_match('/^\d{5,30}$/', $aid)) continue;
+                $normalized[$bid] = $item;
+            }
+        }
+        foreach ($updates as $bid => $item) $normalized[$bid] = $item;
+        $all[$profile] = ['ad_accounts' => $normalized];
+        $encoded = json_encode($all, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if (!is_string($encoded)) return;
+        ftruncate($fp, 0);
+        rewind($fp);
+        fwrite($fp, $encoded);
+        fflush($fp);
+    } finally {
+        @flock($fp, LOCK_UN);
+        @fclose($fp);
+    }
+}
 PHP_HELPERS;
 $hierarchyBaseSignature = <<<'PHP_SIG'
 function hierarchy_profile_snapshot_base(string $profile, ?array $workspaceMeta = null): array
@@ -1452,6 +1643,8 @@ $syncProfileReplacement = <<<'PHP'
             $reconciled['pending'] = false;
             $reconciled['sync_complete'] = true;
             $reconciled['sync_reconciled'] = true;
+            $reconciled['sync_timings_ms'] = is_array($savedResult['sync_timings_ms'] ?? null)
+                ? $savedResult['sync_timings_ms'] : [];
             MetaEndpoint::ok(hierarchy_asset_types_snapshot($reconciled));
         }
 
@@ -1462,6 +1655,8 @@ $syncProfileReplacement = <<<'PHP'
             'sync_complete' => false,
             'sync_error_kind' => (string)($savedResult['sync_error_kind'] ?? 'PRIVATE_SYNC'),
             'sync_error' => (string)($savedResult['sync_error'] ?? 'Private Meta sync failed'),
+            'sync_timings_ms' => is_array($savedResult['sync_timings_ms'] ?? null)
+                ? $savedResult['sync_timings_ms'] : [],
             'sync_reconciled' => true,
         ]);
     }
@@ -1607,7 +1802,9 @@ $syncProfileReplacement = <<<'PHP'
             ? [$requestedBusinessId]
             : [];
 
+        // REMASK_PHP_SYNC_CONTEXT_TIMING_V1
         $workerStarted = microtime(true);
+        $phpContextMs = (int)(($workerStarted - $syncStarted) * 1000);
         try {
             $liveInventory = hierarchy_worker_live_inventory(
                 $profile,
@@ -1631,6 +1828,16 @@ $syncProfileReplacement = <<<'PHP'
                 }
             }
 
+            // REMASK_FAILED_SYNC_TIMING_V1
+            // Failed transports must produce phase timings too; only numeric
+            // totals are logged. Never serialize URLs, proxy credentials,
+            // tokens or exception text into performance telemetry.
+            $failureTimings = [
+                'php_context' => max(0, $phpContextMs),
+                'worker_bridge' => max(0, (int)((microtime(true) - $workerStarted) * 1000)),
+                'php_total' => max(0, (int)((microtime(true) - $syncStarted) * 1000)),
+            ];
+            error_log('[ReMask sync failure timing] ' . json_encode($failureTimings));
             if ($requestId !== '') {
                 hierarchy_sync_result_put(
                     $requestId,
@@ -1640,6 +1847,7 @@ $syncProfileReplacement = <<<'PHP'
                         'sync_complete' => false,
                         'sync_error_kind' => $errorKind,
                         'sync_error' => $message,
+                        'sync_timings_ms' => $failureTimings,
                     ]
                 );
             }
@@ -1657,6 +1865,23 @@ $syncProfileReplacement = <<<'PHP'
         $seenBusiness = [];
         $seenAccount = [];
         $rkPartial = false;
+        $confirmedBindingBatch = [];
+
+        // REMASK_LINEAR_EXISTING_RK_MERGE_V1
+        // Index existing records once instead of rewalking all RKs for every
+        // confirmed RK. Keep the first matching row as the legacy loop did.
+        $savedByBusiness = [];
+        $savedByBusinessAndId = [];
+        foreach ((array)($existingSnapshot['ad_accounts'] ?? []) as $oldAccount) {
+            if (!is_array($oldAccount)) continue;
+            $oldBusiness = (string)($oldAccount['business_id'] ?? '');
+            $oldId = preg_replace('/^act_/', '',
+                (string)($oldAccount['id'] ?? $oldAccount['account_id'] ?? ''));
+            $savedByBusiness[$oldBusiness][] = $oldAccount;
+            if (!array_key_exists($oldId, $savedByBusinessAndId[$oldBusiness] ?? [])) {
+                $savedByBusinessAndId[$oldBusiness][$oldId] = $oldAccount;
+            }
+        }
 
         foreach ((array)($liveInventory['businesses'] ?? []) as $liveBusiness) {
             if (!is_array($liveBusiness)) continue;
@@ -1669,11 +1894,17 @@ $syncProfileReplacement = <<<'PHP'
             if (!empty($liveBusiness['ad_accounts_partial'])) {
                 $rkPartial = true;
                 $syncWarnings[] = 'Проверены отдельные РК. Полный список РК этого BM не подтверждён; остальные сохранённые строки сохранены без новой проверки.';
-                foreach ((array)($existingSnapshot['ad_accounts'] ?? []) as $oldAccount) {
-                    if (!is_array($oldAccount) || (string)($oldAccount['business_id'] ?? '') !== $businessId) continue;
-                    $oldId = preg_replace('/^act_/', '', (string)($oldAccount['id'] ?? $oldAccount['account_id'] ?? ''));
-                    $freshIds = array_map(static fn($row) => preg_replace('/^act_/', '', (string)($row['id'] ?? $row['account_id'] ?? '')), (array)($liveBusiness['ad_accounts'] ?? []));
-                    if ($oldId === '' || in_array($oldId, $freshIds, true)) continue;
+                $freshIdSet = [];
+                foreach ((array)($liveBusiness['ad_accounts'] ?? []) as $freshAccount) {
+                    if (!is_array($freshAccount)) continue;
+                    $freshId = preg_replace('/^act_/', '',
+                        (string)($freshAccount['id'] ?? $freshAccount['account_id'] ?? ''));
+                    $freshIdSet[$freshId] = true;
+                }
+                foreach ($savedByBusiness[$businessId] ?? [] as $oldAccount) {
+                    $oldId = preg_replace('/^act_/', '',
+                        (string)($oldAccount['id'] ?? $oldAccount['account_id'] ?? ''));
+                    if ($oldId === '' || isset($freshIdSet[$oldId])) continue;
                     $oldAccount['_sync_preserved'] = true;
                     $adAccountRows[] = $oldAccount;
                     $seenAccount[$oldId] = true;
@@ -1695,15 +1926,12 @@ $syncProfileReplacement = <<<'PHP'
                 // An ID-only fast revalidation cannot rename a known RK or
                 // discard its Business asset alias. Keep identity metadata only
                 // for the same canonical RK in this exact profile and BM.
-                foreach ((array)($existingSnapshot['ad_accounts'] ?? []) as $knownAccount) {
-                    if (!is_array($knownAccount) || (string)($knownAccount['business_id'] ?? '') !== $businessId) continue;
-                    $knownId = preg_replace('/^act_/', '', (string)($knownAccount['id'] ?? $knownAccount['account_id'] ?? ''));
-                    if ($knownId !== $accountId) continue;
+                $knownAccount = $savedByBusinessAndId[$businessId][$accountId] ?? null;
+                if (is_array($knownAccount)) {
                     $freshName = trim((string)($row['name'] ?? ''));
                     $knownName = trim((string)($knownAccount['name'] ?? ''));
                     if (($freshName === '' || preg_match('/^(?:act_)?\d{5,30}$/', $freshName)) && $knownName !== '' && !preg_match('/^(?:act_)?\d{5,30}$/', $knownName)) $row['name'] = $knownName;
                     if (empty($row['business_asset_id']) && !empty($knownAccount['business_asset_id'])) $row['business_asset_id'] = $knownAccount['business_asset_id'];
-                    break;
                 }
                 $row['_business_edge'] = (string)($row['_source'] ?? 'business_suite_browser_live_inventory');
                 if (!array_key_exists('funding', $row)) $row['funding'] = null;
@@ -1712,12 +1940,11 @@ $syncProfileReplacement = <<<'PHP'
                 $adAccountRows[] = $row;
                 $accountsForBusiness[] = $row;
 
-                hierarchy_binding_put(
-                    $profile,
-                    $businessId,
-                    $accountId,
-                    trim((string)($row['name'] ?? ''))
-                );
+                $confirmedBindingBatch[] = [
+                    'business_id' => $businessId,
+                    'ad_account_id' => $accountId,
+                    'account_name' => trim((string)($row['name'] ?? '')),
+                ];
             }
 
             $businessRows[] = [
@@ -1733,6 +1960,9 @@ $syncProfileReplacement = <<<'PHP'
             ];
             $seenBusiness[$businessId] = true;
         }
+
+        // Persist the complete confirmed RK batch under one file lock.
+        hierarchy_binding_put_many($profile, $confirmedBindingBatch);
 
         // Provisioning bindings are historical state only. They are never
         // merged into the result of a live Meta synchronization.
@@ -1886,6 +2116,7 @@ $syncProfileReplacement = <<<'PHP'
         $snapshot['graph_preflight_available'] = false;
         $snapshot['sync_complete'] = $syncComplete;
         $snapshot['sync_timings_ms'] = [
+            'php_context' => $phpContextMs,
             'worker_bridge' => $workerElapsedMs,
             'worker' => is_array($liveInventory['timings_ms'] ?? null) ? $liveInventory['timings_ms'] : [],
         ];
@@ -2031,6 +2262,8 @@ $syncProfileReplacement = <<<'PHP'
             $snapshot['sync_warnings'] = array_values(array_unique($syncWarnings));
         }
 
+        $snapshot['sync_timings_ms']['php_reconciliation'] = (int)((microtime(true) - $reconcileStarted) * 1000);
+        $snapshot['sync_timings_ms']['php_total'] = (int)((microtime(true) - $syncStarted) * 1000);
         if ($requestId !== '') {
             hierarchy_sync_result_put(
                 $requestId,
@@ -2040,6 +2273,7 @@ $syncProfileReplacement = <<<'PHP'
                     'sync_complete' => $syncComplete,
                     'sync_error_kind' => (string)($snapshot['sync_error_kind'] ?? ''),
                     'sync_error' => (string)($snapshot['sync_error'] ?? ''),
+                    'sync_timings_ms' => $snapshot['sync_timings_ms'],
                 ]
             );
         }

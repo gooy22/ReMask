@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import time
 from urllib.parse import urlsplit
 from pathlib import Path
 from collections import defaultdict
@@ -447,7 +448,9 @@ class WorkerPool:
         if not item or item['status']!='QUEUED':
             return
         profile_id=str(item['profile_id'])
+        lock_started=time.monotonic()
         async with self.profile_locks[profile_id]:
+            lock_wait_ms=(time.monotonic()-lock_started)*1000
             # Another queue consumer may have completed this item while this
             # consumer waited for the profile lock.
             item = await self.store.item(item_id)
@@ -456,8 +459,17 @@ class WorkerPool:
             if not await self.store.set_item_running(item_id):
                 return
             tasks=await self.store.tasks(item_id)
+            # updated_at is the last QUEUED transition, including explicit
+            # requeues; created_at alone exaggerates retries as queue latency.
+            queued_at=item.get('updated_at')
+            queue_age_ms=max(0.0,(time.time()-float(queued_at))*1000) if type(queued_at) in (int,float) else 0.0
+            resolver_started=time.monotonic()
             try:
-                context=await self.resolver.resolve(profile_id)
+                try:
+                    context=await self.resolver.resolve(profile_id)
+                finally:
+                    log.info('worker_dispatch_latency item=%s queue_age_ms=%.0f profile_lock_ms=%.2f resolver_ms=%.2f',
+                        item_id,queue_age_ms,lock_wait_ms,(time.monotonic()-resolver_started)*1000)
                 async with ProfileSession(context) as session:
                     for task in tasks:
                         if task['status']=='SUCCESS':

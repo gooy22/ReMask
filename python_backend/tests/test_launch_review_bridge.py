@@ -37,7 +37,8 @@ class LaunchReviewBridgeTests(unittest.TestCase):
                     self.end_headers()
                     self.wfile.write(json.dumps({'detail': {
                         'code': 'PRIVATE_ADS_DRAFT_PAGE_UNVERIFIED',
-                        'message': 'Fixture Page access was not verified', 'retryable': False,
+                        'message': 'Fixture Page access was not verified: access_token=synthetic-worker-token',
+                         'retryable': False,
                     }}).encode())
 
             server = ThreadingHTTPServer(('127.0.0.1', 0), Worker)
@@ -61,7 +62,10 @@ $input=['profile_id'=>'35','business_id'=>'111111','ad_account_id'=>'222222',
                 result = json.loads(response.stdout)
                 self.assertFalse(result['ok'])
                 self.assertEqual(result['code'], 'PRIVATE_ADS_DRAFT_PAGE_UNVERIFIED')
-                self.assertEqual(result['message'], 'Fixture Page access was not verified')
+                self.assertEqual(result['message'], 'PRIVATE_ADS_DRAFT_PAGE_UNVERIFIED')
+                self.assertNotIn('synthetic-worker-token', response.stdout + response.stderr)
+                self.assertNotIn('Fixture Page access was not verified',
+                                 response.stdout + response.stderr)
                 self.assertFalse(result['retryable'])
                 self.assertEqual(len(observed), 1)
                 self.assertEqual(observed[0][0], '/api/v1/profiles/35/private-launch-review')

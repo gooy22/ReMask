@@ -121,13 +121,14 @@ final class RemaskTemplateTargetingReference {
     private static function key(string $type, string $query): string {
         return hash('sha256', $type."\0".trim($query));
     }
-    public function get(string $type, string $query, int $now): ?array {
-        return $this->update(static function(array &$state) use ($type,$query,$now) {
+    public function get(string $type, string $query, int $now, int $offset = 0): ?array {
+        return $this->update(static function(array &$state) use ($type,$query,$now,$offset) {
             $row = $state['queries'][self::key($type,$query)] ?? null;
             if (!is_array($row) || !is_array($row['data'] ?? null) || $now-(int)($row['checked_at'] ?? 0)>2592000) return null;
             // Exact keys safely identify older query entries for later searches.
             $state['queries'][self::key($type,$query)]['type']=$type;
-            return ['data'=>array_slice($row['data'],0,100),'checked_live'=>false,'source'=>'private_meta_template_reference',
+            return ['data'=>array_slice($row['data'],$offset,100),'checked_live'=>false,'source'=>'private_meta_template_reference',
+                'offset'=>$offset, 'next_offset'=>count($row['data'])>$offset+100 ? $offset+100 : null,
                 'truncated'=>($row['truncated'] ?? false) === true || count($row['data'])>100,
                 'catalog_count'=>(int)($row['catalog_count'] ?? count($row['data'])),
                 'template_account_bound'=>false,'reference_checked_at'=>$row['checked_at'],
@@ -182,8 +183,8 @@ final class RemaskTemplateTargetingReference {
             return $available;
         });
     }
-    public function search(string $type, string $query, int $now): ?array {
-        return $this->update(static function(array &$state) use ($type,$query,$now) {
+    public function search(string $type, string $query, int $now, int $offset = 0): ?array {
+        return $this->update(static function(array &$state) use ($type,$query,$now,$offset) {
             $rows=[]; $checkedAt=$now; $truncated=false;
             foreach ($state['queries'] as $key=>$row) {
                 // Older stores have no type metadata. Only the known browse
@@ -203,7 +204,8 @@ final class RemaskTemplateTargetingReference {
             // The browse tree is not the entire Meta search index. A cache
             // miss must still allow searching interests outside that tree.
             if (!$rows) return null;
-            return ['data'=>array_slice(array_values($rows),0,100),'checked_live'=>false,
+            return ['data'=>array_slice(array_values($rows),$offset,100),'checked_live'=>false,
+                'offset'=>$offset, 'next_offset'=>count($rows)>$offset+100 ? $offset+100 : null,
                 'truncated'=>count($rows)>100 || $truncated,
                 'source'=>'private_meta_template_reference','template_account_bound'=>false,
                 'reference_checked_at'=>$checkedAt, 'reference_stale'=>$now-$checkedAt>86400];
@@ -212,7 +214,7 @@ final class RemaskTemplateTargetingReference {
 }
 
 final class RemaskModuleTargetingReference {
-    public static function search(string $type, string $query, string $file): ?array {
+    public static function search(string $type, string $query, string $file, int $offset = 0): ?array {
         if (!in_array($type,['locales','locations'],true)) return null;
         $freshFile=rtrim((string)(getenv('REMASK_DATA_DIR') ?: '/var/lib/remask'),'/').'/private-targeting-reference.json';
         $fresh=json_decode((string)@file_get_contents($freshFile),true);
@@ -236,7 +238,8 @@ final class RemaskModuleTargetingReference {
             return $score($b)<=>$score($a);
         });
         foreach ($rows as &$row) unset($row['aliases']); unset($row);
-        return ['data'=>array_slice($rows,0,100),'checked_live'=>false,'source'=>'private_meta_module_reference',
+        return ['data'=>array_slice($rows,$offset,100),'checked_live'=>false,'source'=>'private_meta_module_reference',
+            'offset'=>$offset, 'next_offset'=>count($rows)>$offset+100 ? $offset+100 : null,
             'template_account_bound'=>false,'reference_captured_at'=>$data['captured_at'],
             'truncated'=>count($rows)>100];
     }

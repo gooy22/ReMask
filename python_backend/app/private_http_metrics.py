@@ -10,20 +10,32 @@ transport failure. Decoded chunks never returned to the caller are excluded.
 from __future__ import annotations
 
 from collections import Counter
+from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from functools import wraps
 import asyncio
 import json
 import logging
+import secrets
 import time
 
 import httpx
 
 log = logging.getLogger('remask_worker')
+_RESOURCE_NAMES = frozenset({'interests', 'behaviors', 'locations', 'locales',
+    'pages', 'images', 'videos', 'campaigns', 'adsets', 'ads', 'pixels',
+    'custom_audiences', 'conversion_goals', 'instagram_accounts',
+    'instagram_media', 'creatives', 'insights', 'college_years',
+    'industries', 'life_events', 'family_statuses', 'user_device',
+    'user_os'})
 _OPERATIONS = frozenset({'private_launch', 'private_delivery', 'provision', 'provisioning',
-    'prepare', 'prepare_profile', 'proxy_check', 'transparent_post', 'sync_profile'})
+    'prepare', 'prepare_profile', 'proxy_check', 'transparent_post', 'sync_profile',
+    'template_reference', 'resource_other'} | {'resource_' + name for name in _RESOURCE_NAMES})
 MAX_RESPONSE_REFERENCES = 512
+_PHASES = frozenset({'resolver', 'cache_lookup', 'profile_session', 'reference_discovery',
+    'reference_read', 'ads_document', 'account_proof', 'meta_read', 'inventory_read',
+    'resource_read', 'queue_wait', 'profile_lock', 'store_read', 'store_write'})
 _ERRORS = (httpx.TimeoutException, TimeoutError, httpx.ProxyError,
     httpx.ConnectError, httpx.ReadError, httpx.WriteError, httpx.ProtocolError,
     httpx.DecodingError, httpx.TooManyRedirects)
@@ -48,7 +60,10 @@ class OperationTraffic:
     profile_id: str
     operation: str
     started: float = field(default_factory=time.monotonic)
+    trace_id: str = field(default_factory=lambda: secrets.token_hex(6))
     active: bool = True
+    phase_ms: Counter = field(default_factory=Counter)
+    phase_count: Counter = field(default_factory=Counter)
     request_scopes: int = 0
     completed_request_scopes: int = 0
     request_attempts: int = 0
@@ -68,6 +83,9 @@ class OperationTraffic:
 
     def snapshot(self, *, outcome='observed'):
         return {'operation': self.operation, 'outcome': outcome,
+            'trace_id': self.trace_id,
+            'phase_ms': {k:round(v, 3) for k,v in sorted(self.phase_ms.items())},
+            'phase_count': dict(sorted(self.phase_count.items())),
             'operation_wall_ms': round((time.monotonic() - self.started) * 1000, 3),
             'request_scopes': self.request_scopes,
             'completed_request_scopes': self.completed_request_scopes,
@@ -92,6 +110,26 @@ class OperationTraffic:
             'request_body_bytes_measured': False}
 
 
+@contextmanager
+def measure_phase(name):
+    """Measure an allowlisted wall-time phase within a currently active scope.
+
+    Does not capture profile credentials, endpoint URLs, request fields, or
+    arbitrary labels. Nested/concurrent phase durations may overlap; they
+    must not be summed to infer the total operation wall-time.
+    """
+    operation = _current_operation.get()
+    enabled = (name in _PHASES and operation is not None and operation.active)
+    started = time.monotonic() if enabled else None
+    try:
+        yield
+    finally:
+        if (enabled and operation.active and
+                _current_operation.get() is operation):
+            operation.phase_ms[name] += (time.monotonic() - started) * 1000
+            operation.phase_count[name] += 1
+
+
 def begin_operation(profile_id, action):
     metric = OperationTraffic(str(profile_id), action if action in _OPERATIONS else 'other')
     return metric, _current_operation.set(metric)
@@ -113,6 +151,38 @@ def end_operation(metric, token: Token, *, outcome):
         # Observability must never turn a confirmed Meta mutation into a job
         # failure (and thereby encourage an operator to submit it again).
         pass
+
+
+
+def observe_profile_read(function):
+    """Account for direct resource/reference HTTP reads without logging a query.
+
+    The allowlisted resource kind helps separate heavy HTML bootstrap from the
+    actual small response. Only PrivateHttpClient body bytes are measured; proxy
+    billing and non-private transports remain explicitly out of scope.
+    """
+    @wraps(function)
+    async def wrapped(*args, **kwargs):
+        profile = str(kwargs.get('profile_id', args[0] if args else '') or '').strip()
+        resource = kwargs.get('resource')
+        name = ('resource_' + resource if type(resource) is str and
+                resource in _RESOURCE_NAMES else
+                'resource_other' if resource is not None else 'template_reference')
+        existing = _current_operation.get()
+        if existing is not None and existing.active and existing.profile_id == profile:
+            return await function(*args, **kwargs)
+        metric, token = begin_operation(profile, name)
+        outcome = 'failed'
+        try:
+            result = await function(*args, **kwargs)
+            outcome = 'success'
+            return result
+        except asyncio.CancelledError:
+            outcome = 'cancelled'
+            raise
+        finally:
+            end_operation(metric, token, outcome=outcome)
+    return wrapped
 
 
 def observe_profile_inventory(function):

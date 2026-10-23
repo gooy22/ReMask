@@ -72,9 +72,11 @@ function fixture(){
   assert.equal(results.children[0].textContent,'Scoped employer');
   console.log('Shared Launch choices: exact-scope adapter and CSRF preserved.');
 
-  const creative=fixture();const requests=[];
+  const creative=fixture();const requests=[],creativeRequests=[],creativeSelected=[];
   Object.assign(creative.ctx,{$:id=>creative.nodes.get(id),creativeTargetingTimers:{interests:0},creativeTargetingControllers:{interests:null},
-    esc:String,creativeTargetLabel:()=>({main:'Interest'}),addCreativeTarget(){},api:async()=>new Promise(resolve=>requests.push(resolve))});
+    creativeTargetingPages:{},esc:String,creativeTargetLabel:()=>({main:'Interest'}),
+    addCreativeTarget:(kind,row)=>creativeSelected.push({kind,row}),
+    api:async(url,options)=>{creativeRequests.push({url,options});return new Promise(resolve=>requests.push(resolve));}});
   const field=new Input(),box=new Element();
   creative.nodes.set('mbInterestSearch',field);creative.nodes.set('mbInterestResults',box);
   const code=read('railway-v100-creatives.js');
@@ -90,14 +92,32 @@ function fixture(){
   assert.match(box.children.at(-1).textContent,/Сохранённые данные Meta.*актуальность не проверена/,
     'offline choices show their saved date and do not claim a fresh Meta read');
   console.log('Creative choices: Escape, query changes and catalog truncation passed.');
+  field.value='';
+  field.fire('keydown','Enter');
+  requests.shift()({data:[{id:'100001',name:'First'}],offset:0,next_offset:100,truncated:true});
+  await settle();
+  const more=box.children.find(node=>node.dataset.remaskTargetMore==='1');
+  assert.ok(more,'Creative editor offers the next saved reference page');
+  more.fire('click');
+  assert.match(creativeRequests.at(-1).options.body,/offset=100/);
+  requests.shift()({data:[{id:'100002',name:'Second'}],offset:100,next_offset:null});
+  await settle();
+  assert.equal(box.children.filter(node=>node.dataset.remaskTargetChoice==='1').length,2,
+    'Creative editor retains previous page while adding later results');
+  box.children.filter(node=>node.dataset.remaskTargetChoice==='1')[1].fire('click');
+  assert.equal(creativeSelected.length,1,'Creative editor selection remains functional after loading page 2');
+  assert.equal(creativeSelected[0].row.id,'100002','the later-page option keeps its exact ID');
+  console.log('Creative template: full catalog page navigation and selection passed.');
 
-  const launch=fixture();const replies=[];
+
+  const launch=fixture();const replies=[],launchRequests=[];
   for(const id of ['geoQuery','geoResults','selectedGeo'])launch.nodes.set(id,id.endsWith('Query')?new Input():new Element());
   let legacyReads=0;
   launch.nodes.get('geoQuery').addEventListener('input',()=>legacyReads++);
   launch.nodes.get('geoQuery').addEventListener('keydown',()=>legacyReads++);
   Object.assign(launch.ctx,{$:id=>launch.nodes.get(id),state:{geo:[]},formPost:body=>body,
-    apiJson:async()=>new Promise(resolve=>replies.push(resolve)),renderPills(){},invalidateLaunchReview(){},validateReady(){}});
+    apiJson:async(url,options)=>{launchRequests.push({url,options});return new Promise(resolve=>replies.push(resolve));},
+    renderPills(){},invalidateLaunchReview(){},validateReady(){}});
   vm.runInContext(read('railway-targeting-pickers.js'),launch.ctx);
   let request=launch.ctx.searchTargeting('locations');
   launch.nodes.get('geoQuery').fire('input');replies.shift()({data:[{key:'UA',type:'country',name:'Ukraine'}]});await request;
@@ -110,4 +130,68 @@ function fixture(){
   launch.nodes.get('geoResults').children[0].fire('click');
   assert.equal(launch.ctx.state.geo[0].key,'UA','selection keeps the original country key');
   console.log('Launch choices: query invalidation and original selection IDs passed.');
+  for(const id of ['interestQuery','interestResults','selectedInterests'])launch.nodes.set(id,id.endsWith('Query')?new Input():new Element());
+  launch.ctx.state.interests=[];
+  // Installation has already occurred; create a new fixture with its elements
+  // present at initialization so that the same shipped handlers own focus/input.
+  const paged=fixture(),pageReplies=[],pageRequests=[];
+  for(const id of ['interestQuery','interestResults','selectedInterests'])
+    paged.nodes.set(id,id.endsWith('Query')?new Input():new Element());
+  Object.assign(paged.ctx,{$:id=>paged.nodes.get(id),state:{interests:[]},formPost:body=>body,
+    apiJson:async(url,options)=>{pageRequests.push({url,options});return new Promise(resolve=>pageReplies.push(resolve));},
+    renderPills(){},invalidateLaunchReview(){},validateReady(){}});
+  vm.runInContext(read('railway-targeting-pickers.js'),paged.ctx);
+  let first=paged.ctx.searchTargeting('interests');
+  pageReplies.shift()({data:[{id:'100001',name:'First interest',path:['Category']}],
+    next_offset:100,offset:0,truncated:true,source:'private_meta_template_reference'});
+  await first;
+  const resultBox=paged.nodes.get('interestResults');
+  assert.equal(resultBox.children.at(-1).textContent,'Показать ещё 100 вариантов',
+    'template picker exposes next-page control instead of hiding all but 100 IDs');
+  resultBox.children.at(-1).fire('click');
+  assert.equal(pageRequests.at(-1).options.offset,100,'later page requests retain a bounded offset');
+  pageReplies.shift()({data:[{id:'100002',name:'Second interest',path:['Category','Second']}],
+    next_offset:null,offset:100,truncated:false,source:'private_meta_template_reference'});
+  await settle();
+  assert.equal(resultBox.children.length,2,'later options are appended without losing previous choices');
+  resultBox.children[1].fire('click');
+  assert.equal(paged.ctx.state.interests[0].id,'100002','a later-page interest can be selected and saved');
+  assert.equal(paged.ctx.state.interests[0].path[1],'Second','category hierarchy is preserved for the chosen ID');
+  assert.equal(resultBox.children.length,0,'selection dismisses all remaining options');
+  console.log('Launch category browser: paged discovery, exact ID choice and saved taxonomy passed.');
+  // Installed Launch API wrapper must retain the page offset. Previously it
+  // forwarded type/query/limit but silently dropped offset from a template.
+  const completion=fixture(),bridged=[];
+  Object.assign(completion.ctx,{
+    selectedAccountIds:()=>[],targetMode:()=>false,state:{profile:'38'},
+    $:()=>null,URLSearchParams,
+    apiJson:async(url,options)=>{bridged.push({url,options});return {data:[]};}
+  });
+  const completionSource=read('railway-private-launch-completion.js');
+  vm.runInContext(completionSource.slice(0,completionSource.indexOf('// A selected RK needs')),completion.ctx);
+  await completion.ctx.apiJson('ajax/metaTemplateTargetingSearch.php',{
+    body:'type=interests&q=&limit=100&offset=100'
+  });
+  assert.equal(new URLSearchParams(bridged[0].options.body).get('offset'),'100',
+    'Launch preserves page offsets through its installed account/template bridge');
+  assert.equal(bridged[0].url,'ajax/metaTemplateTargetingSearch.php');
+  const scopedResponse={data:[],checked_live:true,account_scope_verified:true,
+    profile:'38',account_id:'111111',resource:'interests',offset:100,next_offset:200};
+  // The wrapped source function is a closure over the original mock: replace
+  // its returned value by constructing a fresh selected-account fixture.
+  const selected=fixture(),selectedCalls=[];
+  Object.assign(selected.ctx,{$:()=>null,URLSearchParams,state:{profile:'38'},
+    selectedAccountIds:()=>['111111'],targetMode:()=>false,
+    apiJson:async(url,options)=>{selectedCalls.push({url,options});return scopedResponse;}});
+  vm.runInContext(completionSource.slice(0,completionSource.indexOf('// A selected RK needs')),selected.ctx);
+  const selectedPage=await selected.ctx.apiJson('ajax/metaTemplateTargetingSearch.php',{
+    body:'type=interests&q=&limit=100&offset=100'
+  });
+  assert.equal(selectedCalls[0].url,'ajax/metaTargetingSearch.php',
+    'selected account routes paging through its own private Meta resource reader');
+  assert.equal(new URLSearchParams(selectedCalls[0].options.body).get('offset'),'100');
+  assert.equal(selectedPage.next_offset,200);
+  console.log('Installed targeting API bridge: later page offset survives request routing.');
+
+
 })().catch(error=>{console.error(error);process.exitCode=1;});

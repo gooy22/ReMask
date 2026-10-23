@@ -97,7 +97,8 @@ async def verify_published_objects(client, objects, levels):
 
 
 def _scope(row, account, entity):
-    if not isinstance(row, dict) or row.get("error") or row.get("errors") or row.get("id") != entity:
+    if (not isinstance(row, dict) or "error" in row or "errors" in row
+            or row.get("id") != entity):
         raise fail("OBJECT_ID_MISMATCH", "Independent read did not return the saved advertising object")
     returned = row.get("account_id")
     if not isinstance(returned, str) or returned.removeprefix("act_") != account:

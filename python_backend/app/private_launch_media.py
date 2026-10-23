@@ -103,8 +103,8 @@ class LaunchMediaResolver:
                     async with client.post(self.url, headers={'X-Remask-Internal-Key':self.key},
                                            data=form, allow_redirects=False) as response:
                         payload = await response.json()
-                        if response.status != 200 or payload.get('ok') is not True:
-                            message = str(payload.get('error') or '')
+                        if not isinstance(payload, dict) or response.status != 200 or payload.get('ok') is not True:
+                            message = str(payload.get('error') or '') if isinstance(payload, dict) else ''
                             code = 'MEDIA_LIBRARY_QUOTA_EXCEEDED' if 'QUOTA_EXCEEDED' in message else 'MEDIA_LOCAL_PERSIST_FAILED'
                             raise ProvisioningError(code, 'Prepared media could not be saved in the managed library', retryable=False)
         except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as exc:
@@ -151,9 +151,14 @@ def local_references(creative):
         values = creative[source]
         if not isinstance(values, list):
             raise invalid("Staged media must be a list")
-        if any(not isinstance(row, dict) or not re.fullmatch(r"[a-f0-9]{64}", str(row.get("sha256", ""))) for row in values):
-            raise invalid("Staged media requires its saved checksum")
-        references = [{"id": row.get("id"), "sha256": row["sha256"]} for row in values]
+        safe_fields = {"id", "sha256", "size_bytes", "media_type", "mime_type"}
+        if any(not isinstance(row, dict) or set(row) - safe_fields
+               or not isinstance(row.get("sha256"), str)
+               or not re.fullmatch(r"[a-f0-9]{64}", row["sha256"])
+               or not isinstance(row.get("id"), str)
+               or row["id"] != "m-" + row["sha256"][:24] for row in values):
+            raise invalid("Staged media must use an exact managed library ID and checksum, without paths or URLs")
+        references = [{"id": row["id"], "sha256": row["sha256"]} for row in values]
     elif source == "media_library_id":
         references = [{"id": creative[source]}]
     else:

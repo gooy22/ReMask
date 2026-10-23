@@ -42,7 +42,9 @@ let remaskPrivateLaunchBusy=false;
 const remaskPrivateLaunchPendingKey='remask_private_launch_pending_v1';
 // Saving an actual Meta draft is an explicit operation, separate from publishing.
 function remaskPrivateExecutionMode(config) {
-    const mode=$('remaskPrivateExecutionMode')?.value||config?.payload?.execution_mode||'PUBLISH';
+    // Missing controls or a stale stored bundle never imply publish intent.
+    // Publication must be chosen in the visible execution-mode selector.
+    const mode=$('remaskPrivateExecutionMode')?.value||'DRAFT';
     if(!['DRAFT','PUBLISH'].includes(mode))throw new Error('Выберите режим создания рекламы.');
     return mode;
 }
@@ -190,7 +192,20 @@ function remaskPrivateTargetRows(config) {
         if($('launchDeliverySelect')?.value==='ACTIVE'||Object.values(requested).some(value=>value!=='PAUSED'))
             throw new Error('Для черновика выберите статус «На паузе».');
     }
-    if(Array.isArray(config?._targets))return JSON.parse(JSON.stringify(config._targets));
+    if(Array.isArray(config?._targets)){
+        // A precomputed target snapshot must not bypass the visible choice.
+        // Reject stale or hidden publication intent rather than silently
+        // reinterpreting a previously reviewed task.
+        const rows=JSON.parse(JSON.stringify(config._targets));
+        for(const row of rows){
+            const launch=row?.launch;
+            const mode=launch?.override?.execution_mode||
+                launch?.base?.execution_mode||launch?.execution_mode;
+            if(mode!==executionMode)
+                throw new Error('Режим создания изменился. Повторите проверку текущего плана.');
+        }
+        return rows;
+    }
     const ids=Array.isArray(config?.accountIds)?config.accountIds:
         (typeof selectedAccountIds==='function'?selectedAccountIds():[]);
     // Direct single-RK Launch and workspace/bulk Launch have different Page
@@ -220,14 +235,14 @@ function remaskPrivateTargetRows(config) {
         if(!profile)throw new Error('Для РК не выбран профиль Facebook: '+accountId+'.');
         if(!/^\d{5,30}$/.test(businessId))throw new Error('Для РК не указан BM: '+accountId+'.');
         if(!/^\d{5,30}$/.test(pageId))throw new Error('Выберите страницу для РК '+accountId+'.');
-        const selectedPaymentMethod=remaskPrivateSelectedPayment(
+        const selectedPaymentMethod=executionMode==='DRAFT'?null:remaskPrivateSelectedPayment(
             profile,accountId
         );
         const override=JSON.parse(JSON.stringify(overrides[accountId]||overrides['act_'+accountId]||{}));
         // Operation mode is a form-level choice, never a stale per-RK override.
         delete override.execution_mode;
         const base={...(config.payload||{})};delete base.execution_mode;
-        if(executionMode==='DRAFT')base.execution_mode='DRAFT';
+        base.execution_mode=executionMode;
         if(config.payload?.creative?.page_id||override.creative?.page_id)
             override.creative={...(override.creative||{}),page_id:pageId};
         if(config.payload?.adset?.promoted_object?.page_id||override.adset?.promoted_object?.page_id)
@@ -401,7 +416,7 @@ async function remaskPrivatePrepareConfig() {
     const {config,format,preset,selected,files,cards,delivery}=snapshot;
     const executionMode=remaskPrivateExecutionMode(config);
     delete config.payload.execution_mode;
-    if(executionMode==='DRAFT')config.payload.execution_mode='DRAFT';
+    config.payload.execution_mode=executionMode;
     const creative=config.payload.creative||(config.payload.creative={});
     // PHP's associative JSON decode/encode turns an empty {} into []. These
     // optional maps contain no settings; omit them before the worker bridge
@@ -554,6 +569,10 @@ function remaskPrivateRenderReviewResults(results,render=true) {
         business_id:entry.row.business_id,ad_account_id:entry.row.ad_account_id,
         page_id:entry.row.page_id,status:entry.status,
         error_code:entry.error_code||'',message:entry.error||'',
+        checked_live:entry.review?.checked_live===true,
+        editor_state:entry.review?.editor_state||'EDITOR_UNVERIFIED',
+        missing_fields:Array.isArray(entry.review?.missing_fields)?entry.review.missing_fields:[],
+        missing_contracts:Array.isArray(entry.review?.missing_contracts)?entry.review.missing_contracts:[],
         review_attempted:entry.review_attempted!==false}));
     if(typeof state!=='undefined')state.privateLaunchReadiness={admission_policy:'all_required',targets};
     if(!render||typeof document==='undefined'||!document.createElement)return;
@@ -571,8 +590,13 @@ function remaskPrivateRenderReviewResults(results,render=true) {
     const list=document.createElement('ul');
     for(const target of targets){
         const item=document.createElement('li');
-        item.textContent='Профиль '+target.profile_id+' · РК '+target.ad_account_id+' · '+
-            (target.status==='READY'?'ГОТОВ':target.error_code+': '+target.message);
+        const status=target.status==='READY'?'API preflight готов':target.error_code+': '+target.message;
+        const missing=[...target.missing_fields.map(value=>'field '+value),
+            ...target.missing_contracts.map(value=>'contract '+value)];
+        item.textContent='Профиль '+target.profile_id+' · РК '+target.ad_account_id+' · '+status+
+            ' · API live read: '+(target.checked_live?'выполнен':'не выполнялся')+
+            ' · Meta editor: '+target.editor_state+
+            (missing.length?' · Требуется: '+missing.join(', '):'');
         list.appendChild(item);
     }
     box.appendChild(list);
@@ -859,7 +883,12 @@ async function remaskPrivatePollJob(jobId) {
 
 function remaskPrivateCanDeliver(item,task,status){
     if(task?.action!=='private_launch')return false;
-    if((task.payload?.launch?.base?.execution_mode||task.payload?.launch?.execution_mode)==='DRAFT')return false;
+    const launch=task.payload?.launch;
+    const executionMode=launch?.base?.execution_mode||launch?.execution_mode;
+    // Legacy tasks with missing intent must never inherit publishing controls.
+    // An account-level override is not a valid source of publication consent.
+    if(executionMode!=='PUBLISH'||(launch?.override&&
+        Object.prototype.hasOwnProperty.call(launch.override,'execution_mode')))return false;
     if(status==='PAUSED'||task.status==='SUCCESS')return true;
     return (item.advertising_steps||[]).some(step=>step.task_id===task.id&&step.verified===true&&
         step.status==='SUCCESS'&&['ADS_MANAGER:PUBLISH','PUBLISH_FAMILY'].includes(step.step)&&

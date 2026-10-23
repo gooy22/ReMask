@@ -76,7 +76,7 @@ function fixture(size=30) {
     const results=await ctx.remaskPrivateReviewLive();
     assert.equal(results[0].error_code,'PAGE_ACCESS_REQUIRED');
     const request=requests.find(row=>row.action==='private_launch_review');
-    assert.equal(request.launch.base.execution_mode,mode==='DRAFT'?'DRAFT':undefined);
+    assert.equal(request.launch.base.execution_mode,mode);
     assert.equal(storage.size,0);
     assert.ok(requests.every(row=>row.action!=='create'));
     assert.match(controls.launchResult.textContent,/0\/1 РК готовы/);
@@ -95,10 +95,19 @@ function fixture(size=30) {
     const task={action:'private_launch',status:'SUCCESS',payload:created.profiles[0].tasks[0].payload};
     assert.equal(ctx.remaskPrivateCanDeliver({},task,'ACTIVE'),false);
     assert.equal(ctx.remaskPrivateCanDeliver({},task,'PAUSED'),false);
+    const previous={...task,payload:{...task.payload,launch:{base:{},override:{}}}};
+    assert.equal(ctx.remaskPrivateCanDeliver({},previous,'ACTIVE'),false,
+      'a legacy task without explicit publication intent cannot expose activation');
+    assert.equal(ctx.remaskPrivateCanDeliver({},previous,'PAUSED'),false,
+      'a legacy task without explicit publication intent cannot expose delivery actions');
+    const conflicting={...task,payload:{...task.payload,
+      launch:{base:{execution_mode:'PUBLISH'},override:{execution_mode:'DRAFT'}}}};
+    assert.equal(ctx.remaskPrivateCanDeliver({},conflicting,'ACTIVE'),false,
+      'an account-level mode override invalidates stored publication consent');
     const draftFingerprint=ctx.remaskPrivateFingerprint(rows);
     controls.remaskPrivateExecutionMode.value='PUBLISH';
     const publicationRows=ctx.remaskPrivateTargetRows(config);
-    assert.equal(publicationRows[0].launch.base.execution_mode,undefined);
+    assert.equal(publicationRows[0].launch.base.execution_mode,'PUBLISH');
     assert.notEqual(ctx.remaskPrivateFingerprint(publicationRows),draftFingerprint,'draft and publication must not share an intent');
     controls.remaskPrivateExecutionMode.value='DRAFT';
     config.payload.delivery.ad='ACTIVE';

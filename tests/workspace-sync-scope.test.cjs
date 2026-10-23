@@ -80,8 +80,117 @@ async function run(activeTab, rows) {
   return JSON.parse(JSON.stringify(calls));
 }
 
+async function syncLatencyMetricsAreAggregateOnly() {
+  const logs=[],elements=new Map(),profile='fixture-private-profile';
+  const state={running:false,activeTab:'profiles'};
+  const sandbox={
+    state,selectedRows:()=>[{name:profile}],
+    $:id=>{if(!elements.has(id))elements.set(id,{});return elements.get(id);},
+    updateSelectionUi(){},setProgress(){},render(){},
+    Date,Math,setTimeout,clearTimeout,post:payload=>payload,
+    console:{info:(...args)=>logs.push(args.join(' '))},
+    applySnapshot:()=>true,
+    async apiJson(){
+      return {sync_complete:true,sync_timings_ms:{
+        php_context:12,worker_bridge:55,php_total:73,php_reconciliation:6,
+        worker:{total:51,profile_context:4,durable_state:2,http_session:3,
+          inventory:35,page_enrichment:7,
+          meta_reads:{business_id:'PRIVATE-BUSINESS',proxy:'PRIVATE-CREDENTIAL'},
+          arbitrary:'PRIVATE-WORKER'},
+        // Incoming arbitrary fields must never be logged:
+        profile,proxy:'PRIVATE-CREDENTIAL'
+      }};
+    },
+    async concurrent(items,limit,fn){
+      const result=[];
+      for(const item of items)result.push(await fn(item));
+      return result;
+    },
+  };
+  vm.createContext(sandbox);vm.runInContext(source,sandbox);
+  await sandbox.syncSelection();
+  const metric=state.lastSyncTimingMs;
+  assert.equal(metric.ui_http_calls,1);
+  assert.equal(metric.ui_http_parallel_peak,1);
+  assert.equal(metric.ui_apply_count,1);
+  assert.equal(metric.php_context_ms_sum,12);
+  assert.equal(metric.worker_bridge_ms_sum,55);
+  assert.equal(metric.php_total_ms_sum,73);
+  assert.equal(metric.php_reconciliation_ms_sum,6);
+  assert.equal(metric.worker_reported_count,1);
+  assert.equal(metric.worker_total_ms_sum,51);
+  assert.equal(metric.worker_profile_context_ms_sum,4);
+  assert.equal(metric.worker_durable_state_ms_sum,2);
+  assert.equal(metric.worker_http_session_ms_sum,3);
+  assert.equal(metric.worker_inventory_ms_sum,35);
+  assert.equal(metric.worker_page_enrichment_ms_sum,7);
+  assert.equal(metric.ui_http_pending,0);
+  assert.equal(metric.ui_http_complete,true);
+  assert.ok(metric.ui_wall_ms>=0 && metric.ui_render_ms>=0);
+  assert.equal(state.running,false);
+  assert.equal(logs.length,1);
+  assert.ok(logs[0].includes('[ReMask sync latency]'));
+  assert.ok(!logs[0].includes(profile));
+  assert.ok(!logs[0].includes('PRIVATE-CREDENTIAL'));
+  assert.ok(!logs[0].includes('PRIVATE-BUSINESS'));
+  assert.ok(!logs[0].includes('PRIVATE-WORKER'));
+}
+
+async function failedSyncPhaseTimingIsReportedWithoutMutatingWorkspace() {
+  const logs=[],elements=new Map();
+  const state={running:false,activeTab:'profiles'};
+  let applied=0;
+  const scope={
+    state,selectedRows:()=>[{name:'private-fixture'}],
+    $:id=>{if(!elements.has(id))elements.set(id,{});return elements.get(id);},
+    updateSelectionUi(){},setProgress(){},render(){},
+    Date,Math,setTimeout,clearTimeout,post:x=>x,
+    console:{info:(...x)=>logs.push(x.join(' '))},
+    applySnapshot(){applied++;throw Error('Failed sync must not apply');},
+    apiJson:async()=>({sync_complete:false,sync_error_kind:'PRIVATE_SYNC',
+      sync_error:'fixture failure',sync_timings_ms:{
+        php_context:100,worker_bridge:30100,php_total:30205,
+        secret:'cookie-do-not-log'
+      }}),
+    concurrent:async(items,limit,work)=>{
+      const result=[];
+      for(const item of items)result.push(await work(item));
+      return result;
+    },
+  };
+  vm.createContext(scope);vm.runInContext(source,scope);
+  await scope.syncSelection();
+  assert.equal(applied,0);
+  const timing=state.lastSyncTimingMs;
+  assert.equal(timing.php_context_ms_sum,100);
+  assert.equal(timing.worker_bridge_ms_sum,30100);
+  assert.equal(timing.php_total_ms_sum,30205);
+  assert.equal(timing.php_reported_count,1);
+  assert.equal(logs.length,1);
+  assert.ok(!logs[0].includes('cookie-do-not-log'));
+}
+
+async function incompleteSyncCannotApplyOrReportSuccess() {
+  for(const response of [null,{}, {profile:{name:'alpha'}}, {sync_complete:false}]){
+    let applied=0;
+    const elements=new Map();
+    const sandbox={state:{running:false,activeTab:'profiles'},selectedRows:()=>[{name:'alpha'}],
+      $:id=>{if(!elements.has(id))elements.set(id,{});return elements.get(id);},
+      updateSelectionUi(){},setProgress(){},render(){},Date,Math,setTimeout,clearTimeout,
+      post:payload=>payload,apiJson:async()=>response,
+      applySnapshot(){applied++;return true;},
+      concurrent:async(items,limit,fn)=>Promise.all(items.map(fn))};
+    vm.createContext(sandbox);vm.runInContext(source,sandbox);
+    await sandbox.syncSelection();
+    assert.equal(applied,0,'An incomplete response cannot replace confirmed Workspace state');
+    assert.match(elements.get('workspaceStatus').textContent,/не выполнена/);
+    assert.equal(sandbox.state.running,false);
+  }
+}
+
 async function stalledReconciliation() {
   const calls=[], elements=new Map(); let now=0, timerId=0;
+  let releaseRead;
   const timers=new Map();
   const sandbox={state:{running:false,activeTab:'profiles'},selectedRows:()=>[{name:'35'}],
     $:id=>{if(!elements.has(id))elements.set(id,{});return elements.get(id);},
@@ -93,7 +202,7 @@ async function stalledReconciliation() {
     apiJson:async(url,payload)=>{
       calls.push(payload);
       if(payload.action==='sync_profile')throw Error('Failed to fetch');
-      return new Promise(()=>{});
+      return new Promise(resolve=>{releaseRead=resolve;});
     },
     concurrent:async(items,limit,fn)=>Promise.all(items.map(fn)),
   };
@@ -110,12 +219,74 @@ async function stalledReconciliation() {
   assert.equal(sandbox.state.running,false);
   assert.equal(calls.length,2,'a hung status read must not queue further requests');
   assert.match(elements.get('workspaceStatus').textContent,/Failed to fetch/);
+  assert.equal(sandbox.state.lastSyncTimingMs.ui_http_pending,1);
+  assert.equal(sandbox.state.lastSyncTimingMs.ui_http_complete,false);
+  const measured=JSON.stringify(sandbox.state.lastSyncTimingMs);
+  releaseRead({pending:true});
+  for(let i=0;i<10;i++)await Promise.resolve();
+  assert.equal(JSON.stringify(sandbox.state.lastSyncTimingMs),measured,
+    'A late read must not mutate the timing snapshot after UI completion');
+}
+
+async function independentProfilesRunInParallelButSameProfileSerial() {
+  const rows=[
+    {profile:'alpha',id:'1111111111'},
+    {profile:'alpha',id:'2222222222'},
+    {profile:'bravo',id:'3333333333'},
+    {profile:'charlie',id:'4444444444'},
+  ];
+  const active=new Set(),calls=[],finished=[],progress=[];
+  let peak=0,sameProfileOverlap=false,poolLimit=0;
+  const elements=new Map();
+  const scope={
+    state:{running:false,activeTab:'businesses'},selectedRows:()=>rows,
+    $:id=>{if(!elements.has(id))elements.set(id,{});return elements.get(id);},
+    updateSelectionUi(){},render(){},setProgress:(done,total)=>progress.push([done,total]),
+    post:value=>value,applySnapshot:()=>true,Date,Math,setTimeout,clearTimeout,
+    async apiJson(url,input){
+      if(input.action!=='sync_profile')throw Error('Unexpected network route');
+      calls.push({profile:input.profile,business:input.business_id});
+      if(active.has(input.profile))sameProfileOverlap=true;
+      active.add(input.profile);
+      peak=Math.max(peak,active.size);
+      await new Promise(resolve=>setTimeout(resolve,3));
+      active.delete(input.profile);
+      finished.push(input.profile+'|'+input.business_id);
+      return {sync_complete:true};
+    },
+    async concurrent(items,limit,worker){
+      poolLimit=limit;
+      let next=0;
+      await Promise.all(Array.from({length:Math.min(limit,items.length)},async()=>{
+        for(;;){
+          const index=next++;
+          if(index>=items.length)return;
+          await worker(items[index]);
+        }
+      }));
+      return [];
+    },
+  };
+  vm.createContext(scope);vm.runInContext(source,scope);
+  await scope.syncSelection();
+  assert.equal(poolLimit,2,'At most two independent profile reads per browser');
+  assert.equal(peak,2,'Independent profiles must actually overlap');
+  assert.equal(sameProfileOverlap,false,'The same profile must remain serial');
+  assert.equal(calls.length,4,'Every selected BM must still be visited');
+  assert.deepEqual(finished.filter(x=>x.startsWith('alpha|')),
+    ['alpha|1111111111','alpha|2222222222']);
+  assert.deepEqual(progress.at(-1),[4,4]);
+  assert.equal(scope.state.running,false);
 }
 
 (async()=>{
   snapshotPreservation();
   businessOnlySnapshot();
   await sessionRefreshOutcome();
+  await syncLatencyMetricsAreAggregateOnly();
+  await failedSyncPhaseTimingIsReportedWithoutMutatingWorkspace();
+  await incompleteSyncCannotApplyOrReportSuccess();
+  await independentProfilesRunInParallelButSameProfileSerial();
   await stalledReconciliation();
   const bm = await run('businesses',[{profile:'8',id:'1632909278268870'}]);
   assert.equal(bm.length,1);
