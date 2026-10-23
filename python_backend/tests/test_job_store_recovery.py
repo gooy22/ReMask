@@ -689,6 +689,55 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
             )
         return job_id, item_id
 
+    async def test_large_generic_job_status_is_batched_and_preserves_detail_order(self):
+        job_id, seed_item=self._seed(task_status='SUCCESS')
+        with self.store._connect() as con:
+            con.execute("UPDATE job_tasks SET result_json=? WHERE item_id=?",
+                (json.dumps({'finished':True}),seed_item))
+            now=int(time.time())
+            for n in range(48):
+                item_id='batch-item-%03d'%n
+                con.execute(
+                    'INSERT INTO job_items (id,job_id,profile_id,status,created_at,updated_at) '
+                    'VALUES(?,?,?,?,?,?)',
+                    (item_id,job_id,str(1000+n),'SUCCESS',now+n+1,now+n+1))
+                for position in (0,1):
+                    con.execute(
+                        'INSERT INTO job_tasks '
+                        '(id,item_id,position,action,payload_json,status,created_at,updated_at) '
+                        'VALUES(?,?,?,?,?,?,?,?)',
+                        ('task-%03d-%d'%(n,position),item_id,position,
+                         'fixture',json.dumps({'position':position}),
+                         'SUCCESS',now+n+1,now+n+1))
+        await self.provisioning_state.set_running(
+            seed_item,'4','default',ProvisioningStep.BUSINESS)
+        await self.provisioning_state.complete(
+            seed_item,'4','default',ProvisioningStep.BUSINESS,
+            {'business_id':'1234567890123456'})
+        executed=[]
+        original=self.store._connect
+        def counted_connection():
+            conn=original()
+            conn.set_trace_callback(lambda query: executed.append(query))
+            return conn
+        with patch.object(self.store,'_connect',side_effect=counted_connection):
+            view=await self.store.job_view(job_id)
+        self.assertEqual(view['items_total'],49)
+        self.assertEqual(view['items'][0]['id'],seed_item)
+        self.assertEqual(view['items'][0]['tasks'][0]['result'],{'finished':True})
+        self.assertEqual(view['items'][0]['provisioning_steps'][0]['step'],'BUSINESS')
+        self.assertEqual(view['items'][0]['provisioning_steps'][0]['result']['business_id'],
+            '1234567890123456')
+        self.assertEqual(len(view['items'][0]['advertising_steps']),0)
+        for n,item in enumerate(view['items'][1:]):
+            self.assertEqual(item['id'],'batch-item-%03d'%n)
+            self.assertEqual([t['payload']['position'] for t in item['tasks']],[0,1])
+            self.assertEqual(item['provisioning_steps'],[])
+        selects=[q.lower() for q in executed if q.lstrip().lower().startswith('select')]
+        self.assertEqual(len(selects),4,
+            'One Job, item, task and provisioning SELECT should serve any job size')
+        self.assertEqual(sum('join job_items' in q for q in selects),2)
+
     async def test_finalize_does_not_promote_running_task_to_success(self):
         job_id, item_id = self._seed(task_status="RUNNING")
 
