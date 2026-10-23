@@ -141,7 +141,8 @@ class SavedDraftInspectionTests(unittest.IsolatedAsyncioTestCase):
         original_get = self.client.get
         async def interrupted(path, params):
             if path == '/addraft_555555':
-                raise TimeoutError('synthetic independent read interrupted')
+                from app.private_ads_draft import fail
+                raise fail('READ_PENDING', 'synthetic independent read interrupted', True)
             return await original_get(path, params)
         self.client.get = interrupted
         with self.assertRaises(ProvisioningError):
