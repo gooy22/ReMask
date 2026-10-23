@@ -722,7 +722,9 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
             with original() as conn:
                 conn.set_trace_callback(lambda query: executed.append(query))
                 yield conn
-        with patch.object(self.store,'_connect',side_effect=counted_connection):
+        # Replace the bound factory directly. A MagicMock side_effect can
+        # rewrap context managers in some Python/runtime combinations.
+        with patch.object(self.store,'_connect',counted_connection):
             view=await self.store.job_view(job_id)
         self.assertEqual(view['items_total'],49)
         self.assertEqual(view['items'][0]['id'],seed_item)
