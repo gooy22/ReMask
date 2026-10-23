@@ -171,6 +171,49 @@ echo 'SAVED';
                 self.assertEqual(content[profile]['ad_accounts'][0]['id'], account)
                 self.assertEqual(content[profile]['profile']['name'], profile)
 
+    def test_workspace_display_groups_accounts_once_and_preserves_row_order(self):
+        source = (Path(__file__).resolve().parents[2] / 'railway-workspace-sync-fix-overlay.php').read_text()
+        start = source.index('function hierarchy_created_accounts_apply_display(')
+        end = source.index('function hierarchy_binding_file(): string', start)
+        function = source[start:end]
+        self.assertIn('REMASK_LINEAR_WORKSPACE_ACCOUNT_GROUPS_V1', function)
+        fixture = r'''
+function hierarchy_binding_get($profile) {
+    return [
+        ['business_id'=>'2222222222','ad_account_id'=>'4444444444','account_name'=>'Added'],
+        ['business_id'=>'3333333333','ad_account_id'=>'5555555555','account_name'=>'Foreign'],
+        ['business_id'=>'1111111111','ad_account_id'=>'6666666666','account_name'=>'New'],
+    ];
+}
+$snapshot = [
+    'businesses'=>[
+        ['id'=>'1111111111','name'=>'First BM'],
+        ['id'=>'2222222222','name'=>'Second BM'],
+    ],
+    'ad_accounts'=>[
+        ['id'=>'7777777777','business_id'=>'1111111111'],
+        ['id'=>'8888888888','business_id'=>'2222222222'],
+        ['id'=>'9999999999','business_id'=>'1111111111'],
+    ],
+    'profile'=>['name'=>'fixture'],
+    'profiles'=>[['name'=>'fixture']],
+];
+'''
+        script = fixture + function + r'''
+echo json_encode(hierarchy_created_accounts_apply_display('fixture',$snapshot));
+'''
+        completed = subprocess.run(['php','-r',script],capture_output=True,text=True,timeout=10)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        snap = json.loads(completed.stdout)
+        groups = snap['businesses']
+        self.assertEqual([[row['id'] for row in group['accounts']] for group in groups],
+            [['7777777777','9999999999','6666666666'],
+             ['8888888888','4444444444']])
+        self.assertEqual([group['ad_account_count'] for group in groups], [3,2])
+        self.assertEqual(snap['ad_accounts_count'], 5)
+        self.assertEqual(snap['profile']['rk_count'], 5)
+        self.assertEqual(snap['profiles'][0]['rk_count'], 5)
+
     def test_batched_bindings_preserve_old_businesses_and_last_rk_wins(self):
         source = (Path(__file__).resolve().parents[2] / 'railway-workspace-sync-fix-overlay.php').read_text()
         start = source.index('function hierarchy_binding_file(): string')
