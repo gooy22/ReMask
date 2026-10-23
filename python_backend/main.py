@@ -45,6 +45,17 @@ INTERNAL_KEY=os.getenv('REMASK_INTERNAL_KEY')
 store=JobStore(DB_PATH)
 mirror=SnapshotMirror(STATE_URL,INTERNAL_KEY)
 pool=WorkerPool(store,mirror,CONCURRENCY)
+# Fast interactive reads must not inherit a 6x15s local resolver retry chain.
+# This is a failure bound; successful profile checks retain their full response.
+_READ_CONTEXT_BUDGET_SECONDS=12.0
+
+
+async def _resolve_read_profile(profile_id: str):
+    return await asyncio.wait_for(
+        pool.resolver.resolve(profile_id),timeout=_READ_CONTEXT_BUDGET_SECONDS,
+    )
+
+
 SMOKE_ON_START=str(os.getenv('REMASK_E2E_SMOKE_ON_START','0')).strip().lower() in {'1','true','yes','on'}
 BM_CANARY_ON_START=str(os.getenv('REMASK_BM_CANARY_ON_START','0')).strip().lower() in {'1','true','yes','on'}
 
@@ -3728,7 +3739,7 @@ async def private_advertising_resources(profile_id: str, resource: str, account_
     try:
         account = pool.private_launch._id(account_id, 'account_id')
         with measure_phase('resolver'):
-            context = await pool.resolver.resolve(profile)
+            context = await _resolve_read_profile(profile)
         rows = [row for row in (context.ad_accounts or []) if isinstance(row,dict)
                 and str(row.get('ad_account_id') or row.get('account_id') or row.get('id') or '').removeprefix('act_') == account]
         businesses = {str(row.get('business_id') or '') for row in rows if str(row.get('business_id') or '').isdigit()}
@@ -3790,7 +3801,7 @@ async def private_template_reference(profile_id: str, operation: str, payload: d
     try:
         async def read():
             with measure_phase('resolver'):
-                context = await pool.resolver.resolve(profile)
+                context = await _resolve_read_profile(profile)
             with measure_phase('profile_session'):
                 async with ProfileSession(context) as session:
                     web = await session.facebook_web()
@@ -3826,7 +3837,7 @@ async def private_advertising_helper(profile_id: str, helper: str, payload: dict
         if not profile or len(profile) > 160:
             raise ValueError('INVALID_PROFILE')
         account = pool.private_launch._id(payload.get('account_id'), 'account_id')
-        context = await pool.resolver.resolve(profile)
+        context = await _resolve_read_profile(profile)
         businesses = {str(row.get('business_id') or '') for row in context.ad_accounts or []
             if isinstance(row, dict) and str(row.get('ad_account_id') or row.get('account_id')
                 or row.get('id') or '').removeprefix('act_') == account
