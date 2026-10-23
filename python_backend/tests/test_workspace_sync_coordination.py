@@ -8,6 +8,58 @@ import unittest
 
 
 class WorkspaceSyncCoordinationTests(unittest.TestCase):
+    def test_parallel_profile_snapshot_writes_never_lose_another_profile(self):
+        """The cross-profile UI pool must preserve both persisted snapshots."""
+        source = (Path(__file__).resolve().parents[2] / 'railway-workspace-sync-fix-overlay.php').read_text()
+        helper = source[source.index('function hierarchy_live_snapshot_file('):
+                        source.index('function hierarchy_live_snapshot_apply_display(')]
+        with tempfile.TemporaryDirectory() as directory:
+            helper = helper.replace('/var/lib/remask', directory)
+            script = helper + r'''
+fgets(STDIN);
+$profile=$argv[1]; $business=$argv[2]; $account=$argv[3];
+for ($i=0;$i<80;$i++) {
+    hierarchy_live_snapshot_put(
+        $profile,
+        [['id'=>$business,'name'=>'Live BM']],
+        [['id'=>$account,'business_id'=>$business]],
+        [], ['name'=>$profile], false
+    );
+}
+echo 'SAVED';
+'''
+            profiles = [
+                ('alpha', '1111111111', '2222222222'),
+                ('bravo', '3333333333', '4444444444'),
+                ('charlie', '5555555555', '6666666666'),
+            ]
+            children = []
+            try:
+                for args in profiles:
+                    child = subprocess.Popen(['php', '-r', script, *args],
+                        stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE, text=True)
+                    children.append(child)
+                for child in children:
+                    child.stdin.write('start\\n')
+                    child.stdin.flush()
+                for child in children:
+                    output, errors = child.communicate(timeout=15)
+                    self.assertEqual(child.returncode, 0, errors)
+                    self.assertEqual(output, 'SAVED')
+            finally:
+                for child in children:
+                    if child.poll() is None:
+                        child.kill()
+                        child.communicate(timeout=5)
+            file = Path(directory) / 'workspace-live-meta-snapshots.json'
+            content = json.loads(file.read_text())
+            self.assertEqual(set(content), {entry[0] for entry in profiles})
+            for profile, business, account in profiles:
+                self.assertEqual(content[profile]['businesses'][0]['id'], business)
+                self.assertEqual(content[profile]['ad_accounts'][0]['id'], account)
+                self.assertEqual(content[profile]['profile']['name'], profile)
+
     def test_busy_profile_never_starts_another_meta_read_and_other_profiles_are_free(self):
         source = (Path(__file__).resolve().parents[2] / 'railway-workspace-sync-fix-overlay.php').read_text()
         helper = source[source.index('function hierarchy_profile_sync_lock('):
