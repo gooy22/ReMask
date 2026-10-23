@@ -35,17 +35,9 @@ $js = <<<'JS'
   }
 
   function labelFor(input) {
-    let out = '';
-    if (input.id) {
-      const label = document.querySelector(`label[for="${CSS.escape(input.id)}"]`);
-      if (label) out += ' ' + label.textContent;
-    }
-    let p = input.parentElement;
-    for (let i = 0; p && i < 6; i++, p = p.parentElement) {
-      const label = p.querySelector('label, .form-label, .label, small, .muted, .section-title, h2, h3, h4, h5');
-      if (label) out += ' ' + label.textContent;
-    }
-    return out;
+    if (!input.id) return '';
+    const label = document.querySelector(`label[for="${CSS.escape(input.id)}"]`);
+    return label ? String(label.textContent || '') : '';
   }
 
   function isTargetingInput(input) {
@@ -53,11 +45,17 @@ $js = <<<'JS'
     if (input.disabled || input.readOnly) return false;
     const type = (input.getAttribute('type') || 'text').toLowerCase();
     if (!['text', 'search', ''].includes(type)) return false;
-    const hay = `${textOf(input)} ${labelFor(input)}`;
-    if (EXCLUDE_INPUT_RE.test(hay)) return false;
-    if (TARGETING_RE.test(hay)) return true;
-    const wrap = input.closest('[data-targeting], [data-audience], .targeting, .audience, .interests, .behaviors, .behaviours, .detailed-targeting, .targeting-search, .interest-search');
-    return Boolean(wrap);
+    // Use stable field identity and its own label only. Never inspect entered
+    // copy or ancestor headings: "Primary text" can sit beside audience fields.
+    const identity = [input.id, input.name, input.placeholder,
+      input.getAttribute?.('aria-label'), input.getAttribute?.('data-label'),
+      input.getAttribute?.('class')].filter(Boolean).join(' ');
+    const directLabel = labelFor(input);
+    if (EXCLUDE_INPUT_RE.test(identity + ' ' + directLabel)) return false;
+    if (TARGETING_RE.test(identity + ' ' + directLabel)) return true;
+    return Boolean(input.closest(
+      '[data-remask-targeting-input], [data-targeting-field], [data-targeting], [data-audience], .targeting-search, .interest-search'
+    ));
   }
 
   function looksLikeSearchButton(btn) {
@@ -101,7 +99,7 @@ $js = <<<'JS'
     for (const btn of buttons) {
       const nearest = btn.closest('[data-targeting], [data-audience], .targeting, .audience, .interests, .behaviors, .behaviours, .detailed-targeting, .targeting-search, .interest-search, .input-group, .form-group, .field, .mb-3, .card, .panel, section, form, div');
       const broad = btn.closest('.card, .panel, section, form, main, body');
-      if (areaHasTargeting(nearest) || areaHasTargeting(broad)) removeButton(btn);
+      if (areaHasTargeting(nearest)) removeButton(btn);
     }
   }
 
