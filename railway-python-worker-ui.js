@@ -1479,7 +1479,7 @@ function pythonWorkerBmRowConfig(dialog, profiles, fallbackName) {
   return result;
 }
 
-async function pythonWorkerRefreshProfile(profileId) {
+async function pythonWorkerRefreshProfile(profileId, options) {
   if (typeof apiJson !== 'function' || typeof post !== 'function') {
     return false;
   }
@@ -1498,7 +1498,7 @@ async function pythonWorkerRefreshProfile(profileId) {
     );
 
     if (typeof applySnapshot === 'function') applySnapshot(data);
-    if (typeof render === 'function') render();
+    if (typeof render === 'function' && (!options || options.render !== false)) render();
     return true;
   } catch (error) {
     console.error('[ReMask Worker UI] snapshot_profile failed for ' + profileId + ':', error);
@@ -1525,10 +1525,15 @@ async function pythonWorkerRefreshSuccessfulProfiles(items) {
   // independent profiles concurrently, but cap PHP load and preserve the
   // original profile ordering for any failed-refresh diagnostics.
   const unconfirmed = new Array(profiles.length);
+  let refreshed = 0;
   await pythonWorkerMapLimit(profiles, 3, async function(profileId, index) {
-    const ok = await pythonWorkerRefreshProfile(profileId);
+    const ok = await pythonWorkerRefreshProfile(profileId, {render: false});
     if (!ok) unconfirmed[index] = profileId;
+    else refreshed++;
   });
+  // State application is synchronous; a single final render avoids an
+  // expensive full Workspace redraw on every independently returned snapshot.
+  if (refreshed > 0 && typeof render === 'function') render();
   return unconfirmed.filter(Boolean);
 }
 
