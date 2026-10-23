@@ -159,5 +159,23 @@ function fixture(){
   assert.equal(paged.ctx.state.interests[0].path[1],'Second','category hierarchy is preserved for the chosen ID');
   assert.equal(resultBox.children.length,0,'selection dismisses all remaining options');
   console.log('Launch category browser: paged discovery, exact ID choice and saved taxonomy passed.');
+  // Installed Launch API wrapper must retain the page offset. Previously it
+  // forwarded type/query/limit but silently dropped offset from a template.
+  const completion=fixture(),bridged=[];
+  Object.assign(completion.ctx,{
+    selectedAccountIds:()=>[],targetMode:()=>false,state:{profile:'38'},
+    $:()=>null,URLSearchParams,
+    apiJson:async(url,options)=>{bridged.push({url,options});return {data:[]};}
+  });
+  const completionSource=read('railway-private-launch-completion.js');
+  vm.runInContext(completionSource.slice(0,completionSource.indexOf('// A selected RK needs')),completion.ctx);
+  await completion.ctx.apiJson('ajax/metaTemplateTargetingSearch.php',{
+    body:'type=interests&q=&limit=100&offset=100'
+  });
+  assert.equal(new URLSearchParams(bridged[0].options.body).get('offset'),'100',
+    'Launch preserves page offsets through its installed account/template bridge');
+  assert.equal(bridged[0].url,'ajax/metaTemplateTargetingSearch.php');
+  console.log('Installed targeting API bridge: later page offset survives request routing.');
+
 
 })().catch(error=>{console.error(error);process.exitCode=1;});
