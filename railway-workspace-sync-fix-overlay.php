@@ -491,38 +491,58 @@ async function syncSelection(){
     }
   };
 
-  // REMASK_SYNC_BROWSER_SERIAL_V1
-  // Production is intentionally one Chromium lease in a 1 GB container.
-  // Match client request concurrency to that capacity instead of queueing
-  // three long HTTP requests behind one browser semaphore.
-  const syncConcurrency=1;
+  // REMASK_SYNC_PROFILE_AWARE_POOL_V1
+  // HTTP-only inventory no longer leases Chromium. Run at most two distinct
+  // profile sessions concurrently; the PHP per-profile lock remains the
+  // authority, and selected BMs on the SAME profile remain strictly serial.
+  // Bound the number of simultaneous Meta reads in the 1 GB runtime.
+  const syncConcurrency=2;
+  const concurrentByProfile=async(targets, profileOf, worker, progress)=>{
+    const grouped=new Map();
+    targets.forEach((target,index)=>{
+      const profile=String(profileOf(target)||'').trim();
+      if(!grouped.has(profile))grouped.set(profile,[]);
+      grouped.get(profile).push({target,index});
+    });
+    const ordered=new Array(targets.length);
+    let completed=0;
+    await concurrent([...grouped.values()],Math.min(syncConcurrency,grouped.size),
+      async group=>{
+        for(const entry of group){
+          try{
+            ordered[entry.index]=await worker(entry.target);
+          }catch(error){
+            const failure=classifySyncError(error);
+            ordered[entry.index]={error:failure.message,error_kind:failure.kind,
+              profile:String(profileOf(entry.target)||'')};
+          }
+          completed++;
+          progress(completed,targets.length);
+        }
+      });
+    return ordered;
+  };
 
   try{
     let results=[];
     if(tab==='profiles'){
-      results=await concurrent(
-        rows,
-        syncConcurrency,
-        r=>syncProfileSafe(r.name),
+      results=await concurrentByProfile(
+        rows,r=>r.name,r=>syncProfileSafe(r.name),
         (done,total)=>{$('workspaceStatus').textContent=`Синхронизация FB: ${done}/${total}`;setProgress(done,total)}
       );
     }else if(tab==='businesses'){
       // REMASK_BUSINESS_TAB_SELECTED_SCOPE_V2
       // Selected BM rows are explicit targets. The server merges live
       // siblings from the confirmed snapshot after checking this exact BM.
-      results=await concurrent(
-        rows,
-        syncConcurrency,
-        row=>syncBusinessSafe(row),
+      results=await concurrentByProfile(
+        rows,row=>row.profile,row=>syncBusinessSafe(row),
         (done,total)=>{$('workspaceStatus').textContent=`Синхронизация BM: ${done}/${total}`;setProgress(done,total)}
       );
     }else if(tab==='ad_accounts'){
       const businesses=[...new Map(rows.filter(r=>r.profile && r.business_id)
         .map(r=>[`${r.profile}:${r.business_id}`,{profile:r.profile,id:r.business_id}])).values()];
-      results=await concurrent(
-        businesses,
-        syncConcurrency,
-        row=>syncBusinessSafe(row),
+      results=await concurrentByProfile(
+        businesses,row=>row.profile,row=>syncBusinessSafe(row),
         (done,total)=>{$('workspaceStatus').textContent=`Синхронизация RK: ${done}/${total}`;setProgress(done,total)}
       );
     }else{
