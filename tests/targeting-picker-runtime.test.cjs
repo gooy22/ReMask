@@ -91,13 +91,14 @@ function fixture(){
     'offline choices show their saved date and do not claim a fresh Meta read');
   console.log('Creative choices: Escape, query changes and catalog truncation passed.');
 
-  const launch=fixture();const replies=[];
+  const launch=fixture();const replies=[],launchRequests=[];
   for(const id of ['geoQuery','geoResults','selectedGeo'])launch.nodes.set(id,id.endsWith('Query')?new Input():new Element());
   let legacyReads=0;
   launch.nodes.get('geoQuery').addEventListener('input',()=>legacyReads++);
   launch.nodes.get('geoQuery').addEventListener('keydown',()=>legacyReads++);
   Object.assign(launch.ctx,{$:id=>launch.nodes.get(id),state:{geo:[]},formPost:body=>body,
-    apiJson:async()=>new Promise(resolve=>replies.push(resolve)),renderPills(){},invalidateLaunchReview(){},validateReady(){}});
+    apiJson:async(url,options)=>{launchRequests.push({url,options});return new Promise(resolve=>replies.push(resolve));},
+    renderPills(){},invalidateLaunchReview(){},validateReady(){}});
   vm.runInContext(read('railway-targeting-pickers.js'),launch.ctx);
   let request=launch.ctx.searchTargeting('locations');
   launch.nodes.get('geoQuery').fire('input');replies.shift()({data:[{key:'UA',type:'country',name:'Ukraine'}]});await request;
@@ -110,4 +111,34 @@ function fixture(){
   launch.nodes.get('geoResults').children[0].fire('click');
   assert.equal(launch.ctx.state.geo[0].key,'UA','selection keeps the original country key');
   console.log('Launch choices: query invalidation and original selection IDs passed.');
+  for(const id of ['interestQuery','interestResults','selectedInterests'])launch.nodes.set(id,id.endsWith('Query')?new Input():new Element());
+  launch.ctx.state.interests=[];
+  // Installation has already occurred; create a new fixture with its elements
+  // present at initialization so that the same shipped handlers own focus/input.
+  const paged=fixture(),pageReplies=[],pageRequests=[];
+  for(const id of ['interestQuery','interestResults','selectedInterests'])
+    paged.nodes.set(id,id.endsWith('Query')?new Input():new Element());
+  Object.assign(paged.ctx,{$:id=>paged.nodes.get(id),state:{interests:[]},formPost:body=>body,
+    apiJson:async(url,options)=>{pageRequests.push({url,options});return new Promise(resolve=>pageReplies.push(resolve));},
+    renderPills(){},invalidateLaunchReview(){},validateReady(){}});
+  vm.runInContext(read('railway-targeting-pickers.js'),paged.ctx);
+  let first=paged.ctx.searchTargeting('interests');
+  pageReplies.shift()({data:[{id:'100001',name:'First interest',path:['Category']}],
+    next_offset:100,offset:0,truncated:true,source:'private_meta_template_reference'});
+  await first;
+  const resultBox=paged.nodes.get('interestResults');
+  assert.equal(resultBox.children.at(-1).textContent,'Показать ещё 100 вариантов',
+    'template picker exposes next-page control instead of hiding all but 100 IDs');
+  resultBox.children.at(-1).fire('click');
+  assert.equal(pageRequests.at(-1).options.body.offset,100,'later page requests retain a bounded offset');
+  pageReplies.shift()({data:[{id:'100002',name:'Second interest',path:['Category','Second']}],
+    next_offset:null,offset:100,truncated:false,source:'private_meta_template_reference'});
+  await settle();
+  assert.equal(resultBox.children.length,2,'later options are appended without losing previous choices');
+  resultBox.children[1].fire('click');
+  assert.equal(paged.ctx.state.interests[0].id,'100002','a later-page interest can be selected and saved');
+  assert.equal(paged.ctx.state.interests[0].path[1],'Second','category hierarchy is preserved for the chosen ID');
+  assert.equal(resultBox.children.length,0,'selection dismisses all remaining options');
+  console.log('Launch category browser: paged discovery, exact ID choice and saved taxonomy passed.');
+
 })().catch(error=>{console.error(error);process.exitCode=1;});
