@@ -9,6 +9,7 @@ import copy
 from .private_ads_catalog import identity
 from .private_ads_draft import fail
 from .private_ads_http import AdsManagerPrivateHttp
+from .private_http_metrics import measure_phase
 from .private_advertising_reads import RESOURCE_FIELDS, TARGETING_TYPES
 
 
@@ -44,10 +45,12 @@ class _ReadClient:
         if row["method"] != "GET" or set(params or {}) - set(row["params"]):
             raise fail("INVALID_RESOURCE_ROUTE", "Resource request differs from its reviewed source")
         if self.http is None:
-            self.http = await AdsManagerPrivateHttp.open(self.web, account_id=self.account,
-                business_id=self.business, actor_id=self.actor,
-                reference_read=self.reference_read)
-        return await self.http.get(path.removeprefix("/" + self.catalog.data["api_version"]), params or {})
+            with measure_phase('ads_document'):
+                self.http = await AdsManagerPrivateHttp.open(self.web, account_id=self.account,
+                    business_id=self.business, actor_id=self.actor,
+                    reference_read=self.reference_read)
+        with measure_phase('account_proof' if name == 'ACCOUNT_READ' else 'meta_read'):
+            return await self.http.get(path.removeprefix("/" + self.catalog.data["api_version"]), params or {})
 
     async def account_record(self, *, require_active=True, currency=False, pages=False, reference=False):
         fields = ["id", "account_id", "business"]
