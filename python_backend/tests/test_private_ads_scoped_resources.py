@@ -95,6 +95,18 @@ class ResourceCases(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sum(path.endswith('/targetingbrowse') for path,_ in self.calls),2,
             'a different actor must not consume the previous actor\'s tree')
 
+    async def test_behavior_tree_uses_the_same_account_scoped_pagination(self):
+        self.responses['/act_111111/targetingbrowse']={'data':[
+            {'id':str(800000+i),'name':'Behavior '+str(i),'type':'behaviors'}
+            for i in range(105)]}
+        first=await self.catalog.read(self.web,'behaviors',self.values)
+        second=await self.catalog.read(self.web,'behaviors',{**self.values,'offset':100})
+        self.assertEqual(first['next_offset'],100)
+        self.assertEqual([row['id'] for row in second['data']],
+                         [str(800100+i) for i in range(5)])
+        self.assertIsNone(second['next_offset'])
+        self.assertEqual(sum(path.endswith('/targetingbrowse') for path,_ in self.calls),1)
+
     async def test_scoped_interest_offset_validation_rejects_malformed_pages(self):
         self.responses['/act_111111/targetingbrowse']={'data':[]}
         for bad in (True,-1,50,20000,'100.0','1e2',None):
