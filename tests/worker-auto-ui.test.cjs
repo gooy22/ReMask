@@ -202,7 +202,7 @@ const source = fs.readFileSync('railway-python-worker-ui.js', 'utf8');
   };
   vm.createContext(local);
   const begin=source.indexOf('async function pythonWorkerRefreshSuccessfulProfiles(');
-  vm.runInContext(source.slice(begin,source.indexOf('\\nasync function pythonWorkerStartBusiness',begin)),local);
+  vm.runInContext(source.slice(begin,source.indexOf('\nasync function pythonWorkerStartBusiness',begin)),local);
   const items=['1','2','3','4','5','1'].map(profile_id=>({profile_id,status:'SUCCESS'}));
   const errors=await local.pythonWorkerRefreshSuccessfulProfiles(items);
   assert.equal(peak,3,'At most three local snapshots in flight');
@@ -236,7 +236,7 @@ const source = fs.readFileSync('railway-python-worker-ui.js', 'utf8');
   };
   vm.createContext(scope);
   const start=source.indexOf('async function pythonWorkerRefreshProfile(');
-  vm.runInContext(source.slice(start,source.indexOf('\\nasync function pythonWorkerStartBusiness',start)),scope);
+  vm.runInContext(source.slice(start,source.indexOf('\nasync function pythonWorkerStartBusiness',start)),scope);
   const failed=await scope.pythonWorkerRefreshSuccessfulProfiles(
     ['1','2','3','4','1'].map(profile_id=>({profile_id,status:'SUCCESS'})));
   assert.deepEqual(Array.from(failed),['3']);
