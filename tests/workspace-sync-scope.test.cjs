@@ -93,6 +93,10 @@ async function syncLatencyMetricsAreAggregateOnly() {
     async apiJson(){
       return {sync_complete:true,sync_timings_ms:{
         php_context:12,worker_bridge:55,php_total:73,php_reconciliation:6,
+        worker:{total:51,profile_context:4,durable_state:2,http_session:3,
+          inventory:35,page_enrichment:7,
+          meta_reads:{business_id:'PRIVATE-BUSINESS',proxy:'PRIVATE-CREDENTIAL'},
+          arbitrary:'PRIVATE-WORKER'},
         // Incoming arbitrary fields must never be logged:
         profile,proxy:'PRIVATE-CREDENTIAL'
       }};
@@ -113,12 +117,23 @@ async function syncLatencyMetricsAreAggregateOnly() {
   assert.equal(metric.worker_bridge_ms_sum,55);
   assert.equal(metric.php_total_ms_sum,73);
   assert.equal(metric.php_reconciliation_ms_sum,6);
+  assert.equal(metric.worker_reported_count,1);
+  assert.equal(metric.worker_total_ms_sum,51);
+  assert.equal(metric.worker_profile_context_ms_sum,4);
+  assert.equal(metric.worker_durable_state_ms_sum,2);
+  assert.equal(metric.worker_http_session_ms_sum,3);
+  assert.equal(metric.worker_inventory_ms_sum,35);
+  assert.equal(metric.worker_page_enrichment_ms_sum,7);
+  assert.equal(metric.ui_http_pending,0);
+  assert.equal(metric.ui_http_complete,true);
   assert.ok(metric.ui_wall_ms>=0 && metric.ui_render_ms>=0);
   assert.equal(state.running,false);
   assert.equal(logs.length,1);
   assert.ok(logs[0].includes('[ReMask sync latency]'));
   assert.ok(!logs[0].includes(profile));
   assert.ok(!logs[0].includes('PRIVATE-CREDENTIAL'));
+  assert.ok(!logs[0].includes('PRIVATE-BUSINESS'));
+  assert.ok(!logs[0].includes('PRIVATE-WORKER'));
 }
 
 async function failedSyncPhaseTimingIsReportedWithoutMutatingWorkspace() {
@@ -175,6 +190,7 @@ async function incompleteSyncCannotApplyOrReportSuccess() {
 
 async function stalledReconciliation() {
   const calls=[], elements=new Map(); let now=0, timerId=0;
+  let releaseRead;
   const timers=new Map();
   const sandbox={state:{running:false,activeTab:'profiles'},selectedRows:()=>[{name:'35'}],
     $:id=>{if(!elements.has(id))elements.set(id,{});return elements.get(id);},
@@ -186,7 +202,7 @@ async function stalledReconciliation() {
     apiJson:async(url,payload)=>{
       calls.push(payload);
       if(payload.action==='sync_profile')throw Error('Failed to fetch');
-      return new Promise(()=>{});
+      return new Promise(resolve=>{releaseRead=resolve;});
     },
     concurrent:async(items,limit,fn)=>Promise.all(items.map(fn)),
   };
@@ -203,6 +219,13 @@ async function stalledReconciliation() {
   assert.equal(sandbox.state.running,false);
   assert.equal(calls.length,2,'a hung status read must not queue further requests');
   assert.match(elements.get('workspaceStatus').textContent,/Failed to fetch/);
+  assert.equal(sandbox.state.lastSyncTimingMs.ui_http_pending,1);
+  assert.equal(sandbox.state.lastSyncTimingMs.ui_http_complete,false);
+  const measured=JSON.stringify(sandbox.state.lastSyncTimingMs);
+  releaseRead({pending:true});
+  for(let i=0;i<10;i++)await Promise.resolve();
+  assert.equal(JSON.stringify(sandbox.state.lastSyncTimingMs),measured,
+    'A late read must not mutate the timing snapshot after UI completion');
 }
 
 async function independentProfilesRunInParallelButSameProfileSerial() {

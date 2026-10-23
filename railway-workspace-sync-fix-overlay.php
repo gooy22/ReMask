@@ -302,7 +302,10 @@ async function syncSelection(){
   const timing={ui_wall_ms:0,ui_http_ms_sum:0,ui_http_calls:0,
     ui_http_parallel_peak:0,ui_apply_ms_sum:0,ui_apply_count:0,
     ui_render_ms:0,php_reported_count:0,php_total_ms_sum:0,
-    php_context_ms_sum:0,worker_bridge_ms_sum:0,php_reconciliation_ms_sum:0};
+    php_context_ms_sum:0,php_reconciliation_ms_sum:0,worker_bridge_ms_sum:0,
+    worker_reported_count:0,worker_total_ms_sum:0,worker_profile_context_ms_sum:0,
+    worker_durable_state_ms_sum:0,worker_http_session_ms_sum:0,
+    worker_inventory_ms_sum:0,worker_page_enrichment_ms_sum:0};
   let activeHttp=0;
   updateSelectionUi();
   $('workspaceStatus').textContent=`Доп. синхронизация: 0/${rows.length}`;
@@ -610,17 +613,32 @@ async function syncSelection(){
       timing.php_reported_count++;
       for(const [source,dest] of [
         ['php_total','php_total_ms_sum'],['php_context','php_context_ms_sum'],
-        ['worker_bridge','worker_bridge_ms_sum'],
-        ['php_reconciliation','php_reconciliation_ms_sum']]){
-        const value=Number(server[source]);
-        if(Number.isFinite(value)&&value>=0)timing[dest]+=value;
+        ['php_reconciliation','php_reconciliation_ms_sum'],['worker_bridge','worker_bridge_ms_sum']]){
+        const value=server[source];
+        if(typeof value==='number'&&Number.isFinite(value)&&value>=0)timing[dest]+=value;
+      }
+      const worker=server.worker;
+      if(!worker||typeof worker!=='object')continue;
+      timing.worker_reported_count++;
+      // These are overlapping phase sums, not a decomposition of UI wall time.
+      // Never copy meta_reads: it contains per-Business identity metadata.
+      for(const [source,dest] of [
+        ['total','worker_total_ms_sum'],['profile_context','worker_profile_context_ms_sum'],
+        ['durable_state','worker_durable_state_ms_sum'],['http_session','worker_http_session_ms_sum'],
+        ['inventory','worker_inventory_ms_sum'],['page_enrichment','worker_page_enrichment_ms_sum']]){
+        const value=worker[source];
+        if(typeof value==='number'&&Number.isFinite(value)&&value>=0)timing[dest]+=value;
       }
     }
   }finally{
     timing.ui_wall_ms=Math.max(0,Date.now()-syncUiStarted);
-    state.lastSyncTimingMs=timing;
+    timing.ui_http_pending=activeHttp;
+    timing.ui_http_complete=activeHttp===0;
+    // A timed-out request may still finish after the UI deadline. Retain the
+    // measured state at completion instead of mutating an already logged result.
+    state.lastSyncTimingMs={...timing};
     if(typeof console!=='undefined'&&typeof console.info==='function'){
-      console.info('[ReMask sync latency]',JSON.stringify(timing));
+      console.info('[ReMask sync latency]',JSON.stringify(state.lastSyncTimingMs));
     }
     state.running=false;
     updateSelectionUi();
