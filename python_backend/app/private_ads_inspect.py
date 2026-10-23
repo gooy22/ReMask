@@ -179,8 +179,15 @@ async def inspect_saved_draft(adapter, *, profile_id, context, session, payload)
         business_id=target["business_id"], actor_id=actor)
     client.read_only = True
     account = await client.get("/act_" + target["ad_account_id"], {"fields": ["id", "account_id", "business"]})
-    if (not isinstance(account.get("id"), str) or account["id"].removeprefix("act_") != target["ad_account_id"]
-            or not isinstance(account.get("business"), dict) or account["business"].get("id") != target["business_id"]):
+    secondary_account = account.get("account_id") if isinstance(account, dict) else None
+    if (not isinstance(account, dict) or "error" in account or "errors" in account
+            or not isinstance(account.get("id"), str)
+            or account["id"].removeprefix("act_") != target["ad_account_id"]
+            or (secondary_account is not None and
+                (not isinstance(secondary_account, str) or
+                 secondary_account.removeprefix("act_") != target["ad_account_id"]))
+            or not isinstance(account.get("business"), dict)
+            or account["business"].get("id") != target["business_id"]):
         raise fail("READ_SCOPE_MISMATCH", "Fresh account read did not confirm the saved Business")
     draft = await client.get("/addraft_" + draft_id, {"fields": ["id", "account_id", "author_id", "ownership_type"]})
     adapter_scope(draft, target["ad_account_id"])
