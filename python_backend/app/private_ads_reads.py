@@ -279,7 +279,7 @@ class AdsManagerReadCatalog:
                 "checked_live": True, "checked_at": int(cached[0]),
                 "source": "private_meta_targetingbrowse",
                 "catalog_count": len(records), "offset": offset,
-                "next_offset": offset + limit if offset + limit < len(records) else None,
+                "next_offset": offset + limit if offset + limit < len(records) and (offset + limit) % 100 == 0 else None,
                 "truncated": offset + limit < len(records)}
         response = await client.request("TARGETING_BROWSE", params={
             "fields":["raw_name","id","name","type","path","key","parent","description",
@@ -330,7 +330,7 @@ class AdsManagerReadCatalog:
                 "account_id":client.account, "account_scope_verified":True,
                 "checked_live":True, "checked_at":int(time.time()), "source":"private_meta_targetingbrowse",
                 "catalog_count":len(records), "offset":offset,
-                "next_offset":offset+limit if offset+limit<len(records) else None,
+                "next_offset":offset+limit if offset+limit<len(records) and (offset+limit)%100==0 else None,
                 "truncated":offset+limit<len(records)}
 
     async def pages(self, web, values):
