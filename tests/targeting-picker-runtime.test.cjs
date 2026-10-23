@@ -104,8 +104,9 @@ function fixture(){
   await settle();
   assert.equal(box.children.filter(node=>node.dataset.remaskTargetChoice==='1').length,2,
     'Creative editor retains previous page while adding later results');
-  box.children.find(node=>node.dataset.remaskTargetChoice==='1'&&node.textContent.includes('Interest')).fire('click');
+  box.children.filter(node=>node.dataset.remaskTargetChoice==='1')[1].fire('click');
   assert.equal(creativeSelected.length,1,'Creative editor selection remains functional after loading page 2');
+  assert.equal(creativeSelected[0].row.id,'100002','the later-page option keeps its exact ID');
   console.log('Creative template: full catalog page navigation and selection passed.');
 
 
