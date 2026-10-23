@@ -62,6 +62,28 @@ class TemplateReferenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result['account_scope_verified'])
         self.assertEqual(self.context.ad_accounts, [])
 
+    async def test_discovered_business_hints_avoid_second_business_listing(self):
+        self.discovery.return_value = {
+            'businesses': [], 'discovered_business_ids': ['222222'],
+            'diagnostics': []}
+        self.accounts.return_value = {'ids': ['111111'], 'complete': False}
+        result = await self.read()
+        self.businesses.assert_not_awaited()
+        self.accounts.assert_awaited_once_with(self.web, '222222', '')
+        self.assertTrue(result['account_scope_verified'])
+        self.assertEqual(self.helper.await_count, 1)
+
+    async def test_discovered_business_hints_still_require_fresh_account_proof(self):
+        self.discovery.return_value = {
+            'businesses': [], 'discovered_business_ids': ['222222'],
+            'diagnostics': []}
+        self.accounts.return_value = {'ids': ['111111'], 'complete': False}
+        self.helper.return_value['account_scope_verified'] = False
+        with self.assertRaises(ProvisioningError):
+            await self.read()
+        self.businesses.assert_not_awaited()
+        self.assertEqual(_sources, {})
+
     async def test_native_discovery_never_substitutes_personal_scope_or_invalid_ids(self):
         self.discovery.return_value={'businesses':[]}
         self.businesses.return_value={'rows':{'999999':'Personal','invalid':'Bad'}}
