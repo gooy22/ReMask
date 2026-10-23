@@ -151,6 +151,7 @@ def observe_profile_read(function):
             raise
         finally:
             end_operation(metric, token, outcome=outcome)
+    return wrapped
 
 
 def observe_profile_inventory(function):
