@@ -130,6 +130,21 @@ function rmx_pwj_worker_request(string $method, string $path, ?array $payload = 
         if (is_array($detailValue)) {
             $code = $detailValue['code'] ?? null;
             if (is_string($code) && preg_match('/^[A-Z0-9_]{1,100}$/D', $code)) $safe['code'] = $code;
+            // Validation messages for the private draft input validator are
+            // fixed server-authored text. Preserve that one safe diagnostic so
+            // the Launch form can name the rejected field without exposing raw
+            // Meta responses, request payloads, or other upstream messages.
+            $validationMessage = $detailValue['message'] ?? null;
+            if ($code === 'PRIVATE_ADS_DRAFT_INVALID_INPUT' && is_string($validationMessage)) {
+                $validationMessage = strip_tags($validationMessage);
+                $validationMessage = preg_replace('/[\\x00-\\x1F\\x7F]+/u', ' ', $validationMessage);
+                $validationMessage = preg_replace('#https?://[^\\s]+#i', '[URL]', $validationMessage);
+                $validationMessage = trim($validationMessage);
+                if ($validationMessage !== '' && strlen($validationMessage) <= 240
+                    && !preg_match('/(?:cookie|authorization|access[_ -]?token|password|secret|fb_dtsg)/i', $validationMessage)) {
+                    $safe['message'] = $validationMessage;
+                }
+            }
             if (($detailValue['retryable'] ?? false) === true) $safe['retryable'] = true;
         }
         throw new RmxPwjWorkerHttpError('PYTHON_WORKER_HTTP_' . $status, $safe);
@@ -567,7 +582,7 @@ try {
         // Preserve the typed readiness failure across PHP. Do not make the
         // browser recover control flow from JSON embedded in an error string.
         rmx_pwj_out(['ok'=>false, 'error'=>$e->detail['code'], 'code'=>$e->detail['code'],
-            'message'=>$e->detail['code'],
+            'message'=>$e->detail['message'] ?? $e->detail['code'],
             'retryable'=>($e->detail['retryable'] ?? false) === true], 502);
     }
     if (str_starts_with($message, 'PYTHON_WORKER_NOT_CONFIGURED')) {
