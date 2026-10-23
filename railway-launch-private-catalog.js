@@ -890,22 +890,19 @@ async function remaskPrivateCreateJob() {
         if(blocked.length)throw new Error('Черновик не сохранён для РК '+
             blocked.map(entry=>entry.row.ad_account_id+': '+entry.error).join(' · ')+'.');
         const planned=remaskPrivateJobRequest(config,reviewed);
-        remaskPrivateShow((planned.reused?'Повторяю сохранённую отправку':'Создаю')+
-            ' задачу для '+reviewed.length+' РК…');
+        remaskPrivateShow(remaskPrivateExecutionMode()==='DRAFT'?'Сохраняю черновик…':'Отправляю рекламу…');
         submitting=true;
         const accepted=await remaskPrivateWorker(planned.request);
         const jobId=String(accepted?.job?.job_id||'').trim();
         if(!jobId)throw new Error('Сервер не вернул номер задачи.');
-        remaskPrivateShow(
-            'Задача принята: '+jobId+' · '+reviewed.length+' РК. Результаты доступны в Jobs.'
-        );
+        remaskPrivateShow('Задача запущена. Результат появится в «Задачи и результаты».');
         try{localStorage.setItem('remask_private_source_job_v1',JSON.stringify({job_id:jobId}));}catch(_){}
         remaskPrivatePollJob(jobId);
         return accepted;
     }catch(error){
         const message=String(error?.message||error).replace(/[.!?]+$/,'');
-        remaskPrivateShow('Создание рекламы недоступно: '+message+'.'+
-            (submitting?' При потере ответа повторная отправка использует сохранённую задачу.':''),'failed');
+        remaskPrivateShow((submitting?'Не удалось подтвердить сохранение. ':'Черновик не сохранён. ')+message+
+            (submitting?' Проверьте статус в «Задачи и результаты» перед повторной отправкой.':''),'failed');
         return null;
     }finally{
         remaskPrivateLaunchBusy=false;validateReady();
@@ -916,7 +913,7 @@ const remaskOriginalValidateReady=validateReady;
 function remaskPrivateHideReviewControls() {
     for (const id of ['reviewLaunch','serverDryRun','dryRunPlan']) {
         const button=$(id);
-        if(button){button.hidden=true;button.setAttribute('aria-hidden','true');}
+        if(button){button.hidden=true;button.setAttribute?.('aria-hidden','true');}
     }
 }
 validateReady=function() {
