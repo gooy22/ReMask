@@ -210,6 +210,42 @@ const source = fs.readFileSync('railway-python-worker-ui.js', 'utf8');
   assert.deepEqual(Array.from(errors),['2','4'],'Failures retain the selection order');
 })().catch(error=>{console.error(error);process.exitCode=1;});
 
+// Terminal Job batches should update multiple profiles with one DOM render.
+(async()=>{
+  const applied=[];let redraws=0;
+  const scope={
+    post:value=>value,
+    console:{error(){}},
+    async apiJson(url,payload){
+      if(payload.profile==='3')throw Error('fixture snapshot failed');
+      await new Promise(resolve=>setTimeout(resolve,2));
+      return {profile:{name:payload.profile}};
+    },
+    applySnapshot:data=>applied.push(data.profile.name),
+    render(){redraws++;},
+    async pythonWorkerMapLimit(items,limit,worker){
+      let next=0;
+      await Promise.all(Array.from({length:limit},async()=>{
+        while(true){
+          const i=next++;
+          if(i>=items.length)return;
+          await worker(items[i],i);
+        }
+      }));
+    },
+  };
+  vm.createContext(scope);
+  const start=source.indexOf('async function pythonWorkerRefreshProfile(');
+  vm.runInContext(source.slice(start,source.indexOf('\\nasync function pythonWorkerStartBusiness',start)),scope);
+  const failed=await scope.pythonWorkerRefreshSuccessfulProfiles(
+    ['1','2','3','4','1'].map(profile_id=>({profile_id,status:'SUCCESS'})));
+  assert.deepEqual(Array.from(failed),['3']);
+  assert.deepEqual(applied.sort(),['1','2','4']);
+  assert.equal(redraws,1);
+  assert.equal(await scope.pythonWorkerRefreshProfile('1'),true);
+  assert.equal(redraws,2,'A single-profile refresh must still redraw normally');
+})().catch(error=>{console.error(error);process.exitCode=1;});
+
 // Both BM and RK context menus must expose the same automatic bulk action.
 for(const [tab,label] of [['businesses','Добавить RK'],['ad_accounts','Проверить Assets']]){
   let inserted;
