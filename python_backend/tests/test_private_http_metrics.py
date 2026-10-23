@@ -497,10 +497,10 @@ class PrivateHttpMetricsTests(unittest.IsolatedAsyncioTestCase):
         async def unavailable(profile):
             await asyncio.sleep(360)
         slow=AsyncMock(side_effect=unavailable)
-        with patch.object(api,'pool',SimpleNamespace(resolver=SimpleNamespace(resolve=slow))), \\
-                patch.object(api,'_READ_CONTEXT_BUDGET_SECONDS',0.01):
-            with self.assertRaises(asyncio.TimeoutError):
-                await api._resolve_read_profile('fixture')
+        with patch.object(api,'pool',SimpleNamespace(resolver=SimpleNamespace(resolve=slow))):
+            with patch.object(api,'_READ_CONTEXT_BUDGET_SECONDS',0.01):
+                with self.assertRaises(asyncio.TimeoutError):
+                    await api._resolve_read_profile('fixture')
         self.assertEqual(slow.await_count,1)
         good=AsyncMock(return_value='verified profile fixture')
         with patch.object(api,'pool',SimpleNamespace(resolver=SimpleNamespace(resolve=good))):
