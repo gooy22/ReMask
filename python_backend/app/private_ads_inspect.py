@@ -114,8 +114,12 @@ async def saved_draft_intent(adapter, *, profile_id, context, payload):
                 or not isinstance(source, str) or not re.fullmatch(r"[a-f0-9]{64}", source)):
             raise fail("SAVED_OPERATION_MISMATCH", "Inspection target, actor or configuration differs from the saved intent")
         sources.add(source)
-    if len(sources) != 1 or not sources <= {adapter.source_digest, *READ_ONLY_DRAFT_PREDECESSORS}:
-        raise fail("SAVED_OPERATION_MISMATCH", "Saved draft sender has not been reviewed for read-only inspection")
+    if len(sources) != 1:
+        raise fail("SAVED_OPERATION_MISMATCH", "Saved draft journal mixes source revisions")
+    # Any single source revision may be INSPECTED, but never resumed for
+    # mutation from this path. Each read rechecks the actor/account/parents/
+    # exact saved fields; only the mutation sender enforces reviewed digests.
+
     # Inspect a contiguous saved prefix, not only the completed hierarchy.
     # A lost response has no safe entity handle: report it explicitly instead
     # of guessing an ID, creating a second draft or hiding earlier progress.
@@ -168,7 +172,8 @@ async def inspect_saved_draft(adapter, *, profile_id, context, session, payload)
             "pending_stage": pending, "uninspected_levels": list(LEVELS),
             "missing_direct_objects": [], "launch_fingerprint_verified": True,
             "actor_verified": True, "payment_checked_live": False, "mutation_posts": 0,
-            "source": "saved_account_scoped_journal", "recovered_source_digest": source}
+            "source": "saved_account_scoped_journal", "recovered_source_digest": source,
+            "source_reviewed_for_mutation": source in {adapter.source_digest, *READ_ONLY_DRAFT_PREDECESSORS}}
     web = await session.facebook_web()
     client = await AdsManagerPrivateHttp.open(web, account_id=target["ad_account_id"],
         business_id=target["business_id"], actor_id=actor)
@@ -268,10 +273,12 @@ async def inspect_saved_draft(adapter, *, profile_id, context, session, payload)
             if not any(row["level"] == level and row["available"] for row in object_reads)],
         "launch_fingerprint_verified": True, "actor_verified": True,
         "editor_verified": False, "published": None, "payment_checked_live": False,
-        "mutation_posts": 0, "source": "independent_private_ads_http", "recovered_source_digest": source}
+        "mutation_posts": 0, "source": "independent_private_ads_http",
+        "recovered_source_digest": source,
+        "source_reviewed_for_mutation": source in {adapter.source_digest, *READ_ONLY_DRAFT_PREDECESSORS}}
 
 
 def adapter_scope(row, account):
-    if (not isinstance(row, dict) or row.get("error") or row.get("errors")
+    if (not isinstance(row, dict) or "error" in row or "errors" in row
             or not isinstance(row.get("account_id"), str) or row["account_id"].removeprefix("act_") != account):
         raise fail("READ_SCOPE_MISMATCH", "Fresh draft read returned another advertising account")
