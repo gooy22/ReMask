@@ -67,6 +67,92 @@ class SavedDraftInspectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result['editor_verified'])
         self.assertEqual(await self.owner.state.all_steps('image-launch'), before)
 
+    async def test_lost_draft_reply_returns_local_journal_diagnostic_without_meta_reads(self):
+        self.payload['launch']['execution_mode'] = 'DRAFT'
+        original_post = self.client.post
+        async def unknown(path, params, *, before_submit, files):
+            if path.endswith('/addrafts'):
+                await before_submit()
+                raise TimeoutError('synthetic lost reply')
+            return await original_post(path, params, before_submit=before_submit, files=files)
+        self.client.post = unknown
+        with self.assertRaises(ProvisioningError):
+            await self.launch()
+        self.client.post = original_post
+        old = copy.deepcopy(await self.owner.state.all_steps('image-launch'))
+        self.payload['reconcile_only'] = True
+        with patch.object(self.session, 'facebook_web',
+                          new=AsyncMock(side_effect=AssertionError('No Meta session allowed'))) as session, \
+                patch.object(self.client, 'post',
+                             new=AsyncMock(side_effect=AssertionError('No POST allowed'))) as post:
+            result = await self.launch()
+        session.assert_not_awaited()
+        post.assert_not_awaited()
+        self.assertEqual(result['status'], 'RECONCILE_REQUIRED')
+        self.assertIsNone(result['draft_id'])
+        self.assertEqual(result['pending_stage'], {'stage': 'DRAFT', 'reason': 'UNKNOWN_REMOTE_RESULT'})
+        self.assertEqual(result['fragment_reads'], [])
+        self.assertEqual(result['uninspected_levels'], ['campaign', 'ad_set', 'ad'])
+        self.assertFalse(result['fragment_storage_verified'])
+        self.assertEqual(result['mutation_posts'], 0)
+        self.assertEqual(await self.owner.state.all_steps('image-launch'), old)
+
+    async def test_lost_fragment_reply_inspects_every_known_stage_without_replay(self):
+        for stage_index, operation in enumerate(('FRAGMENT_CAMPAIGN', 'FRAGMENT_AD_SET', 'FRAGMENT_AD')):
+            with self.subTest(operation=operation):
+                await self.asyncSetUp()
+                self.payload['launch']['execution_mode'] = 'DRAFT'
+                original_post = self.client.post
+                async def unknown(path, params, *, before_submit, files):
+                    if path.endswith('/addraft_fragments') and len(self.client.fragments) == stage_index:
+                        await before_submit()
+                        raise TimeoutError('synthetic lost fragment reply')
+                    return await original_post(path, params, before_submit=before_submit, files=files)
+                self.client.post = unknown
+                with self.assertRaises(ProvisioningError):
+                    await self.launch()
+                self.client.post = original_post
+                self.payload['reconcile_only'] = True
+                before = copy.deepcopy(await self.owner.state.all_steps('image-launch'))
+                before_posts = len(self.client.posts)
+                with patch.object(self.client, 'post',
+                                  new=AsyncMock(side_effect=AssertionError('No POST allowed'))) as post:
+                    result = await self.launch()
+                post.assert_not_awaited()
+                self.assertEqual(result['status'], 'RECONCILE_REQUIRED')
+                self.assertEqual(result['pending_stage'],
+                                 {'stage': operation, 'reason': 'UNKNOWN_REMOTE_RESULT'})
+                self.assertEqual(len(result['fragment_reads']), stage_index)
+                self.assertEqual(result['uninspected_levels'], list(('campaign', 'ad_set', 'ad')[stage_index:]))
+                self.assertEqual(result['mutation_posts'], 0)
+                self.assertFalse(result['fragment_storage_verified'])
+                self.assertEqual(len(self.client.posts), before_posts)
+                self.assertEqual(await self.owner.state.all_steps('image-launch'), before)
+
+    async def test_partial_draft_after_read_error_marks_next_stage_not_submitted(self):
+        self.payload['launch']['execution_mode'] = 'DRAFT'
+        original_get = self.client.get
+        async def interrupted(path, params):
+            if path == '/addraft_555555':
+                raise TimeoutError('synthetic independent read interrupted')
+            return await original_get(path, params)
+        self.client.get = interrupted
+        with self.assertRaises(ProvisioningError):
+            await self.launch()
+        self.client.get = original_get
+        self.payload['reconcile_only'] = True
+        before = copy.deepcopy(await self.owner.state.all_steps('image-launch'))
+        with patch.object(self.client, 'post', new=AsyncMock(side_effect=AssertionError('No POST'))) as post:
+            result = await self.launch()
+        post.assert_not_awaited()
+        self.assertEqual(result['status'], 'RECONCILE_REQUIRED')
+        self.assertEqual(result['draft_id'], '555555')
+        self.assertEqual(result['pending_stage'], {'stage': 'FRAGMENT_CAMPAIGN', 'reason': 'NOT_SUBMITTED'})
+        self.assertEqual(result['fragment_reads'], [])
+        self.assertFalse(result['fragment_storage_verified'])
+        self.assertTrue(result['relationships_confirmed'])
+        self.assertEqual(await self.owner.state.all_steps('image-launch'), before)
+
     async def test_unavailable_object_read_records_exact_rejection_without_claiming_absence(self):
         from app.private_ads_http import AdsManagerResponseError
         await self.saved()
