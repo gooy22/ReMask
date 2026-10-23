@@ -205,7 +205,7 @@
     }
     function setupLaunch() {
         const root=document.querySelector('.launch-wrap');if(!root || root.dataset.wfReady)return;root.dataset.wfReady='1';root.classList.add('wf-launch');
-        const entries=[['profile','1. Профили и рекламные кабинеты'],['campaignName','2. Кампания'],['adsetName','3. Бюджет и аудитория'],['creativeName','4. Объявление'],['reviewLaunch','5. Проверка и запуск']];
+        const entries=[['profile','1. Профили и рекламные кабинеты'],['campaignName','2. Кампания'],['adsetName','3. Бюджет и аудитория'],['creativeName','4. Объявление'],['reviewLaunch','5. Сохранение черновика']];
         const nav=document.createElement('nav');nav.className='wf-step-nav';nav.setAttribute('aria-label','Этапы подготовки рекламы');
         for(const [id,title] of entries){const card=$(id)?.closest('.launch-card');if(!card)continue;if(!card.id)card.id='wf-launch-'+id;setText(card.querySelector('h5'),title);const a=document.createElement('a');a.href='#'+card.id;a.textContent=title;nav.appendChild(a);}
         root.querySelector('.launch-card')?.before(nav);
