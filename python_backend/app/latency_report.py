@@ -120,6 +120,7 @@ def summarize(lines, *, slow_ms=30_000):
     outcomes = defaultdict(lambda: defaultdict(int))
     incomplete_ui = 0
     ignored = 0
+    post_job_profile_totals = {"attempted": 0, "succeeded": 0, "failed": 0}
 
     def add(group, value):
         number = _number(value)
@@ -178,12 +179,13 @@ def summarize(lines, *, slow_ms=30_000):
             for name in POST_JOB_MEASUREMENTS:
                 if name in data:
                     add("post_job." + name, data[name])
-            # Counts remain numeric measurements. Refuse invalid/unbounded
-            # counts to avoid exporting arbitrary user-provided metadata.
-            for name in ("attempted", "succeeded", "failed"):
-                value = data.get(name)
-                if type(value) is int and 0 <= value <= 10000:
-                    add("post_job." + name, value)
+            # Profile counts are NOT milliseconds. Aggregate them separately
+            # and never include profile identifiers or individual rows.
+            counts = [data.get(name) for name in ("attempted", "succeeded", "failed")]
+            if (all(type(value) is int and 0 <= value <= 10000 for value in counts)
+                    and counts[0] == counts[1] + counts[2]):
+                for name, value in zip(post_job_profile_totals, counts):
+                    post_job_profile_totals[name] += value
             continue
         if "worker_dispatch_latency " in raw:
             match = DISPATCH_PATTERN.search(raw)
@@ -213,6 +215,7 @@ def summarize(lines, *, slow_ms=30_000):
             for key, status in sorted(outcomes.items())
         },
         "incomplete_ui_http_records": incomplete_ui,
+        "post_job_profile_totals": post_job_profile_totals,
         "ignored_lines": ignored,
     }
     return report
