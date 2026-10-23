@@ -744,3 +744,82 @@ class ReadOnlyReferenceBootstrapReuseTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(other.read_only)
         self.assertEqual(self.web.fetch_text.await_count, 2)
         self.assertEqual(self.web.refresh_reviewed_modules.await_count, 1)
+
+    async def test_benchmark_old_vs_reused_reference_traffic_fixture(self):
+        """Controlled encoded-body comparison; NEVER proxy provider billing.
+
+        The legacy path deliberately keeps CDN maintenance disabled here:
+        savings come solely from avoiding repeat Ads Manager document reads.
+        The selected account is still read independently on each iteration.
+        """
+        import gzip
+        import hashlib
+        from app.private_ads_http import _REFERENCE_CONTEXT_CACHE
+
+        # Synthetic document with a large unrelated field. This is not
+        # captured Meta HTML, and its compressed size is not a production
+        # observation. The same payload is used in each scenario.
+        source = json.loads(document())
+        source["synthetic_padding"] = "".join(
+            hashlib.sha256(str(i).encode()).hexdigest() for i in range(1024))
+        page = json.dumps(source, separators=(",", ":"))
+        account = (b'{"id":"act_111111","account_id":"111111",'
+                   b'"business":{"id":"222222"}}')
+        html_wire_fixture_bytes = len(gzip.compress(page.encode(), mtime=0))
+        account_fixture_bytes = len(account)
+
+        async def scenario(*, count, optimized):
+            _REFERENCE_CONTEXT_CACHE.clear()
+            web = Web()
+            web.profile.name = "benchmark-profile"
+            web.profile.user_agent = "fixture-UA"
+            web.session.response_body = account
+            documents = []
+            async def fetch_page(url, **kwargs):
+                documents.append(url)
+                return (200, page, url)
+            web.fetch_text = fetch_page
+            web.refresh_reviewed_modules = AsyncMock()
+            for _ in range(count):
+                if optimized:
+                    client = await AdsManagerPrivateHttp.open(web,
+                        account_id="111111", business_id="222222",
+                        actor_id="123456", reference_read=True)
+                else:
+                    # Same code path as legacy open, without optional CDN work.
+                    client = await AdsManagerPrivateHttp._open_uncached(web,
+                        account_id="111111", business_id="222222",
+                        actor_id="123456", refresh_modules=False)
+                    client.read_only = True
+                result = await client.get("/act_111111",
+                    {"fields":["id","account_id","business"]})
+                self.assertEqual(result["account_id"], "111111")
+                self.assertEqual(result["business"]["id"], "222222")
+            return {
+                "html_gets": len(documents),
+                "account_gets": len(web.session.calls),
+                "fixture_encoded_response_bytes":
+                    len(documents) * html_wire_fixture_bytes
+                    + len(web.session.calls) * account_fixture_bytes,
+                "fixture_decoded_response_bytes":
+                    len(documents) * len(page.encode())
+                    + len(web.session.calls) * account_fixture_bytes,
+                "cdn_refreshes": web.refresh_reviewed_modules.await_count,
+            }
+
+        for count in (2, 5, 10):
+            legacy = await scenario(count=count, optimized=False)
+            reused = await scenario(count=count, optimized=True)
+            self.assertEqual(legacy["html_gets"], count)
+            self.assertEqual(reused["html_gets"], 1)
+            self.assertEqual(legacy["account_gets"], count)
+            self.assertEqual(reused["account_gets"], count)
+            self.assertEqual(legacy["cdn_refreshes"], 0)
+            self.assertEqual(reused["cdn_refreshes"], 0)
+            self.assertLess(reused["fixture_encoded_response_bytes"],
+                            legacy["fixture_encoded_response_bytes"])
+            print("REMASK_TRAFFIC_FIXTURE " + json.dumps({
+                "reads": count, "legacy": legacy, "optimized": reused,
+                "fixture_gzip_doc_bytes": html_wire_fixture_bytes,
+                "scope": "synthetic_gzip_body_only_not_proxy_billing"
+            }, sort_keys=True), flush=True)
