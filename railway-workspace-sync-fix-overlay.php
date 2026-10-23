@@ -1627,7 +1627,9 @@ $syncProfileReplacement = <<<'PHP'
             ? [$requestedBusinessId]
             : [];
 
+        // REMASK_PHP_SYNC_CONTEXT_TIMING_V1
         $workerStarted = microtime(true);
+        $phpContextMs = (int)(($workerStarted - $syncStarted) * 1000);
         try {
             $liveInventory = hierarchy_worker_live_inventory(
                 $profile,
@@ -1906,6 +1908,7 @@ $syncProfileReplacement = <<<'PHP'
         $snapshot['graph_preflight_available'] = false;
         $snapshot['sync_complete'] = $syncComplete;
         $snapshot['sync_timings_ms'] = [
+            'php_context' => $phpContextMs,
             'worker_bridge' => $workerElapsedMs,
             'worker' => is_array($liveInventory['timings_ms'] ?? null) ? $liveInventory['timings_ms'] : [],
         ];
