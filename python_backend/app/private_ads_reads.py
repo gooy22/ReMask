@@ -73,6 +73,9 @@ class _ReadClient:
 class AdsManagerReadCatalog:
     def __init__(self, catalog):
         self.catalog = catalog
+        # A bounded account/actor-scoped browse snapshot prevents a 20k-node
+        # Meta request for every "show more" click in the audience picker.
+        self._browse_cache = {}
         self.rows = {"pages": {"source": "ad_account_promotable_objects.promotable_page_ids",
                                "catalog_digest": catalog.digest}}
         for name, route in {"images":"IMAGE_READ", "videos":"VIDEO_READ",
@@ -255,7 +258,28 @@ class AdsManagerReadCatalog:
                 "checked_live":True, "checked_at":int(time.time()), "source":"ads_manager_private_http"}
 
     async def browse_targeting(self, client, name, values):
-        """The recovered sender returns a flat tree; headings have no selectable ID."""
+        """Page a complete flat tree; headings have no selectable ID."""
+        raw_offset = values.get("offset", 0)
+        if type(raw_offset) is int:
+            offset = raw_offset
+        elif isinstance(raw_offset, str) and re.fullmatch(r"(0|[1-9][0-9]{0,4})", raw_offset):
+            offset = int(raw_offset)
+        else:
+            raise fail("INVALID_RESOURCE_OFFSET", "Targeting offset must be a page boundary")
+        if offset < 0 or offset > 19900 or offset % 100:
+            raise fail("INVALID_RESOURCE_OFFSET", "Targeting offset must be a page boundary")
+        limit = _bounded_limit(values.get("limit", 100), maximum=20000)
+        cache_key = (client.actor, client.business, client.account, name)
+        cached = self._browse_cache.get(cache_key)
+        if cached and time.time() - cached[0] <= 180:
+            records = cached[1]
+            return {"data": [dict(row) for row in records[offset:offset + limit]],
+                "account_id": client.account, "account_scope_verified": True,
+                "checked_live": True, "checked_at": int(time.time()),
+                "source": "private_meta_targetingbrowse",
+                "catalog_count": len(records), "offset": offset,
+                "next_offset": offset + limit if offset + limit < len(records) else None,
+                "truncated": offset + limit < len(records)}
         response = await client.request("TARGETING_BROWSE", params={
             "fields":["raw_name","id","name","type","path","key","parent","description",
                       "audience_size_lower_bound","audience_size_upper_bound"],
@@ -296,10 +320,17 @@ class AdsManagerReadCatalog:
             if key in seen:
                 continue
             seen.add(key); records.append(clean)
-        limit = _bounded_limit(values.get("limit", 100), maximum=20000)
-        return {"data":records[:limit], "account_id":client.account, "account_scope_verified":True,
+        self._browse_cache[cache_key] = (time.time(), records)
+        # Bound the cross-account cache. Expired/older trees are evicted first.
+        if len(self._browse_cache) > 8:
+            oldest = min(self._browse_cache, key=lambda key: self._browse_cache[key][0])
+            del self._browse_cache[oldest]
+        return {"data":[dict(row) for row in records[offset:offset+limit]],
+                "account_id":client.account, "account_scope_verified":True,
                 "checked_live":True, "checked_at":int(time.time()), "source":"private_meta_targetingbrowse",
-                "catalog_count":len(records), "truncated":len(records)>limit}
+                "catalog_count":len(records), "offset":offset,
+                "next_offset":offset+limit if offset+limit<len(records) else None,
+                "truncated":offset+limit<len(records)}
 
     async def pages(self, web, values):
         result = await self.read(web, "pages", values)
