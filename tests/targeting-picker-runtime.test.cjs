@@ -199,7 +199,7 @@ function fixture(){
   // behavior results and selected-item containers. This is the regression
   // that used to be skipped by the early return when behaviorQuery existed.
   const behaviorOverlay=read('railway-behaviors-ui-overlay.php');
-  const behaviorUi=behaviorOverlay.match(/\\$ui=<<<'JS'\\n([\\s\\S]*?)\\nJS;/)?.[1];
+  const behaviorUi=behaviorOverlay.match(/\$ui=<<<'JS'\n([\s\S]*?)\nJS;/)?.[1];
   assert.ok(behaviorUi,'behavior UI installer must remain embedded in the runtime overlay');
   const partial=fixture(), behaviorInput=new Input(), behaviorBlock=new Element();
   behaviorInput.id='behaviorQuery';behaviorInput.placeholder='Поведение';
