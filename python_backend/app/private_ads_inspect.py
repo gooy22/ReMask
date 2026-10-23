@@ -199,7 +199,7 @@ async def inspect_saved_draft(adapter, *, profile_id, context, session, payload)
         adapter_scope(row, target["ad_account_id"])
         parent = objects.get("campaign" if level == "ad_set" else "ad_set") if level != "campaign" else None
         if (row.get("id") != fragment_id or row.get("ad_draft_id") != draft_id or row.get("ad_object_type") != level
-                or parent is not None and row.get("parent_ad_object_id") != parent):
+                or row.get("parent_ad_object_id") not in ((None, "") if parent is None else (parent,))):
             raise fail("READ_RELATION_MISMATCH", "Fresh fragment relationships differ from the saved draft")
         if level != "campaign" and values.get("campaign_id") != objects["campaign"]:
             raise fail("READ_RELATION_MISMATCH", "Saved Ad Set or Ad has another Campaign relationship")
