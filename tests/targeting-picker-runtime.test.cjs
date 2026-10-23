@@ -215,7 +215,7 @@ function fixture(){
   partial.ctx.$=id=>partial.nodes.get(id)||null;
   partial.ctx.state={behaviors:[{id:'654321',name:'Fixture behavior'}]};
   partial.ctx.renderPills=(box,rows)=>{box.rendered=rows.slice();};
-  vm.runInContext(behaviorUi+'\\nensureBehaviorTargetingUi();',partial.ctx);
+  vm.runInContext(behaviorUi+String.fromCharCode(10)+'ensureBehaviorTargetingUi();',partial.ctx);
   assert.ok(partial.nodes.get('selectedBehaviors'),'partial Launch markup restores selected behavior container');
   assert.ok(partial.nodes.get('behaviorResults'),'partial Launch markup restores behavior results container');
   assert.equal(partial.nodes.get('selectedBehaviors').className,'pills');
