@@ -675,3 +675,72 @@ class PublishedReads(unittest.IsolatedAsyncioTestCase):
             self.rows["777774"]["object_story_spec"][field] = value
             with self.subTest(field=field), self.assertRaises(ProvisioningError):
                 await verify_published_objects(self.client, self.objects, self.levels)
+
+ 
+class ReadOnlyReferenceBootstrapReuseTests(unittest.IsolatedAsyncioTestCase):
+    """A warm reference search does not replay Ads Manager HTML/CDN downloads."""
+
+    async def asyncSetUp(self):
+        from app.private_ads_http import _REFERENCE_CONTEXT_CACHE
+        _REFERENCE_CONTEXT_CACHE.clear()
+        self.addCleanup(_REFERENCE_CONTEXT_CACHE.clear)
+        self.web = Web()
+        self.web.profile.name = "reference-profile-fixture"
+        self.web.profile.user_agent = "reference-UA"
+        self.web.fetch_text = AsyncMock(wraps=self.web.fetch_text)
+        self.web.refresh_reviewed_modules = AsyncMock()
+
+    async def open_reference(self):
+        return await AdsManagerPrivateHttp.open(self.web, account_id="111111",
+            business_id="222222", actor_id="123456", reference_read=True)
+
+    async def test_two_reference_reads_open_one_document_and_never_refresh_cdn(self):
+        from app.private_ads_catalog import AdsManagerRouteCatalog
+        from app.private_ads_reads import _ReadClient
+        self.web.session.response_body = (b'{"id":"act_111111","account_status":1,'
+            b'"business":{"id":"222222"}}')
+        catalog = AdsManagerRouteCatalog()
+        for _ in range(2):
+            reader = _ReadClient(self.web, catalog,
+                {"ad_account_id":"111111","business_id":"222222"},
+                reference_read=True)
+            row = await reader.account_record(reference=True)
+            self.assertEqual(row["id"], "act_111111")
+            self.assertTrue(reader.http.read_only)
+        self.assertEqual(self.web.fetch_text.await_count, 1)
+        self.assertEqual(len(self.web.session.calls), 2)  # Fresh account proof on EACH read.
+        self.web.refresh_reviewed_modules.assert_not_awaited()
+
+    async def test_parallel_reference_reads_coalesce_html_fetch(self):
+        import asyncio
+        results = await asyncio.gather(*(self.open_reference() for _ in range(8)))
+        self.assertTrue(all(client.read_only for client in results))
+        self.assertEqual(self.web.fetch_text.await_count, 1)
+
+    async def test_cookie_account_and_expired_cache_must_reinitialize(self):
+        from app.private_ads_http import _REFERENCE_CONTEXT_CACHE, _REFERENCE_CONTEXT_TTL_SECONDS
+        await self.open_reference()
+        self.web.profile.cookies["xs"] = "changed"
+        await self.open_reference()
+        self.assertEqual(self.web.fetch_text.await_count, 2)
+        key = next(reversed(_REFERENCE_CONTEXT_CACHE))
+        observed, context, origin = _REFERENCE_CONTEXT_CACHE[key]
+        _REFERENCE_CONTEXT_CACHE[key] = (observed - _REFERENCE_CONTEXT_TTL_SECONDS - 1, context, origin)
+        await self.open_reference()
+        self.assertEqual(self.web.fetch_text.await_count, 3)
+        await AdsManagerPrivateHttp.open(self.web, account_id="333333",
+            business_id="222222", actor_id="123456", reference_read=True)
+        self.assertEqual(self.web.fetch_text.await_count, 4)
+
+    async def test_reference_client_cannot_post_and_launch_open_is_always_fresh(self):
+        client = await self.open_reference()
+        async def claim():
+            self.fail("Reference-only sender must never claim a write")
+        with self.assertRaises(ProvisioningError):
+            await client.post("/act_111111/campaigns", {}, before_submit=claim)
+        self.assertEqual(len(self.web.session.calls), 0)
+        other = await AdsManagerPrivateHttp.open(self.web, account_id="111111",
+            business_id="222222", actor_id="123456")
+        self.assertFalse(other.read_only)
+        self.assertEqual(self.web.fetch_text.await_count, 2)
+        self.assertEqual(self.web.refresh_reviewed_modules.await_count, 1)
