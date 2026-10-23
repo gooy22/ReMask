@@ -168,7 +168,7 @@ async function loadTargetBindings() {
 function renderTargetBindings() {
     const pages = state.targetBindingAssets.pages[target.profile] || [];
 }
-'''))
+''')
         (root/'scripts/workspace.js').write_text(
             'async function fetchAsset(resource){return null;}\nfunction fillSelect(){}\n'
             'async function checkAssetsSelection(){ }\nasync function showFunding(){}\n')
