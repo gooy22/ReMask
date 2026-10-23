@@ -805,7 +805,7 @@ class InstalledLaunchTests(unittest.TestCase):
         self.assertEqual(lookup['profile'],['20'])
         self.assertEqual(lookup['account_id'],['123456'])
         self.assertEqual(lookup['execution_mode'],['DRAFT'])
-        self.page.locator('#dryRunPlan').click()
+        self.page.evaluate('remaskPrivateReviewOnly()')
         self.page.wait_for_function('document.querySelector("#launchResult").textContent.includes("План подготовлен для 1 РК")')
         plan=next(row for row in self.worker_requests if row['action']=='private_launch_plan')
         interests=plan['launch']['base']['adset']['targeting']['flexible_spec'][0]['interests']
@@ -836,7 +836,7 @@ class InstalledLaunchTests(unittest.TestCase):
         self.page.evaluate('fixtureSingleTarget("act_123456")')
         self.page.locator('#page option[value="345678"]').wait_for(state='attached')
         self.page.locator('#page').select_option('345678')
-        self.page.locator('#dryRunPlan').click()
+        self.page.evaluate('remaskPrivateReviewOnly()')
         self.page.wait_for_function('document.querySelector("#launchResult").textContent.includes("План подготовлен для 1 РК")')
         base=next(row for row in self.worker_requests if row['action']=='private_launch_plan')['launch']['base']
         target=base['adset']['targeting']
@@ -857,13 +857,13 @@ class InstalledLaunchTests(unittest.TestCase):
 
     def test_single_rk_selected_page_reaches_plan_and_independent_review(self):
         self.prepare_single_page_launch()
-        self.page.locator('#dryRunPlan').click()
+        self.page.evaluate('remaskPrivateReviewOnly()')
         self.page.wait_for_function('document.querySelector("#launchResult").textContent.includes("План подготовлен для 1 РК")')
         plan=next(row for row in self.worker_requests if row['action']=='private_launch_plan')
         self.assertEqual((plan['profile_id'],plan['ad_account_id'],plan['page_id']),('20','123456','345678'))
         self.assertEqual(plan['launch']['base']['creative']['page_id'],'345678')
         self.assertNotIn('official_params',plan['launch']['base']['creative'])
-        self.page.locator('#reviewLaunch').click()
+        self.page.evaluate('remaskPrivateReviewLive()')
         self.page.wait_for_function('document.querySelector("#launchResult").textContent.includes("Проверка Meta: 0/1")')
         review=next(row for row in self.worker_requests if row['action']=='private_launch_review')
         self.assertEqual(review['page_id'],'345678')
@@ -879,7 +879,7 @@ class InstalledLaunchTests(unittest.TestCase):
                 self.page.locator('#remaskPrivateExecutionMode').select_option(mode)
                 before=self.page.evaluate('fixtureLaunch.capture()')
                 self.worker_requests.clear()
-                self.page.locator('#reviewLaunch').click()
+                self.page.evaluate('remaskPrivateReviewLive()')
                 self.page.wait_for_function('document.querySelector("#launchResult").textContent.includes("Проверка Meta: 1/1")')
                 review=next(row for row in self.worker_requests if row['action']=='private_launch_review')
                 self.assertEqual((review['profile_id'],review['ad_account_id'],review['page_id']),('20','123456','345678'))
