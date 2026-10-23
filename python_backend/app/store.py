@@ -53,7 +53,9 @@ class JobStore:
         con = sqlite3.connect(self.path, timeout=30)
         try:
             con.row_factory = sqlite3.Row
-            con.execute("PRAGMA journal_mode=WAL")
+            # WAL is a persistent per-database setting. Repeating the pragma
+            # on every short-lived connection adds unnecessary journal checks
+            # to hot-path job polling and queue reads.
             con.execute("PRAGMA foreign_keys=ON")
             with con:
                 yield con
@@ -65,6 +67,9 @@ class JobStore:
 
     def _init_sync(self) -> None:
         with self._connect() as con:
+            # A single startup migration sets the durable journal mode before
+            # concurrent worker and polling connections begin.
+            con.execute("PRAGMA journal_mode=WAL")
             con.executescript('''
             CREATE TABLE IF NOT EXISTS jobs (
                 id TEXT PRIMARY KEY,
