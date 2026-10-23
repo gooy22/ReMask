@@ -38,6 +38,11 @@ class LatencyReportTests(unittest.TestCase):
         self.assertNotIn("PRIVATE-PROFILE", json.dumps(report))
         self.assertNotIn("PRIVATE-TRACE", json.dumps(report))
 
+    def test_allowlist_matches_live_metrics_without_runtime_http_dependencies(self):
+        from app.latency_report import _RESOURCE_NAMES as offline
+        from app.private_http_metrics import _RESOURCE_NAMES as recorder
+        self.assertEqual(offline, recorder)
+
     def test_unknown_resource_labels_are_not_exported_or_grouped(self):
         payloads = [
             {"operation":"resource_interests", "operation_wall_ms":120,
