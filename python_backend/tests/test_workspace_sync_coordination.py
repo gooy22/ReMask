@@ -8,6 +8,57 @@ import unittest
 
 
 class WorkspaceSyncCoordinationTests(unittest.TestCase):
+    def test_indexed_rk_merge_preserves_identity_and_partial_rows(self):
+        """Execute the installed PHP reconciliation, not a reimplementation."""
+        source = (Path(__file__).resolve().parents[2] / 'railway-workspace-sync-fix-overlay.php').read_text()
+        start = source.index('        $rkPartial = false;')
+        end = source.index('        // Provisioning bindings are historical state only.', start)
+        code = source[start:end]
+        self.assertIn('REMASK_LINEAR_EXISTING_RK_MERGE_V1', code)
+        fixture = r'''
+function hierarchy_binding_put($profile,$business,$account,$name) {
+    $GLOBALS['recorded'][]=[$profile,$business,$account,$name];
+}
+$profile = 'fixture'; $businessRows = []; $adAccountRows = [];
+$seenBusiness = []; $seenAccount = []; $syncWarnings = [];
+$existingSnapshot = ['ad_accounts'=>[
+    ['id'=>'act_2222222222','business_id'=>'1111111111',
+     'name'=>'Saved RK Name','business_asset_id'=>'saved-asset'],
+    ['id'=>'act_3333333333','business_id'=>'1111111111','name'=>'Preserve RK'],
+    ['id'=>'act_2222222222','business_id'=>'9999999999','name'=>'Foreign RK'],
+]];
+$liveInventory = ['businesses'=>[
+    ['id'=>'1111111111','name'=>'BM One','ad_accounts_partial'=>true,
+     'ad_accounts'=>[
+        ['id'=>'2222222222','name'=>'2222222222'],
+        ['id'=>'5555555555','name'=>'Fresh RK'],
+    ]],
+    ['id'=>'7777777777','name'=>'BM Two','ad_accounts'=>[
+        ['id'=>'8888888888','name'=>'Second BM RK'],
+    ]],
+]];
+'''
+        php = fixture + code + r'''
+echo json_encode(['accounts'=>$adAccountRows,
+    'businesses'=>$businessRows,'partial'=>$rkPartial,
+    'recorded'=>$GLOBALS['recorded']??[]]);
+'''
+        result = subprocess.run(['php', '-r', php], capture_output=True,
+                                text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        output = json.loads(result.stdout)
+        records = output['accounts']
+        self.assertEqual([row['id'] for row in records],
+                         ['3333333333', '2222222222', '5555555555', '8888888888'])
+        self.assertTrue(records[0]['_sync_preserved'])
+        self.assertEqual(records[1]['name'], 'Saved RK Name')
+        self.assertEqual(records[1]['business_asset_id'], 'saved-asset')
+        self.assertEqual(records[1]['business_id'], '1111111111')
+        self.assertTrue(output['partial'])
+        self.assertEqual([row['ad_account_count'] for row in output['businesses']], [2,1])
+        self.assertEqual(len(output['recorded']), 3)
+        self.assertFalse(any(row.get('name') == 'Foreign RK' for row in records))
+
     def test_parallel_profile_snapshot_writes_never_lose_another_profile(self):
         """The cross-profile UI pool must preserve both persisted snapshots."""
         source = (Path(__file__).resolve().parents[2] / 'railway-workspace-sync-fix-overlay.php').read_text()
