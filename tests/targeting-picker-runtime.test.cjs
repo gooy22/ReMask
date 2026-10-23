@@ -202,6 +202,17 @@ function fixture(){
   const behaviorUi=behaviorOverlay.match(/\$ui=<<<'JS'\n([\s\S]*?)\nJS;/)?.[1];
   assert.ok(behaviorUi,'behavior UI installer must remain embedded in the runtime overlay');
   const partial=fixture(), behaviorInput=new Input(), behaviorBlock=new Element();
+  partial.doc.createElement=tag=>{
+    const node=tag==='input'?new Input():new Element();
+    Object.defineProperty(node,'id',{set(value){this._id=value;partial.nodes.set(value,node);},get(){return this._id||'';}});
+    node.insertAdjacentElement=(_position,child)=>{
+      const parent=node.parentElement;
+      if(!parent)throw new Error('detached targeting element');
+      const index=parent.children.indexOf(node);
+      parent.children.splice(index+1,0,child);child.parentElement=parent;
+    };
+    return node;
+  };
   behaviorInput.id='behaviorQuery';behaviorInput.placeholder='Поведение';
   behaviorInput.parentElement=behaviorBlock;behaviorBlock.children.push(behaviorInput);
   behaviorInput.insertAdjacentElement=(position,node)=>{
