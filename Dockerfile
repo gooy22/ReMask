@@ -164,7 +164,7 @@ RUN set -eux; \
     grep -q 'REMASK_SYNC_CSRF_SAFE_TRANSPORT_V1' /var/www/html/scripts/workspace.js; \
     grep -q 'REMASK_SYNC_RESULT_RECONCILIATION_V1' /var/www/html/scripts/workspace.js; \
     grep -q 'REMASK_FAILED_SYNC_DOES_NOT_MUTATE_WORKSPACE_V1' /var/www/html/scripts/workspace.js; \
-    grep -q 'REMASK_SYNC_BROWSER_SERIAL_V1' /var/www/html/scripts/workspace.js; \
+    grep -q 'concurrentByProfile=async' /var/www/html/scripts/workspace.js; \
     grep -q 'REMASK_SYNC_PROFILE_AWARE_POOL_V1' /var/www/html/scripts/workspace.js; \
     grep -q 'REMASK_BUSINESS_TAB_SELECTED_SCOPE_V2' /var/www/html/scripts/workspace.js; \
     ! grep -q 'r=>syncBusinessSafe(r)' /var/www/html/scripts/workspace.js; \
