@@ -2271,6 +2271,11 @@ async function pythonWorkerPoll() {
     pythonWorkerRenderJob(job);
 
     const items = Array.isArray(job.items) ? job.items : [];
+    const isPrepareJob = items.some(function(item) {
+      return (Array.isArray(item && item.tasks) ? item.tasks : []).some(function(task) {
+        return task && task.action === 'prepare';
+      });
+    });
     const plannedEntities = new Set();
     items.forEach(function(item) {
       (Array.isArray(item.tasks) ? item.tasks : []).forEach(function(task) {
@@ -2350,7 +2355,9 @@ async function pythonWorkerPoll() {
       const unconfirmed = await pythonWorkerRefreshSuccessfulProfiles(items);
       pythonWorkerSetText(
         'pythonPwStatus',
-        pythonWorkerAdvertisingSummary(items,status) || (isPageAccessJob
+        pythonWorkerAdvertisingSummary(items,status) || (isPrepareJob
+          ? 'Подготовка комплекта завершена. Фактическая готовность и ID показаны в результатах.'
+          : isPageAccessJob
           ? 'Доступ PrgssTeam в выбранном BM настроен.'
           : isConfirmationJob
           ? 'Confirm существующей FP в основном BM проверен. Page ID сохранён в Job.'
@@ -2398,8 +2405,10 @@ async function pythonWorkerPoll() {
             return step && String(step.step || '').toUpperCase() === 'AD_ACCOUNT';
           });
       });
-      const entityLabel = isCompositeJob ? compositeLabel : (isFanPageJob ? 'FP' : (isAdAccountJob ? 'RK' : 'BM'));
-      const entityFailureLabel = isPageAccessJob
+      const entityLabel = isPrepareJob ? 'комплектов' : (isCompositeJob ? compositeLabel : (isFanPageJob ? 'FP' : (isAdAccountJob ? 'RK' : 'BM')));
+      const entityFailureLabel = isPrepareJob
+        ? 'Подготовка комплекта не завершена: '
+        : isPageAccessJob
         ? 'Подготовка доступа PrgssTeam остановлена: '
         : isConfirmationJob
         ? 'Не удалось проверить Confirm существующей FP: '
@@ -2426,7 +2435,7 @@ async function pythonWorkerPoll() {
       pythonWorkerSetText(
         'pythonPwStatus',
         pythonWorkerAdvertisingSummary(items,status,errors.join(' · ')) || (status === 'PARTIAL'
-          ? 'Часть ' + entityLabel + ' создана. Ошибки: ' + (errors.join(' · ') || 'неизвестная ошибка')
+          ? (isPrepareJob ? 'Подготовка комплекта выполнена частично. Ошибки: ' : 'Часть ' + entityLabel + ' создана. Ошибки: ') + (errors.join(' · ') || 'неизвестная ошибка')
           : entityFailureLabel + (errors.join(' · ') || 'неизвестная ошибка'))
       );
 
@@ -5099,3 +5108,5 @@ if (document.readyState === 'loading') {
 } else {
   pythonWorkerInitUi();
 }
+
+/* REMASK_PREPARE_TERMINAL_LABEL_V1 */

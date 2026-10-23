@@ -146,6 +146,66 @@ class StaticReadTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('SECRET',repr(proof));self.assertNotIn('DO_NOT_LOG',repr(proof))
 
 
+class StaticReadBootstrapRetryTests(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def timeout(*, stage='fetch', sent=False):
+        from fb_worker import RemoteRequestError
+        return RemoteRequestError('Facebook fetch timeout',
+            meta_payload={'transport_failure': {'kind': 'TimeoutError'}},
+            request_may_have_been_sent=sent, transport_stage=stage)
+
+    async def test_query_retries_one_failed_bootstrap_with_identical_scope(self):
+        web=SimpleNamespace(graphql=AsyncMock(side_effect=[self.timeout(), {'data': {'ok': True}}]))
+        result=await execute(web, 'READ_RK', business=BM)
+        self.assertEqual(result, {'data': {'ok': True}})
+        self.assertEqual(web.graphql.await_count, 2)
+        self.assertEqual(web.graphql.await_args_list[0], web.graphql.await_args_list[1])
+        self.assertEqual(web.graphql.call_args.kwargs['business_context_id'], BM)
+        self.assertNotIn('before_submit', web.graphql.call_args.kwargs)
+
+    async def test_query_retries_timeout_wrapped_by_business_auth_precheck(self):
+        from tests.test_fb_worker_request_envelope import BusinessAuthenticationPrecheckTests
+        web, http = BusinessAuthenticationPrecheckTests().session(
+            source='https://business.facebook.com/latest/home')
+        error=self.timeout()
+        url='https://business.facebook.com/latest/settings/ad_accounts/?business_id='+BM
+        web.fetch_text=AsyncMock(side_effect=[error, (200,
+            '["DTSGInitialData",[],{"token":"fixture-business-token"}]', url)])
+        web.refresh_reviewed_modules=AsyncMock()
+        self.assertEqual(await execute(web, 'READ_RK', business=BM), {'data': {'ok': True}})
+        self.assertEqual(error.transport_stage, 'business_auth_precheck')
+        self.assertEqual(web.fetch_text.await_count, 2)
+        self.assertEqual(len(http.posts), 1)
+        self.assertEqual(http.posts[0]['data']['doc_id'], command('READ_RK', business=BM)['doc_id'])
+        self.assertEqual(json.loads(http.posts[0]['data']['variables']), command('READ_RK',business=BM)['variables'])
+
+    async def test_exhausted_read_is_classified_and_has_a_finite_retry_limit(self):
+        web=SimpleNamespace(graphql=AsyncMock(side_effect=self.timeout()))
+        with self.assertRaises(ProvisioningError) as caught:
+            await execute(web, 'READ_RK', business=BM)
+        self.assertEqual(caught.exception.code, 'PRIVATE_STATIC_READ_TIMEOUT')
+        self.assertTrue(caught.exception.retryable)
+        self.assertEqual(web.graphql.await_count, 2)
+
+    async def test_mutation_is_never_replayed_even_for_bootstrap_timeout(self):
+        error=self.timeout()
+        web=SimpleNamespace(graphql=AsyncMock(side_effect=error))
+        intent=AsyncMock()
+        with self.assertRaises(type(error)) as caught:
+            await execute(web, 'CLAIM', business=BM, page=RK, join='fixture', before_submit=intent)
+        self.assertIs(caught.exception, error)
+        self.assertEqual(web.graphql.await_count, 1)
+
+    async def test_unknown_post_and_untyped_failures_do_not_enter_bootstrap_retry(self):
+        for error in (self.timeout(stage='graphql', sent=True),
+                      self.timeout(sent=None), RuntimeError('unclassified')):
+            with self.subTest(error=type(error).__name__, stage=getattr(error,'transport_stage','')):
+                web=SimpleNamespace(graphql=AsyncMock(side_effect=error))
+                with self.assertRaises(type(error)):
+                    await execute(web, 'READ_RK', business=BM)
+                self.assertEqual(web.graphql.await_count, 1)
+
+
 class StaticChainTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         from tests import test_private_page_ownership as assets

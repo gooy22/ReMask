@@ -654,3 +654,25 @@ vm.createContext(sandbox); vm.runInContext(source.slice(start,end), sandbox);
   assert.equal(await scope.pythonWorkerHealthCheck(),true,'Failed health reads must release the in-flight guard');
   assert.equal(calls,4);
 })().catch(error=>{console.error(error);process.exitCode=1;});
+
+// Prepare reuses existing resources; terminal text must describe the bundle operation.
+(async()=>{
+  const texts={},storage={};let job;
+  const scope={pythonWorkerUiState:{jobId:'prepare-job',polling:false,busy:true},
+    localStorage:{setItem(k,v){storage[k]=v;},removeItem(k){delete storage[k];}},
+    pythonWorkerRenderJob(){},pythonWorkerSetText(k,v){texts[k]=v;},
+    pythonWorkerSelectionRefresh(){},pythonWorkerSchedulePoll(){throw Error('Terminal job cannot repoll');},
+    async pythonWorkerRefreshSuccessfulProfiles(){return [];},async pythonWorkerBridge(){return {job};}};
+  vm.createContext(scope);
+  const summary=source.indexOf('function pythonWorkerAdvertisingSummary(');
+  vm.runInContext(source.slice(summary,source.indexOf('\nwindow.pythonWorkerStartBusiness',summary)),scope);
+  for(const status of ['FAILED','PARTIAL','SUCCESS']){
+    job={status,items:[{profile_id:'3',status:status==='PARTIAL'?'FAILED':status,
+      error_code:'PRIVATE_STATIC_READ_TIMEOUT',error_message:'Read-only precheck timeout',
+      tasks:[{action:'prepare',result:status==='SUCCESS'?{status:'PAYMENT_REQUIRED'}:null}]}]};
+    scope.pythonWorkerUiState.jobId='prepare-job';
+    await scope.pythonWorkerPoll();
+    assert.match(texts.pythonPwStatus,/Подготовка комплекта/);
+    assert.doesNotMatch(texts.pythonPwStatus,/Создание BM|BM создан|Business Manager создан|CREATE/);
+  }
+})().catch(error=>{console.error(error);process.exitCode=1;});
