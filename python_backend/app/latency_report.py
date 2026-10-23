@@ -54,6 +54,9 @@ UI_MEASUREMENTS = frozenset({
 PHP_MEASUREMENTS = frozenset({
     "php_total", "php_context", "worker_bridge", "php_reconciliation",
 })
+POST_JOB_MEASUREMENTS = frozenset({
+    "batch_wall_ms", "profile_read_ms_sum", "render_ms",
+})
 DISPATCH_PATTERN = re.compile(
     r"worker_dispatch_latency\b.*?queue_age_ms=([0-9.]+)"
     r"\s+profile_lock_ms=([0-9.]+)\s+resolver_ms=([0-9.]+)"
@@ -166,6 +169,21 @@ def summarize(lines, *, slow_ms=30_000):
             for name in PHP_MEASUREMENTS:
                 if name in data:
                     add("php_failed." + name, data[name])
+            continue
+        if "[ReMask post-job refresh latency]" in raw:
+            data = _json_after(raw, "[ReMask post-job refresh latency]")
+            if data is None:
+                ignored += 1
+                continue
+            for name in POST_JOB_MEASUREMENTS:
+                if name in data:
+                    add("post_job." + name, data[name])
+            # Counts remain numeric measurements. Refuse invalid/unbounded
+            # counts to avoid exporting arbitrary user-provided metadata.
+            for name in ("attempted", "succeeded", "failed"):
+                value = data.get(name)
+                if type(value) is int and 0 <= value <= 10000:
+                    add("post_job." + name, value)
             continue
         if "worker_dispatch_latency " in raw:
             match = DISPATCH_PATTERN.search(raw)
