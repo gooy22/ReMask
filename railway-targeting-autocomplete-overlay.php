@@ -21,7 +21,7 @@ $js = <<<'JS'
   const attached = new WeakMap();
   const inflight = new WeakMap();
 
-  const TARGETING_RE = /(targeting|interest|interests|behavior|behaviors|behaviour|behaviours|audience|detailed|деталь|интерес|інтерес|повед|аудитор|таргет|таргетинг)/i;
+  const TARGETING_RE = /(targeting|interest|interests|behavior|behaviors|behaviour|behaviours|audience|detailed|geo|location|country|region|city|географ|местополож|страна|регион|город|деталь|интерес|інтерес|повед|аудитор|таргет|таргетинг)/i;
   const EXCLUDE_INPUT_RE = /(token|cookie|proxy|password|url|utm|pixel|page|creative|headline|text|budget|bid|date|time|payment|billing)/i;
   const SEARCH_BUTTON_RE = /^(search|find|поиск|шукати|знайти|найти)$/i;
 
