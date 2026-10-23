@@ -492,5 +492,22 @@ class PrivateHttpMetricsTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('SECRET query',str(captured.output))
 
 
+    async def test_interactive_resolver_bound_prevents_long_retry_chain(self):
+        import main as api
+        async def unavailable(profile):
+            await asyncio.sleep(360)
+        slow=AsyncMock(side_effect=unavailable)
+        with patch.object(api,'pool',SimpleNamespace(resolver=SimpleNamespace(resolve=slow))), \\
+                patch.object(api,'_READ_CONTEXT_BUDGET_SECONDS',0.01):
+            with self.assertRaises(asyncio.TimeoutError):
+                await api._resolve_read_profile('fixture')
+        self.assertEqual(slow.await_count,1)
+        good=AsyncMock(return_value='verified profile fixture')
+        with patch.object(api,'pool',SimpleNamespace(resolver=SimpleNamespace(resolve=good))):
+            result=await api._resolve_read_profile('fixture')
+        self.assertEqual(result,'verified profile fixture')
+        good.assert_awaited_once_with('fixture')
+
+
 if __name__ == '__main__':
     unittest.main()
