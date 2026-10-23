@@ -72,9 +72,11 @@ function fixture(){
   assert.equal(results.children[0].textContent,'Scoped employer');
   console.log('Shared Launch choices: exact-scope adapter and CSRF preserved.');
 
-  const creative=fixture();const requests=[];
+  const creative=fixture();const requests=[],creativeRequests=[],creativeSelected=[];
   Object.assign(creative.ctx,{$:id=>creative.nodes.get(id),creativeTargetingTimers:{interests:0},creativeTargetingControllers:{interests:null},
-    esc:String,creativeTargetLabel:()=>({main:'Interest'}),addCreativeTarget(){},api:async()=>new Promise(resolve=>requests.push(resolve))});
+    creativeTargetingPages:{},esc:String,creativeTargetLabel:()=>({main:'Interest'}),
+    addCreativeTarget:(kind,row)=>creativeSelected.push({kind,row}),
+    api:async(url,options)=>{creativeRequests.push({url,options});return new Promise(resolve=>requests.push(resolve));}});
   const field=new Input(),box=new Element();
   creative.nodes.set('mbInterestSearch',field);creative.nodes.set('mbInterestResults',box);
   const code=read('railway-v100-creatives.js');
@@ -90,6 +92,22 @@ function fixture(){
   assert.match(box.children.at(-1).textContent,/Сохранённые данные Meta.*актуальность не проверена/,
     'offline choices show their saved date and do not claim a fresh Meta read');
   console.log('Creative choices: Escape, query changes and catalog truncation passed.');
+  field.value='';
+  field.fire('keydown','Enter');
+  requests.shift()({data:[{id:'100001',name:'First'}],offset:0,next_offset:100,truncated:true});
+  await settle();
+  const more=box.children.find(node=>node.dataset.remaskTargetMore==='1');
+  assert.ok(more,'Creative editor offers the next saved reference page');
+  more.fire('click');
+  assert.match(creativeRequests.at(-1).options.body,/offset=100/);
+  requests.shift()({data:[{id:'100002',name:'Second'}],offset:100,next_offset:null});
+  await settle();
+  assert.equal(box.children.filter(node=>node.dataset.remaskTargetChoice==='1').length,2,
+    'Creative editor retains previous page while adding later results');
+  box.children.find(node=>node.dataset.remaskTargetChoice==='1'&&node.textContent.includes('Interest')).fire('click');
+  assert.equal(creativeSelected.length,1,'Creative editor selection remains functional after loading page 2');
+  console.log('Creative template: full catalog page navigation and selection passed.');
+
 
   const launch=fixture();const replies=[],launchRequests=[];
   for(const id of ['geoQuery','geoResults','selectedGeo'])launch.nodes.set(id,id.endsWith('Query')?new Input():new Element());
