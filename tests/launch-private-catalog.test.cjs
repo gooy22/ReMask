@@ -4,6 +4,13 @@ const vm = require('node:vm');
 const path = require('node:path');
 const source = fs.readFileSync(path.join(__dirname, '..', 'railway-launch-private-catalog.js'), 'utf8');
 const workerBridge = fs.readFileSync(path.join(__dirname, '..', 'railway-python-worker-jobs-overlay.php'), 'utf8');
+const targetingAutocomplete = fs.readFileSync(path.join(__dirname, '..', 'railway-targeting-autocomplete-overlay.php'), 'utf8');
+assert.match(targetingAutocomplete, /const identity = \[input\.id, input\.name, input\.placeholder,/,
+  'targeting autocomplete must use stable field identity instead of entered ad copy');
+assert.doesNotMatch(targetingAutocomplete, /const hay = `\$\{textOf\(input\)\}/,
+  'typing targeting words into Primary text must not create a Meta targeting panel');
+assert.doesNotMatch(targetingAutocomplete, /areaHasTargeting\(broad\)/,
+  'a search button outside targeting fields must not be removed because some other field targets');
 assert.match(workerBridge, /\$request = \$path === 'media-inspect'[\s\S]*\['launch'=>\$input\['launch'\]\]/,
   'the authenticated PHP bridge must forward the exact per-RK launch to media preflight');
 
