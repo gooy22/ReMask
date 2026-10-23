@@ -959,6 +959,13 @@ function hierarchy_sync_result_put(
 
         // Store only status metadata. The actual snapshot is rebuilt from
         // current account state + last confirmed live inventory on read.
+        $timings = [];
+        foreach (['php_context', 'worker_bridge', 'php_reconciliation', 'php_total'] as $phase) {
+            $value = $result['sync_timings_ms'][$phase] ?? null;
+            if ((is_int($value) || is_float($value)) && is_finite((float)$value) && $value >= 0) {
+                $timings[$phase] = $value;
+            }
+        }
         $all[$requestId] = [
             'profile' => $profile,
             'updated_at' => $now,
@@ -966,6 +973,7 @@ function hierarchy_sync_result_put(
             'sync_complete' => ($result['sync_complete'] ?? false) === true,
             'sync_error_kind' => trim((string)($result['sync_error_kind'] ?? '')),
             'sync_error' => trim((string)($result['sync_error'] ?? '')),
+            'sync_timings_ms' => $timings,
         ];
 
         $encoded = json_encode(
@@ -995,7 +1003,15 @@ function hierarchy_sync_result_get(
         || $profile === ''
     ) return [];
 
-    $raw = @file_get_contents(hierarchy_sync_result_file());
+    $fp = @fopen(hierarchy_sync_result_file(), 'r');
+    if (!$fp) return [];
+    try {
+        if (!@flock($fp, LOCK_SH)) return [];
+        $raw = stream_get_contents($fp);
+    } finally {
+        @flock($fp, LOCK_UN);
+        @fclose($fp);
+    }
     if (!is_string($raw) || trim($raw) === '') return [];
     $all = json_decode($raw, true);
     if (!is_array($all)) return [];
@@ -1159,7 +1175,15 @@ function hierarchy_live_snapshot_file(): string
 function hierarchy_live_snapshot_all(): array
 {
     $file = hierarchy_live_snapshot_file();
-    $raw = @file_get_contents($file);
+    $fp = @fopen($file, 'r');
+    if (!$fp) return [];
+    try {
+        if (!@flock($fp, LOCK_SH)) return [];
+        $raw = stream_get_contents($fp);
+    } finally {
+        @flock($fp, LOCK_UN);
+        @fclose($fp);
+    }
     if (!is_string($raw) || trim($raw) === '') return [];
     $json = json_decode($raw, true);
     return is_array($json) ? $json : [];
@@ -1611,6 +1635,8 @@ $syncProfileReplacement = <<<'PHP'
             $reconciled['pending'] = false;
             $reconciled['sync_complete'] = true;
             $reconciled['sync_reconciled'] = true;
+            $reconciled['sync_timings_ms'] = is_array($savedResult['sync_timings_ms'] ?? null)
+                ? $savedResult['sync_timings_ms'] : [];
             MetaEndpoint::ok(hierarchy_asset_types_snapshot($reconciled));
         }
 
@@ -2228,6 +2254,8 @@ $syncProfileReplacement = <<<'PHP'
             $snapshot['sync_warnings'] = array_values(array_unique($syncWarnings));
         }
 
+        $snapshot['sync_timings_ms']['php_reconciliation'] = (int)((microtime(true) - $reconcileStarted) * 1000);
+        $snapshot['sync_timings_ms']['php_total'] = (int)((microtime(true) - $syncStarted) * 1000);
         if ($requestId !== '') {
             hierarchy_sync_result_put(
                 $requestId,
@@ -2237,6 +2265,7 @@ $syncProfileReplacement = <<<'PHP'
                     'sync_complete' => $syncComplete,
                     'sync_error_kind' => (string)($snapshot['sync_error_kind'] ?? ''),
                     'sync_error' => (string)($snapshot['sync_error'] ?? ''),
+                    'sync_timings_ms' => $snapshot['sync_timings_ms'],
                 ]
             );
         }

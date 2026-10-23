@@ -1,13 +1,70 @@
 """Exercise the installed PHP handler contract across independent processes."""
 import json
+import fcntl
 from pathlib import Path
 import re
 import subprocess
 import tempfile
+import time
 import unittest
 
 
 class WorkspaceSyncCoordinationTests(unittest.TestCase):
+    def test_saved_sync_result_retains_only_numeric_phase_timings(self):
+        source = (Path(__file__).resolve().parents[2] / 'railway-workspace-sync-fix-overlay.php').read_text()
+        helpers = source[source.index('function hierarchy_sync_result_file('):
+                         source.index('function hierarchy_created_businesses_apply_display(')]
+        with tempfile.TemporaryDirectory() as directory:
+            script = helpers.replace('/var/lib/remask', directory) + r'''
+hierarchy_sync_result_put('fixture_request', 'alpha', [
+    'sync_complete'=>false, 'sync_error_kind'=>'PRIVATE_SYNC',
+    'sync_timings_ms'=>['php_context'=>12, 'worker_bridge'=>30.5,
+        'php_reconciliation'=>'PRIVATE-STRING', 'php_total'=>-1,
+        'cookie'=>'PRIVATE-COOKIE', 'worker'=>['secret'=>'PRIVATE-SECRET']],
+]);
+echo json_encode(hierarchy_sync_result_get('fixture_request','alpha'));
+'''
+            result = subprocess.run(['php', '-r', script], capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout)['sync_timings_ms'],
+                             {'php_context': 12, 'worker_bridge': 30.5})
+            stored = (Path(directory) / 'workspace-sync-results.json').read_text()
+            self.assertNotIn('PRIVATE-', stored)
+
+    def test_snapshot_and_result_readers_wait_for_writer_commit(self):
+        source = (Path(__file__).resolve().parents[2] / 'railway-workspace-sync-fix-overlay.php').read_text()
+        cases = [
+            ('function hierarchy_live_snapshot_file(', 'function hierarchy_live_snapshot_apply_display(',
+             'workspace-live-meta-snapshots.json', 'hierarchy_live_snapshot_all()', {'alpha': {'updated_at': 1}}),
+            ('function hierarchy_sync_result_file(', 'function hierarchy_created_businesses_apply_display(',
+             'workspace-sync-results.json', "hierarchy_sync_result_get('fixture_request','alpha')",
+             {'fixture_request': {'profile': 'alpha', 'updated_at': int(time.time()), 'sync_complete': True}}),
+        ]
+        for start, end, filename, expression, payload in cases:
+            with self.subTest(reader=expression), tempfile.TemporaryDirectory() as directory:
+                helper = source[source.index(start):source.index(end)].replace('/var/lib/remask', directory)
+                with (Path(directory) / filename).open('w+') as writer:
+                    fcntl.flock(writer, fcntl.LOCK_EX)
+                    child = subprocess.Popen(['php', '-r', helper +
+                        "echo \"READY\\n\"; echo json_encode(" + expression + ');'],
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                    try:
+                        self.assertEqual(child.stdout.readline().strip(), 'READY')
+                        with self.assertRaises(subprocess.TimeoutExpired):
+                            child.communicate(timeout=0.2)
+                        json.dump(payload, writer)
+                        writer.flush()
+                        fcntl.flock(writer, fcntl.LOCK_UN)
+                        output, errors = child.communicate(timeout=10)
+                        self.assertEqual(child.returncode, 0, errors)
+                        expected = payload['fixture_request'] if 'fixture_request' in payload else payload
+                        self.assertEqual(json.loads(output), expected)
+                    finally:
+                        fcntl.flock(writer, fcntl.LOCK_UN)
+                        if child.poll() is None:
+                            child.kill()
+                            child.communicate(timeout=5)
+
     def test_indexed_rk_merge_preserves_identity_and_partial_rows(self):
         """Execute the installed PHP reconciliation, not a reimplementation."""
         source = (Path(__file__).resolve().parents[2] / 'railway-workspace-sync-fix-overlay.php').read_text()
