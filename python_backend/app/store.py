@@ -949,19 +949,41 @@ class JobStore:
             job=con.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone()
             if not job:
                 return None
+            # Frequent UI polls must not run two child SELECTs per profile.
+            # Join through durable job_items so one bound job_id parameter covers
+            # arbitrarily large jobs without SQLite's IN-list variable limit.
+            item_rows=con.execute(
+                'SELECT * FROM job_items WHERE job_id=? ORDER BY created_at',(job_id,)
+            ).fetchall()
+            tasks_by_item={}
+            for tr in con.execute(
+                'SELECT t.* FROM job_tasks AS t '
+                'JOIN job_items AS i ON i.id=t.item_id '
+                'WHERE i.job_id=? ORDER BY i.created_at,t.position',(job_id,)
+            ).fetchall():
+                t=dict(tr)
+                t['retryable']=bool(t.get('retryable'))
+                t['payload']=json.loads(t.pop('payload_json'))
+                if t.get('result_json'):
+                    t['result']=json.loads(t['result_json'])
+                t.pop('result_json',None)
+                tasks_by_item.setdefault(t['item_id'],[]).append(t)
+            steps_by_item={}
+            for pr in con.execute(
+                'SELECT p.* FROM provisioning_steps AS p '
+                'JOIN job_items AS i ON i.id=p.item_id '
+                'WHERE i.job_id=? ORDER BY i.created_at,p.created_at,p.step',(job_id,)
+            ).fetchall():
+                p=dict(pr)
+                if p.get('result_json'):
+                    p['result']=json.loads(p['result_json'])
+                p.pop('result_json',None)
+                steps_by_item.setdefault(p['item_id'],[]).append(p)
             items=[]
-            for ir in con.execute('SELECT * FROM job_items WHERE job_id=? ORDER BY created_at', (job_id,)).fetchall():
+            for ir in item_rows:
                 item=dict(ir)
                 item['retryable']=bool(item.get('retryable'))
-                tasks=[]
-                for tr in con.execute('SELECT * FROM job_tasks WHERE item_id=? ORDER BY position', (item['id'],)).fetchall():
-                    t=dict(tr)
-                    t['retryable']=bool(t.get('retryable'))
-                    t['payload']=json.loads(t.pop('payload_json'))
-                    if t.get('result_json'):
-                        t['result']=json.loads(t['result_json'])
-                    t.pop('result_json',None)
-                    tasks.append(t)
+                tasks=tasks_by_item.get(item['id'],[])
                 # Expose a manual verification retry for the legacy false-quota
                 # failure. This read-only view never queues work or alters IDs.
                 details_recovery = (
@@ -978,18 +1000,10 @@ class JobStore:
                             task['retryable'] = True
                             task['recovery_mode'] = 'verify_created_ad_account'
                 item['tasks']=tasks
-                item['advertising_steps']=self._advertising_progress(con, item, tasks)
-                provisioning_steps=[]
-                for pr in con.execute(
-                    'SELECT * FROM provisioning_steps WHERE item_id=? ORDER BY created_at,step',
-                    (item['id'],),
-                ).fetchall():
-                    p=dict(pr)
-                    if p.get('result_json'):
-                        p['result']=json.loads(p['result_json'])
-                    p.pop('result_json',None)
-                    provisioning_steps.append(p)
-                item['provisioning_steps']=provisioning_steps
+                item['advertising_steps']=(self._advertising_progress(con,item,tasks)
+                    if any(t.get('action') in {'private_launch','private_delivery'} for t in tasks)
+                    else [])
+                item['provisioning_steps']=steps_by_item.get(item['id'],[])
                 items.append(item)
             data=dict(job)
             data['items']=items
