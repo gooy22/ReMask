@@ -18,13 +18,19 @@ try {
     if (!in_array($type, array_merge(['locations','interests','behaviors','locales'],$types), true)) throw new InvalidArgumentException('UNKNOWN_TARGETING_TYPE');
     $query = trim((string)($input['q'] ?? ''));
     if (strlen($query) > 200) throw new InvalidArgumentException('INVALID_TARGETING_QUERY');
+    // A page is a view of a retained, account-independent reference tree;
+    // it never authorizes another profile's advertising mutations.
+    $rawOffset=(string)($input['offset'] ?? '0');
+    if (!preg_match('/^(0|[1-9][0-9]{0,4})$/D',$rawOffset) || (int)$rawOffset>19900 || (int)$rawOffset%100!==0)
+        throw new InvalidArgumentException('INVALID_TARGETING_OFFSET');
+    $offset=(int)$rawOffset;
     $module = RemaskModuleTargetingReference::search($type,$query,
-        __DIR__.'/../classes/meta-targeting-reference.json');
+        __DIR__.'/../classes/meta-targeting-reference.json',$offset);
     if ($module !== null) { MetaEndpoint::ok($module); exit; }
     $reference = new RemaskTemplateTargetingReference(dirname(ACCOUNTSFILENAME).'/template-targeting-'.hash('sha256',ACCOUNTSFILENAME).'.json');
-    $cached = $reference->get($type, $query, time());
+    $cached = $reference->get($type, $query, time(), $offset);
     if ($cached !== null) { MetaEndpoint::ok($cached); exit; }
-    if (($cached=$reference->search($type,$query,time())) !== null) {
+    if (($cached=$reference->search($type,$query,time(),$offset)) !== null) {
         MetaEndpoint::ok($cached); exit;
     }
     $profiles = [];
@@ -53,7 +59,8 @@ try {
             if (($result['checked_live'] ?? null) !== true || ($result['account_scope_verified'] ?? null) !== true)
                 throw new RuntimeException('TEMPLATE_LOOKUP_ACCESS_UNVERIFIED');
             $reference->put($type, $query, $result, time());
-            MetaEndpoint::ok(['data'=>array_slice($result['data'] ?? [],0,100), 'checked_live'=>true,
+            MetaEndpoint::ok(['data'=>array_slice($result['data'] ?? [],$offset,100), 'checked_live'=>true,
+                'offset'=>$offset, 'next_offset'=>count($result['data'] ?? [])>$offset+100 ? $offset+100 : null,
                 'truncated'=>($result['truncated'] ?? false) === true || count($result['data'] ?? [])>100,
                 'catalog_count'=>(int)($result['catalog_count'] ?? count($result['data'] ?? [])),
                 'source'=>'private_meta_template_lookup', 'template_account_bound'=>false]);
