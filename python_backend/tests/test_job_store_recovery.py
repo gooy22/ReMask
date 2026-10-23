@@ -689,6 +689,17 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
             )
         return job_id, item_id
 
+    async def test_job_view_index_migrates_existing_database_without_touching_jobs(self):
+        job_id, item_id=self._seed(task_status='SUCCESS')
+        with self.store._connect() as con:
+            con.execute('DROP INDEX idx_items_job_created')
+        await self.store.init()
+        with self.store._connect() as con:
+            names={str(row['name']) for row in con.execute("PRAGMA index_list('job_items')")}
+        self.assertIn('idx_items_job_created',names)
+        view=await self.store.job_view(job_id)
+        self.assertEqual(view['items'][0]['id'],item_id)
+
     async def test_large_generic_job_status_is_batched_and_preserves_detail_order(self):
         job_id, seed_item=self._seed(task_status='SUCCESS')
         with self.store._connect() as con:
