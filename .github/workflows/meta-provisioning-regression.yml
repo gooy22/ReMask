@@ -45,8 +45,18 @@ jobs:
             ffmpeg -version | head -n 1
             ffprobe -version | head -n 1
           else
-            sudo apt-get update
-            sudo apt-get install -y --no-install-recommends ffmpeg
+            # Use the official Ubuntu mirrors: the runner's Azure mirror can
+            # download codec packages so slowly that it consumes the whole job.
+            if [ -f /etc/apt/apt-mirrors.txt ]; then
+              printf '%s\n' 'https://archive.ubuntu.com/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
+            fi
+            if [ -f /etc/apt/apt-security-mirrors.txt ]; then
+              printf '%s\n' 'https://security.ubuntu.com/ubuntu/' | sudo tee /etc/apt/apt-security-mirrors.txt >/dev/null
+            fi
+            sudo timeout --kill-after=10s 90s apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update
+            sudo timeout --kill-after=10s 180s apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -y --no-install-recommends ffmpeg
+            ffmpeg -version | head -n 1
+            ffprobe -version | head -n 1
           fi
       - name: Install backend dependencies
         run: |
