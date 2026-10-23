@@ -299,3 +299,17 @@ class ResourceCases(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(result['data']),601)
         self.assertFalse(result['truncated'])
         self.assertEqual(result['catalog_count'],601)
+
+    async def test_reference_sender_is_read_only_but_owned_asset_sender_is_not(self):
+        from app.private_ads_reads import _ReadClient
+        with patch('app.private_ads_reads.AdsManagerPrivateHttp.open',
+                   new=AsyncMock(return_value=self.client)) as opened:
+            reference = _ReadClient(self.web, self.catalog.catalog, self.values,
+                                    reference_read=True)
+            await reference.account_record(reference=True)
+            self.assertTrue(opened.await_args.kwargs['reference_read'])
+            owned = _ReadClient(self.web, self.catalog.catalog, self.values)
+            await owned.account_record()
+            self.assertFalse(opened.await_args.kwargs['reference_read'])
+        self.assertEqual([call[0] for call in self.calls[-2:]],
+                         ['/act_111111', '/act_111111'])
