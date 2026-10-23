@@ -21,8 +21,15 @@ import time
 import httpx
 
 log = logging.getLogger('remask_worker')
+_RESOURCE_NAMES = frozenset({'interests', 'behaviors', 'locations', 'locales',
+    'pages', 'images', 'videos', 'campaigns', 'adsets', 'ads', 'pixels',
+    'custom_audiences', 'conversion_goals', 'instagram_accounts',
+    'instagram_media', 'creatives', 'insights', 'college_years',
+    'industries', 'life_events', 'family_statuses', 'user_device',
+    'user_os'})
 _OPERATIONS = frozenset({'private_launch', 'private_delivery', 'provision', 'provisioning',
-    'prepare', 'prepare_profile', 'proxy_check', 'transparent_post', 'sync_profile'})
+    'prepare', 'prepare_profile', 'proxy_check', 'transparent_post', 'sync_profile',
+    'template_reference', 'resource_other'} | {'resource_' + name for name in _RESOURCE_NAMES})
 MAX_RESPONSE_REFERENCES = 512
 _ERRORS = (httpx.TimeoutException, TimeoutError, httpx.ProxyError,
     httpx.ConnectError, httpx.ReadError, httpx.WriteError, httpx.ProtocolError,
@@ -113,6 +120,37 @@ def end_operation(metric, token: Token, *, outcome):
         # Observability must never turn a confirmed Meta mutation into a job
         # failure (and thereby encourage an operator to submit it again).
         pass
+
+
+
+def observe_profile_read(function):
+    """Account for direct resource/reference HTTP reads without logging a query.
+
+    The allowlisted resource kind helps separate heavy HTML bootstrap from the
+    actual small response. Only PrivateHttpClient body bytes are measured; proxy
+    billing and non-private transports remain explicitly out of scope.
+    """
+    @wraps(function)
+    async def wrapped(*args, **kwargs):
+        profile = str(kwargs.get('profile_id', args[0] if args else '') or '').strip()
+        resource = kwargs.get('resource')
+        name = ('resource_' + resource if type(resource) is str and
+                resource in _RESOURCE_NAMES else
+                'resource_other' if resource is not None else 'template_reference')
+        existing = _current_operation.get()
+        if existing is not None and existing.active and existing.profile_id == profile:
+            return await function(*args, **kwargs)
+        metric, token = begin_operation(profile, name)
+        outcome = 'failed'
+        try:
+            result = await function(*args, **kwargs)
+            outcome = 'success'
+            return result
+        except asyncio.CancelledError:
+            outcome = 'cancelled'
+            raise
+        finally:
+            end_operation(metric, token, outcome=outcome)
 
 
 def observe_profile_inventory(function):
