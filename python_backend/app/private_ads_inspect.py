@@ -168,6 +168,8 @@ async def inspect_saved_draft(adapter, *, profile_id, context, session, payload)
         return {"status": "RECONCILE_REQUIRED", "execution_mode": "DRAFT_INSPECT",
             **target, "launch_key": key, "draft_id": None, "draft_objects": {},
             "fragment_reads": [], "object_reads": [], "fragment_storage_verified": False,
+            "meta_validation_complete": False, "meta_validation_errors_present": False,
+            "draft_verified": False,
             "relationships_confirmed": False, "editor_verified": False, "published": None,
             "pending_stage": pending, "uninspected_levels": list(LEVELS),
             "missing_direct_objects": [], "launch_fingerprint_verified": True,
@@ -217,6 +219,8 @@ async def inspect_saved_draft(adapter, *, profile_id, context, session, payload)
             "fresh_values": {entry["field"]: copy.deepcopy(entry.get("new_value")) for entry in row["values"]},
             "validation_status": row.get("validation_status"), "active_errors_present": bool(row.get("active_errors")),
             "active_errors_observed": "active_errors" in row,
+            "active_errors_confirmed_empty": isinstance(row.get("active_errors"), list)
+                and not row["active_errors"],
             "active_error_diagnostic": validation_diagnostic(row.get("active_errors"), observed="active_errors" in row),
             "publish_status": row.get("publish_status"), "status": row.get("status")})
     # Draft fragments do not prove that Graph exposes a corresponding object.
@@ -268,12 +272,22 @@ async def inspect_saved_draft(adapter, *, profile_id, context, session, payload)
     # The job result persists this evidence. Original mutation receipts and
     # fingerprints remain untouched, even if Meta reports a validation error.
     complete = pending is None and len(fragments) == len(LEVELS)
+    validation_complete = complete and all(
+        row["validation_status"] == "VALIDATED"
+        and row["active_errors_confirmed_empty"]
+        for row in reads)
+    validation_errors_present = any(
+        row["validation_status"] == "HAS_ERRORS" or row["active_errors_present"]
+        for row in reads)
     inspected = [row["level"] for row in reads]
     inspected_objects = inspected + (["creative"] if "ad" in inspected else [])
     return {"status": "SUCCESS" if complete else "RECONCILE_REQUIRED",
         "execution_mode": "DRAFT_INSPECT", **target, "launch_key": key,
         "draft_id": draft_id, "draft_objects": objects, "fragment_reads": reads,
         "fragment_storage_verified": complete, "relationships_confirmed": True,
+        "meta_validation_complete": validation_complete,
+        "meta_validation_errors_present": validation_errors_present,
+        "draft_verified": validation_complete,
         "pending_stage": pending, "uninspected_levels": [level for level in LEVELS if level not in inspected],
         "object_reads": object_reads,
         "missing_direct_objects": [level for level in inspected_objects
