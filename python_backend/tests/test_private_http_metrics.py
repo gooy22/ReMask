@@ -14,7 +14,7 @@ import httpx
 from app import runner
 from app.models import CreateJobRequest
 from app.private_http import PrivateHttpClient
-from app.private_http_metrics import begin_operation, end_operation
+from app.private_http_metrics import begin_operation, end_operation, observe_profile_read
 from app.runner import WorkerPool
 from app.store import JobStore
 
@@ -422,6 +422,30 @@ class PrivateHttpMetricsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reports[0]['outcome'],'failed')
         self.assertEqual(reports[0]['request_scopes'],0)
         self.assertNotIn('SECRET',str(captured.output))
+
+
+
+    async def test_direct_reference_metrics_separate_sources_without_exposing_query(self):
+        import main as api
+        for handler in (api.private_advertising_resources, api.private_template_reference):
+            self.assertEqual(inspect.signature(handler), inspect.signature(handler.__wrapped__))
+        client = await self.client(lambda request: httpx.Response(200, stream=Chunks([b'five!'])))
+        @observe_profile_read
+        async def read(*, profile_id, resource=None, query='SECRET query'):
+            async with client.get('https://www.facebook.com/') as response:
+                await response.text()
+            return {'ok': True}
+        with self.assertLogs('remask_worker', level='INFO') as captured:
+            await read(profile_id='fixture', resource='interests')
+            await read(profile_id='fixture', resource='not-a-registered-resource')
+            await read(profile_id='fixture')
+        reports = [json.loads(line.split('private_http_operation ',1)[1])
+                   for line in captured.output if 'private_http_operation ' in line]
+        self.assertEqual([row['operation'] for row in reports],
+                         ['resource_interests', 'resource_other', 'template_reference'])
+        self.assertEqual([row['encoded_response_body_bytes'] for row in reports], [5,5,5])
+        self.assertTrue(all(row['complete'] for row in reports))
+        self.assertNotIn('SECRET query',str(captured.output))
 
 
 if __name__ == '__main__':
