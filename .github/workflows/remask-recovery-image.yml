@@ -14,6 +14,10 @@ on:
       - .github/workflows/remask-recovery-image.yml
   workflow_dispatch:
 
+concurrency:
+  group: remask-recovery-image-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   packages: write
@@ -37,6 +41,6 @@ jobs:
           file: ./Dockerfile
           push: true
           tags: |
-            ghcr.io/gooy22/remask:recovery
             ghcr.io/gooy22/remask:${{ github.sha }}
+            ghcr.io/gooy22/remask:${{ github.ref_name == 'main' && 'recovery' || 'recovery-pr' }}
           provenance: false
