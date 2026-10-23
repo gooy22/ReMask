@@ -104,7 +104,7 @@ assert.equal(controls.reviewLaunch.hidden,true);
 assert.equal(controls.dryRunPlan.hidden,true);
 assert.equal(controls.serverDryRun.hidden,true);
 assert.equal(controls.launchButton.textContent,'Сохранить черновик');
-assert.equal(controls.reviewLaunch.title,'');
+assert.equal(Boolean(controls.reviewLaunch.title),false);
 assert.equal(Boolean(controls.reviewStatus.textContent),false);
 assert.equal(controls.preflight.textContent,'Загрузить сохранённые РК');
 console.log('Private Launch catalog and funding truth checks passed');
