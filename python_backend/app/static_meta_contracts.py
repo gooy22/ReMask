@@ -97,7 +97,7 @@ async def execute(web, operation, *, before_submit=None, business='', variables=
             read_bootstrap_timeout = (
                 row['operation_kind'] == 'query'
                 and before_submit is None
-                and exc.transport_stage == 'fetch'
+                and exc.transport_stage in {'fetch', 'business_auth_precheck'}
                 and exc.request_may_have_been_sent is False
                 and isinstance(failure, dict)
                 and failure.get('kind') in {'TimeoutError', 'ReadTimeout', 'ConnectTimeout', 'PoolTimeout'}
