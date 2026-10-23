@@ -296,6 +296,14 @@ async function syncSelection(){
   if(!rows.length)return;
 
   state.running=true;
+  // REMASK_SYNC_UI_LATENCY_V1 - only aggregated timings; no profile IDs,
+  // query contents, cookies, proxy credentials or response payloads.
+  const syncUiStarted=Date.now();
+  const timing={ui_wall_ms:0,ui_http_ms_sum:0,ui_http_calls:0,
+    ui_http_parallel_peak:0,ui_apply_ms_sum:0,ui_apply_count:0,
+    ui_render_ms:0,php_reported_count:0,php_total_ms_sum:0,
+    php_context_ms_sum:0,worker_bridge_ms_sum:0};
+  let activeHttp=0;
   updateSelectionUi();
   $('workspaceStatus').textContent=`Доп. синхронизация: 0/${rows.length}`;
 
@@ -365,7 +373,27 @@ async function syncSelection(){
   // the current auth/CSRF contract. If the mobile browser drops the long
   // request, request_id reconciliation below reads the server-side result
   // instead of bypassing CSRF with a second custom fetch implementation.
-  const syncApiJson=async(url,body)=>apiJson(url,body);
+  const syncApiJson=async(url,body)=>{
+    const began=Date.now();
+    timing.ui_http_calls++;
+    activeHttp++;
+    timing.ui_http_parallel_peak=Math.max(timing.ui_http_parallel_peak,activeHttp);
+    try{
+      return await apiJson(url,body);
+    }finally{
+      activeHttp--;
+      timing.ui_http_ms_sum+=Math.max(0,Date.now()-began);
+    }
+  };
+  const syncApplySnapshot=(data)=>{
+    const began=Date.now();
+    try{
+      return applySnapshot(data);
+    }finally{
+      timing.ui_apply_count++;
+      timing.ui_apply_ms_sum+=Math.max(0,Date.now()-began);
+    }
+  };
 
   // REMASK_SYNC_RESULT_RECONCILIATION_V1
   const syncRequestId=()=>{
@@ -390,7 +418,7 @@ async function syncSelection(){
         ),Math.min(3000,remaining));
         if(!d||d.pending===true)continue;
         if(d.sync_complete===true){
-          const applied=applySnapshot(d);
+          const applied=syncApplySnapshot(d);
           if(!applied){
             return {
               error:'Live Meta sync finished but reconciled snapshot was not applied',
@@ -427,7 +455,7 @@ async function syncSelection(){
         business_id
       };
     }
-    const applied=applySnapshot(d);
+    const applied=syncApplySnapshot(d);
     if(d && d.sync_complete===true && !applied){
       return {
         error:'Live Meta sync returned success but Workspace snapshot was not applied',
@@ -571,8 +599,26 @@ async function syncSelection(){
     }else{
       $('workspaceStatus').textContent='Синхронизация Meta завершена.';
     }
+    const renderStarted=Date.now();
     render();
+    timing.ui_render_ms=Math.max(0,Date.now()-renderStarted);
+    for(const item of results){
+      const server=item&&item.sync_timings_ms;
+      if(!server||typeof server!=='object')continue;
+      timing.php_reported_count++;
+      for(const [source,dest] of [
+        ['php_total','php_total_ms_sum'],['php_context','php_context_ms_sum'],
+        ['worker_bridge','worker_bridge_ms_sum']]){
+        const value=Number(server[source]);
+        if(Number.isFinite(value)&&value>=0)timing[dest]+=value;
+      }
+    }
   }finally{
+    timing.ui_wall_ms=Math.max(0,Date.now()-syncUiStarted);
+    state.lastSyncTimingMs=timing;
+    if(typeof console!=='undefined'&&typeof console.info==='function'){
+      console.info('[ReMask sync latency]',JSON.stringify(timing));
+    }
     state.running=false;
     updateSelectionUi();
   }
