@@ -625,3 +625,32 @@ vm.createContext(sandbox); vm.runInContext(source.slice(start,end), sandbox);
   });
   assert.ok(!invalid.some(value=>value.includes('secret')));
 }
+
+// A slow health poll and a manual refresh share one in-flight read.
+// Once it settles, the next check must read fresh state, including after errors.
+(async()=>{
+  let calls=0, finish;
+  const element={dataset:{},textContent:''};
+  const scope={pythonWorkerUiState:{},pythonWorkerEl:()=>element,
+    pythonWorkerSelectionRefresh(){},pythonWorkerErrorText:()=> 'fixture error',
+    pythonWorkerBridge:()=>{calls++;return new Promise(resolve=>{finish=resolve;});}};
+  vm.createContext(scope);
+  let start=source.indexOf('let pythonWorkerHealthRead =');
+  if(start<0)start=source.indexOf('async function pythonWorkerHealthCheck()');
+  vm.runInContext(source.slice(start,source.indexOf('\nfunction pythonWorkerIsProfileAuthBlockedCode',start)),scope);
+  const first=scope.pythonWorkerHealthCheck();
+  const second=scope.pythonWorkerHealthCheck();
+  assert.equal(calls,1,'Overlapping health checks must not queue repeated PHP/ready/resolver reads');
+  finish({ready:true,worker:{},readiness:{profiles_visible:1,volume_mounted:true}});
+  assert.deepEqual(await Promise.all([first,second]),[true,true]);
+  assert.equal(element.dataset.state,'online');
+  const fresh=scope.pythonWorkerHealthCheck();
+  assert.equal(calls,2,'A settled health check cannot cache readiness for a later poll');
+  finish({ready:false,worker:{}});assert.equal(await fresh,false);
+  scope.pythonWorkerBridge=async()=>{calls++;throw Error('fixture transport');};
+  assert.equal(await scope.pythonWorkerHealthCheck(),false);
+  assert.equal(scope.pythonWorkerUiState.workerOnline,false);
+  scope.pythonWorkerBridge=async()=>{calls++;return {ready:true,worker:{}};};
+  assert.equal(await scope.pythonWorkerHealthCheck(),true,'Failed health reads must release the in-flight guard');
+  assert.equal(calls,4);
+})().catch(error=>{console.error(error);process.exitCode=1;});
