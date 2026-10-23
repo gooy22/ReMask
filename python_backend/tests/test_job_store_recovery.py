@@ -714,12 +714,14 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
         await self.provisioning_state.complete(
             seed_item,'4','default',ProvisioningStep.BUSINESS,
             {'business_id':'1234567890123456'})
+        from contextlib import contextmanager
         executed=[]
         original=self.store._connect
+        @contextmanager
         def counted_connection():
-            conn=original()
-            conn.set_trace_callback(lambda query: executed.append(query))
-            return conn
+            with original() as conn:
+                conn.set_trace_callback(lambda query: executed.append(query))
+                yield conn
         with patch.object(self.store,'_connect',side_effect=counted_connection):
             view=await self.store.job_view(job_id)
         self.assertEqual(view['items_total'],49)
