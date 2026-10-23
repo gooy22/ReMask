@@ -302,7 +302,7 @@ async function syncSelection(){
   const timing={ui_wall_ms:0,ui_http_ms_sum:0,ui_http_calls:0,
     ui_http_parallel_peak:0,ui_apply_ms_sum:0,ui_apply_count:0,
     ui_render_ms:0,php_reported_count:0,php_total_ms_sum:0,
-    php_context_ms_sum:0,worker_bridge_ms_sum:0};
+    php_context_ms_sum:0,worker_bridge_ms_sum:0,php_reconciliation_ms_sum:0};
   let activeHttp=0;
   updateSelectionUi();
   $('workspaceStatus').textContent=`Доп. синхронизация: 0/${rows.length}`;
@@ -431,7 +431,8 @@ async function syncSelection(){
         return {
           error:String(d.sync_error||'Private Meta sync failed after client reconnect'),
           error_kind:String(d.sync_error_kind||'PRIVATE_SYNC'),
-          profile
+          profile,
+          sync_timings_ms:d.sync_timings_ms
         };
       }catch(error){
         if(error?.code==='SYNC_TIMEOUT')break;
@@ -452,7 +453,8 @@ async function syncSelection(){
         error:String(d.sync_error||'Private Business Suite inventory was inconclusive'),
         error_kind:String(d.sync_error_kind||'PRIVATE_INCONCLUSIVE'),
         profile,
-        business_id
+        business_id,
+        sync_timings_ms:d.sync_timings_ms
       };
     }
     const applied=syncApplySnapshot(d);
@@ -608,7 +610,8 @@ async function syncSelection(){
       timing.php_reported_count++;
       for(const [source,dest] of [
         ['php_total','php_total_ms_sum'],['php_context','php_context_ms_sum'],
-        ['worker_bridge','worker_bridge_ms_sum']]){
+        ['worker_bridge','worker_bridge_ms_sum'],
+        ['php_reconciliation','php_reconciliation_ms_sum']]){
         const value=Number(server[source]);
         if(Number.isFinite(value)&&value>=0)timing[dest]+=value;
       }
@@ -1528,6 +1531,8 @@ $syncProfileReplacement = <<<'PHP'
             'sync_complete' => false,
             'sync_error_kind' => (string)($savedResult['sync_error_kind'] ?? 'PRIVATE_SYNC'),
             'sync_error' => (string)($savedResult['sync_error'] ?? 'Private Meta sync failed'),
+            'sync_timings_ms' => is_array($savedResult['sync_timings_ms'] ?? null)
+                ? $savedResult['sync_timings_ms'] : [],
             'sync_reconciled' => true,
         ]);
     }
@@ -1699,6 +1704,16 @@ $syncProfileReplacement = <<<'PHP'
                 }
             }
 
+            // REMASK_FAILED_SYNC_TIMING_V1
+            // Failed transports must produce phase timings too; only numeric
+            // totals are logged. Never serialize URLs, proxy credentials,
+            // tokens or exception text into performance telemetry.
+            $failureTimings = [
+                'php_context' => max(0, $phpContextMs),
+                'worker_bridge' => max(0, (int)((microtime(true) - $workerStarted) * 1000)),
+                'php_total' => max(0, (int)((microtime(true) - $syncStarted) * 1000)),
+            ];
+            error_log('[ReMask sync failure timing] ' . json_encode($failureTimings));
             if ($requestId !== '') {
                 hierarchy_sync_result_put(
                     $requestId,
@@ -1708,6 +1723,7 @@ $syncProfileReplacement = <<<'PHP'
                         'sync_complete' => false,
                         'sync_error_kind' => $errorKind,
                         'sync_error' => $message,
+                        'sync_timings_ms' => $failureTimings,
                     ]
                 );
             }
