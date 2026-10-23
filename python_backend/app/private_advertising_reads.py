@@ -220,7 +220,8 @@ class AdvertisingResourceStore:
                     and result.get("account_scope_verified") is True
                     and result.get("query_required") is not True
                     and result.get("truncated") is not True
-                    and result.get("inventory_complete") is not False)
+                    and result.get("inventory_complete") is not False
+                    and not (name in TARGETING_TYPES and values.get("offset", 0)))
         if not complete:
             return {**result, "_cache": {"hit": False, "cached_only": False,
                     "fetched_at": result.get("checked_at"), "stale": True}}
