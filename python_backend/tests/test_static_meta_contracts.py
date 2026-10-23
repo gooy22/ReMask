@@ -163,6 +163,22 @@ class StaticReadBootstrapRetryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(web.graphql.call_args.kwargs['business_context_id'], BM)
         self.assertNotIn('before_submit', web.graphql.call_args.kwargs)
 
+    async def test_query_retries_timeout_wrapped_by_business_auth_precheck(self):
+        from tests.test_fb_worker_request_envelope import BusinessAuthenticationPrecheckTests
+        web, http = BusinessAuthenticationPrecheckTests().session(
+            source='https://business.facebook.com/latest/home')
+        error=self.timeout()
+        url='https://business.facebook.com/latest/settings/ad_accounts/?business_id='+BM
+        web.fetch_text=AsyncMock(side_effect=[error, (200,
+            '["DTSGInitialData",[],{"token":"fixture-business-token"}]', url)])
+        web.refresh_reviewed_modules=AsyncMock()
+        self.assertEqual(await execute(web, 'READ_RK', business=BM), {'data': {'ok': True}})
+        self.assertEqual(error.transport_stage, 'business_auth_precheck')
+        self.assertEqual(web.fetch_text.await_count, 2)
+        self.assertEqual(len(http.posts), 1)
+        self.assertEqual(http.posts[0]['data']['doc_id'], command('READ_RK', business=BM)['doc_id'])
+        self.assertEqual(json.loads(http.posts[0]['data']['variables']), command('READ_RK',business=BM)['variables'])
+
     async def test_exhausted_read_is_classified_and_has_a_finite_retry_limit(self):
         web=SimpleNamespace(graphql=AsyncMock(side_effect=self.timeout()))
         with self.assertRaises(ProvisioningError) as caught:
