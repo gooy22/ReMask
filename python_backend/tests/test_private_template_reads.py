@@ -40,6 +40,7 @@ class TemplateReferenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.helper.await_args.args[2]['business_id'], '222222')
         self.assertEqual(self.helper.await_args.args[2]['ad_account_id'], '111111')
         self.assertTrue(self.discovery.await_args.kwargs['execute_read_queries'])
+        self.assertTrue(self.discovery.await_args.kwargs['fast_sync'])
         self.assertEqual(self.discovery.await_args.kwargs['personal_scope_id'],'999999')
 
     async def test_cached_hint_still_requires_fresh_account_read_and_cookie_change_rediscovers(self):
