@@ -103,6 +103,7 @@ class JobStore:
                 UNIQUE(item_id, position)
             );
             CREATE INDEX IF NOT EXISTS idx_items_status ON job_items(status);
+            CREATE INDEX IF NOT EXISTS idx_items_job_created ON job_items(job_id, created_at);
             CREATE INDEX IF NOT EXISTS idx_tasks_item ON job_tasks(item_id, position);
             ''')
 
