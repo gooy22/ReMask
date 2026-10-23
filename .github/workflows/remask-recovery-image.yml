@@ -2,7 +2,7 @@ name: Build ReMask recovery image
 
 on:
   push:
-    branches: [main]
+    branches: [main, codex/launch-offline-hardening]
     paths:
       - Dockerfile
       - docker-start.sh
