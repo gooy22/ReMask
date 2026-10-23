@@ -100,4 +100,12 @@ assert.throws(()=>ctx.remaskLaunchMetaParse('-2','unsigned int','max_spend'),/>=
 assert.throws(()=>ctx.remaskLaunchMetaParse('invalid','bool','is_dynamic_creative'),/true или false/);
 assert.deepEqual(JSON.parse(JSON.stringify(ctx.remaskLaunchMetaParse('52,1000','list<unsigned int>','locales'))),[52,1000]);
 
+// A draft validation rejection must carry the safe Python-authored reason
+// through the PHP bridge; returning only the code made the UI un-actionable.
+const workerJobsOverlay=read('railway-python-worker-jobs-overlay.php');
+assert.match(workerJobsOverlay,/\$code === 'PRIVATE_ADS_DRAFT_INVALID_INPUT'/);
+assert.match(workerJobsOverlay,/\$safe\['message'\] = \$validationMessage/);
+assert.match(workerJobsOverlay,/'message'=>\$e->detail\['message'\] \?\? \$e->detail\['code'\]/);
+assert.match(read('railway-launch-private-catalog.js'),/data\?\.message\|\|data\?\.error\|\|data\?\.detail/);
+
 console.log('Installed Launch UI -> selected meta_builder -> PHP job payload preserves exact nested targeting and rejects truncated IDs.');
