@@ -85,7 +85,32 @@ async def execute(web, operation, *, before_submit=None, business='', variables=
     submit = getattr(web, 'graphql', None)
     if not callable(submit):
         raise ProvisioningError('CREATE_BM_PRIVATE_TRANSPORT_UNAVAILABLE', 'Direct private HTTP GraphQL transport is unavailable.')
-    return await submit(row['doc_id'], row['variables'], **kwargs)
+    from fb_worker import RemoteRequestError
+    for attempt in range(2):
+        try:
+            return await submit(row['doc_id'], row['variables'], **kwargs)
+        except RemoteRequestError as exc:
+            failure = exc.meta_payload.get('transport_failure')
+            # Only a reviewed query whose bootstrap GET timed out before
+            # dispatch may retry here. Mutation senders and unknown POST
+            # outcomes retain their original durable reconciliation path.
+            read_bootstrap_timeout = (
+                row['operation_kind'] == 'query'
+                and before_submit is None
+                and exc.transport_stage == 'fetch'
+                and exc.request_may_have_been_sent is False
+                and isinstance(failure, dict)
+                and failure.get('kind') in {'TimeoutError', 'ReadTimeout', 'ConnectTimeout', 'PoolTimeout'}
+            )
+            if not read_bootstrap_timeout:
+                raise
+            if attempt:
+                raise ProvisioningError(
+                    'PRIVATE_STATIC_READ_TIMEOUT',
+                    'Meta read ' + operation + ' timed out during HTTP bootstrap.',
+                    retryable=True,
+                ) from exc
+            log.info('static_contract read bootstrap retry operation=%s attempt=2', operation)
 
 
 class StaticAssetContracts:
