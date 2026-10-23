@@ -95,6 +95,13 @@ function rmx_pwj_worker_request(string $method, string $path, ?array $payload = 
     if ($body !== null) $http['content'] = $body;
 
     $context = stream_context_create(['http' => $http]);
+    // Authentication and any CSRF/session writes have already completed.
+    // Worker GETs are read-only; persist the session before awaiting them so
+    // a slow readiness/status read cannot serialize the operator's other tabs.
+    if (strtoupper($method) === 'GET' && session_status() === PHP_SESSION_ACTIVE) {
+        session_write_close();
+    }
+
     $raw = @file_get_contents($url, false, $context);
 
     $status = 0;
