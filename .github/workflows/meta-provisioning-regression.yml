@@ -104,7 +104,9 @@ jobs:
         run: node tests/payment-inspection-ui.test.cjs
 
       - name: Authenticated targeting choices and stale response guards
-        run: node tests/targeting-picker-runtime.test.cjs
+        run: |
+          node tests/targeting-picker-runtime.test.cjs
+          node tests/creative-targeting-roundtrip.test.cjs
 
       - name: Advertising estimate retry and account selection guards
         run: node tests/advertising-estimate-retry.test.cjs
