@@ -292,6 +292,9 @@ class AdsManagerPrivateHttp:
             from .private_ads_document import business_login_continuation, business_login_public_sources
             continuation = business_login_continuation(final_url, body)
             if not continuation:
+                from .private_business_login import native_business_login_continuation
+                continuation = native_business_login_continuation(body, url)
+            if not continuation:
                 log.info('ads_business_continuation_missing profile=%s public_scripts=%s',
                     getattr(web.profile, 'name', ''), business_login_public_sources(body))
             if continuation:
