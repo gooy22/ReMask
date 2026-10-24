@@ -43,6 +43,21 @@ def _has_login_form(body: str) -> bool:
     return parser.found
 
 
+def _is_facebook_auth_navigation(url: str) -> bool:
+    """Recognize a final Facebook login/checkpoint redirect without reading its HTML."""
+    parts = urlsplit(str(url or ""))
+    host = str(parts.hostname or "").casefold()
+    path = str(parts.path or "").casefold().rstrip("/")
+    facebook_host = host == "facebook.com" or host.endswith(".facebook.com")
+    if parts.scheme != "https" or not facebook_host:
+        return False
+    return (
+        path in {"/login", "/login.php", "/checkpoint"}
+        or path.startswith("/login/")
+        or path.startswith("/checkpoint/")
+    )
+
+
 # ---------------------------------------------------------------------------
 # Errors
 # ---------------------------------------------------------------------------
@@ -893,15 +908,22 @@ class FacebookWebSession:
                 headers=request_headers,
                 allow_redirects=True,
             ) as response:
-                raw = await response.content.read(max(1, int(max_bytes)) + 1)
-                if len(raw) > max_bytes:
-                    raw = raw[:max_bytes]
+                response_url = str(response.url)
+                if document_navigation and _is_facebook_auth_navigation(response_url):
+                    # The final URL is sufficient for the caller to report a
+                    # fresh-login/checkpoint requirement. Do not download a
+                    # large Meta login page just to rediscover its route.
+                    body = ""
+                else:
+                    raw = await response.content.read(max(1, int(max_bytes)) + 1)
+                    if len(raw) > max_bytes:
+                        raw = raw[:max_bytes]
 
-                charset = response.charset or "utf-8"
-                try:
-                    body = raw.decode(charset, errors="replace")
-                except LookupError:
-                    body = raw.decode("utf-8", errors="replace")
+                    charset = response.charset or "utf-8"
+                    try:
+                        body = raw.decode(charset, errors="replace")
+                    except LookupError:
+                        body = raw.decode("utf-8", errors="replace")
 
                 response_headers = {
                     str(key): str(value)
@@ -911,7 +933,7 @@ class FacebookWebSession:
                 return (
                     response.status,
                     body,
-                    str(response.url),
+                    response_url,
                     response_headers,
                 )
 
