@@ -596,6 +596,7 @@ class MetaSession:
         initial = dict(self.context._loaded_cookies or self.context.cookies)
         actor_id = str(initial.get("c_user") or "")
         if (refreshed_cookies is not None and actor_id
+                and self.context.cookies == initial
                 and refreshed_cookies.get("c_user") == actor_id
                 and str(refreshed_cookies.get("xs") or "").strip()
                 and refreshed_cookies != initial):
