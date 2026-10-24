@@ -163,7 +163,7 @@ class _BusinessGateParser(HTMLParser):
                             form["fields"].append(field)
                         else:
                             self.external_fields.setdefault(form_id, []).append(field)
-                if kind in {"submit", "image"} and name and not hidden:
+                if kind in {"submit", "image"} and not hidden:
                     self.candidates.append({
                         "tag": "input",
                         "attrs": attrs,
@@ -337,6 +337,10 @@ async def _request_facebook(
     current_url = url
     current_fields = list(fields or [])
     current_referer = referer
+    last_status = 0
+    last_url = url
+    last_body = ""
+    last_headers: dict[str, str] = {}
     for _ in range(4):
         headers = {
             "User-Agent": str(profile.user_agent or ""),
@@ -365,22 +369,22 @@ async def _request_facebook(
         elif current_fields:
             kwargs["params"] = current_fields
         async with session.request(current_method, current_url, **kwargs) as response:
-            status = int(response.status)
-            response_url = str(response.url)
+            last_status = int(response.status)
+            last_url = str(response.url)
             location = str(response.headers.get("Location") or "")
-            body = await _bounded_response(response)
-        if status not in {301, 302, 303, 307, 308} or not location:
-            return status, response_url, body, {}, dict(response.headers)
-        next_url = urljoin(response_url, location)
+            last_headers = {str(key):str(value) for key,value in response.headers.items()}
+            last_body = await _bounded_response(response)
+        if last_status not in {301, 302, 303, 307, 308} or not location:
+            return last_status, last_url, last_body, last_headers
+        next_url = urljoin(last_url, location)
         if not _facebook_url(next_url) or _auth_navigation(next_url):
-            return status, next_url, body, dict(response.headers)
-        current_referer = response_url
+            return last_status, next_url, last_body, last_headers
+        current_referer = last_url
         current_url = next_url
-        if status in {301, 302, 303} and current_method == "POST":
+        if last_status in {301, 302, 303} and current_method == "POST":
             current_method = "GET"
             current_fields = []
-    return status, response_url, body
-
+    return last_status, last_url, last_body, last_headers
 
 async def continue_business_login_gate(
     web,
@@ -391,7 +395,8 @@ async def continue_business_login_gate(
 ) -> dict | None:
     """Submit one safe Meta continuation, then verify the original read-only URL."""
     continuation = extract_business_login_continuation(body, gate_url)
-    actor_id = str(getattr(getattr(web, "profile", None), "cookies", {}).get("c_user") or "")
+    profile = getattr(web, "profile", None)
+    actor_id = str(getattr(profile, "cookies", {}).get("c_user") or "")
     if not continuation or not actor_id or not _facebook_url(return_url):
         return None
 
@@ -401,10 +406,12 @@ async def continue_business_login_gate(
         return None
 
     try:
-        _, action_url, _, _ = await _request_facebook(
-            session, web.profile, continuation["method"], continuation["url"],
+        action_status, action_url, _, _ = await _request_facebook(
+            session, profile, continuation["method"], continuation["url"],
             fields=continuation["fields"], referer=gate_url,
         )
+        if action_status in {401, 403}:
+            return None
         if _auth_navigation(action_url) and not is_business_login_gate_url(action_url):
             return None
         after = session.facebook_cookie_snapshot()
@@ -413,17 +420,21 @@ async def continue_business_login_gate(
             return None
 
         status, final_url, response_body, response_headers = await _request_facebook(
-            session, web.profile, "GET", return_url, referer=gate_url,
+            session, profile, "GET", return_url, referer=gate_url,
         )
         after = session.facebook_cookie_snapshot()
-        return (
+        if (
             200 <= status < 400
             and str(after.get("c_user") or "") == actor_id
             and bool(str(after.get("xs") or "").strip())
             and not _auth_navigation(final_url)
         ):
-            return {"status":status,"body":response_body,"url":final_url,
-                    "headers":response_headers}
+            return {
+                "status":status,
+                "body":response_body,
+                "url":final_url,
+                "headers":response_headers,
+            }
         return None
     except Exception:
         return None
