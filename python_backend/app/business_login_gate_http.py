@@ -301,7 +301,7 @@ def extract_business_login_continuation(
     }
 
 
-async def _bounded_response(response, max_bytes: int = 1_000_000) -> str:
+async def _bounded_response(response, max_bytes: int = 4_000_000) -> str:
     raw = await response.content.read(max_bytes + 1)
     raw = raw[:max_bytes]
     charset = str(getattr(response, "charset", "") or "utf-8")
@@ -370,10 +370,10 @@ async def _request_facebook(
             location = str(response.headers.get("Location") or "")
             body = await _bounded_response(response)
         if status not in {301, 302, 303, 307, 308} or not location:
-            return status, response_url, body
+            return status, response_url, body, {}, dict(response.headers)
         next_url = urljoin(response_url, location)
         if not _facebook_url(next_url) or _auth_navigation(next_url):
-            return status, next_url, body
+            return status, next_url, body, dict(response.headers)
         current_referer = response_url
         current_url = next_url
         if status in {301, 302, 303} and current_method == "POST":
@@ -388,29 +388,31 @@ async def continue_business_login_gate(
     gate_url: str,
     body: str,
     return_url: str,
-) -> bool:
+) -> dict | None:
     """Submit one safe Meta continuation, then verify the original read-only URL."""
     continuation = extract_business_login_continuation(body, gate_url)
     actor_id = str(getattr(getattr(web, "profile", None), "cookies", {}).get("c_user") or "")
     if not continuation or not actor_id or not _facebook_url(return_url):
-        return False
+        return None
 
     session = await web._ensure_session()
     before = session.facebook_cookie_snapshot()
     if str(before.get("c_user") or "") != actor_id or not str(before.get("xs") or "").strip():
-        return False
+        return None
 
     try:
-        await _request_facebook(
+        _, action_url, _, _ = await _request_facebook(
             session, web.profile, continuation["method"], continuation["url"],
             fields=continuation["fields"], referer=gate_url,
         )
+        if _auth_navigation(action_url) and not is_business_login_gate_url(action_url):
+            return None
         after = session.facebook_cookie_snapshot()
         if str(after.get("c_user") or "") != actor_id or not str(after.get("xs") or "").strip():
             await web.close()
-            return False
+            return None
 
-        status, final_url, _ = await _request_facebook(
+        status, final_url, response_body, response_headers = await _request_facebook(
             session, web.profile, "GET", return_url, referer=gate_url,
         )
         after = session.facebook_cookie_snapshot()
@@ -419,6 +421,9 @@ async def continue_business_login_gate(
             and str(after.get("c_user") or "") == actor_id
             and bool(str(after.get("xs") or "").strip())
             and not _auth_navigation(final_url)
-        )
+        ):
+            return {"status":status,"body":response_body,"url":final_url,
+                    "headers":response_headers}
+        return None
     except Exception:
-        return False
+        return None
