@@ -97,7 +97,7 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         return f'<script src="{SOURCE}"></script><script>server.handle(' + json.dumps({'require':[row]}) + ');</script>'
 
     def test_native_business_button_uses_document_scope_and_reviewed_controller(self):
-        from app.private_business_login import native_business_login_continuation, SOURCE
+        from app.private_business_login import native_business_login_continuation, SOURCE, SOURCE_GB
         from urllib.parse import urlsplit, parse_qs
         target = 'https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=111111&business_id=222222'
         body = self.native_gate()
@@ -109,6 +109,7 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(destination['act'], ['111111'])
         self.assertEqual(destination['business_id'], ['222222'])
         self.assertEqual(destination['biz_login_source'], ['biz_unified_f3_fb_login_button'])
+        self.assertIsNotNone(native_business_login_continuation(body.replace(SOURCE, SOURCE_GB), target))
         # Native null referrer defaults to Business home; the caller still
         # reopens and proves its original exact Ads Manager scope afterwards.
         root_result = native_business_login_continuation(self.native_gate(referrerURI=None), target)
