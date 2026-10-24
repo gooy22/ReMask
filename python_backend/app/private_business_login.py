@@ -87,7 +87,11 @@ def native_business_login_continuation(body, return_url):
                 if not isinstance(request_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,160}', request_id):
                     continue
                 actual = urlsplit(urljoin('https://business.facebook.com/', next_url))
-                business_home = actual.netloc == 'business.facebook.com' and actual.path == '/' and not actual.query
+                home_query = parse_qs(actual.query)
+                business_home = (actual.netloc == 'business.facebook.com' and actual.path in ('', '/')
+                    and set(home_query) <= {'nav_ref'}
+                    and all(len(values) == 1 and re.fullmatch(r'[A-Za-z0-9_-]{0,160}', values[0])
+                            for values in home_query.values()))
                 if (actual.scheme != 'https' or actual.netloc not in
                         {'business.facebook.com', 'adsmanager.facebook.com'}
                         or actual.fragment or (not business_home and
