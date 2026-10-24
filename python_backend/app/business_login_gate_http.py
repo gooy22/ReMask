@@ -122,9 +122,16 @@ class _BusinessGateParser(HTMLParser):
         self.has_credentials = False
         self.form_counter = 0
         self.external_fields: dict[str, list[tuple[str, str]]] = {}
+        self.visible_text: list[str] = []
 
     def _current_hidden(self) -> bool:
         return any(hidden for _, hidden in self.element_stack)
+
+    def _current_text_suppressed(self) -> bool:
+        return any(
+            tag in {"head", "script", "style", "template", "noscript"}
+            for tag, _ in self.element_stack
+        )
 
     def _current_form(self) -> str:
         return self.form_stack[-1] if self.form_stack else ""
@@ -198,6 +205,9 @@ class _BusinessGateParser(HTMLParser):
         self.handle_endtag(tag)
 
     def handle_data(self, data: str) -> None:
+        if self._current_hidden() or self._current_text_suppressed():
+            return
+        self.visible_text.append(data)
         for candidate in self.active_controls:
             candidate["text"] += data
 
@@ -215,27 +225,28 @@ class _BusinessGateParser(HTMLParser):
                 break
 
 
-def extract_business_login_continuation(
+def _extract_business_login_continuation(
     body: str,
     gate_url: str,
-) -> dict | None:
-    """Return a single safe same-profile continuation request, if unambiguous."""
-    if not is_business_login_gate_url(gate_url) or not isinstance(body, str):
-        return None
+) -> tuple[dict | None, str]:
+    """Return a safe continuation plus a non-sensitive outcome code."""
+    if not is_business_login_gate_url(gate_url):
+        return None, "not_business_gate"
+    if not isinstance(body, str):
+        return None, "invalid_response_body"
     if len(body) > 2_000_000:
-        return None
-    lowered = body.casefold()
-    if any(marker in lowered for marker in _CHALLENGE_MARKERS):
-        return None
-
+        return None, "response_body_too_large"
     parser = _BusinessGateParser()
     try:
         parser.feed(body)
         parser.close()
     except Exception:
-        return None
+        return None, "malformed_gate_markup"
+    visible_text = re.sub(r"\s+", " ", " ".join(parser.visible_text)).casefold()
+    if any(marker in visible_text for marker in _CHALLENGE_MARKERS):
+        return None, "authentication_challenge"
     if parser.has_credentials:
-        return None
+        return None, "credential_input_present"
 
     for form_id, fields in parser.external_fields.items():
         if form_id in parser.forms:
@@ -251,11 +262,11 @@ def extract_business_login_continuation(
         if score:
             ranked.append((score, label_kind, candidate))
     if not ranked:
-        return None
+        return None, "no_supported_continuation_control"
     best_score = max(row[0] for row in ranked)
     best = [row for row in ranked if row[0] == best_score]
     if len(best) != 1:
-        return None
+        return None, "ambiguous_continuation_controls"
 
     _, label_kind, candidate = best[0]
     attrs = candidate["attrs"]
@@ -267,10 +278,10 @@ def extract_business_login_continuation(
         form_id = str(candidate.get("form_id") or "")
         form = parser.forms.get(form_id)
         if form is None or form.get("hidden") or form.get("interactive"):
-            return None
+            return None, "interactive_or_hidden_form"
         method = str(attrs.get("formmethod") or form.get("method") or "get").upper()
         if method not in {"GET", "POST"}:
-            return None
+            return None, "unsupported_form_method"
         action_value = attrs.get("formaction") or form.get("action") or gate_url
         action = urljoin(gate_url, str(action_value))
         fields = list(form.get("fields") or [])
@@ -282,7 +293,7 @@ def extract_business_login_continuation(
             fields.append((name, value))
 
     if not _facebook_url(action):
-        return None
+        return None, "non_facebook_continuation_target"
     if len(fields) > 80 or any(
         not name
         or len(name) > 256
@@ -290,16 +301,24 @@ def extract_business_login_continuation(
         or _CREDENTIAL_NAME.search(name)
         for name, value in fields
     ):
-        return None
+        return None, "unsafe_continuation_fields"
     if sum(len(name) + len(value) for name, value in fields) > 16000:
-        return None
+        return None, "continuation_fields_too_large"
 
     return {
         "method": method,
         "url": action,
         "fields": fields,
         "label_kind": label_kind,
-    }
+    }, "continuation_ready"
+
+
+def extract_business_login_continuation(
+    body: str,
+    gate_url: str,
+) -> dict | None:
+    """Return a single safe same-profile continuation request, if unambiguous."""
+    return _extract_business_login_continuation(body, gate_url)[0]
 
 
 async def _bounded_response(response, max_bytes: int = 4_000_000) -> str:
@@ -395,28 +414,53 @@ async def continue_business_login_gate(
     return_url: str,
 ) -> dict | None:
     """Submit one safe Meta continuation, then verify the original read-only URL."""
-    continuation = extract_business_login_continuation(body, gate_url)
-    profile = getattr(web, "profile", None)
-    actor_id = str(getattr(profile, "cookies", {}).get("c_user") or "")
-    if not continuation or not actor_id or not _facebook_url(return_url):
+    def set_outcome(value: str) -> None:
+        # Codes only: never store or log response text, form values, cookies, or URLs.
+        try:
+            web._business_login_gate_outcome = value
+        except Exception:
+            pass
+
+    continuation, outcome = _extract_business_login_continuation(body, gate_url)
+    set_outcome(outcome)
+    if not continuation:
         return None
 
-    session = await web._ensure_session()
-    before = session.facebook_cookie_snapshot()
-    if str(before.get("c_user") or "") != actor_id or not str(before.get("xs") or "").strip():
+    profile = getattr(web, "profile", None)
+    actor_id = str(getattr(profile, "cookies", {}).get("c_user") or "")
+    if not actor_id:
+        set_outcome("missing_actor")
+        return None
+    if not _facebook_url(return_url):
+        set_outcome("invalid_return_url")
         return None
 
     try:
+        session = await web._ensure_session()
+        before = session.facebook_cookie_snapshot()
+        if (
+            str(before.get("c_user") or "") != actor_id
+            or not str(before.get("xs") or "").strip()
+        ):
+            set_outcome("profile_session_mismatch")
+            return None
+
         action_status, action_url, _, _ = await _request_facebook(
             session, profile, continuation["method"], continuation["url"],
             fields=continuation["fields"], referer=gate_url,
         )
         if action_status in {401, 403}:
+            set_outcome("meta_rejected_continuation")
             return None
         if _auth_navigation(action_url) and not is_business_login_gate_url(action_url):
+            set_outcome("continuation_redirected_to_auth")
             return None
         after = session.facebook_cookie_snapshot()
-        if str(after.get("c_user") or "") != actor_id or not str(after.get("xs") or "").strip():
+        if (
+            str(after.get("c_user") or "") != actor_id
+            or not str(after.get("xs") or "").strip()
+        ):
+            set_outcome("profile_session_changed")
             await web.close()
             return None
 
@@ -430,12 +474,16 @@ async def continue_business_login_gate(
             and bool(str(after.get("xs") or "").strip())
             and not _auth_navigation(final_url)
         ):
+            set_outcome("recovered")
             return {
                 "status":status,
                 "body":response_body,
                 "url":final_url,
                 "headers":response_headers,
             }
+        set_outcome("return_url_not_verified")
         return None
-    except Exception:
+    except Exception as exc:
+        # Exception type is safe to report; exception text can contain request data.
+        set_outcome("transport_error_" + type(exc).__name__)
         return None

@@ -27,6 +27,18 @@ class GateContinuationParserTests(unittest.TestCase):
         self.assertEqual(result["fields"], [("fb_dtsg", "csrf-token"), ("continue", "1")])
         self.assertEqual(result["label_kind"], "facebook_continue")
 
+    def test_ignores_checkpoint_markers_inside_scripts(self):
+        body = """
+        <script>const route = "/checkpoint/";</script>
+        <form action="/business/loginpage/continue" method="post">
+          <input type="hidden" name="fb_dtsg" value="csrf">
+          <button>Continue with Facebook</button>
+        </form>
+        """
+        result = extract_business_login_continuation(body, GATE_URL)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["label_kind"], "facebook_continue")
+
     def test_refuses_login_credentials_and_checkpoints(self):
         credential_form = """
         <form action="/business/loginpage/continue" method="post">
@@ -151,12 +163,29 @@ class GateContinuationTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["status"], 200)
         self.assertEqual(result["url"], RETURN_URL)
         self.assertEqual(result["body"], "verified profile response")
+        self.assertEqual(web._business_login_gate_outcome, "recovered")
         self.assertEqual(len(session.request_calls), 3)
         method, url, kwargs = session.request_calls[0]
         self.assertEqual(method, "POST")
         self.assertEqual(url, "https://business.facebook.com/business/loginpage/continue")
         self.assertEqual(kwargs["content"], "fb_dtsg=csrf-token&continue=1")
         self.assertEqual(kwargs["proxy"], "http://profile-proxy:8080")
+
+    async def test_records_safe_reason_when_gate_has_no_supported_control(self):
+        session = _FakeSession([])
+        web = _FakeWeb(session)
+        result = await continue_business_login_gate(
+            web,
+            gate_url=GATE_URL,
+            body="<p>Review your business</p>",
+            return_url=RETURN_URL,
+        )
+        self.assertIsNone(result)
+        self.assertEqual(
+            web._business_login_gate_outcome,
+            "no_supported_continuation_control",
+        )
+        self.assertEqual(session.request_calls, [])
 
     async def test_stops_if_facebook_actor_changes_after_continuation(self):
         body = """
