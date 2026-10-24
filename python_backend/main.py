@@ -3763,7 +3763,7 @@ async def private_advertising_resources(profile_id: str, resource: str, account_
                     return {'ok':True,'profile':profile,'resource':resource,**cached}
                 # Previously observed targeting choices are useful suggestions
                 # while a refresh runs; they do not establish live permission.
-                if resource in resources.TARGETING_OPTION_TYPES and cached.get('data'):
+                if resource in getattr(resources, 'TARGETING_OPTION_TYPES', ()) and cached.get('data'):
                     async def refresh_targeting_suggestions():
                         try:
                             async with ProfileSession(context) as refresh_session:
