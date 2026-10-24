@@ -67,6 +67,20 @@ try {
             // Complete bounded reference tree is cached; browser responses stay at 100 choices.
             $result = RemaskTemplateTargetingContext::readReference($context['profile'],$type,
                 ['q'=>$query,'limit'=>$query==='' ? 20000 : 50]);
+            $cacheMeta=$result['_cache'] ?? [];
+            if (($cacheMeta['hit'] ?? false)===true && ($cacheMeta['cached_only'] ?? false)===true
+                && in_array($result['source'] ?? '',[
+                    'private_meta_targeting_option_index','ads_manager_private_http','private_meta_targetingbrowse'
+                ],true) && is_array($result['data'] ?? null) && count($result['data'])>0) {
+                MetaEndpoint::ok(['data'=>$result['data'], 'checked_live'=>false,
+                    'offset'=>$offset, 'next_offset'=>$result['next_offset'] ?? null,
+                    'truncated'=>($result['truncated'] ?? false) === true,
+                    'catalog_count'=>(int)($result['catalog_count'] ?? count($result['data'])),
+                    'source'=>$result['source'], 'template_account_bound'=>false,
+                    'reference_checked_at'=>(int)($result['checked_at'] ?? 0),
+                    'reference_stale'=>($cacheMeta['stale'] ?? false)===true]);
+                exit;
+            }
             if (($result['checked_live'] ?? null) !== true || ($result['account_scope_verified'] ?? null) !== true)
                 throw new RuntimeException('TEMPLATE_LOOKUP_ACCESS_UNVERIFIED');
             $reference->put($type, $query, $result, time());
