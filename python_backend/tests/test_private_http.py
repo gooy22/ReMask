@@ -22,6 +22,13 @@ class Chunks(httpx.AsyncByteStream):
         yield b"second"
 
 
+class NeverRead(httpx.AsyncByteStream):
+    async def __aiter__(self):
+        if False:
+            yield b""
+        raise AssertionError("auth redirect body must not be consumed")
+
+
 class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
     def make(self, proxy="http://127.0.0.1:1", name="fixture", uid="123"):
         client = PrivateHttpClient(profile_name=name, cookies={"c_user": uid},
@@ -104,6 +111,46 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
                              {'transport_failure':{'kind':failure.__name__}})
             self.assertNotIn('SECRET', str(caught.exception))
             self.assertNotIn('facebook.com', str(caught.exception))
+
+    async def test_document_auth_redirect_is_classified_without_reading_html(self):
+        web = FacebookWebSession(WebProfile(
+            'fixture', {'c_user': '123'}, 'http://127.0.0.1:1', 'fixture-UA'))
+        self.addAsyncCleanup(web.close)
+        client = await web._ensure_session()
+        calls = []
+
+        def handler(request):
+            calls.append(request)
+            if len(calls) == 1:
+                return httpx.Response(
+                    302, headers={'Location': 'https://www.facebook.com/login/'} )
+            return httpx.Response(200, stream=NeverRead())
+
+        await self.mock(client, handler)
+        status, body, final_url, headers = await web.fetch_text_with_headers(
+            'https://business.facebook.com/business/loginrequest/fb/',
+            document_navigation=True)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(body, '')
+        self.assertEqual(httpx.URL(final_url).path, '/login/')
+        self.assertEqual(len(calls), 2)
+
+    async def test_non_auth_document_navigation_still_reads_html(self):
+        web = FacebookWebSession(WebProfile(
+            'fixture', {'c_user': '123'}, 'http://127.0.0.1:1', 'fixture-UA'))
+        self.addAsyncCleanup(web.close)
+        client = await web._ensure_session()
+        await self.mock(client, lambda request: httpx.Response(
+            200, text='<html>campaigns</html>'))
+
+        status, body, final_url, _headers = await web.fetch_text_with_headers(
+            'https://business.facebook.com/adsmanager/manage/campaigns',
+            document_navigation=True)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(body, '<html>campaigns</html>')
+        self.assertEqual(httpx.URL(final_url).path, '/adsmanager/manage/campaigns')
 
     async def test_graphql_multipart_stream_keeps_auth_and_claim_before_one_post(self):
         import io
