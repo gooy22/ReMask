@@ -55,15 +55,26 @@ def native_business_login_continuation(body, return_url, *, diagnostic=None):
             continue
         tree = Parser(_LANGUAGE).parse(source.encode())
         for row in _walk(tree.root_node):
-            if row.type != 'array' or len(row.named_children) != 4:
+            if row.type != 'array' or len(row.named_children) not in (4, 5):
                 continue
-            renderer, method, dependencies, args = row.named_children
+            renderer, method, dependencies, args = row.named_children[:4]
             try:
-                if (_literal(renderer) != 'react-xhp' or _literal(method) !=
-                        'constructAndRenderComponentIntoComment_DO_NOT_USE'
-                        or dependencies.type != 'array' or ROOT not in
-                        [_literal(child) for child in dependencies.named_children]
-                        or args.type != 'array' or len(args.named_children) != 1):
+                if (_literal(renderer) not in {'react-xhp', 'ReactRenderer'} or _literal(method) !=
+                        'constructAndRenderComponentIntoComment_DO_NOT_USE'):
+                    continue
+                report['reason'] = 'render_record'
+                if (len(row.named_children) == 5 and
+                        (type(_literal(row.named_children[4])) is not int or _literal(row.named_children[4]) < 0)):
+                    continue
+                if dependencies.type == 'array':
+                    if not all(isinstance(_literal(child), str) for child in dependencies.named_children):
+                        continue
+                elif dependencies.type != 'null':
+                    continue
+                # Dependencies and optional call ID are loader bookkeeping.
+                # The literal constructor below proves which UI is rendered.
+                report['reason'] = 'render_arguments'
+                if args.type != 'array' or len(args.named_children) != 1:
                     continue
                 root = _pairs(args.named_children[0])
                 constructor = root['constructor']
