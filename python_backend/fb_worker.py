@@ -706,10 +706,16 @@ class FacebookWebSession:
                         or "/checkpoint" in route
                         or _has_login_form(candidate_body)
                     ):
-                        auth_attempts.append({"auth_reason": "business_login_gate" if is_business_login_gate_url(candidate_url)
+                        auth_attempt = {"auth_reason": "business_login_gate" if is_business_login_gate_url(candidate_url)
                             else "checkpoint_redirect" if "/checkpoint" in route
                             else "login_redirect" if "/login" in route else "login_form",
-                            "final_url": f"{parts.scheme}://{parts.hostname or ''}{parts.path}"})
+                            "final_url": f"{parts.scheme}://{parts.hostname or ''}{parts.path}"}
+                        handoff_outcome = str(getattr(
+                            self, "_business_login_gate_outcome", "",
+                        ))
+                        if handoff_outcome == "continuation_redirected_to_auth":
+                            auth_attempt["business_login_handoff_outcome"] = handoff_outcome
+                        auth_attempts.append(auth_attempt)
                         error = AuthenticationError("Meta requires session restoration before bootstrap.")
                         error.meta_payload = {"business_precheck": auth_attempts}
                         error.request_may_have_been_sent = False
