@@ -153,7 +153,7 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         target = 'https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=111111&business_id=222222'
         props = {'loginOptions':['FB'], 'saveSession':False, 'referrerURI':target,
                  'requestId':'native-request-id'}
-        for renderer in ('react-xhp', 'ReactRenderer'):
+        for renderer in ('react-xhp', 'ReactRenderer', 'react-xhp@native-module-hash', 'ReactRenderer@native-module-hash'):
             for dependencies in (None, [ROOT], []):
                 row = [renderer, 'constructAndRenderComponentIntoComment_DO_NOT_USE', dependencies,
                        [{'constructor':{'__m':ROOT},'props':props}], 42]
