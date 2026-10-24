@@ -91,6 +91,7 @@ jobs:
       - name: Private Launch catalog and funding interface
         run: |
           node tests/launch-private-catalog.test.cjs
+          php tests/private-launch-meta-marker.test.php
           node tests/launch-batch-review.test.cjs
       - name: Installed Launch UI to PHP targeting bridge
         run: node tests/launch-ui-php-targeting-bridge.test.cjs

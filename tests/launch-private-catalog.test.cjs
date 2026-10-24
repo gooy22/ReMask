@@ -639,6 +639,9 @@ console.log('Private Launch catalog and funding truth checks passed');
 
 (async()=>{
   const overlay=fs.readFileSync(path.join(__dirname,'..','railway-launch-private-catalog-overlay.php'),'utf8');
+  assert.ok(overlay.includes("require_once '/tmp/railway-private-launch-meta-marker.php';"));
+  assert.ok(overlay.includes('$js=remask_patch_private_launch_meta_marker($js);'));
+  assert.ok(overlay.includes('scripts/launch.js?v=20261023-private-launch-meta-marker-v1'));
   assert.match(overlay,/\/payment-methods\?'\.http_build_query\(\$paymentQuery/);
   assert.match(overlay,/'business_id'=>self::id\(\$account\['business_id'\]/);
   assert.match(overlay,/'account_name'=>trim\(\(string\)\(\$account\['name'\]/);
