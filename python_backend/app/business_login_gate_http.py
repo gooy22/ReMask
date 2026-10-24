@@ -534,8 +534,20 @@ async def continue_business_login_gate(
             str(before.get("c_user") or "") != actor_id
             or not str(before.get("xs") or "").strip()
         ):
-            set_outcome("profile_session_mismatch")
-            return None
+            # A read-only Meta response can leave an in-memory cookie jar with
+            # an actor switch or cleared auth cookie. FacebookWebSession.close()
+            # preserves refreshed cookies only for the original actor with a
+            # live xs cookie; otherwise it discards that jar. Rebuild once from
+            # the saved profile session, then keep the same identity guard.
+            await web.close()
+            session = await web._ensure_session()
+            before = session.facebook_cookie_snapshot()
+            if (
+                str(before.get("c_user") or "") != actor_id
+                or not str(before.get("xs") or "").strip()
+            ):
+                set_outcome("profile_session_mismatch")
+                return None
 
         action_status, action_url, _, _ = await _request_facebook(
             session, profile, continuation["method"], continuation["url"],
