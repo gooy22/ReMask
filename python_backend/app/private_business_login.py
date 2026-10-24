@@ -1,0 +1,101 @@
+"""Literal Meta Business FB-button navigation over the existing web session.
+
+Reviewed 2026-10-24: BusinessToolsF3UnifiedLoginPageConfig.getFacebookLoginURI,
+BusinessToolsF3UnifiedLoginPageLoginPanel and XBusinessFBLoginHandleRequestController.
+This consumes the current document's props, never executes JavaScript or logs in
+with credentials. A changed source bundle requires review rather than guessing.
+"""
+from urllib.parse import urlsplit, parse_qs, parse_qsl, urlencode, urlunsplit
+from uuid import uuid4
+import re
+from html.parser import HTMLParser
+
+ROOT = 'BusinessToolsF3UnifiedLoginPageView.react'
+SOURCE = 'https://static.xx.fbcdn.net/rsrc.php/v4iEB24/yI/l/en_US-j/Ok9Q1EXGe9g.js'
+
+
+def native_business_login_continuation(body, return_url):
+    from .private_contract_discovery import Parser, _LANGUAGE, _walk, _pairs, _literal, _script_urls
+    from .private_ads_document import _JSON_SCRIPT_RE
+    expected = urlsplit(return_url)
+    expected_query = parse_qs(expected.query)
+    if (expected.scheme != 'https' or expected.netloc not in
+            {'business.facebook.com', 'adsmanager.facebook.com'}
+            or expected.path != '/adsmanager/manage/campaigns'
+            or any(len(expected_query.get(key, [])) != 1 or not
+                   re.fullmatch(r'[0-9]{5,30}', expected_query[key][0])
+                   for key in ('act', 'business_id'))):
+        return None
+    class Credentials(HTMLParser):
+        blocked = False
+        def handle_starttag(self, tag, attrs):
+            values = dict(attrs)
+            if tag == 'input' and (values.get('type', '').lower() in {'password', 'email'}
+                    or values.get('name', '').lower() in {'email', 'pass', 'password', 'approvals_code'}):
+                self.blocked = True
+    fields = Credentials()
+    fields.feed(body)
+    if fields.blocked:
+        return None
+    if SOURCE not in _script_urls(body, 'https://business.facebook.com/', limit=200):
+        return None
+    candidates = []
+    for script in _JSON_SCRIPT_RE.finditer(body):
+        source = script.group(1)
+        if ROOT not in source:
+            continue
+        tree = Parser(_LANGUAGE).parse(source.encode())
+        for row in _walk(tree.root_node):
+            if row.type != 'array' or len(row.named_children) != 4:
+                continue
+            renderer, method, dependencies, args = row.named_children
+            try:
+                if (_literal(renderer) != 'react-xhp' or _literal(method) !=
+                        'constructAndRenderComponentIntoComment_DO_NOT_USE'
+                        or dependencies.type != 'array' or ROOT not in
+                        [_literal(child) for child in dependencies.named_children]
+                        or args.type != 'array' or len(args.named_children) != 1):
+                    continue
+                root = _pairs(args.named_children[0])
+                constructor = root['constructor']
+                if constructor.type != 'object' or len(constructor.named_children) != 1:
+                    continue
+                pair = constructor.named_children[0]
+                key = pair.child_by_field_name('key')
+                if (pair.type != 'pair' or key.text not in (b'__m', b'"__m"')
+                        or _literal(pair.child_by_field_name('value')) != ROOT):
+                    continue
+                props = _pairs(root['props'])
+                def scalar(name, default=None):
+                    return _literal(props[name]) if name in props else default
+                options = props.get('loginOptions')
+                if (options is None or options.type != 'array'
+                        or 'FB' not in [_literal(child) for child in options.named_children]
+                        or scalar('saveSession') is not False
+                        or any(scalar(name) not in (False, None) for name in
+                               ('addNewProfileAM', 'fromProfileSwitcherAddAccount',
+                                'isFromInvitationFlow', 'igInvite'))):
+                    continue
+                next_url = scalar('referrerURI')
+                request_id = scalar('requestId')
+                if not isinstance(next_url, str):
+                    continue
+                if request_id is None:
+                    request_id = str(uuid4())
+                if not isinstance(request_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,160}', request_id):
+                    continue
+                actual = urlsplit(next_url)
+                if (actual.scheme != 'https' or actual.netloc not in
+                        {'business.facebook.com', 'adsmanager.facebook.com'}
+                        or actual.path != expected.path or actual.fragment
+                        or any(parse_qs(actual.query).get(key) != parse_qs(expected.query).get(key)
+                               for key in ('act', 'business_id'))):
+                    continue
+                query = dict(parse_qsl(actual.query))
+                query.update(biz_login_source='biz_unified_f3_fb_login_button', join_id=str(uuid4()))
+                next_url = urlunsplit((actual.scheme, actual.netloc, actual.path, urlencode(query), ''))
+                candidates.append('https://business.facebook.com/business/loginrequest/fb/?' +
+                                  urlencode({'next':next_url, 'f3_request_id':request_id}))
+            except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
+                continue
+    return candidates[0] if len(candidates) == 1 else None
