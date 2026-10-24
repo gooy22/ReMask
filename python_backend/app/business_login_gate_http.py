@@ -29,6 +29,7 @@ _CHALLENGE_MARKERS = (
 def _facebook_url(value: str) -> bool:
     try:
         parts = urlsplit(str(value or "").strip())
+        port = parts.port
     except ValueError:
         return False
     host = str(parts.hostname or "").casefold()
@@ -37,7 +38,7 @@ def _facebook_url(value: str) -> bool:
         and (host == "facebook.com" or host.endswith(_FACEBOOK_HOST_SUFFIX))
         and not parts.username
         and not parts.password
-        and parts.port in (None, 443)
+        and port in (None, 443)
     )
 
 
@@ -163,7 +164,7 @@ class _BusinessGateParser(HTMLParser):
                             form["fields"].append(field)
                         else:
                             self.external_fields.setdefault(form_id, []).append(field)
-                if kind in {"submit", "image"} and not hidden:
+                if kind == "submit" and not hidden:
                     self.candidates.append({
                         "tag": "input",
                         "attrs": attrs,
