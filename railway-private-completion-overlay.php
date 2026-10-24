@@ -71,6 +71,112 @@ completionReplace($resolver, '    $liveInventory = rmx_py_live_inventory($profil
         is_array($confirmedBindings) ? $confirmedBindings : [], $profile, $personalScope);
 PHP_CODE, 'resolver-confirmed-identities');
 file_put_contents($root.'/ajax/pythonProfileContext.php', $resolver);
+
+// REMASK_PROFILE_COOKIE_REFRESH_V1: persist only Meta-issued same-actor session updates.
+
+$profileContextPath = $root . '/ajax/pythonProfileContext.php';
+$profileContextSource = file_get_contents($profileContextPath);
+if (!is_string($profileContextSource) || substr_count($profileContextSource, '<?php') !== 1) {
+    throw new RuntimeException('Python profile context boundary missing');
+}
+$cookieRefreshHandler = <<<'PROFILE_COOKIE_REFRESH'
+if (strtoupper((string)($_SERVER['REQUEST_METHOD'] ?? 'GET')) === 'POST') {
+    header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: no-store');
+    $expectedKey = trim((string)(getenv('REMASK_INTERNAL_KEY') ?: ''));
+    $providedKey = trim((string)($_SERVER['HTTP_X_REMASK_INTERNAL_KEY'] ?? ''));
+    if ($expectedKey === '' || $providedKey === '' || !hash_equals($expectedKey, $providedKey)) {
+        http_response_code(401);
+        echo json_encode(['ok'=>false,'error'=>'UNAUTHORIZED']);
+        exit;
+    }
+    try {
+        $raw = file_get_contents('php://input');
+        if (!is_string($raw) || strlen($raw) > 2097152) throw new InvalidArgumentException();
+        $input = json_decode($raw, true, 64, JSON_THROW_ON_ERROR);
+        if (!is_array($input) || ($input['action'] ?? '') !== 'refresh_profile_cookies') {
+            http_response_code(400);
+            echo json_encode(['ok'=>false,'error'=>'INVALID_ACTION']);
+            exit;
+        }
+        $profile = trim((string)($input['profile_id'] ?? ''));
+        $actor = trim((string)($input['actor_id'] ?? ''));
+        $expectedXs = (string)($input['expected_xs'] ?? '');
+        $cookieInput = $input['cookies'] ?? null;
+        if ($profile === '' || strlen($profile) > 255 || $actor === '' ||
+            !ctype_digit($actor) || $expectedXs === '' || !is_array($cookieInput)) {
+            throw new InvalidArgumentException();
+        }
+        require_once __DIR__ . '/../settings.php';
+        require_once __DIR__ . '/../classes/FbAccount.php';
+        require_once __DIR__ . '/../classes/AccountStoreFactory.php';
+        require_once __DIR__ . '/../classes/RemaskCookieProfile.php';
+        $store = AccountStoreFactory::create(ACCOUNTSFILENAME);
+        $account = $store->getAccountByName($profile);
+        if (!$account) {
+            http_response_code(404);
+            echo json_encode(['ok'=>false,'error'=>'PROFILE_NOT_FOUND']);
+            exit;
+        }
+        $toMap = static function ($value): array {
+            if (!is_array($value)) return [];
+            $map = [];
+            if (!array_is_list($value)) {
+                foreach ($value as $name => $cookieValue) {
+                    if (is_array($cookieValue)) {
+                        $name = $cookieValue['name'] ?? '';
+                        $cookieValue = $cookieValue['value'] ?? null;
+                    }
+                    if (!is_string($name) && !is_int($name)) continue;
+                    if (!is_string($cookieValue) && !is_int($cookieValue)) continue;
+                    $name = trim((string)$name);
+                    $cookieValue = (string)$cookieValue;
+                    if ($name === '') continue;
+                    if (isset($map[$name]) && $map[$name] !== $cookieValue) {
+                        throw new InvalidArgumentException();
+                    }
+                    $map[$name] = $cookieValue;
+                }
+                return $map;
+            }
+            foreach ($value as $row) {
+                if (!is_array($row) || !is_string($row['name'] ?? null) ||
+                    (!is_string($row['value'] ?? null) && !is_int($row['value'] ?? null))) continue;
+                $name = trim($row['name']);
+                $cookieValue = (string)$row['value'];
+                if ($name === '') continue;
+                if (isset($map[$name]) && $map[$name] !== $cookieValue) {
+                    throw new InvalidArgumentException();
+                }
+                $map[$name] = $cookieValue;
+            }
+            return $map;
+        };
+        $oldCookies = $toMap($account->cookies ?? []);
+        if (($oldCookies['c_user'] ?? '') !== $actor ||
+            !hash_equals((string)($oldCookies['xs'] ?? ''), $expectedXs)) {
+            http_response_code(409);
+            echo json_encode(['ok'=>false,'error'=>'PROFILE_SESSION_CHANGED']);
+            exit;
+        }
+        $rows = RemaskCookieProfile::validate($cookieInput, $account->proxy ?? null, false, $profile);
+        $newCookies = $toMap($rows);
+        if (($newCookies['c_user'] ?? '') !== $actor || trim((string)($newCookies['xs'] ?? '')) === '') {
+            throw new InvalidArgumentException();
+        }
+        $account->cookies = $newCookies;
+        $store->addOrUpdateAccount($account);
+        echo json_encode(['ok'=>true,'updated'=>true,'cookie_count'=>count($newCookies)]);
+    } catch (Throwable $e) {
+        http_response_code(400);
+        echo json_encode(['ok'=>false,'error'=>'PROFILE_COOKIE_REFRESH_FAILED']);
+    }
+    exit;
+}
+PROFILE_COOKIE_REFRESH;
+$profileContextSource = preg_replace('/<\?php/', '<?php' . "\n" . $cookieRefreshHandler . "\n", $profileContextSource, 1, $count);
+if ($count !== 1) throw new RuntimeException('Python profile context POST boundary missing');
+file_put_contents($profileContextPath, $profileContextSource);
 $creativeEndpoint = file_get_contents($root.'/ajax/creativeLibrary.php');
 completionReplace($creativeEndpoint, "require_once __DIR__ . '/../classes/MetaOfficialFields.php';",
     "require_once __DIR__ . '/../classes/RemaskPrivateFormSchema.php';", 'creative-validator');
