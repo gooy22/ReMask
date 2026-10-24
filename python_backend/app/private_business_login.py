@@ -23,12 +23,12 @@ def native_gate_render_shape(body):
     from .private_ads_document import _JSON_SCRIPT_RE
     scripts = [match.group(1) for match in _JSON_SCRIPT_RE.finditer(body)]
     calls, constructors = [], []
-    identifier = r'[A-Za-z_$][A-Za-z0-9_.$-]{0,119}'
+    identifier = r'[A-Za-z_$][A-Za-z0-9_.$@-]{0,219}'
     for source in scripts:
         source = source.replace(r'\"', '"')
         for module, method in re.findall(r'\[\s*"(' + identifier + r')"\s*,\s*"(' + identifier + r')"', source):
             if any(word in (module + method).lower() for word in ('render', 'react', 'hydrate')):
-                pair = [module, method]
+                pair = [module.split('@', 1)[0], method]
                 if pair not in calls:
                     calls.append(pair)
         for module in re.findall(r'(?:"__m"|\b__m)\s*:\s*"(' + identifier + r')"', source):
@@ -80,7 +80,11 @@ def native_business_login_continuation(body, return_url, *, diagnostic=None):
                 continue
             renderer, method, dependencies, args = row.named_children[:4]
             try:
-                if (_literal(renderer) not in {'react-xhp', 'ReactRenderer'} or _literal(method) !=
+                renderer_name = _literal(renderer)
+                # Same ServerJSDefine module-name/hash resolution used by
+                # context_from_document for native Ads Manager initializers.
+                if (not isinstance(renderer_name, str) or renderer_name.split('@', 1)[0]
+                        not in {'react-xhp', 'ReactRenderer'} or _literal(method) !=
                         'constructAndRenderComponentIntoComment_DO_NOT_USE'):
                     continue
                 report['reason'] = 'render_record'
