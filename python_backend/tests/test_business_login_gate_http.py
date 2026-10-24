@@ -1,0 +1,182 @@
+import unittest
+from types import SimpleNamespace
+
+from app.business_login_gate_http import (
+    continue_business_login_gate,
+    extract_business_login_continuation,
+    is_business_login_gate_url,
+)
+
+
+GATE_URL = "https://business.facebook.com/business/loginpage?next=%2Flatest%2Fhome"
+RETURN_URL = "https://business.facebook.com/latest/home"
+
+
+class GateContinuationParserTests(unittest.TestCase):
+    def test_accepts_one_facebook_continuation_form(self):
+        body = """
+        <form id="handoff" action="/business/loginpage/continue" method="post">
+          <input type="hidden" name="fb_dtsg" value="csrf-token">
+          <button type="submit" name="continue" value="1">Continue with Facebook</button>
+        </form>
+        """
+        result = extract_business_login_continuation(body, GATE_URL)
+        self.assertTrue(is_business_login_gate_url(GATE_URL))
+        self.assertEqual(result["method"], "POST")
+        self.assertEqual(result["url"], "https://business.facebook.com/business/loginpage/continue")
+        self.assertEqual(result["fields"], [("fb_dtsg", "csrf-token"), ("continue", "1")])
+        self.assertEqual(result["label_kind"], "facebook_continue")
+
+    def test_refuses_login_credentials_and_checkpoints(self):
+        credential_form = """
+        <form action="/business/loginpage/continue" method="post">
+          <input type="hidden" name="fb_dtsg" value="csrf">
+          <input type="password" name="pass">
+          <button>Continue with Facebook</button>
+        </form>
+        """
+        checkpoint = "<p>Enter security code</p><button>Continue with Facebook</button>"
+        self.assertIsNone(extract_business_login_continuation(credential_form, GATE_URL))
+        self.assertIsNone(extract_business_login_continuation(checkpoint, GATE_URL))
+
+    def test_refuses_ambiguous_or_cross_origin_continuations(self):
+        ambiguous = """
+        <button>Continue with Facebook</button>
+        <button>Continue with Facebook</button>
+        """
+        external = """
+        <a href="https://example.invalid/continue">Continue with Facebook</a>
+        """
+        self.assertIsNone(extract_business_login_continuation(ambiguous, GATE_URL))
+        self.assertIsNone(extract_business_login_continuation(external, GATE_URL))
+
+    def test_refuses_unexpected_gate_hosts_and_hidden_controls(self):
+        body = """
+        <form action="/business/loginpage/continue">
+          <button>Continue with Facebook</button>
+        </form>
+        """
+        self.assertIsNone(extract_business_login_continuation(
+            body, "https://evil.example/business/loginpage"))
+        hidden = """
+        <form action="/business/loginpage/continue">
+          <button style="display:none">Continue with Facebook</button>
+        </form>
+        """
+        self.assertIsNone(extract_business_login_continuation(hidden, GATE_URL))
+
+
+class _ResponseBody:
+    def __init__(self, value):
+        self.value = value
+
+    async def read(self, size=-1):
+        value, self.value = self.value, b""
+        return value if size < 0 else value[:size]
+
+
+class _Response:
+    def __init__(self, status, url, body=b"", headers=None):
+        self.status = status
+        self.url = url
+        self.headers = headers or {}
+        self.charset = "utf-8"
+        self.content = _ResponseBody(body)
+
+
+class _ResponseContext:
+    def __init__(self, response):
+        self.response = response
+
+    async def __aenter__(self):
+        return self.response
+
+    async def __aexit__(self, *_):
+        return False
+
+
+class _FakeSession:
+    def __init__(self, responses, snapshots=None):
+        self.responses = list(responses)
+        self.snapshots = list(snapshots or [
+            {"c_user": "123", "xs": "same-session"},
+        ])
+        self.request_calls = []
+
+    def request(self, method, url, **kwargs):
+        self.request_calls.append((method, url, kwargs))
+        return _ResponseContext(self.responses.pop(0))
+
+    def facebook_cookie_snapshot(self):
+        if len(self.snapshots) > 1:
+            return dict(self.snapshots.pop(0))
+        return dict(self.snapshots[0])
+
+
+class _FakeWeb:
+    def __init__(self, session):
+        self.profile = SimpleNamespace(
+            cookies={"c_user": "123", "xs": "same-session"},
+            proxy="http://profile-proxy:8080",
+            user_agent="Fixture UA",
+        )
+        self.session = session
+        self.closed = False
+
+    async def _ensure_session(self):
+        return self.session
+
+    async def close(self):
+        self.closed = True
+
+
+class GateContinuationTransportTests(unittest.IsolatedAsyncioTestCase):
+    async def test_posts_once_then_reuses_the_verified_profile_http_session(self):
+        body = """
+        <form action="/business/loginpage/continue" method="post">
+          <input type="hidden" name="fb_dtsg" value="csrf-token">
+          <button name="continue" value="1">Continue with Facebook</button>
+        </form>
+        """
+        session = _FakeSession([
+            _Response(302, "https://business.facebook.com/business/loginpage/continue",
+                      headers={"Location": "/latest/home"}),
+            _Response(200, "https://business.facebook.com/latest/home", b"redirect target"),
+            _Response(200, RETURN_URL, b"verified profile response"),
+        ])
+        web = _FakeWeb(session)
+        result = await continue_business_login_gate(
+            web, gate_url=GATE_URL, body=body, return_url=RETURN_URL,
+        )
+        self.assertEqual(result["status"], 200)
+        self.assertEqual(result["url"], RETURN_URL)
+        self.assertEqual(result["body"], "verified profile response")
+        self.assertEqual(len(session.request_calls), 3)
+        method, url, kwargs = session.request_calls[0]
+        self.assertEqual(method, "POST")
+        self.assertEqual(url, "https://business.facebook.com/business/loginpage/continue")
+        self.assertEqual(kwargs["content"], "fb_dtsg=csrf-token&continue=1")
+        self.assertEqual(kwargs["proxy"], "http://profile-proxy:8080")
+
+    async def test_stops_if_facebook_actor_changes_after_continuation(self):
+        body = """
+        <a href="/business/loginpage/continue">Continue with Facebook</a>
+        """
+        session = _FakeSession(
+            [_Response(200, "https://business.facebook.com/business/loginpage/continue")],
+            snapshots=[
+                {"c_user": "123", "xs": "same-session"},
+                {"c_user": "999", "xs": "other-actor"},
+            ],
+        )
+        web = _FakeWeb(session)
+        result = await continue_business_login_gate(
+            web, gate_url=GATE_URL, body=body, return_url=RETURN_URL,
+        )
+        self.assertIsNone(result)
+        self.assertTrue(web.closed)
+        self.assertEqual(len(session.request_calls), 1)
+
+
+if __name__ == "__main__":
+    unittest.main()
