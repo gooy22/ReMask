@@ -16,6 +16,10 @@ import aiohttp
 import httpx
 
 from app.private_http import PrivateHttpClient
+from app.business_login_gate_http import (
+    continue_business_login_gate,
+    is_business_login_gate_url,
+)
 
 
 log = logging.getLogger("remask_worker")
@@ -187,6 +191,7 @@ class FacebookWebSession:
 
         self._bootstrap: FacebookBootstrap | None = None
         self._graphql_request_counter = 0
+        self._business_login_gate_attempted = False
 
     # ------------------------------------------------------------------
     # Profile HTTP/2 lifecycle
@@ -650,36 +655,50 @@ class FacebookWebSession:
             attempts: list[str] = []
             auth_attempts: list[dict[str, str]] = []
 
+            document_headers = {
+                "Accept": (
+                    "text/html,application/xhtml+xml,"
+                    "application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+                ),
+                "Accept-Language": "en-US,en;q=0.9",
+                "Cache-Control": "no-cache",
+                "Pragma": "no-cache",
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "none",
+                "Sec-Fetch-User": "?1",
+                "Upgrade-Insecure-Requests": "1",
+            }
+
+            async def read_bootstrap_document(url: str):
+                async with session.get(
+                    url,
+                    proxy=self.profile.proxy,
+                    headers=document_headers,
+                    allow_redirects=True,
+                ) as response:
+                    return int(response.status), await response.text(), str(response.url)
+
             for bootstrap_url in bootstrap_urls:
                 try:
-                    async with session.get(
-                        bootstrap_url,
-                        proxy=self.profile.proxy,
-                        headers={
-                            "Accept": (
-                                "text/html,application/xhtml+xml,"
-                                "application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
-                            ),
-                            "Accept-Language": "en-US,en;q=0.9",
-                            "Cache-Control": "no-cache",
-                            "Pragma": "no-cache",
-                            "Sec-Fetch-Dest": "document",
-                            "Sec-Fetch-Mode": "navigate",
-                            "Sec-Fetch-Site": "none",
-                            "Sec-Fetch-User": "?1",
-                            "Upgrade-Insecure-Requests": "1",
-                        },
-                        allow_redirects=True,
-                    ) as response:
-                        candidate_body = await response.text()
-                        candidate_url = str(response.url)
-
-                        if response.status >= 500:
-                            attempts.append(
-                                f"{bootstrap_url}: HTTP {response.status}"
-                            )
-                            continue
-
+                    candidate_status, candidate_body, candidate_url = (
+                        await read_bootstrap_document(bootstrap_url)
+                    )
+                    if is_business_login_gate_url(candidate_url):
+                        recovered = await self._maybe_continue_business_login_gate(
+                            gate_url=candidate_url,
+                            body=candidate_body,
+                            return_url=bootstrap_url,
+                        )
+                        if recovered:
+                            candidate_status = int(recovered["status"])
+                            candidate_body = str(recovered["body"] or "")
+                            candidate_url = str(recovered["url"] or "")
+                    if candidate_status >= 500:
+                        attempts.append(
+                            f"{bootstrap_url}: HTTP {candidate_status}"
+                        )
+                        continue
                         parts = urlsplit(candidate_url)
                         route = parts.path.lower()
                         if (
@@ -687,7 +706,8 @@ class FacebookWebSession:
                             or "/checkpoint" in route
                             or _has_login_form(candidate_body)
                         ):
-                            auth_attempts.append({"auth_reason": "checkpoint_redirect" if "/checkpoint" in route
+                            auth_attempts.append({"auth_reason": "business_login_gate" if is_business_login_gate_url(candidate_url)
+                                else "checkpoint_redirect" if "/checkpoint" in route
                                 else "login_redirect" if "/login" in route else "login_form",
                                 "final_url": f"{parts.scheme}://{parts.hostname or ''}{parts.path}"})
                             error = AuthenticationError("Meta requires session restoration before bootstrap.")
@@ -719,7 +739,7 @@ class FacebookWebSession:
                                 if any(marker in source for source in normalized_sources)
                             ]
                             surface = (
-                                f"HTTP {response.status} final={candidate_url} "
+                                f"HTTP {candidate_status} final={candidate_url} "
                                 f"bytes={len(candidate_body)}"
                             )
                             if marker_names:
@@ -836,6 +856,27 @@ class FacebookWebSession:
 
             return bootstrap
 
+    async def _maybe_continue_business_login_gate(
+        self,
+        *,
+        gate_url: str,
+        body: str,
+        return_url: str,
+    ) -> dict | None:
+        if self._business_login_gate_attempted:
+            return None
+        self._business_login_gate_attempted = True
+        self.invalidate_bootstrap()
+        result = await continue_business_login_gate(
+            self, gate_url=gate_url, body=body, return_url=return_url,
+        )
+        log.info(
+            "[%s] business login handoff recovered=%s",
+            self.profile.name,
+            bool(result),
+        )
+        return result
+
     def invalidate_bootstrap(self) -> None:
         self._bootstrap = None
         self._reviewed_module_ids = {}
@@ -863,6 +904,7 @@ class FacebookWebSession:
         max_bytes: int = 4_000_000,
         referer: str | None = None,
         document_navigation: bool = False,
+        _allow_business_gate_retry: bool = True,
     ) -> tuple[int, str, str, dict[str, str]]:
         """
         Fetch one Facebook HTML/document response through the profile proxy.
@@ -939,12 +981,28 @@ class FacebookWebSession:
                     for key, value in response.headers.items()
                 }
 
-                return (
-                    response.status,
-                    body,
-                    response_url,
-                    response_headers,
+                response_status = int(response.status)
+
+            if _allow_business_gate_retry and is_business_login_gate_url(response_url):
+                recovered = await self._maybe_continue_business_login_gate(
+                    gate_url=response_url,
+                    body=body,
+                    return_url=target,
                 )
+                if recovered:
+                    return (
+                        int(recovered["status"]),
+                        str(recovered["body"] or ""),
+                        str(recovered["url"] or ""),
+                        dict(recovered.get("headers") or {}),
+                    )
+
+            return (
+                response_status,
+                body,
+                response_url,
+                response_headers,
+            )
 
         except asyncio.TimeoutError as exc:
             raise RemoteRequestError(
