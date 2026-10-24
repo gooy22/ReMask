@@ -1,5 +1,6 @@
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from app.business_login_gate_http import (
     continue_business_login_gate,
@@ -186,6 +187,38 @@ class GateContinuationTransportTests(unittest.IsolatedAsyncioTestCase):
             "no_supported_continuation_control",
         )
         self.assertEqual(session.request_calls, [])
+
+    async def test_uses_reviewed_native_facebook_continuation(self):
+        native_url = (
+            "https://business.facebook.com/business/loginrequest/fb/"
+            "?next=https%3A%2F%2Fbusiness.facebook.com%2Flatest%2Fhome"
+            "%3Fbiz_login_source%3Dbiz_unified_f3_fb_login_button"
+            "%26join_id%3Dsafe-test&f3_request_id=safe-test"
+        )
+        session = _FakeSession([
+            _Response(200, native_url, b"continuation accepted"),
+            _Response(200, RETURN_URL, b"verified profile response"),
+        ])
+        web = _FakeWeb(session)
+        with patch(
+            "app.private_business_login.native_business_login_continuation",
+            return_value=native_url,
+        ) as native:
+            result = await continue_business_login_gate(
+                web,
+                gate_url=GATE_URL,
+                body="<html><p>Meta Business</p></html>",
+                return_url=RETURN_URL,
+            )
+        self.assertEqual(result["url"], RETURN_URL)
+        self.assertEqual(web._business_login_gate_outcome, "recovered")
+        native.assert_called_once()
+        self.assertEqual(native.call_args.args[1], RETURN_URL)
+        method, url, kwargs = session.request_calls[0]
+        self.assertEqual(method, "GET")
+        self.assertEqual(url, native_url)
+        self.assertEqual(kwargs["proxy"], "http://profile-proxy:8080")
+        self.assertEqual(len(session.request_calls), 2)
 
     async def test_stops_if_facebook_actor_changes_after_continuation(self):
         body = """
