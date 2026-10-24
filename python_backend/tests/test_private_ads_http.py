@@ -109,6 +109,12 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(destination['act'], ['111111'])
         self.assertEqual(destination['business_id'], ['222222'])
         self.assertEqual(destination['biz_login_source'], ['biz_unified_f3_fb_login_button'])
+        # Native null referrer defaults to Business home; the caller still
+        # reopens and proves its original exact Ads Manager scope afterwards.
+        root_result = native_business_login_continuation(self.native_gate(referrerURI=None), target)
+        root_next = parse_qs(urlsplit(root_result).query)['next'][0]
+        self.assertEqual(urlsplit(root_next).netloc, 'business.facebook.com')
+        self.assertEqual(urlsplit(root_next).path, '/')
         for changed in (body.replace(SOURCE, SOURCE+'?changed=1'), body + body,
                         body+'<input type="password">',
                         self.native_gate(saveSession=True),
