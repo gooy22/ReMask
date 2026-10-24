@@ -86,6 +86,66 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
 
     async def claim(self):self.claims += 1
 
+    async def test_business_gate_follows_native_link_once_then_proves_exact_scope(self):
+        gate = 'https://business.facebook.com/business/loginpage/'
+        link = 'https://www.facebook.com/login/?next=https%3A%2F%2Fbusiness.facebook.com%2Flatest%2Fhome'
+        url = 'https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=111111&business_id=222222'
+        self.web.fetch_text = AsyncMock(side_effect=[
+            (200, f'<a href="{link}">Log in with Facebook</a>', gate),
+            (200, 'continued', 'https://business.facebook.com/latest/home'),
+            (200, document(), url)])
+        client = await AdsManagerPrivateHttp.open(self.web,
+            account_id='111111', business_id='222222', actor_id='123456')
+        self.assertEqual(client.context.account_id, '111111')
+        self.assertEqual([call.args[0] for call in self.web.fetch_text.await_args_list], [url, link, url])
+        self.assertEqual(self.web.session.calls, [])
+
+    async def test_business_gate_credentials_are_not_submitted_or_retried(self):
+        self.web.fetch_text = AsyncMock(return_value=(200,
+            '<input type="password"><a href="https://www.facebook.com/login/">Log in with Facebook</a>',
+            'https://business.facebook.com/business/loginpage/'))
+        with self.assertRaises(ProvisioningError) as caught:
+            await AdsManagerPrivateHttp.open(self.web,
+                account_id='111111', business_id='222222', actor_id='123456')
+        self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE')
+        self.web.fetch_text.assert_awaited_once()
+
+    async def test_business_continuation_does_not_loop_on_persistent_gate(self):
+        gate = 'https://business.facebook.com/business/loginpage/'
+        html = '<a href="https://www.facebook.com/login/">Log in with Facebook</a>'
+        self.web.fetch_text = AsyncMock(return_value=(200, html, gate))
+        with self.assertRaises(ProvisioningError):
+            await AdsManagerPrivateHttp.open(self.web,
+                account_id='111111', business_id='222222', actor_id='123456')
+        self.assertEqual(self.web.fetch_text.await_count, 3)
+
+    async def test_business_continuation_preserves_fresh_actor_proof(self):
+        gate = 'https://business.facebook.com/business/loginpage/'
+        html = '<a href="https://www.facebook.com/login/">Log in with Facebook</a>'
+        url = 'https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=111111&business_id=222222'
+        foreign = document().replace('123456', '999999')
+        self.web.fetch_text = AsyncMock(side_effect=[(200, html, gate),
+            (200, 'continued', 'https://business.facebook.com/latest/home'), (200, foreign, url)])
+        with self.assertRaises(ProvisioningError):
+            await AdsManagerPrivateHttp.open(self.web,
+                account_id='111111', business_id='222222', actor_id='123456')
+        self.assertEqual(self.web.session.calls, [])
+
+    def test_business_continuation_rejects_untrusted_or_ambiguous_links(self):
+        from app.private_ads_document import business_login_continuation
+        gate = 'https://business.facebook.com/business/loginpage/'
+        for href in ('https://evil.invalid/login/',
+                     'https://www.facebook.com.evil.invalid/login/',
+                     'https://www.facebook.com/login/?next=https%3A%2F%2Fevil.invalid',
+                     'https://www.facebook.com/dialog/oauth/?client_id=123',
+                     'https://www.facebook.com/login/?scope=ads_management'):
+            with self.subTest(href=href):
+                self.assertIsNone(business_login_continuation(gate,
+                    f'<a href="{href}">Log in with Facebook</a>'))
+        anchor = '<a href="https://www.facebook.com/login/">Log in with Facebook</a>'
+        self.assertIsNone(business_login_continuation(gate, anchor + anchor))
+        self.assertIsNone(business_login_continuation('https://evil.invalid/business/loginpage/', anchor))
+
     def test_literal_serverjs_initialization_with_module_hash(self):
         payload = json.loads(document())
         payload['require'] = [["WebApiApplication@reviewed-hash", "init", [],
