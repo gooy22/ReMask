@@ -14,6 +14,19 @@ from urllib.parse import urljoin, urlsplit, parse_qs
 from typing import Any
 
 
+def business_login_public_sources(body: str) -> list[str]:
+    """Only public, immutable CDN script paths; never query/auth values."""
+    scripts = re.findall(r'<script\b[^>]*\bsrc\s*=\s*[\"\']([^\"\']+)[\"\']', body, re.I)
+    result = []
+    for src in scripts:
+        parsed = urlsplit(html.unescape(src))
+        if (parsed.scheme == 'https' and parsed.netloc.startswith('static.')
+                and parsed.netloc.endswith('.fbcdn.net') and not parsed.query
+                and not parsed.fragment and re.fullmatch(r'/rsrc\.php/v4[A-Za-z0-9_/-]*/[A-Za-z0-9_-]+\.js', parsed.path)):
+            result.append(parsed.geturl())
+    return sorted(set(result))[:12]
+
+
 _JSON_SCRIPT_RE = re.compile(r"<script\b[^>]*>(.*?)</script\s*>", re.IGNORECASE | re.DOTALL)
 _REQUEST_KEYS = {"variables", "params", "request", "input", "query", "preloadparams"}
 

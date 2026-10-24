@@ -146,6 +146,15 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(business_login_continuation(gate, anchor + anchor))
         self.assertIsNone(business_login_continuation('https://evil.invalid/business/loginpage/', anchor))
 
+    def test_gate_source_evidence_never_includes_query_values_or_nonpublic_hosts(self):
+        from app.private_ads_document import business_login_public_sources
+        public = 'https://static.xx.fbcdn.net/rsrc.php/v4/yA/r/public-module.js'
+        body = ''.join(f'<script src="{url}"></script>' for url in (
+            public, public + '?secret=do-not-log',
+            'https://www.facebook.com/login/?token=do-not-log',
+            'https://static.xx.fbcdn.net.evil.invalid/rsrc.php/v4/yA/r/public-module.js'))
+        self.assertEqual(business_login_public_sources(body), [public])
+
     def test_literal_serverjs_initialization_with_module_hash(self):
         payload = json.loads(document())
         payload['require'] = [["WebApiApplication@reviewed-hash", "init", [],
