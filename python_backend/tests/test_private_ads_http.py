@@ -139,6 +139,24 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('/business/loginrequest/fb/?',self.web.fetch_text.await_args_list[1].args[0])
         self.assertEqual(self.web.session.calls, [])
 
+    def test_native_gate_accepts_serverjs_loader_metadata_without_changing_props(self):
+        from app.private_business_login import native_business_login_continuation, ROOT, SOURCE
+        target = 'https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=111111&business_id=222222'
+        props = {'loginOptions':['FB'], 'saveSession':False, 'referrerURI':target,
+                 'requestId':'native-request-id'}
+        for renderer in ('react-xhp', 'ReactRenderer'):
+            for dependencies in (None, [ROOT], []):
+                row = [renderer, 'constructAndRenderComponentIntoComment_DO_NOT_USE', dependencies,
+                       [{'constructor':{'__m':ROOT},'props':props}], 42]
+                body = f'<script src="{SOURCE}"></script><script>' + json.dumps({'require':[row]}) + '</script>'
+                with self.subTest(renderer=renderer,dependencies=dependencies):
+                    self.assertIsNotNone(native_business_login_continuation(body,target))
+        for renderer, call_id in (('unrelated', 42), ('ReactRenderer', 'not-a-call-id')):
+            row = [renderer, 'constructAndRenderComponentIntoComment_DO_NOT_USE', None,
+                   [{'constructor':{'__m':ROOT},'props':props}], call_id]
+            body = f'<script src="{SOURCE}"></script><script>' + json.dumps({'require':[row]}) + '</script>'
+            self.assertIsNone(native_business_login_continuation(body,target))
+
     async def test_business_gate_follows_native_link_once_then_proves_exact_scope(self):
         gate = 'https://business.facebook.com/business/loginpage/'
         link = 'https://www.facebook.com/login/?next=https%3A%2F%2Fbusiness.facebook.com%2Flatest%2Fhome'
