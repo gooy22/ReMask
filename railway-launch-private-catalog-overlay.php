@@ -432,7 +432,7 @@ try {
     $type=['location'=>'locations','interest'=>'interests','behavior'=>'behaviors',
            'language'=>'locales','languages'=>'locales','locale'=>'locales'][$type] ?? $type;
     if (!in_array($type,array_merge(['locations','interests','behaviors','locales'],RemaskAdvertisingAssetBridge::targetingTypes()),true)) throw new InvalidArgumentException('UNKNOWN_TARGETING_TYPE');
-    MetaEndpoint::ok(RemaskAdvertisingAssetBridge::read($input,RemaskPrivateLaunchCatalog::load($profile),$type,true));
+    MetaEndpoint::ok(RemaskAdvertisingAssetBridge::read($input,RemaskPrivateLaunchCatalog::load($profile),$type,($input['force'] ?? '')==='1'));
 } catch (Throwable $e) { MetaEndpoint::fail($e); }
 TARGETING
 );

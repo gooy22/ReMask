@@ -146,6 +146,47 @@ class PixelReads(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(cached['checked_live'])
         self.assertFalse(cached['account_scope_verified'])
 
+    async def test_targeting_option_cache_is_persistent_and_exactly_scoped(self):
+        from pathlib import Path
+        from time import time
+        values = {'profile_id': '19', 'ad_account_id': '111111',
+                  'business_id': '222222', 'query': 'travel', 'limit': 25,
+                  'offset': 0, 'execution_mode': 'PUBLISH'}
+        response = {'data': [{'id': '6004160395895', 'name': 'Travel',
+                              'path': ['Travel & Tourism']}],
+                    'account_id': '111111', 'checked_live': True,
+                    'account_scope_verified': True, 'checked_at': int(time()),
+                    'source': 'fixture'}
+        reader = SimpleNamespace(rows={'interests': {'source': 'fixture'}},
+                                 read=AsyncMock(return_value=response))
+        with tempfile.TemporaryDirectory() as folder:
+            store = AdvertisingResourceStore(reader); store.root = Path(folder)
+            live = await store.get(name='interests', values=values, actor_id='123456',
+                                   force=True, web=object())
+            cached = await store.get(name='interests', values=values, actor_id='123456')
+            self.assertEqual(cached['data'][0]['id'], '6004160395895')
+            self.assertTrue(cached['_cache']['hit'])
+            self.assertTrue(cached['_cache']['cached_only'])
+            self.assertFalse(cached['checked_live'])
+            self.assertFalse(cached['account_scope_verified'])
+            self.assertTrue(live['checked_live'])
+            self.assertEqual(reader.read.await_count, 1)
+            for changes, actor in (
+                ({'profile_id': '20'}, '123456'),
+                ({'business_id': '333333'}, '123456'),
+                ({'ad_account_id': '999999'}, '123456'),
+                ({'query': 'travel apps'}, '123456'),
+                ({'limit': 26}, '123456'),
+                ({'offset': 100}, '123456'),
+                ({}, '654321'),
+            ):
+                with self.subTest(changes=changes, actor=actor):
+                    other = await store.get(name='interests', values={**values, **changes},
+                                            actor_id=actor)
+                    self.assertEqual(other['availability'], 'NOT_LOADED')
+                    self.assertFalse(other['checked_live'])
+            self.assertEqual(reader.read.await_count, 1)
+
     async def test_cached_page_permissions_are_never_represented_as_live_proof(self):
         from pathlib import Path
         from time import time

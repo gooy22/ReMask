@@ -1,6 +1,6 @@
 /* REMASK_PRIVATE_CREATIVE_LAUNCH_COMPLETION_V1 */
-// Unbound templates may use the reference catalog. A selected RK must use its
-// own fresh private reads, never another profile's cached targeting options.
+// Unbound templates may use the reference catalog. A selected RK uses its
+// exact private scope; cached options are suggestions, never live permission proof.
 function remaskPrivateTargetingScope() {
     const accounts=selectedAccountIds().map(value=>String(value).replace(/^act_/,''));
     if(accounts.length!==1)return null;
@@ -16,7 +16,7 @@ apiJson = async function(url, options = {}) {
             && (typeof options.body === 'string' || typeof options.body?.get === 'function')) {
         const input = typeof options.body === 'string' ? new URLSearchParams(options.body) : options.body;
         const body = new URLSearchParams();
-        for (const key of ['type','q','limit','offset']) {
+        for (const key of ['type','q','limit','offset','force']) {
             const value = input.get(key);
             if (value !== null) body.set(key, value);
         }
@@ -31,7 +31,11 @@ apiJson = async function(url, options = {}) {
             const result=await remaskPrivateOriginalTargetingApiJson('ajax/metaTargetingSearch.php',{...options,body:body.toString()});
             const current=remaskPrivateTargetingScope();
             if(JSON.stringify(current)!==JSON.stringify(scope))throw new Error('TARGETING_SELECTION_CHANGED');
-            if(result?.checked_live!==true || result?.account_scope_verified!==true
+            const liveRead=result?.checked_live===true && result?.account_scope_verified===true;
+            const cachedSuggestion=result?.checked_live===false && result?.account_scope_verified===false
+                && result?._cache?.hit===true && result?._cache?.cached_only===true
+                && result?.availability!=='NOT_LOADED';
+            if((!liveRead && !cachedSuggestion)
                     || String(result.profile)!==scope.profile || String(result.account_id)!==scope.account_id
                     || result.resource!==resource)throw new Error('TARGETING_SOURCE_SCOPE_UNVERIFIED');
             return result;
