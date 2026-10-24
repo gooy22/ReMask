@@ -11,7 +11,7 @@ const targetingCode=source.slice(source.indexOf('function remaskPrivateTargeting
   source.indexOf('// A selected RK needs'));
 function targetingFixture(){
   const calls=[];
-  const ctx={URLSearchParams,state:{profile:'38',targets:[]},accounts:['act_120249912222240685'],mode:'DRAFT',
+  const ctx={URLSearchParams,MutationObserver:class{observe(){} disconnect(){}},state:{profile:'38',targets:[]},accounts:['act_120249912222240685'],mode:'DRAFT',
     remaskModuleControls:{isTargetingType:type=>type==='work_positions'},
     $:()=>({value:ctx.mode}),selectedAccountIds:()=>ctx.accounts,targetMode:()=>ctx.state.targets.length>0,
     apiJson:async(url,options)=>{
