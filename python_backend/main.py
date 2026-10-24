@@ -2883,6 +2883,7 @@ async def profile_live_inventory(
                                 'CHECKPOINT_REQUIRED',
                                 'SESSION_EXPIRED',
                                 'TWO_FACTOR_REQUIRED',
+                                'BUSINESS_LOGIN_GATE',
                             }
                         ):
                             log.warning(
