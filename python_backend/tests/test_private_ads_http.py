@@ -115,11 +115,14 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         root_next = parse_qs(urlsplit(root_result).query)['next'][0]
         self.assertEqual(urlsplit(root_next).netloc, 'business.facebook.com')
         self.assertEqual(urlsplit(root_next).path, '/')
+        self.assertIsNotNone(native_business_login_continuation(
+            self.native_gate(referrerURI='https://business.facebook.com/?nav_ref=business_login'), target))
         for changed in (body.replace(SOURCE, SOURCE+'?changed=1'), body + body,
                         body+'<input type="password">',
                         self.native_gate(saveSession=True),
                         self.native_gate(fromProfileSwitcherAddAccount=True),
                         self.native_gate(loginOptions=['SSO']),
+                        self.native_gate(referrerURI='https://business.facebook.com/?next=https://evil.invalid'),
                         self.native_gate(referrerURI=target.replace('111111','999999'))):
             self.assertIsNone(native_business_login_continuation(changed, target))
 
@@ -203,6 +206,8 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
             'https://www.facebook.com/login/?token=do-not-log',
             'https://static.xx.fbcdn.net.evil.invalid/rsrc.php/v4/yA/r/public-module.js'))
         self.assertEqual(business_login_public_sources(body), [public])
+        inline = '<script>var resources={"uri":' + json.dumps(public).replace('/', r'\/') + '};</script>'
+        self.assertEqual(business_login_public_sources(inline), [public])
 
     def test_literal_serverjs_initialization_with_module_hash(self):
         payload = json.loads(document())
