@@ -16,15 +16,18 @@ from typing import Any
 
 def business_login_public_sources(body: str) -> list[str]:
     """Only public, immutable CDN script paths; never query/auth values."""
-    scripts = re.findall(r'<script\b[^>]*\bsrc\s*=\s*[\"\']([^\"\']+)[\"\']', body, re.I)
+    normalized = html.unescape(body).replace(r'\/', '/')
+    scripts = re.findall(r'<script\b[^>]*\bsrc\s*=\s*[\"\']([^\"\']+)[\"\']', normalized, re.I)
+    scripts.extend(re.findall(r'[\"\'](?:src|uri)[\"\']\s*:\s*[\"\']([^\"\']+\.js)[\"\']', normalized, re.I))
     result = []
     for src in scripts:
         parsed = urlsplit(html.unescape(src))
         if (parsed.scheme == 'https' and parsed.netloc.startswith('static.')
                 and parsed.netloc.endswith('.fbcdn.net') and not parsed.query
                 and not parsed.fragment and re.fullmatch(r'/rsrc\.php/v4[A-Za-z0-9_/-]*/[A-Za-z0-9_-]+\.js', parsed.path)):
-            result.append(parsed.geturl())
-    return sorted(set(result))[:12]
+            if parsed.geturl() not in result:
+                result.append(parsed.geturl())
+    return result[-12:]
 
 
 _JSON_SCRIPT_RE = re.compile(r"<script\b[^>]*>(.*?)</script\s*>", re.IGNORECASE | re.DOTALL)
