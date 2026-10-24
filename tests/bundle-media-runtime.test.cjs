@@ -85,8 +85,10 @@ test('fresh exact-scope Meta results and explicitly cached suggestions are selec
 test('foreign, unmarked, or unloaded cache cannot supply scoped targeting choices',async()=>{
   for(const response of [{profile:'16'},{account_id:'999999'},{resource:'behaviors'},
       {checked_live:false},{account_scope_verified:false},
-      {_cache:{hit:false,cached_only:true}},{availability:'NOT_LOADED'},
-      {_cache:{hit:true,cached_only:false}}]){
+      {checked_live:false,account_scope_verified:false,_cache:{hit:false,cached_only:true}},
+      {checked_live:false,account_scope_verified:false,availability:'NOT_LOADED',
+        _cache:{hit:true,cached_only:true}},
+      {checked_live:false,account_scope_verified:false,_cache:{hit:true,cached_only:false}}]){
     const {ctx,search}=targetingFixture();ctx.response=response;
     await assert.rejects(search,/TARGETING_SOURCE_SCOPE_UNVERIFIED/);
   }
