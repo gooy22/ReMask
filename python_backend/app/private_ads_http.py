@@ -346,7 +346,10 @@ class AdsManagerPrivateHttp:
             account_matches,
             parse_qs(final.query).get("business_id") == [business_id], gate or "none")
         if gate:
-            raise fail(gate, "Ads Manager requires restoration of the profile session", True)
+            # A gate which remains after Meta's native continuation is an
+            # authentication state, not a transient transport failure. Retrying
+            # the same cookies only repeats the full login-page navigation.
+            raise fail(gate, "Ads Manager requires restoration of the profile session", False)
         if (status != 200 or len(body.encode()) > 5_000_000 or final.scheme != "https"
                 or final.hostname not in {"adsmanager.facebook.com", "business.facebook.com"}
                 or final.path != "/adsmanager/manage/campaigns"
