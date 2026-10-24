@@ -309,7 +309,14 @@ class AdsManagerPrivateHttp:
                                                    'adsmanager.facebook.com'}):
                     raise fail('BUSINESS_LOGIN_GATE', 'Business continuation did not return a Facebook document', True)
                 continued_gate = _auth_gate(continued_url, continued_body)
-                if continued_gate and continued_gate != 'BUSINESS_LOGIN_GATE':
+                # The native loginrequest/callback document can retain a
+                # '/login...' path after committing the Business cookie.
+                # That path alone is not evidence of a password prompt.
+                credential_form = _auth_gate('https://www.facebook.com/', continued_body)
+                facebook_login = (continued.hostname == 'www.facebook.com' and
+                    (continued.path == '/login.php' or continued.path.rstrip('/') == '/login'
+                     or continued.path.startswith('/login/')))
+                if continued_gate == 'CHECKPOINT_REQUIRED' or credential_form or facebook_login:
                     raise fail(continued_gate, 'Facebook authentication is required', False)
                 if str(web.profile.cookies.get('c_user') or '') != actor_id:
                     raise fail('ACTOR_MISMATCH', 'Business continuation changed profile identity')
