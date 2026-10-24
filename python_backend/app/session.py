@@ -593,25 +593,32 @@ class MetaSession:
                 refreshed_cookies = dict(current.profile.cookies)
                 self._facebook_session = None
 
-        initial = dict(self.context._loaded_cookies or self.context.cookies)
+        initial = dict(
+            getattr(self.context, "_loaded_cookies", None)
+            or getattr(self.context, "cookies", None)
+            or {}
+        )
+        current_cookies = getattr(self.context, "cookies", None)
         actor_id = str(initial.get("c_user") or "")
         if (refreshed_cookies is not None and actor_id
-                and self.context.cookies == initial
+                and isinstance(current_cookies, dict)
+                and current_cookies == initial
                 and refreshed_cookies.get("c_user") == actor_id
                 and str(refreshed_cookies.get("xs") or "").strip()
                 and refreshed_cookies != initial):
             self.context.cookies = refreshed_cookies
-            persistor = self.context._cookie_persistor
+            persistor = getattr(self.context, "_cookie_persistor", None)
             if callable(persistor):
+                profile_id = str(getattr(self.context, "profile_id", "") or "")
                 try:
                     await persistor(
-                        self.context.profile_id, actor_id,
+                        profile_id, actor_id,
                         str(initial.get("xs") or ""), refreshed_cookies,
                     )
                 except Exception as exc:
                     logging.getLogger("remask.profile_resolver").warning(
                         "profile_cookie_refresh_failed profile=%s kind=%s",
-                        self.context.profile_id, type(exc).__name__,
+                        profile_id, type(exc).__name__,
                     )
 
         async with self._session_lock:
