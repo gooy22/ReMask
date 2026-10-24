@@ -13,7 +13,7 @@ from h2.connection import H2Connection
 from h2.events import DataReceived, RequestReceived, StreamEnded
 
 from app.private_http import PrivateHttpClient
-from app.session import MetaSession, ProfileContext
+from app.session import MetaSession, ProfileContext, ProfileResolver
 from fb_worker import FacebookBootstrap, FacebookWebSession, RemoteRequestError, WebProfile
 
 
@@ -152,6 +152,40 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status, 200)
         self.assertEqual(body, '<html>campaigns</html>')
         self.assertEqual(httpx.URL(final_url).path, '/adsmanager/manage/campaigns')
+
+    async def test_profile_cookie_refresh_uses_internal_endpoint_once(self):
+        calls = []
+
+        class Response:
+            async def __aenter__(self): return self
+            async def __aexit__(self, *args): return None
+            async def json(self, content_type=None):
+                return {'ok':True,'updated':True}
+
+        class Client:
+            def __init__(self, **kwargs): self.kwargs = kwargs
+            async def __aenter__(self): return self
+            async def __aexit__(self, *args): return None
+            def post(self, url, *, json):
+                calls.append((url, json, self.kwargs['headers']))
+                return Response()
+
+        resolver = ProfileResolver(
+            'https://remask.invalid/ajax/pythonProfileContext.php',
+            'fixture-internal-key',
+        )
+        with patch('app.session.aiohttp.ClientSession',
+                   side_effect=lambda **kwargs: Client(**kwargs)):
+            result = await resolver.persist_cookie_refresh(
+                'fixture','123','old-xs',{'c_user':'123','xs':'new-xs'},
+            )
+        self.assertTrue(result)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0], resolver.url)
+        self.assertEqual(calls[0][1]['action'], 'refresh_profile_cookies')
+        self.assertEqual(calls[0][1]['profile_id'], 'fixture')
+        self.assertEqual(calls[0][1]['actor_id'], '123')
+        self.assertEqual(calls[0][2]['X-Remask-Internal-Key'], 'fixture-internal-key')
 
     async def test_meta_cookie_refresh_is_saved_to_same_profile(self):
         context = ProfileContext(
