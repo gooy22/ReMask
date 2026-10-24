@@ -46,12 +46,34 @@ def native_business_login_continuation(body, return_url, *, diagnostic=None):
     report['reason'] = 'request_scope'
     expected = urlsplit(return_url)
     expected_query = parse_qs(expected.query)
-    if (expected.scheme != 'https' or expected.netloc not in
-            {'business.facebook.com', 'adsmanager.facebook.com'}
-            or expected.path != '/adsmanager/manage/campaigns'
-            or any(len(expected_query.get(key, [])) != 1 or not
-                   re.fullmatch(r'[0-9]{5,30}', expected_query[key][0])
-                   for key in ('act', 'business_id'))):
+    expected_campaign = (
+        expected.scheme == 'https'
+        and expected.netloc in {'business.facebook.com', 'adsmanager.facebook.com'}
+        and expected.path == '/adsmanager/manage/campaigns'
+        and not expected.fragment
+        and all(
+            len(expected_query.get(key, [])) == 1
+            and expected_query[key][0].isascii()
+            and expected_query[key][0].isdigit()
+            and 5 <= len(expected_query[key][0]) <= 30
+            for key in ('act', 'business_id')
+        )
+    )
+    expected_inventory_home = (
+        expected.scheme == 'https'
+        and expected.netloc == 'business.facebook.com'
+        and expected.path == '/latest/home'
+        and not expected.fragment
+        and set(expected_query) <= {'nav_ref'}
+        and all(
+            len(values) == 1
+            and len(values[0]) <= 160
+            and values[0].isascii()
+            and all(char.isalnum() or char in '_-' for char in values[0])
+            for values in expected_query.values()
+        )
+    )
+    if not (expected_campaign or expected_inventory_home):
         return None
     class Credentials(HTMLParser):
         blocked = False
@@ -134,17 +156,43 @@ def native_business_login_continuation(body, return_url, *, diagnostic=None):
                 if not isinstance(request_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,160}', request_id):
                     continue
                 actual = urlsplit(urljoin('https://business.facebook.com/', next_url))
-                home_query = parse_qs(actual.query)
-                business_home = (actual.netloc == 'business.facebook.com' and actual.path in ('', '/')
-                    and set(home_query) <= {'nav_ref'}
-                    and all(len(values) == 1 and re.fullmatch(r'[A-Za-z0-9_-]{0,160}', values[0])
-                            for values in home_query.values()))
-                if (actual.scheme != 'https' or actual.netloc not in
-                        {'business.facebook.com', 'adsmanager.facebook.com'}
-                        or actual.fragment or (not business_home and
-                        (actual.path.rstrip('/') != expected.path or
-                         any(parse_qs(actual.query).get(key) != expected_query.get(key)
-                             for key in ('act', 'business_id'))))):
+                actual_query = parse_qs(actual.query)
+                allowed_home_query = {'nav_ref', 'biz_login_source', 'join_id'}
+                safe_home_query = (
+                    set(actual_query) <= allowed_home_query
+                    and all(
+                        len(values) == 1
+                        and len(values[0]) <= 160
+                        and values[0].isascii()
+                        and all(char.isalnum() or char in '_-' for char in values[0])
+                        for values in actual_query.values()
+                    )
+                )
+                business_home = (
+                    actual.netloc == 'business.facebook.com'
+                    and actual.path in ('', '/')
+                    and safe_home_query
+                )
+                inventory_home = (
+                    expected_inventory_home
+                    and actual.netloc == 'business.facebook.com'
+                    and actual.path == '/latest/home'
+                    and safe_home_query
+                )
+                campaign_return = (
+                    expected_campaign
+                    and actual.path.rstrip('/') == expected.path
+                    and all(
+                        actual_query.get(key) == expected_query.get(key)
+                        for key in ('act', 'business_id')
+                    )
+                )
+                if (
+                    actual.scheme != 'https'
+                    or actual.netloc not in {'business.facebook.com', 'adsmanager.facebook.com'}
+                    or actual.fragment
+                    or not (business_home or inventory_home or campaign_return)
+                ):
                     continue
                 query = dict(parse_qsl(actual.query))
                 query.update(biz_login_source='biz_unified_f3_fb_login_button', join_id=str(uuid4()))

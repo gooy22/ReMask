@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 from html.parser import HTMLParser
-from urllib.parse import urlencode, urljoin, urlsplit
+from urllib.parse import parse_qs, urlencode, urljoin, urlsplit
 
 
 _FACEBOOK_HOST_SUFFIX = ".facebook.com"
@@ -321,6 +321,96 @@ def extract_business_login_continuation(
     return _extract_business_login_continuation(body, gate_url)[0]
 
 
+def _safe_native_continuation_url(value: str) -> bool:
+    if not _facebook_url(value):
+        return False
+    parts = urlsplit(value)
+    if (
+        str(parts.hostname or "").casefold() != "business.facebook.com"
+        or parts.path != "/business/loginrequest/fb/"
+        or parts.fragment
+    ):
+        return False
+    query = parse_qs(parts.query, keep_blank_values=True)
+    if set(query) != {"next", "f3_request_id"}:
+        return False
+    if (
+        len(query["next"]) != 1
+        or len(query["f3_request_id"]) != 1
+        or not re.fullmatch(r"[A-Za-z0-9_-]{1,160}", query["f3_request_id"][0])
+    ):
+        return False
+    next_parts = urlsplit(query["next"][0])
+    if not _facebook_url(query["next"][0]) or next_parts.fragment:
+        return False
+    next_query = parse_qs(next_parts.query, keep_blank_values=True)
+    allowed = {"nav_ref", "biz_login_source", "join_id"}
+    if next_parts.netloc == "business.facebook.com" and next_parts.path in {"", "/", "/latest/home"}:
+        return (
+            set(next_query) <= allowed
+            and all(
+                len(values) == 1
+                and len(values[0]) <= 160
+                and values[0].isascii()
+                and all(char.isalnum() or char in "_-" for char in values[0])
+                for values in next_query.values()
+            )
+        )
+    if (
+        next_parts.netloc not in {"business.facebook.com", "adsmanager.facebook.com"}
+        or next_parts.path.rstrip("/") != "/adsmanager/manage/campaigns"
+    ):
+        return False
+    campaign_query = parse_qs(next_parts.query, keep_blank_values=True)
+    if not {"act", "business_id"} <= set(campaign_query) or set(campaign_query) - {
+        "act", "business_id", "nav_ref", "biz_login_source", "join_id"
+    }:
+        return False
+    return all(
+        len(campaign_query.get(key, [])) == 1
+        and campaign_query[key][0].isascii()
+        and campaign_query[key][0].isdigit()
+        and 5 <= len(campaign_query[key][0]) <= 30
+        for key in ("act", "business_id")
+    )
+
+
+def _business_gate_continuation(body: str, gate_url: str, return_url: str):
+    native_reason = "not_attempted"
+    if is_business_login_gate_url(gate_url):
+        diagnostic: dict[str, str] = {}
+        try:
+            from app.private_business_login import native_business_login_continuation
+
+            native_url = native_business_login_continuation(
+                body, return_url, diagnostic=diagnostic,
+            )
+        except Exception as exc:
+            native_reason = "parser_error_" + type(exc).__name__
+            native_url = None
+        else:
+            reason = str(diagnostic.get("reason") or "unknown")
+            native_reason = (
+                reason if re.fullmatch(r"[a-z_]{1,64}", reason) else "unknown"
+            )
+        if native_url:
+            if _safe_native_continuation_url(str(native_url)):
+                return {
+                    "method": "GET",
+                    "url": str(native_url),
+                    "fields": [],
+                    "label_kind": "native_fb",
+                }, "native_fb_continuation_ready"
+            native_reason = "unsafe_native_target"
+
+    static, static_reason = _extract_business_login_continuation(body, gate_url)
+    if static:
+        return static, "static_continuation_ready"
+    if is_business_login_gate_url(gate_url):
+        return None, "native_" + native_reason + "__static_" + static_reason
+    return None, static_reason
+
+
 async def _bounded_response(response, max_bytes: int = 4_000_000) -> str:
     raw = await response.content.read(max_bytes + 1)
     raw = raw[:max_bytes]
@@ -421,7 +511,9 @@ async def continue_business_login_gate(
         except Exception:
             pass
 
-    continuation, outcome = _extract_business_login_continuation(body, gate_url)
+    continuation, outcome = _business_gate_continuation(
+        body, gate_url, return_url,
+    )
     set_outcome(outcome)
     if not continuation:
         return None
