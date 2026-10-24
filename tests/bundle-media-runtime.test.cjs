@@ -37,10 +37,15 @@ test('selected RK targeting uses persistent suggestions unless an explicit refre
 test('selected RK reads fresh GEO, interests, behaviors and languages in its exact scope',async()=>{
   for(const [type,resource] of [['locations','locations'],['interests','interests'],['behaviors','behaviors'],['languages','locales']]){
     const {ctx,calls,search}=targetingFixture();const result=await search(type);
-    assert.deepEqual(calls,[{url:'ajax/metaTargetingSearch.php',body:{type:resource,q:'fitness',limit:'25',
+    const scoped=()=>calls.filter(call=>call.url==='ajax/metaTargetingSearch.php');
+    assert.deepEqual(scoped(),[{url:'ajax/metaTargetingSearch.php',body:{type:resource,q:'fitness',limit:'25',
       profile:'38',account_id:'120249912222240685',execution_mode:'DRAFT'}}]);
     assert.equal(result.data[0].id,'6003277229371');
-    ctx.mode='PUBLISH';await search(type);assert.equal(calls[1].body.execution_mode,'PUBLISH');
+    ctx.mode='PUBLISH';await search(type);
+    assert.equal(scoped()[1].body.execution_mode,'PUBLISH');
+    const referenceCalls=calls.filter(call=>call.url==='ajax/metaTemplateTargetingSearch.php');
+    assert.equal(referenceCalls.length,type==='locations'?2:0);
+    if(type==='locations')assert.equal(referenceCalls[0].body.module_only,'1');
   }
 });
 test('installed picker reference URL also uses the selected RK live read',async()=>{
