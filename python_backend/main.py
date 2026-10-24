@@ -3753,11 +3753,32 @@ async def private_advertising_resources(profile_id: str, resource: str, account_
                   'actor_id':str(context.cookies.get('c_user') or '')}
         actor = str(context.cookies.get('c_user') or '')
         cached = None
+        resources = pool.private_launch.resources
         if not force:
             with measure_phase('cache_lookup'):
-                cached = await pool.private_launch.resources.get(name=resource,values=values,actor_id=actor)
-            if cached.get('availability') != 'NOT_LOADED' and not cached.get('_cache', {}).get('stale'):
-                return {'ok':True,'profile':profile,'resource':resource,**cached}
+                cached = await resources.get(name=resource,values=values,actor_id=actor)
+            if cached.get('availability') != 'NOT_LOADED':
+                cache_meta = cached.get('_cache', {})
+                if not cache_meta.get('stale'):
+                    return {'ok':True,'profile':profile,'resource':resource,**cached}
+                # Previously observed targeting choices are useful suggestions
+                # while a refresh runs; they do not establish live permission.
+                if resource in resources.TARGETING_OPTION_TYPES and cached.get('data'):
+                    async def refresh_targeting_suggestions():
+                        try:
+                            async with ProfileSession(context) as refresh_session:
+                                refresh_web = await refresh_session.facebook_web()
+                                refresh_web.private_only = True
+                                await resources.get(name=resource, values=values, actor_id=actor,
+                                                    force=True, web=refresh_web)
+                        except Exception as error:
+                            log.info("targeting option refresh failed resource=%s error_type=%s",
+                                     resource, type(error).__name__)
+                    started = resources.schedule_refresh_once(
+                        name=resource, values=values, actor_id=actor,
+                        callback=refresh_targeting_suggestions)
+                    cached = {**cached, '_cache': {**cache_meta, 'refresh_pending': started}}
+                    return {'ok':True,'profile':profile,'resource':resource,**cached}
         try:
             with measure_phase('resource_read'):
                 async with ProfileSession(context) as session:
