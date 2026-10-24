@@ -184,7 +184,7 @@ class GateContinuationTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result)
         self.assertEqual(
             web._business_login_gate_outcome,
-            "no_supported_continuation_control",
+            "native_source_unreviewed__static_no_supported_continuation_control",
         )
         self.assertEqual(session.request_calls, [])
 
