@@ -870,10 +870,14 @@ class FacebookWebSession:
         result = await continue_business_login_gate(
             self, gate_url=gate_url, body=body, return_url=return_url,
         )
+        outcome = str(
+            getattr(self, "_business_login_gate_outcome", "unknown")
+        )
         log.info(
-            "[%s] business login handoff recovered=%s",
+            "[%s] business login handoff recovered=%s outcome=%s",
             self.profile.name,
             bool(result),
+            outcome,
         )
         return result
 
