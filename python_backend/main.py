@@ -3827,7 +3827,39 @@ async def private_template_reference(profile_id: str, operation: str, payload: d
                 async with ProfileSession(context) as session:
                     web = await session.facebook_web()
                     web.private_only = True
-                    return await read_template_reference(web, adapter.catalog, context, operation, payload)
+                    result = await read_template_reference(
+                        web, adapter.catalog, context, operation, payload,
+                        resource_store=pool.private_launch.resources)
+            resources = pool.private_launch.resources
+            cache_meta = result.get('_cache', {}) if isinstance(result, dict) else {}
+            if (operation in getattr(resources, 'TARGETING_OPTION_TYPES', ())
+                    and cache_meta.get('stale') is True and result.get('data')):
+                actor = str(context.cookies.get('c_user') or '')
+                query = str(payload.get('q') or '').strip()
+                maximum = 20000 if not query else 500
+                limit = min(maximum, max(1, int(payload.get('limit', 100))))
+                refresh_values = {
+                    'profile_id': profile,
+                    'business_id': str(result.get('business_id') or ''),
+                    'ad_account_id': str(result.get('account_id') or ''),
+                    'query': query,
+                    'limit': limit,
+                }
+                async def refresh_targeting_suggestions():
+                    try:
+                        async with ProfileSession(context) as refresh_session:
+                            refresh_web = await refresh_session.facebook_web()
+                            refresh_web.private_only = True
+                            await resources.get(name=operation, values=refresh_values,
+                                actor_id=actor, force=True, web=refresh_web)
+                    except Exception as error:
+                        log.info('template targeting refresh failed resource=%s error_type=%s',
+                            operation, type(error).__name__)
+                started = resources.schedule_refresh_once(
+                    name=operation, values=refresh_values, actor_id=actor,
+                    callback=refresh_targeting_suggestions)
+                result = {**result, '_cache':{**cache_meta, 'refresh_pending':started}}
+            return result
         result = await asyncio.wait_for(read(), timeout=32)
         return {'ok': True, **result}
     except AuthenticationError as error:

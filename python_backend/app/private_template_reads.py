@@ -98,7 +98,7 @@ async def _discover_sources(web, actor):
     raise fail('TEMPLATE_LOOKUP_NO_ACCOUNT', 'Meta did not confirm a template read account', True)
 
 
-async def read_template_reference(web, catalog, context, operation, inputs):
+async def read_template_reference(web, catalog, context, operation, inputs, *, resource_store=None):
     # This endpoint cannot read account-owned assets or invoke a writer.
     if operation not in REFERENCE_TYPES | {'audience_estimate', 'placements'}:
         raise fail('TEMPLATE_HELPER_UNAVAILABLE', 'Only template reference reads are supported')
@@ -147,8 +147,22 @@ async def read_template_reference(web, catalog, context, operation, inputs):
             if operation in REFERENCE_TYPES:
                 if len(values['query']) > 200:
                     raise fail('INVALID_TARGETING_QUERY', 'Targeting query is too long')
-                with measure_phase('reference_read'):
-                    result = await AdsManagerReadCatalog(catalog).read(web, operation, values)
+                if resource_store is not None:
+                    cached_result = await resource_store.get(
+                        name=operation, values=values, actor_id=actor)
+                    cache_meta = cached_result.get('_cache', {}) if isinstance(cached_result, dict) else {}
+                    if (cache_meta.get('cached_only') is True
+                            and isinstance(cached_result.get('data'), list)
+                            and cached_result['data']):
+                        return {**cached_result, 'profile': profile, 'business_id': business,
+                                'transport': 'private_http_h2', 'browser_started': False,
+                                'source_context_discovered': True, 'template_account_bound': False}
+                    with measure_phase('reference_read'):
+                        result = await resource_store.get(
+                            name=operation, values=values, actor_id=actor, force=True, web=web)
+                else:
+                    with measure_phase('reference_read'):
+                        result = await AdsManagerReadCatalog(catalog).read(web, operation, values)
                 result = {**result, 'profile': profile, 'business_id': business,
                           'transport': 'private_http_h2', 'browser_started': False}
             else:
