@@ -296,8 +296,10 @@ class AdsManagerPrivateHttp:
                 from .private_business_login import native_business_login_continuation
                 continuation = native_business_login_continuation(body, url, diagnostic=gate_contract)
             if not continuation:
-                log.info('ads_business_continuation_missing profile=%s contract_reason=%s public_scripts=%s',
+                from .private_business_login import native_gate_render_shape
+                log.info('ads_business_continuation_missing profile=%s contract_reason=%s render_shape=%s public_scripts=%s',
                     getattr(web.profile, 'name', ''), gate_contract.get('reason', 'anchor_missing'),
+                    native_gate_render_shape(body),
                     business_login_public_sources(body))
             if continuation:
                 # Follow only the link actually supplied by Meta for this
