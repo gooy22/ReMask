@@ -12,11 +12,17 @@ from html.parser import HTMLParser
 
 ROOT = 'BusinessToolsF3UnifiedLoginPageView.react'
 SOURCE = 'https://static.xx.fbcdn.net/rsrc.php/v4iEB24/yI/l/en_US-j/Ok9Q1EXGe9g.js'
+SOURCE_GB = 'https://static.xx.fbcdn.net/rsrc.php/v4iEB24/y1/l/en_GB-j/Ok9Q1EXGe9g.js'
+# Both locale bundles were retrieved and the controller/config/panel function
+# bodies compared byte-for-byte. Source SHA256s differ in unrelated modules.
+SOURCES = {SOURCE, SOURCE_GB}
 
 
-def native_business_login_continuation(body, return_url):
+def native_business_login_continuation(body, return_url, *, diagnostic=None):
     from .private_contract_discovery import Parser, _LANGUAGE, _walk, _pairs, _literal, _script_urls
     from .private_ads_document import _JSON_SCRIPT_RE
+    report = diagnostic if diagnostic is not None else {}
+    report['reason'] = 'request_scope'
     expected = urlsplit(return_url)
     expected_query = parse_qs(expected.query)
     if (expected.scheme != 'https' or expected.netloc not in
@@ -36,9 +42,12 @@ def native_business_login_continuation(body, return_url):
     fields = Credentials()
     fields.feed(body)
     if fields.blocked:
+        report['reason'] = 'credential_controls'
         return None
-    if SOURCE not in _script_urls(body, 'https://business.facebook.com/', limit=200):
+    report['reason'] = 'source_unreviewed'
+    if not SOURCES.intersection(_script_urls(body, 'https://business.facebook.com/', limit=200)):
         return None
+    report['reason'] = 'root_missing'
     candidates = []
     for script in _JSON_SCRIPT_RE.finditer(body):
         source = script.group(1)
@@ -66,6 +75,7 @@ def native_business_login_continuation(body, return_url):
                         or _literal(pair.child_by_field_name('value')) != ROOT):
                     continue
                 props = _pairs(root['props'])
+                report['reason'] = 'unsupported_flow'
                 def scalar(name, default=None):
                     return _literal(props[name]) if name in props else default
                 options = props.get('loginOptions')
@@ -78,6 +88,7 @@ def native_business_login_continuation(body, return_url):
                     continue
                 next_url = scalar('referrerURI')
                 request_id = scalar('requestId')
+                report['reason'] = 'request_id_or_destination'
                 if next_url is None:
                     next_url = '/'
                 if not isinstance(next_url, str):
@@ -106,4 +117,9 @@ def native_business_login_continuation(body, return_url):
                                   urlencode({'next':next_url, 'f3_request_id':request_id}))
             except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
                 continue
-    return candidates[0] if len(candidates) == 1 else None
+    if len(candidates) == 1:
+        report['reason'] = 'native_fb_continuation'
+        return candidates[0]
+    if len(candidates) > 1:
+        report['reason'] = 'ambiguous_root'
+    return None
