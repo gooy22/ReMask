@@ -220,6 +220,46 @@ class GateContinuationTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kwargs["proxy"], "http://profile-proxy:8080")
         self.assertEqual(len(session.request_calls), 2)
 
+    async def test_reinitializes_mismatched_cookie_jar_from_same_profile_before_handoff(self):
+        native_url = (
+            "https://business.facebook.com/business/loginrequest/fb/"
+            "?next=https%3A%2F%2Fbusiness.facebook.com%2Flatest%2Fhome"
+            "%3Fbiz_login_source%3Dbiz_unified_f3_fb_login_button"
+            "%26join_id%3Dsafe-test&f3_request_id=safe-test"
+        )
+        stale = _FakeSession([], snapshots=[
+            {"c_user": "999", "xs": "other-actor"},
+        ])
+        restored = _FakeSession([
+            _Response(200, native_url, b"continuation accepted"),
+            _Response(200, RETURN_URL, b"verified profile response"),
+        ])
+
+        class ReinitializingWeb(_FakeWeb):
+            def __init__(self, initial, replacement):
+                super().__init__(initial)
+                self.replacement = replacement
+
+            async def close(self):
+                self.closed = True
+                self.session = self.replacement
+
+        web = ReinitializingWeb(stale, restored)
+        with patch(
+            "app.private_business_login.native_business_login_continuation",
+            return_value=native_url,
+        ):
+            result = await continue_business_login_gate(
+                web, gate_url=GATE_URL, body="<html>Business</html>",
+                return_url=RETURN_URL,
+            )
+
+        self.assertEqual(result["body"], "verified profile response")
+        self.assertEqual(web._business_login_gate_outcome, "recovered")
+        self.assertTrue(web.closed)
+        self.assertEqual(stale.request_calls, [])
+        self.assertEqual(len(restored.request_calls), 2)
+
     async def test_stops_if_facebook_actor_changes_after_continuation(self):
         body = """
         <a href="/business/loginpage/continue">Continue with Facebook</a>
