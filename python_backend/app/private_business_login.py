@@ -5,7 +5,7 @@ BusinessToolsF3UnifiedLoginPageLoginPanel and XBusinessFBLoginHandleRequestContr
 This consumes the current document's props, never executes JavaScript or logs in
 with credentials. A changed source bundle requires review rather than guessing.
 """
-from urllib.parse import urlsplit, parse_qs, parse_qsl, urlencode, urlunsplit
+from urllib.parse import urlsplit, parse_qs, parse_qsl, urlencode, urlunsplit, urljoin
 from uuid import uuid4
 import re
 from html.parser import HTMLParser
@@ -78,18 +78,22 @@ def native_business_login_continuation(body, return_url):
                     continue
                 next_url = scalar('referrerURI')
                 request_id = scalar('requestId')
+                if next_url is None:
+                    next_url = '/'
                 if not isinstance(next_url, str):
                     continue
                 if request_id is None:
                     request_id = str(uuid4())
                 if not isinstance(request_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,160}', request_id):
                     continue
-                actual = urlsplit(next_url)
+                actual = urlsplit(urljoin('https://business.facebook.com/', next_url))
+                business_home = actual.netloc == 'business.facebook.com' and actual.path == '/' and not actual.query
                 if (actual.scheme != 'https' or actual.netloc not in
                         {'business.facebook.com', 'adsmanager.facebook.com'}
-                        or actual.path != expected.path or actual.fragment
-                        or any(parse_qs(actual.query).get(key) != parse_qs(expected.query).get(key)
-                               for key in ('act', 'business_id'))):
+                        or actual.fragment or (not business_home and
+                        (actual.path.rstrip('/') != expected.path or
+                         any(parse_qs(actual.query).get(key) != expected_query.get(key)
+                             for key in ('act', 'business_id'))))):
                     continue
                 query = dict(parse_qsl(actual.query))
                 query.update(biz_login_source='biz_unified_f3_fb_login_button', join_id=str(uuid4()))
