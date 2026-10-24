@@ -27,6 +27,18 @@ class GateContinuationParserTests(unittest.TestCase):
         self.assertEqual(result["fields"], [("fb_dtsg", "csrf-token"), ("continue", "1")])
         self.assertEqual(result["label_kind"], "facebook_continue")
 
+    def test_ignores_checkpoint_markers_inside_scripts(self):
+        body = """
+        <script>const route = "/checkpoint/";</script>
+        <form action="/business/loginpage/continue" method="post">
+          <input type="hidden" name="fb_dtsg" value="csrf">
+          <button>Continue with Facebook</button>
+        </form>
+        """
+        result = extract_business_login_continuation(body, GATE_URL)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["label_kind"], "facebook_continue")
+
     def test_refuses_login_credentials_and_checkpoints(self):
         credential_form = """
         <form action="/business/loginpage/continue" method="post">
