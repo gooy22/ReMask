@@ -242,7 +242,7 @@ def _extract_business_login_continuation(
         parser.close()
     except Exception:
         return None, "malformed_gate_markup"
-    visible_text = re.sub(r"\\s+", " ", " ".join(parser.visible_text)).casefold()
+    visible_text = re.sub(r"\s+", " ", " ".join(parser.visible_text)).casefold()
     if any(marker in visible_text for marker in _CHALLENGE_MARKERS):
         return None, "authentication_challenge"
     if parser.has_credentials:
