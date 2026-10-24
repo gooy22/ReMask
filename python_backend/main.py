@@ -2894,6 +2894,7 @@ async def profile_live_inventory(
                             await meta_transport.close_business_browser()
                             # Re-resolve the same profile after an auth failure.
                             # Reopening Chromium alone repeats the original cookies.
+                            saved_session_changed=False
                             try:
                                 saved_session_changed=await asyncio.wait_for(
                                     refresh_saved_auth_context(pool.resolver, profile_session.context),
@@ -2908,6 +2909,12 @@ async def profile_live_inventory(
                                     'live inventory profile=%s saved_session_reload unavailable=%s',
                                     clean_profile, type(refresh_exc).__name__,
                                 )
+                            if not saved_session_changed:
+                                log.warning(
+                                    'live inventory profile=%s auth retry skipped; saved session did not change',
+                                    clean_profile,
+                                )
+                                raise
                             browser_reopen_timeout=budget(18.0)
                             browser=await asyncio.wait_for(
                                 meta_transport.facebook_business_browser(),
