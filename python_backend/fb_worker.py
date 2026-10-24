@@ -699,66 +699,66 @@ class FacebookWebSession:
                             f"{bootstrap_url}: HTTP {candidate_status}"
                         )
                         continue
-                        parts = urlsplit(candidate_url)
-                        route = parts.path.lower()
-                        if (
-                            "/login" in route
-                            or "/checkpoint" in route
-                            or _has_login_form(candidate_body)
-                        ):
-                            auth_attempts.append({"auth_reason": "business_login_gate" if is_business_login_gate_url(candidate_url)
-                                else "checkpoint_redirect" if "/checkpoint" in route
-                                else "login_redirect" if "/login" in route else "login_form",
-                                "final_url": f"{parts.scheme}://{parts.hostname or ''}{parts.path}"})
-                            error = AuthenticationError("Meta requires session restoration before bootstrap.")
-                            error.meta_payload = {"business_precheck": auth_attempts}
-                            error.request_may_have_been_sent = False
-                            error.transport_stage = "bootstrap"
-                            raise error
+                    parts = urlsplit(candidate_url)
+                    route = parts.path.lower()
+                    if (
+                        "/login" in route
+                        or "/checkpoint" in route
+                        or _has_login_form(candidate_body)
+                    ):
+                        auth_attempts.append({"auth_reason": "business_login_gate" if is_business_login_gate_url(candidate_url)
+                            else "checkpoint_redirect" if "/checkpoint" in route
+                            else "login_redirect" if "/login" in route else "login_form",
+                            "final_url": f"{parts.scheme}://{parts.hostname or ''}{parts.path}"})
+                        error = AuthenticationError("Meta requires session restoration before bootstrap.")
+                        error.meta_payload = {"business_precheck": auth_attempts}
+                        error.request_may_have_been_sent = False
+                        error.transport_stage = "bootstrap"
+                        raise error
 
-                        if len(candidate_body) > len(best_authenticated_body):
-                            best_authenticated_body = candidate_body
-                            best_authenticated_url = candidate_url
+                    if len(candidate_body) > len(best_authenticated_body):
+                        best_authenticated_body = candidate_body
+                        best_authenticated_url = candidate_url
 
-                        candidate_dtsg = self._first_match(
-                            candidate_body,
-                            token_patterns,
-                        )
-                        if not candidate_dtsg:
-                            normalized_sources = self._match_sources(candidate_body)
-                            marker_names = [
-                                marker
-                                for marker in (
-                                    "DTSGInitialData",
-                                    "DTSGInitData",
-                                    '"fb_dtsg"',
-                                    'name="fb_dtsg"',
-                                    "name='fb_dtsg'",
-                                    "CurrentUserInitialData",
-                                )
-                                if any(marker in source for source in normalized_sources)
-                            ]
-                            surface = (
-                                f"HTTP {candidate_status} final={candidate_url} "
-                                f"bytes={len(candidate_body)}"
+                    candidate_dtsg = self._first_match(
+                        candidate_body,
+                        token_patterns,
+                    )
+                    if not candidate_dtsg:
+                        normalized_sources = self._match_sources(candidate_body)
+                        marker_names = [
+                            marker
+                            for marker in (
+                                "DTSGInitialData",
+                                "DTSGInitData",
+                                '"fb_dtsg"',
+                                'name="fb_dtsg"',
+                                "name='fb_dtsg'",
+                                "CurrentUserInitialData",
                             )
-                            if marker_names:
-                                attempts.append(
-                                    f"{bootstrap_url}: {surface} markers="
-                                    + ",".join(marker_names)
-                                    + " but no usable fb_dtsg was parsed"
-                                )
-                            else:
-                                attempts.append(
-                                    f"{bootstrap_url}: {surface} no DTSG marker"
-                                )
-                            continue
+                            if any(marker in source for source in normalized_sources)
+                        ]
+                        surface = (
+                            f"HTTP {candidate_status} final={candidate_url} "
+                            f"bytes={len(candidate_body)}"
+                        )
+                        if marker_names:
+                            attempts.append(
+                                f"{bootstrap_url}: {surface} markers="
+                                + ",".join(marker_names)
+                                + " but no usable fb_dtsg was parsed"
+                            )
+                        else:
+                            attempts.append(
+                                f"{bootstrap_url}: {surface} no DTSG marker"
+                            )
+                        continue
 
-                        body = candidate_body
-                        final_url = candidate_url
-                        bootstrap_source = bootstrap_url
-                        fb_dtsg = candidate_dtsg
-                        break
+                    body = candidate_body
+                    final_url = candidate_url
+                    bootstrap_source = bootstrap_url
+                    fb_dtsg = candidate_dtsg
+                    break
 
                 except (asyncio.TimeoutError, aiohttp.ClientError, httpx.HTTPError) as exc:
                     # The failed profile route cannot establish cookie expiry.
