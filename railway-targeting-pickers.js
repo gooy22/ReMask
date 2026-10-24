@@ -9,15 +9,10 @@ if (typeof creativeTargetSearchConfig !== 'function') {
         behaviors:{input:'behaviorQuery',results:'behaviorResults',pills:'selectedBehaviors',state:'behaviors'},
         locales:{input:'languageQuery',results:'languageResults',pills:'selectedLanguages',state:'languages'}
     };
-    // Search is automatic while typing. Keep the obsolete buttons out of the
-    // visible form so the old click listeners cannot issue duplicate reads.
+    // Search is automatic while typing; remove legacy controls entirely.
     for (const id of ['geoSearch','interestSearch']) {
         const button=$(id);
-        if(!button)continue;
-        button.hidden=true;
-        button.disabled=true;
-        button.tabIndex=-1;
-        button.setAttribute('aria-hidden','true');
+        if(button)button.remove();
     }
     const targetingFailureMessage = error => {
         const raw=String(error?.code||error?.payload?.error?.code||error?.payload?.code||

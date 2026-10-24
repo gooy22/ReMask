@@ -168,4 +168,8 @@ expect(!str_contains(json_encode($unbound),'old-owned-hash'),'nested owned media
 $endpoint=file_get_contents(dirname(__DIR__).'/railway-template-targeting-search.php');
 expect(!str_contains($endpoint,"\$input['profile']") && !str_contains($endpoint,"\$input['account_id']"),'client cannot choose destination through template lookup');
 expect(str_contains($endpoint,"'checked_live'") && str_contains($endpoint,"'account_scope_verified'"),'actual Meta read proof remains required');
+$moduleOnlyAt=strpos($endpoint,'if ($moduleOnly)');
+$profileLookupAt=strpos($endpoint,'$profiles = []');
+expect($moduleOnlyAt!==false && $profileLookupAt!==false && $moduleOnlyAt<$profileLookupAt,
+    'static GEO/language misses return before opening any profile or Meta context');
 echo "Template targeting uses automatic scoped reads without a publishing binding.\n";

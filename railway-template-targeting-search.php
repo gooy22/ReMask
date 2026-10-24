@@ -24,9 +24,20 @@ try {
     if (!preg_match('/^(0|[1-9][0-9]{0,4})$/D',$rawOffset) || (int)$rawOffset>19900 || (int)$rawOffset%100!==0)
         throw new InvalidArgumentException('INVALID_TARGETING_OFFSET');
     $offset=(int)$rawOffset;
+    $moduleOnly = (string)($input['module_only'] ?? '') === '1';
+    if (array_key_exists('module_only',$input) && !$moduleOnly)
+        throw new InvalidArgumentException('INVALID_TARGETING_MODE');
+    if ($moduleOnly && !in_array($type,['locations','locales'],true))
+        throw new InvalidArgumentException('INVALID_TARGETING_MODE');
     $module = RemaskModuleTargetingReference::search($type,$query,
         __DIR__.'/../classes/meta-targeting-reference.json',$offset);
     if ($module !== null) { MetaEndpoint::ok($module); exit; }
+    if ($moduleOnly) {
+        MetaEndpoint::ok(['data'=>[],'checked_live'=>false,'availability'=>'NOT_LOADED',
+            'source'=>'private_meta_module_reference','offset'=>$offset,'next_offset'=>null,
+            'template_account_bound'=>false]);
+        exit;
+    }
     $reference = new RemaskTemplateTargetingReference(dirname(ACCOUNTSFILENAME).'/template-targeting-'.hash('sha256',ACCOUNTSFILENAME).'.json');
     $cached = $reference->get($type, $query, time(), $offset);
     if ($cached !== null) { MetaEndpoint::ok($cached); exit; }
