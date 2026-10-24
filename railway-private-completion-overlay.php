@@ -174,8 +174,14 @@ if (strtoupper((string)($_SERVER['REQUEST_METHOD'] ?? 'GET')) === 'POST') {
     exit;
 }
 PROFILE_COOKIE_REFRESH;
-$profileContextSource = preg_replace('/<\?php/', '<?php' . "\n" . $cookieRefreshHandler . "\n", $profileContextSource, 1, $count);
-if ($count !== 1) throw new RuntimeException('Python profile context POST boundary missing');
+$profileContextSource = preg_replace(
+    '/declare\s*\(\s*strict_types\s*=\s*1\s*\)\s*;/',
+    '$0' . "\n" . $cookieRefreshHandler . "\n",
+    $profileContextSource,
+    1,
+    $count
+);
+if ($count !== 1) throw new RuntimeException('Python profile context strict-types boundary missing');
 file_put_contents($profileContextPath, $profileContextSource);
 $creativeEndpoint = file_get_contents($root.'/ajax/creativeLibrary.php');
 completionReplace($creativeEndpoint, "require_once __DIR__ . '/../classes/MetaOfficialFields.php';",
