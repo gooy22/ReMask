@@ -16,10 +16,6 @@ import aiohttp
 import httpx
 
 from app.private_http import PrivateHttpClient
-from app.business_login_gate_http import (
-    continue_business_login_gate,
-    is_business_login_gate_url,
-)
 
 
 log = logging.getLogger("remask_worker")
@@ -45,21 +41,6 @@ def _has_login_form(body: str) -> bool:
     parser = _LoginFormParser()
     parser.feed(body)
     return parser.found
-
-
-def _is_facebook_auth_navigation(url: str) -> bool:
-    """Recognize a final Facebook login/checkpoint redirect without reading its HTML."""
-    parts = urlsplit(str(url or ""))
-    host = str(parts.hostname or "").casefold()
-    path = str(parts.path or "").casefold().rstrip("/")
-    facebook_host = host == "facebook.com" or host.endswith(".facebook.com")
-    if parts.scheme != "https" or not facebook_host:
-        return False
-    return (
-        path in {"/login", "/login.php", "/checkpoint"}
-        or path.startswith("/login/")
-        or path.startswith("/checkpoint/")
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -191,7 +172,6 @@ class FacebookWebSession:
 
         self._bootstrap: FacebookBootstrap | None = None
         self._graphql_request_counter = 0
-        self._business_login_gate_attempted = False
 
     # ------------------------------------------------------------------
     # Profile HTTP/2 lifecycle
@@ -230,17 +210,8 @@ class FacebookWebSession:
 
     async def close(self) -> None:
         async with self._session_lock:
-            if self.session is not None:
-                # HTTPX applies Meta Set-Cookie headers to this profile-bound
-                # jar. Preserve only a snapshot for the same actor; never allow
-                # a redirect to silently switch the profile identity.
-                snapshot = self.session.facebook_cookie_snapshot()
-                original_actor = str(self.profile.cookies.get("c_user") or "")
-                if (snapshot.get("c_user") == original_actor
-                        and str(snapshot.get("xs") or "").strip()):
-                    self.profile.cookies = snapshot
-                if not self.session.closed:
-                    await self.session.close()
+            if self.session is not None and not self.session.closed:
+                await self.session.close()
 
             self.session = None
 
@@ -655,116 +626,95 @@ class FacebookWebSession:
             attempts: list[str] = []
             auth_attempts: list[dict[str, str]] = []
 
-            document_headers = {
-                "Accept": (
-                    "text/html,application/xhtml+xml,"
-                    "application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
-                ),
-                "Accept-Language": "en-US,en;q=0.9",
-                "Cache-Control": "no-cache",
-                "Pragma": "no-cache",
-                "Sec-Fetch-Dest": "document",
-                "Sec-Fetch-Mode": "navigate",
-                "Sec-Fetch-Site": "none",
-                "Sec-Fetch-User": "?1",
-                "Upgrade-Insecure-Requests": "1",
-            }
-
-            async def read_bootstrap_document(url: str):
-                async with session.get(
-                    url,
-                    proxy=self.profile.proxy,
-                    headers=document_headers,
-                    allow_redirects=True,
-                ) as response:
-                    return int(response.status), await response.text(), str(response.url)
-
             for bootstrap_url in bootstrap_urls:
                 try:
-                    candidate_status, candidate_body, candidate_url = (
-                        await read_bootstrap_document(bootstrap_url)
-                    )
-                    if is_business_login_gate_url(candidate_url):
-                        recovered = await self._maybe_continue_business_login_gate(
-                            gate_url=candidate_url,
-                            body=candidate_body,
-                            return_url=bootstrap_url,
-                        )
-                        if recovered:
-                            candidate_status = int(recovered["status"])
-                            candidate_body = str(recovered["body"] or "")
-                            candidate_url = str(recovered["url"] or "")
-                    if candidate_status >= 500:
-                        attempts.append(
-                            f"{bootstrap_url}: HTTP {candidate_status}"
-                        )
-                        continue
-                    parts = urlsplit(candidate_url)
-                    route = parts.path.lower()
-                    if (
-                        "/login" in route
-                        or "/checkpoint" in route
-                        or _has_login_form(candidate_body)
-                    ):
-                        auth_attempt = {"auth_reason": "business_login_gate" if is_business_login_gate_url(candidate_url)
-                            else "checkpoint_redirect" if "/checkpoint" in route
-                            else "login_redirect" if "/login" in route else "login_form",
-                            "final_url": f"{parts.scheme}://{parts.hostname or ''}{parts.path}"}
-                        handoff_outcome = str(getattr(
-                            self, "_business_login_gate_outcome", "",
-                        ))
-                        if handoff_outcome == "continuation_redirected_to_auth":
-                            auth_attempt["business_login_handoff_outcome"] = handoff_outcome
-                        auth_attempts.append(auth_attempt)
-                        error = AuthenticationError("Meta requires session restoration before bootstrap.")
-                        error.meta_payload = {"business_precheck": auth_attempts}
-                        error.request_may_have_been_sent = False
-                        error.transport_stage = "bootstrap"
-                        raise error
+                    async with session.get(
+                        bootstrap_url,
+                        proxy=self.profile.proxy,
+                        headers={
+                            "Accept": (
+                                "text/html,application/xhtml+xml,"
+                                "application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+                            ),
+                            "Accept-Language": "en-US,en;q=0.9",
+                            "Cache-Control": "no-cache",
+                            "Pragma": "no-cache",
+                            "Sec-Fetch-Dest": "document",
+                            "Sec-Fetch-Mode": "navigate",
+                            "Sec-Fetch-Site": "none",
+                            "Sec-Fetch-User": "?1",
+                            "Upgrade-Insecure-Requests": "1",
+                        },
+                        allow_redirects=True,
+                    ) as response:
+                        candidate_body = await response.text()
+                        candidate_url = str(response.url)
 
-                    if len(candidate_body) > len(best_authenticated_body):
-                        best_authenticated_body = candidate_body
-                        best_authenticated_url = candidate_url
-
-                    candidate_dtsg = self._first_match(
-                        candidate_body,
-                        token_patterns,
-                    )
-                    if not candidate_dtsg:
-                        normalized_sources = self._match_sources(candidate_body)
-                        marker_names = [
-                            marker
-                            for marker in (
-                                "DTSGInitialData",
-                                "DTSGInitData",
-                                '"fb_dtsg"',
-                                'name="fb_dtsg"',
-                                "name='fb_dtsg'",
-                                "CurrentUserInitialData",
-                            )
-                            if any(marker in source for source in normalized_sources)
-                        ]
-                        surface = (
-                            f"HTTP {candidate_status} final={candidate_url} "
-                            f"bytes={len(candidate_body)}"
-                        )
-                        if marker_names:
+                        if response.status >= 500:
                             attempts.append(
-                                f"{bootstrap_url}: {surface} markers="
-                                + ",".join(marker_names)
-                                + " but no usable fb_dtsg was parsed"
+                                f"{bootstrap_url}: HTTP {response.status}"
                             )
-                        else:
-                            attempts.append(
-                                f"{bootstrap_url}: {surface} no DTSG marker"
-                            )
-                        continue
+                            continue
 
-                    body = candidate_body
-                    final_url = candidate_url
-                    bootstrap_source = bootstrap_url
-                    fb_dtsg = candidate_dtsg
-                    break
+                        parts = urlsplit(candidate_url)
+                        route = parts.path.lower()
+                        if (
+                            "/login" in route
+                            or "/checkpoint" in route
+                            or _has_login_form(candidate_body)
+                        ):
+                            auth_attempts.append({"auth_reason": "checkpoint_redirect" if "/checkpoint" in route
+                                else "login_redirect" if "/login" in route else "login_form",
+                                "final_url": f"{parts.scheme}://{parts.hostname or ''}{parts.path}"})
+                            error = AuthenticationError("Meta requires session restoration before bootstrap.")
+                            error.meta_payload = {"business_precheck": auth_attempts}
+                            error.request_may_have_been_sent = False
+                            error.transport_stage = "bootstrap"
+                            raise error
+
+                        if len(candidate_body) > len(best_authenticated_body):
+                            best_authenticated_body = candidate_body
+                            best_authenticated_url = candidate_url
+
+                        candidate_dtsg = self._first_match(
+                            candidate_body,
+                            token_patterns,
+                        )
+                        if not candidate_dtsg:
+                            normalized_sources = self._match_sources(candidate_body)
+                            marker_names = [
+                                marker
+                                for marker in (
+                                    "DTSGInitialData",
+                                    "DTSGInitData",
+                                    '"fb_dtsg"',
+                                    'name="fb_dtsg"',
+                                    "name='fb_dtsg'",
+                                    "CurrentUserInitialData",
+                                )
+                                if any(marker in source for source in normalized_sources)
+                            ]
+                            surface = (
+                                f"HTTP {response.status} final={candidate_url} "
+                                f"bytes={len(candidate_body)}"
+                            )
+                            if marker_names:
+                                attempts.append(
+                                    f"{bootstrap_url}: {surface} markers="
+                                    + ",".join(marker_names)
+                                    + " but no usable fb_dtsg was parsed"
+                                )
+                            else:
+                                attempts.append(
+                                    f"{bootstrap_url}: {surface} no DTSG marker"
+                                )
+                            continue
+
+                        body = candidate_body
+                        final_url = candidate_url
+                        bootstrap_source = bootstrap_url
+                        fb_dtsg = candidate_dtsg
+                        break
 
                 except (asyncio.TimeoutError, aiohttp.ClientError, httpx.HTTPError) as exc:
                     # The failed profile route cannot establish cookie expiry.
@@ -862,31 +812,6 @@ class FacebookWebSession:
 
             return bootstrap
 
-    async def _maybe_continue_business_login_gate(
-        self,
-        *,
-        gate_url: str,
-        body: str,
-        return_url: str,
-    ) -> dict | None:
-        if self._business_login_gate_attempted:
-            return None
-        self._business_login_gate_attempted = True
-        self.invalidate_bootstrap()
-        result = await continue_business_login_gate(
-            self, gate_url=gate_url, body=body, return_url=return_url,
-        )
-        outcome = str(
-            getattr(self, "_business_login_gate_outcome", "unknown")
-        )
-        log.info(
-            "[%s] business login handoff recovered=%s outcome=%s",
-            self.profile.name,
-            bool(result),
-            outcome,
-        )
-        return result
-
     def invalidate_bootstrap(self) -> None:
         self._bootstrap = None
         self._reviewed_module_ids = {}
@@ -914,7 +839,6 @@ class FacebookWebSession:
         max_bytes: int = 4_000_000,
         referer: str | None = None,
         document_navigation: bool = False,
-        _allow_business_gate_retry: bool = True,
     ) -> tuple[int, str, str, dict[str, str]]:
         """
         Fetch one Facebook HTML/document response through the profile proxy.
@@ -969,50 +893,27 @@ class FacebookWebSession:
                 headers=request_headers,
                 allow_redirects=True,
             ) as response:
-                response_url = str(response.url)
-                if document_navigation and _is_facebook_auth_navigation(response_url):
-                    # The final URL is sufficient for the caller to report a
-                    # fresh-login/checkpoint requirement. Do not download a
-                    # large Meta login page just to rediscover its route.
-                    body = ""
-                else:
-                    raw = await response.content.read(max(1, int(max_bytes)) + 1)
-                    if len(raw) > max_bytes:
-                        raw = raw[:max_bytes]
+                raw = await response.content.read(max(1, int(max_bytes)) + 1)
+                if len(raw) > max_bytes:
+                    raw = raw[:max_bytes]
 
-                    charset = response.charset or "utf-8"
-                    try:
-                        body = raw.decode(charset, errors="replace")
-                    except LookupError:
-                        body = raw.decode("utf-8", errors="replace")
+                charset = response.charset or "utf-8"
+                try:
+                    body = raw.decode(charset, errors="replace")
+                except LookupError:
+                    body = raw.decode("utf-8", errors="replace")
 
                 response_headers = {
                     str(key): str(value)
                     for key, value in response.headers.items()
                 }
 
-                response_status = int(response.status)
-
-            if _allow_business_gate_retry and is_business_login_gate_url(response_url):
-                recovered = await self._maybe_continue_business_login_gate(
-                    gate_url=response_url,
-                    body=body,
-                    return_url=target,
+                return (
+                    response.status,
+                    body,
+                    str(response.url),
+                    response_headers,
                 )
-                if recovered:
-                    return (
-                        int(recovered["status"]),
-                        str(recovered["body"] or ""),
-                        str(recovered["url"] or ""),
-                        dict(recovered.get("headers") or {}),
-                    )
-
-            return (
-                response_status,
-                body,
-                response_url,
-                response_headers,
-            )
 
         except asyncio.TimeoutError as exc:
             raise RemoteRequestError(

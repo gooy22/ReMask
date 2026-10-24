@@ -129,27 +129,6 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(private_auth_error(caught.exception).code, 'BUSINESS_LOGIN_GATE')
         self.assertNotIn('must-not-leak', str(caught.exception.meta_payload))
 
-    async def test_native_business_gate_redirect_to_auth_requires_nonretryable_meta_reauth(self):
-        session, client = self.session('<form id="login_form">',
-            'https://business.facebook.com/business/loginpage/')
-        async def refused_continuation(**_kwargs):
-            session._business_login_gate_outcome = "continuation_redirected_to_auth"
-            return None
-        session._maybe_continue_business_login_gate = AsyncMock(
-            side_effect=refused_continuation,
-        )
-        with self.assertRaises(AuthenticationError) as caught:
-            await session.bootstrap()
-        self.assertEqual(len(client.calls), 1)
-        from app.private_auth import private_auth_error
-        auth = private_auth_error(caught.exception)
-        self.assertEqual(auth.code, "META_REAUTH_REQUIRED")
-        self.assertFalse(auth.retryable)
-        self.assertEqual(
-            auth.inventory_diagnostics[0]["business_login_handoff_outcome"],
-            "continuation_redirected_to_auth",
-        )
-
     async def test_authenticated_document_with_login_module_name_keeps_usable_session(self):
         session, client = self.session('<script>var login_form=true;</script>'
             '["DTSGInitialData",[],{"token":"fixture-token"}]',

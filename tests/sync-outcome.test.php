@@ -5,15 +5,10 @@ preg_match('/\/\/ REMASK_HONEST_SYNC_OUTCOME_V1\n(.*?)\n\/\/ REMASK_PERSISTENT_B
 if (!isset($match[1])) throw new RuntimeException('Sync outcome implementation missing');
 eval($match[1]);
 function check(bool $value): void { if (!$value) throw new RuntimeException('Sync outcome assertion failed'); }
-foreach (['CHECKPOINT_REQUIRED','BUSINESS_LOGIN_GATE','META_REAUTH_REQUIRED','PRIVATE_HTTP_PROXY_UNAVAILABLE','PRIVATE_HTTP_READ_TIMEOUT'] as $code) {
+foreach (['CHECKPOINT_REQUIRED','BUSINESS_LOGIN_GATE','PRIVATE_HTTP_PROXY_UNAVAILABLE','PRIVATE_HTTP_READ_TIMEOUT'] as $code) {
     $result = hierarchy_private_sync_outcome(['live_ready'=>false,'businesses'=>[],'sync_error_kind'=>$code]);
     check(!$result['complete'] && $result['kind']===$code);
 }
-$reauth = hierarchy_private_sync_outcome([
-    'live_ready'=>false,'businesses'=>[],'sync_error_kind'=>'META_REAUTH_REQUIRED',
-]);
-check(str_contains($reauth['error'], 'normal Meta sign-in is required'));
-check(!str_contains($reauth['error'], 'fresh cookies'));
 check(hierarchy_private_sync_outcome(['live_ready'=>true,'sync_error_kind'=>'PRIVATE_HTTP_READ_TIMEOUT'])['complete']);
 $business = ['id'=>'987654321','accounts'=>[['id'=>'act_987654321'],['id'=>'123456789','business_id'=>'987654321','_sync_preserved'=>true]]];
 $snapshot = hierarchy_asset_types_snapshot(['businesses'=>[$business], 'pages'=>[['id'=>'555555555']],
@@ -24,7 +19,7 @@ check($snapshot['ad_accounts'][0]['_sync_preserved']===true);
 check($snapshot['businesses'][0]['ad_account_count']===1 && count($snapshot['businesses'][0]['accounts'])===1);
 check($snapshot['profile']['rk_count']===1 && $snapshot['profiles'][0]['rk_count']===1 && $snapshot['profiles'][1]['rk_count']===9);
 check(hierarchy_asset_types_snapshot($snapshot)===$snapshot);
-foreach (['CHECKPOINT_REQUIRED','TWO_FACTOR_REQUIRED','SESSION_EXPIRED','META_REAUTH_REQUIRED'] as $code) {
+foreach (['CHECKPOINT_REQUIRED','TWO_FACTOR_REQUIRED','SESSION_EXPIRED'] as $code) {
     // Authentication failure overrides even an inconsistent ready flag.
     $result = hierarchy_private_sync_outcome(['live_ready'=>true,'businesses'=>[['auth_blocked'=>true,'browser_error_code'=>$code]]]);
     check(!$result['complete'] && $result['kind'] === $code);
@@ -35,15 +30,9 @@ foreach (['CHECKPOINT_REQUIRED','TWO_FACTOR_REQUIRED','SESSION_EXPIRED','META_RE
         'auth_blocked_business_codes'=>['987654321'=>$code],
     ]);
     check(!$result['complete'] && $result['kind'] === $code);
+    check(str_contains($result['error'], '987654321'));
+    check(str_contains($result['error'], 'Facebook'));
     check(!str_contains($result['error'], 'ReMask session'));
-    if ($code === 'META_REAUTH_REQUIRED') {
-        check(str_contains($result['error'], 'normal Meta sign-in is required'));
-        check(!str_contains($result['error'], '987654321'));
-        check(!str_contains($result['error'], 'fresh cookies'));
-    } else {
-        check(str_contains($result['error'], '987654321'));
-        check(str_contains($result['error'], 'Facebook'));
-    }
 }
 $result = hierarchy_private_sync_outcome(['live_ready'=>false,'businesses'=>[]]);
 check(!$result['complete'] && $result['kind'] === 'PRIVATE_INCONCLUSIVE');

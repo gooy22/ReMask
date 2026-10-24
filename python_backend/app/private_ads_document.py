@@ -9,25 +9,7 @@ import html
 import json
 import math
 import re
-from html.parser import HTMLParser
-from urllib.parse import urljoin, urlsplit, parse_qs
 from typing import Any
-
-
-def business_login_public_sources(body: str) -> list[str]:
-    """Only public, immutable CDN script paths; never query/auth values."""
-    normalized = html.unescape(body).replace(r'\/', '/')
-    scripts = re.findall(r'<script\b[^>]*\bsrc\s*=\s*[\"\']([^\"\']+)[\"\']', normalized, re.I)
-    scripts.extend(re.findall(r'[\"\'](?:src|uri)[\"\']\s*:\s*[\"\']([^\"\']+\.js)[\"\']', normalized, re.I))
-    result = []
-    for src in scripts:
-        parsed = urlsplit(html.unescape(src))
-        if (parsed.scheme == 'https' and parsed.netloc.startswith('static.')
-                and parsed.netloc.endswith('.fbcdn.net') and not parsed.query
-                and not parsed.fragment and re.fullmatch(r'/rsrc\.php/v4[A-Za-z0-9_/-]*/[A-Za-z0-9_-]+\.js', parsed.path)):
-            if parsed.geturl() not in result:
-                result.append(parsed.geturl())
-    return result[-12:]
 
 
 _JSON_SCRIPT_RE = re.compile(r"<script\b[^>]*>(.*?)</script\s*>", re.IGNORECASE | re.DOTALL)
@@ -101,76 +83,6 @@ def _auth_gate(url: str, body: str) -> str:
             return "BUSINESS_LOGIN_GATE"
         return "SESSION_EXPIRED"
     return ""
-
-
-def business_login_continuation(url: str, body: str) -> str | None:
-    """Read an explicit, credential-free Facebook continuation anchor.
-
-    This is document navigation, never password login or an OAuth grant.
-    JavaScript-only gates without an inspectable native link remain blocked.
-    """
-    page = urlsplit(url)
-    if (page.scheme != 'https' or page.netloc != 'business.facebook.com'
-            or page.path.rstrip('/') != '/business/loginpage'):
-        return None
-
-    class Links(HTMLParser):
-        def __init__(self):
-            super().__init__(convert_charrefs=True)
-            self.links = []
-            self.current = None
-            self.credentials = False
-
-        def handle_starttag(self, tag, attrs):
-            attrs = dict(attrs)
-            if tag == 'input' and (attrs.get('type', '').lower() in {'password', 'email'}
-                    or attrs.get('name', '').lower() in {'email', 'pass', 'password', 'approvals_code'}):
-                self.credentials = True
-            if tag == 'a':
-                self.current = [attrs.get('href', ''), '', attrs.get('aria-label', '')]
-
-        def handle_data(self, data):
-            if self.current is not None:
-                self.current[1] += data
-
-        def handle_endtag(self, tag):
-            if tag == 'a' and self.current is not None:
-                self.links.append((self.current[0], self.current[1] or self.current[2]))
-                self.current = None
-
-    parser = Links()
-    try:
-        parser.feed(body)
-    except (ValueError, RecursionError):
-        return None
-    if parser.credentials:
-        return None
-    labels = {'continue with facebook', 'log in with facebook',
-              'войти через facebook', 'увійти через facebook'}
-    candidates = []
-    for href, label in parser.links:
-        if ' '.join(label.split()).casefold() not in labels or not href:
-            continue
-        target = urljoin(url, href)
-        parsed = urlsplit(target)
-        routes = {'www.facebook.com': {'/login', '/login.php'},
-                  'business.facebook.com': {'/business/login'}}
-        if (parsed.scheme != 'https' or parsed.netloc not in routes or parsed.fragment
-                or parsed.path.rstrip('/') not in routes[parsed.netloc]):
-            continue
-        params = parse_qs(parsed.query)
-        if set(params) & {'access_token', 'client_id', 'scope', 'password', 'pass'}:
-            continue
-        safe = True
-        for key in ('next', 'redirect', 'redirect_uri'):
-            for value in params.get(key, []):
-                destination = urlsplit(urljoin(target, value))
-                if (destination.scheme != 'https' or destination.netloc not in
-                        {'www.facebook.com', 'business.facebook.com', 'adsmanager.facebook.com'}):
-                    safe = False
-        if safe:
-            candidates.append(target)
-    return candidates[0] if len(candidates) == 1 else None
 
 
 def _json_payloads(body: str) -> list[Any]:

@@ -288,52 +288,6 @@ class AdsManagerPrivateHttp:
         url = ("https://adsmanager.facebook.com/adsmanager/manage/campaigns"
                f"?act={account_id}&business_id={business_id}")
         status, body, final_url = await web.fetch_text(url, max_bytes=5_000_001, document_navigation=True)
-        if status == 200 and _auth_gate(final_url, body) == 'BUSINESS_LOGIN_GATE':
-            from .private_ads_document import business_login_continuation, business_login_public_sources
-            continuation = business_login_continuation(final_url, body)
-            gate_contract = {}
-            if not continuation:
-                from .private_business_login import native_business_login_continuation
-                continuation = native_business_login_continuation(body, url, diagnostic=gate_contract)
-            if not continuation:
-                from .private_business_login import native_gate_render_shape
-                log.info('ads_business_continuation_missing profile=%s contract_reason=%s render_shape=%s public_scripts=%s',
-                    getattr(web.profile, 'name', ''), gate_contract.get('reason', 'anchor_missing'),
-                    native_gate_render_shape(body),
-                    business_login_public_sources(body))
-            if continuation:
-                # Follow only the link actually supplied by Meta for this
-                # document. No guessed controller, credential POST or retry loop.
-                continued_status, continued_body, continued_url = await web.fetch_text(
-                    continuation, max_bytes=5_000_001, document_navigation=True,
-                    referer=final_url)
-                continued = urlsplit(continued_url)
-                if (continued_status != 200 or continued.scheme != 'https'
-                        or continued.netloc not in {'www.facebook.com', 'business.facebook.com',
-                                                   'adsmanager.facebook.com'}):
-                    raise fail('BUSINESS_LOGIN_GATE', 'Business continuation did not return a Facebook document', True)
-                continued_gate = _auth_gate(continued_url, continued_body)
-                # The native loginrequest/callback document can retain a
-                # '/login...' path after committing the Business cookie.
-                # That path alone is not evidence of a password prompt.
-                credential_form = _auth_gate('https://www.facebook.com/', continued_body)
-                facebook_login = (continued.hostname == 'www.facebook.com' and
-                    (continued.path == '/login.php' or continued.path.rstrip('/') == '/login'
-                     or continued.path.startswith('/login/')))
-                if continued_gate == 'CHECKPOINT_REQUIRED' or credential_form or facebook_login:
-                    from .private_business_login import native_gate_render_shape
-                    log.info('ads_business_continuation_auth profile=%s gate=%s facebook_login_route=%s login_form_marker=%s password_input=%s render_shape=%s',
-                        getattr(web.profile, 'name', ''), continued_gate or credential_form,
-                        facebook_login, bool(credential_form),
-                        bool(re.search(r'''<input\b[^>]*\btype\s*=\s*["']password["']''', continued_body, re.I)),
-                        native_gate_render_shape(continued_body))
-                    raise fail(continued_gate, 'Facebook authentication is required', False)
-                if str(web.profile.cookies.get('c_user') or '') != actor_id:
-                    raise fail('ACTOR_MISMATCH', 'Business continuation changed profile identity')
-                status, body, final_url = await web.fetch_text(
-                    url, max_bytes=5_000_001, document_navigation=True)
-                log.info('ads_business_continuation profile=%s gate=%s',
-                    getattr(web.profile, 'name', ''), _auth_gate(final_url, body) or 'none')
         final = urlsplit(final_url)
         account_matches = parse_qs(final.query).get("act") == [account_id]
         gate = _auth_gate(final_url, body)
@@ -346,10 +300,7 @@ class AdsManagerPrivateHttp:
             account_matches,
             parse_qs(final.query).get("business_id") == [business_id], gate or "none")
         if gate:
-            # A gate which remains after Meta's native continuation is an
-            # authentication state, not a transient transport failure. Retrying
-            # the same cookies only repeats the full login-page navigation.
-            raise fail(gate, "Ads Manager requires restoration of the profile session", False)
+            raise fail(gate, "Ads Manager requires restoration of the profile session", True)
         if (status != 200 or len(body.encode()) > 5_000_000 or final.scheme != "https"
                 or final.hostname not in {"adsmanager.facebook.com", "business.facebook.com"}
                 or final.path != "/adsmanager/manage/campaigns"

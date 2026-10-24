@@ -342,7 +342,6 @@ async function syncSelection(){
     else if(/checkpoint_required/.test(s))kind='CHECKPOINT_REQUIRED';
     else if(/two_factor_required/.test(s))kind='TWO_FACTOR_REQUIRED';
     else if(/session_expired/.test(s))kind='SESSION_EXPIRED';
-    else if(/meta_reauth_required/.test(s))kind='META_REAUTH_REQUIRED';
     else if(/rate.?limit|too many|code[^0-9]*(4|17|32|613)\\b/.test(s))kind='RATE_LIMIT';
     else if(/\\b407\\b|proxy authentication|proxy auth/.test(s))kind='PROXY_AUTH';
     else if(/live_inventory_browser_open_timeout|browser slot waited|profile_browser_lock_timeout|browser_open timeout/.test(s))kind='BROWSER_BUSY';
@@ -742,23 +741,17 @@ function hierarchy_private_sync_outcome(array $inventory): array
     $privateCode = (string)($inventory['sync_error_kind'] ?? '');
     if (($inventory['live_ready'] ?? false) !== true && in_array($privateCode, [
         'CHECKPOINT_REQUIRED', 'TWO_FACTOR_REQUIRED', 'SESSION_EXPIRED', 'BUSINESS_LOGIN_GATE',
-        'META_REAUTH_REQUIRED',
         'PRIVATE_HTTP_PROXY_UNAVAILABLE', 'PRIVATE_HTTP_READ_TIMEOUT',
         'PRIVATE_HTTP_CONNECTION_UNAVAILABLE', 'PRIVATE_HTTP_PROTOCOL_ERROR', 'PRIVATE_HTTP_READ_UNAVAILABLE',
     ], true)) {
-        $error = $privateCode === 'META_REAUTH_REQUIRED'
-            ? 'META_REAUTH_REQUIRED: Meta redirected this profile to the sign-in page after the Business continuation. A normal Meta sign-in is required; ReMask did not bypass authentication.'
-            : $privateCode . ': Private Meta inventory could not be confirmed.';
-        return ['complete' => false, 'kind' => $privateCode, 'error' => $error];
+        return ['complete' => false, 'kind' => $privateCode,
+            'error' => $privateCode . ': Private Meta inventory could not be confirmed.'];
     }
     foreach ((array)($inventory['businesses'] ?? []) as $business) {
         if (!is_array($business) || empty($business['auth_blocked'])) continue;
         $code = (string)($business['browser_error_code'] ?? '');
-        if (in_array($code, ['CHECKPOINT_REQUIRED', 'TWO_FACTOR_REQUIRED', 'SESSION_EXPIRED', 'META_REAUTH_REQUIRED'], true)) {
-            $error = $code === 'META_REAUTH_REQUIRED'
-                ? 'META_REAUTH_REQUIRED: Meta redirected this profile to the sign-in page. A normal Meta sign-in is required; ReMask did not bypass authentication.'
-                : $code . ': Meta requires account authentication or verification.';
-            return ['complete' => false, 'kind' => $code, 'error' => $error];
+        if (in_array($code, ['CHECKPOINT_REQUIRED', 'TWO_FACTOR_REQUIRED', 'SESSION_EXPIRED'], true)) {
+            return ['complete' => false, 'kind' => $code, 'error' => $code . ': Meta requires account authentication or verification.'];
         }
     }
     $blockedCodes = is_array($inventory['auth_blocked_business_codes'] ?? null)
@@ -768,16 +761,13 @@ function hierarchy_private_sync_outcome(array $inventory): array
         $businessId = trim((string)$businessId);
         $code = trim((string)$code);
         if (!preg_match('/^\d{5,30}$/', $businessId)
-            || !in_array($code, ['CHECKPOINT_REQUIRED', 'TWO_FACTOR_REQUIRED', 'SESSION_EXPIRED', 'META_REAUTH_REQUIRED'], true)) continue;
+            || !in_array($code, ['CHECKPOINT_REQUIRED', 'TWO_FACTOR_REQUIRED', 'SESSION_EXPIRED'], true)) continue;
         $targets = array_values(array_filter(array_map('strval', (array)($inventory['auth_blocked_businesses'] ?? [])),
             static fn($id) => preg_match('/^\d{5,30}$/', trim($id))));
-        $error = $code === 'META_REAUTH_REQUIRED'
-            ? 'META_REAUTH_REQUIRED: Meta redirected this profile to the sign-in page. A normal Meta sign-in is required; ReMask did not bypass authentication.'
-            : $code . ': Facebook redirected this profile to login or verification while checking BM(s): ' . implode(', ', $targets) . '. Restore the Facebook session for this profile with fresh cookies, then repeat Sync.';
         return [
             'complete' => false,
             'kind' => $code,
-            'error' => $error,
+            'error' => $code . ': Facebook redirected this profile to login or verification while checking BM(s): ' . implode(', ', $targets) . '. Restore the Facebook session for this profile with fresh cookies, then repeat Sync.',
         ];
     }
     $complete = ($inventory['live_ready'] ?? false) === true;
@@ -1835,7 +1825,7 @@ $syncProfileReplacement = <<<'PHP'
         } catch (Throwable $liveInventoryError) {
             $message = trim((string)$liveInventoryError->getMessage());
             $errorKind = 'PRIVATE_SYNC';
-            foreach (['CHECKPOINT_REQUIRED', 'TWO_FACTOR_REQUIRED', 'SESSION_EXPIRED', 'META_REAUTH_REQUIRED'] as $authCode) {
+            foreach (['CHECKPOINT_REQUIRED', 'TWO_FACTOR_REQUIRED', 'SESSION_EXPIRED'] as $authCode) {
                 if (stripos($message, $authCode) !== false) {
                     $errorKind = $authCode;
                     break;

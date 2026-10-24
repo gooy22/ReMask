@@ -242,20 +242,6 @@ class PixelReads(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(suggestion['checked_live'])
             self.assertEqual(reader.read.await_count,1)
 
-    async def test_targeting_refresh_first_call_works_below_cooldown_uptime(self):
-        store = AdvertisingResourceStore(SimpleNamespace(rows={'interests':{'source':'fixture'}}))
-        values = {'profile_id':'19','ad_account_id':'111111','business_id':'222222',
-                  'query':'travel','limit':25,'offset':0,'execution_mode':'PUBLISH'}
-        callback = AsyncMock()
-        with patch('app.private_advertising_reads.time.monotonic', return_value=5.0):
-            self.assertTrue(store.schedule_refresh_once(name='interests',values=values,
-                actor_id='123456',callback=callback))
-            self.assertFalse(store.schedule_refresh_once(name='interests',values=values,
-                actor_id='123456',callback=callback))
-            task = next(iter(store._refresh_tasks.values()))
-        await task
-        callback.assert_awaited_once()
-
     async def test_targeting_refresh_scheduler_is_singleflight_per_exact_scope(self):
         store = AdvertisingResourceStore(SimpleNamespace(rows={'interests':{'source':'fixture'}}))
         values = {'profile_id':'19','ad_account_id':'111111','business_id':'222222',

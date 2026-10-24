@@ -200,8 +200,8 @@ class AdvertisingResourceStore:
         if current is not None and not current.done():
             return False
         now = time.monotonic()
-        last_started = self._refresh_last_started.get(key)
-        if last_started is not None and now - last_started < self.REFRESH_COOLDOWN_SECONDS:
+        last_started = self._refresh_last_started.get(key, 0.0)
+        if now - last_started < self.REFRESH_COOLDOWN_SECONDS:
             return False
         self._refresh_last_started[key] = now
         if len(self._refresh_last_started) > 512:

@@ -1,7 +1,7 @@
 """Exercise the real Sync entry point without contacting Meta or a renderer."""
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock, call, patch
+from unittest.mock import AsyncMock, patch
 
 import main as api
 from app.session import ProfileContext
@@ -51,64 +51,6 @@ class PrivateOnlySyncTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['auth_blocked_business_codes'],{BM:'CHECKPOINT_REQUIRED'})
         self.assertFalse(result['session_ready'])
         self.assertFalse(result['live_ready'])
-
-    async def test_meta_rotated_session_is_persisted_and_private_sync_resumes_once(self):
-        context=ProfileContext(
-            profile_id='4',
-            cookies={'c_user':'999999999999','xs':'expired-xs'},
-            proxy='http://fixture:8080',
-            user_agent='fixture',
-        )
-        persisted=ProfileContext(
-            profile_id='4',
-            cookies={'c_user':'999999999999','xs':'meta-rotated-xs'},
-            proxy='http://fixture:8080',
-            user_agent='fixture',
-        )
-        resolver=SimpleNamespace(
-            resolve=AsyncMock(side_effect=[context,persisted]),
-        )
-        first_web=SimpleNamespace()
-        resumed_web=SimpleNamespace()
-        session=SimpleNamespace(
-            context=context,
-            facebook_web=AsyncMock(side_effect=[first_web,resumed_web]),
-            facebook_business_browser=AsyncMock(),
-        )
-
-        async def flush_meta_cookie_rotation():
-            context.cookies['xs']='meta-rotated-xs'
-
-        session.close=AsyncMock(side_effect=flush_meta_cookie_rotation)
-        lease=AsyncMock()
-        lease.__aenter__.return_value=session
-        state=SimpleNamespace(**{name:AsyncMock(return_value=default) for name,default in (
-            ('confirmed_ad_account_bindings_for_profile',[]),('confirmed_business_page_bindings_for_profile',[]),
-            ('latest_profile_fan_pages',[]),('latest_profile_fan_page_batch',{}),('latest_profile_entities',{}))})
-        pool=SimpleNamespace(resolver=resolver,provisioning_state=state)
-        recovered_snapshot={
-            'ready':True,'discovery_complete':True,'confirmed_business_ids':[BM],
-            'businesses':[{'id':BM,'ad_accounts_ready':True,
-                'ad_accounts':[{'id':RK,'business_id':BM}]}],
-        }
-        read=AsyncMock(side_effect=[
-            {'ready':False,'businesses':[],
-                'diagnostics':[{'auth_gate':'META_REAUTH_REQUIRED'}]},
-            recovered_snapshot,
-        ])
-        with patch.object(api,'pool',pool),patch.object(api,'ProfileSession',return_value=lease), \
-                patch.object(api,'private_inventory_snapshot',read), \
-                patch.object(api,'list_pages_via_private_graphql',AsyncMock(side_effect=TimeoutError())):
-            result=await api.profile_live_inventory(
-                '4',business_ids=BM,ad_account_hints=BM+':'+RK,
-            )
-        self.assertTrue(result['live_ready'])
-        self.assertEqual(read.await_count,2)
-        self.assertIs(read.await_args_list[0].args[0],first_web)
-        self.assertIs(read.await_args_list[1].args[0],resumed_web)
-        session.close.assert_awaited_once()
-        resolver.resolve.assert_has_awaits([call('4'),call('4')])
-        session.facebook_business_browser.assert_not_awaited()
 
     async def test_proxy_failure_stays_a_connection_error(self):
         result=await self.run_sync({'ready':False,'businesses':[],

@@ -17,7 +17,7 @@ from app.mirror import MirrorError, SnapshotMirror
 from app.models import CreateJobRequest, HealthResponse, JobAccepted, RetryResponse
 from app.runner import WorkerPool
 from app.session import ProfileContextError, ProfileSession, ProxyCheckError
-from app.session_auth_refresh import persist_and_refresh_saved_auth_context
+from app.session_auth_refresh import refresh_saved_auth_context
 from app.direct_test import direct_test_result
 from app.store import JobStore
 from app.facebook_business_browser import BROWSER_TERMINAL_ACCESS_CODES, BrowserBusinessError, FacebookBusinessBrowser
@@ -1734,42 +1734,6 @@ def _live_inventory_targets_ready(
     })
 
 
-_PRIVATE_SESSION_AUTH_CODES = (
-    "CHECKPOINT_REQUIRED",
-    "TWO_FACTOR_REQUIRED",
-    "SESSION_EXPIRED",
-    "BUSINESS_LOGIN_GATE",
-    "META_REAUTH_REQUIRED",
-)
-
-
-def _private_inventory_auth_gate(snapshot: dict[str, Any]) -> str:
-    """Return a known auth gate from a private inventory result, if present."""
-    if not isinstance(snapshot, dict):
-        return ""
-    rows: list[dict[str, Any]] = []
-    diagnostics = snapshot.get("diagnostics")
-    if isinstance(diagnostics, list):
-        rows.extend(row for row in diagnostics if isinstance(row, dict))
-    businesses = snapshot.get("businesses")
-    if isinstance(businesses, list):
-        for business in businesses:
-            if not isinstance(business, dict):
-                continue
-            rows.append(business)
-            nested = business.get("diagnostics")
-            if isinstance(nested, list):
-                rows.extend(row for row in nested if isinstance(row, dict))
-    codes = {str(snapshot.get("sync_error_kind") or "")}
-    for row in rows:
-        for field in ("auth_gate", "browser_error_code", "code"):
-            codes.add(str(row.get(field) or ""))
-    return next(
-        (code for code in _PRIVATE_SESSION_AUTH_CODES if code in codes),
-        "",
-    )
-
-
 @app.get('/api/v1/profiles/{profile_id}/live-inventory',dependencies=[Depends(require_key)])
 @observe_profile_inventory
 async def profile_live_inventory(
@@ -2215,74 +2179,6 @@ async def profile_live_inventory(
             sync_timings['inventory']=int((time.monotonic()-private_started)*1000)
             if isinstance(private_snapshot.get('timings_ms'),dict):
                 sync_timings['meta_reads']=private_snapshot['timings_ms']
-
-            # A Business gate may rotate xs in the live HTTP/2 cookie jar before
-            # the saved profile is reloaded. Flush that Meta-issued update first,
-            # then retry the same read once only if the same profile and actor now
-            # resolve to a genuinely changed session.
-            private_auth_gate=_private_inventory_auth_gate(private_snapshot)
-            if private_snapshot.get('ready') is not True and private_auth_gate:
-                auth_refresh_started=time.monotonic()
-                auth_session_changed=False
-                remaining=deadline_at-time.monotonic()
-                if remaining > 8.0:
-                    try:
-                        auth_session_changed=await hard_deadline(
-                            persist_and_refresh_saved_auth_context(
-                                profile_session,pool.resolver,profile_session.context,
-                            ),
-                            min(7.0,remaining-5.0),
-                        )
-                    except Exception as refresh_exc:
-                        log.warning(
-                            'live inventory profile=%s Meta-issued session refresh unavailable=%s',
-                            clean_profile,type(refresh_exc).__name__,
-                        )
-                sync_timings['auth_session_refresh']=int(
-                    (time.monotonic()-auth_refresh_started)*1000
-                )
-                if auth_session_changed and deadline_at-time.monotonic() > 1.0:
-                    try:
-                        stage='private_inventory_auth_retry'
-                        facebook_web=await meta_transport.facebook_web()
-                        facebook_web.defer_module_refresh=fast_sync
-                        private_timeout=budget(24.0)
-                        with measure_phase('inventory_auth_retry'):
-                            private_snapshot=await hard_deadline(
-                                private_inventory_snapshot(
-                                    facebook_web,
-                                    known_accounts_by_business=known_accounts_by_business,
-                                    known_business_ids=known_business_ids,
-                                    personal_scope_id=personal_scope_id,
-                                    discover_businesses=not bool(requested_business_ids),
-                                    execute_read_queries=True,
-                                    fast_sync=fast_sync,
-                                ),
-                                private_timeout,
-                            )
-                        sync_timings['inventory']=int(
-                            (time.monotonic()-private_started)*1000
-                        )
-                        if isinstance(private_snapshot.get('timings_ms'),dict):
-                            sync_timings['meta_reads']=private_snapshot['timings_ms']
-                        log.info(
-                            'live inventory profile=%s same-actor Meta session refreshed; private read resumed ready=%s',
-                            clean_profile,private_snapshot.get('ready') is True,
-                        )
-                    except Exception as retry_exc:
-                        log.warning(
-                            'live inventory profile=%s private auth retry unavailable=%s',
-                            clean_profile,type(retry_exc).__name__,
-                        )
-                        from app.private_auth import private_auth_error
-                        from app.private_transport_error import private_transport_error
-                        auth_error=private_auth_error(retry_exc)
-                        _,transport_error=private_transport_error(retry_exc)
-                        private_snapshot={'diagnostics':[{
-                            'auth_gate':auth_error.code if auth_error else '',
-                            'code':auth_error.code if auth_error else transport_error['code'],
-                        }]}
-
             if private_snapshot.get('ready'):
                 private_businesses=[
                     row for row in (private_snapshot.get('businesses') or [])
@@ -2434,7 +2330,8 @@ async def profile_live_inventory(
                 diagnostics=[row for row in private_snapshot.get('diagnostics', []) if isinstance(row,dict)]
                 for row in partial_businesses:
                     diagnostics.extend(item for item in row.get('diagnostics', []) if isinstance(item,dict))
-                blocked_code=_private_inventory_auth_gate(private_snapshot)
+                gates={row.get('auth_gate') for row in diagnostics if row.get('auth_gate')}
+                blocked_code=next((code for code in ('CHECKPOINT_REQUIRED','TWO_FACTOR_REQUIRED','SESSION_EXPIRED','BUSINESS_LOGIN_GATE') if code in gates),'')
                 connection_codes={row.get('code') for row in diagnostics}
                 error_code=blocked_code or next((code for code in ('PRIVATE_HTTP_PROXY_UNAVAILABLE',
                     'PRIVATE_HTTP_READ_TIMEOUT','PRIVATE_HTTP_CONNECTION_UNAVAILABLE','PRIVATE_HTTP_PROTOCOL_ERROR',
@@ -2817,7 +2714,6 @@ async def profile_live_inventory(
                         'SESSION_EXPIRED',
                         'TWO_FACTOR_REQUIRED',
                         'BUSINESS_LOGIN_GATE',
-                        'META_REAUTH_REQUIRED',
                     } or not known_business_ids:
                         raise
                     diagnostic=(
@@ -2987,8 +2883,6 @@ async def profile_live_inventory(
                                 'CHECKPOINT_REQUIRED',
                                 'SESSION_EXPIRED',
                                 'TWO_FACTOR_REQUIRED',
-                                'BUSINESS_LOGIN_GATE',
-                                'META_REAUTH_REQUIRED',
                             }
                         ):
                             log.warning(
@@ -2998,16 +2892,12 @@ async def profile_live_inventory(
                                 exc.code,
                             )
                             await meta_transport.close_business_browser()
-                            # Flush Meta's HTTP/2 cookie jar before re-resolving
-                            # this exact profile; a changed xs is the only retry
-                            # condition accepted by the session helper.
-                            saved_session_changed=False
+                            # Re-resolve the same profile after an auth failure.
+                            # Reopening Chromium alone repeats the original cookies.
                             try:
-                                saved_session_changed=await hard_deadline(
-                                    persist_and_refresh_saved_auth_context(
-                                        profile_session,pool.resolver,profile_session.context,
-                                    ),
-                                    budget(7.0),
+                                saved_session_changed=await asyncio.wait_for(
+                                    refresh_saved_auth_context(pool.resolver, profile_session.context),
+                                    timeout=budget(5.0),
                                 )
                                 log.info(
                                     'live inventory profile=%s saved_session_reloaded=%s',
@@ -3018,12 +2908,6 @@ async def profile_live_inventory(
                                     'live inventory profile=%s saved_session_reload unavailable=%s',
                                     clean_profile, type(refresh_exc).__name__,
                                 )
-                            if not saved_session_changed:
-                                log.warning(
-                                    'live inventory profile=%s auth retry skipped; saved session did not change',
-                                    clean_profile,
-                                )
-                                raise
                             browser_reopen_timeout=budget(18.0)
                             browser=await asyncio.wait_for(
                                 meta_transport.facebook_business_browser(),

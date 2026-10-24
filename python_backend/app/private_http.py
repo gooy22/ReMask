@@ -106,18 +106,6 @@ class PrivateHttpClient:
     def closed(self) -> bool:
         return self._client.is_closed
 
-    def facebook_cookie_snapshot(self) -> dict[str, str]:
-        """Return the current Facebook cookie jar without exposing it to logs."""
-        result: dict[str, str] = {}
-        for cookie in self._client.cookies.jar:
-            domain = str(cookie.domain or "").lstrip(".").casefold()
-            if domain != "facebook.com" and not domain.endswith(".facebook.com"):
-                continue
-            if not cookie.name or cookie.value is None or cookie.is_expired():
-                continue
-            result[str(cookie.name)] = str(cookie.value)
-        return result
-
     async def close(self) -> None:
         await self._client.aclose()
 
