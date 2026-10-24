@@ -157,6 +157,7 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
         calls = []
 
         class Response:
+            status = 200
             async def __aenter__(self): return self
             async def __aexit__(self, *args): return None
             async def json(self, content_type=None):
