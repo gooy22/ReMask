@@ -202,16 +202,18 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
             await AdsManagerPrivateHttp.open(self.web,
                 account_id='111111', business_id='222222', actor_id='123456')
         self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE')
+        self.assertFalse(caught.exception.retryable)
         self.web.fetch_text.assert_awaited_once()
 
     async def test_business_continuation_does_not_loop_on_persistent_gate(self):
         gate = 'https://business.facebook.com/business/loginpage/'
         html = '<a href="https://www.facebook.com/login/">Log in with Facebook</a>'
         self.web.fetch_text = AsyncMock(return_value=(200, html, gate))
-        with self.assertRaises(ProvisioningError):
+        with self.assertRaises(ProvisioningError) as caught:
             await AdsManagerPrivateHttp.open(self.web,
                 account_id='111111', business_id='222222', actor_id='123456')
         self.assertEqual(self.web.fetch_text.await_count, 3)
+        self.assertFalse(caught.exception.retryable)
 
     async def test_business_continuation_preserves_fresh_actor_proof(self):
         gate = 'https://business.facebook.com/business/loginpage/'
