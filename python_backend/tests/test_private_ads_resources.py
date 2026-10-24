@@ -177,7 +177,6 @@ class PixelReads(unittest.IsolatedAsyncioTestCase):
                 ({'business_id': '333333'}, '123456'),
                 ({'ad_account_id': '999999'}, '123456'),
                 ({'query': 'travel apps'}, '123456'),
-                ({'limit': 26}, '123456'),
                 ({'offset': 100}, '123456'),
                 ({}, '654321'),
             ):
@@ -186,6 +185,11 @@ class PixelReads(unittest.IsolatedAsyncioTestCase):
                                             actor_id=actor)
                     self.assertEqual(other['availability'], 'NOT_LOADED')
                     self.assertFalse(other['checked_live'])
+            wider_limit = await store.get(name='interests',values={**values,'limit':26},
+                                          actor_id='123456')
+            self.assertEqual(wider_limit['data'][0]['id'],'6004160395895')
+            self.assertTrue(wider_limit['_cache']['index'])
+            self.assertFalse(wider_limit['checked_live'])
             self.assertEqual(reader.read.await_count, 1)
 
     async def test_targeting_option_index_reuses_observed_ids_for_new_queries_but_not_other_accounts(self):
