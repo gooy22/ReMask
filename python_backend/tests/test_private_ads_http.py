@@ -86,6 +86,58 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
 
     async def claim(self):self.claims += 1
 
+    def native_gate(self, **overrides):
+        from app.private_business_login import ROOT, SOURCE
+        target = 'https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=111111&business_id=222222'
+        props = {'loginOptions':['FB','SSO'], 'saveSession':False,
+                 'referrerURI':target, 'requestId':'native-request-id'}
+        props.update(overrides)
+        row = ['react-xhp', 'constructAndRenderComponentIntoComment_DO_NOT_USE',
+               [ROOT], [{'constructor':{'__m':ROOT}, 'props':props}]]
+        return f'<script src="{SOURCE}"></script><script>server.handle(' + json.dumps({'require':[row]}) + ');</script>'
+
+    def test_native_business_button_uses_document_scope_and_reviewed_controller(self):
+        from app.private_business_login import native_business_login_continuation, SOURCE
+        from urllib.parse import urlsplit, parse_qs
+        target = 'https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=111111&business_id=222222'
+        body = self.native_gate()
+        result = native_business_login_continuation(body, target)
+        self.assertEqual(urlsplit(result).path, '/business/loginrequest/fb/')
+        params = parse_qs(urlsplit(result).query)
+        self.assertEqual(params['f3_request_id'], ['native-request-id'])
+        destination = parse_qs(urlsplit(params['next'][0]).query)
+        self.assertEqual(destination['act'], ['111111'])
+        self.assertEqual(destination['business_id'], ['222222'])
+        self.assertEqual(destination['biz_login_source'], ['biz_unified_f3_fb_login_button'])
+        # Native null referrer defaults to Business home; the caller still
+        # reopens and proves its original exact Ads Manager scope afterwards.
+        root_result = native_business_login_continuation(self.native_gate(referrerURI=None), target)
+        root_next = parse_qs(urlsplit(root_result).query)['next'][0]
+        self.assertEqual(urlsplit(root_next).netloc, 'business.facebook.com')
+        self.assertEqual(urlsplit(root_next).path, '/')
+        self.assertIsNotNone(native_business_login_continuation(
+            self.native_gate(referrerURI='https://business.facebook.com/?nav_ref=business_login'), target))
+        for changed in (body.replace(SOURCE, SOURCE+'?changed=1'), body + body,
+                        body+'<input type="password">',
+                        self.native_gate(saveSession=True),
+                        self.native_gate(fromProfileSwitcherAddAccount=True),
+                        self.native_gate(loginOptions=['SSO']),
+                        self.native_gate(referrerURI='https://business.facebook.com/?next=https://evil.invalid'),
+                        self.native_gate(referrerURI=target.replace('111111','999999'))):
+            self.assertIsNone(native_business_login_continuation(changed, target))
+
+    async def test_js_only_business_gate_uses_native_get_without_credential_post(self):
+        target = 'https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=111111&business_id=222222'
+        self.web.fetch_text = AsyncMock(side_effect=[
+            (200,self.native_gate(),'https://business.facebook.com/business/loginpage/'),
+            (200,'native callback','https://business.facebook.com/business/loginrequest/fb/'),
+            (200,document(),target)])
+        client = await AdsManagerPrivateHttp.open(self.web,
+            account_id='111111',business_id='222222',actor_id='123456')
+        self.assertEqual(client.context.actor_id, '123456')
+        self.assertIn('/business/loginrequest/fb/?',self.web.fetch_text.await_args_list[1].args[0])
+        self.assertEqual(self.web.session.calls, [])
+
     async def test_business_gate_follows_native_link_once_then_proves_exact_scope(self):
         gate = 'https://business.facebook.com/business/loginpage/'
         link = 'https://www.facebook.com/login/?next=https%3A%2F%2Fbusiness.facebook.com%2Flatest%2Fhome'
@@ -154,6 +206,8 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
             'https://www.facebook.com/login/?token=do-not-log',
             'https://static.xx.fbcdn.net.evil.invalid/rsrc.php/v4/yA/r/public-module.js'))
         self.assertEqual(business_login_public_sources(body), [public])
+        inline = '<script>var resources={"uri":' + json.dumps(public).replace('/', r'\/') + '};</script>'
+        self.assertEqual(business_login_public_sources(inline), [public])
 
     def test_literal_serverjs_initialization_with_module_hash(self):
         payload = json.loads(document())
