@@ -288,6 +288,29 @@ class AdsManagerPrivateHttp:
         url = ("https://adsmanager.facebook.com/adsmanager/manage/campaigns"
                f"?act={account_id}&business_id={business_id}")
         status, body, final_url = await web.fetch_text(url, max_bytes=5_000_001, document_navigation=True)
+        if status == 200 and _auth_gate(final_url, body) == 'BUSINESS_LOGIN_GATE':
+            from .private_ads_document import business_login_continuation
+            continuation = business_login_continuation(final_url, body)
+            if continuation:
+                # Follow only the link actually supplied by Meta for this
+                # document. No guessed controller, credential POST or retry loop.
+                continued_status, continued_body, continued_url = await web.fetch_text(
+                    continuation, max_bytes=5_000_001, document_navigation=True,
+                    referer=final_url)
+                continued = urlsplit(continued_url)
+                if (continued_status != 200 or continued.scheme != 'https'
+                        or continued.netloc not in {'www.facebook.com', 'business.facebook.com',
+                                                   'adsmanager.facebook.com'}):
+                    raise fail('BUSINESS_LOGIN_GATE', 'Business continuation did not return a Facebook document', True)
+                continued_gate = _auth_gate(continued_url, continued_body)
+                if continued_gate and continued_gate != 'BUSINESS_LOGIN_GATE':
+                    raise fail(continued_gate, 'Facebook authentication is required', False)
+                if str(web.profile.cookies.get('c_user') or '') != actor_id:
+                    raise fail('ACTOR_MISMATCH', 'Business continuation changed profile identity')
+                status, body, final_url = await web.fetch_text(
+                    url, max_bytes=5_000_001, document_navigation=True)
+                log.info('ads_business_continuation profile=%s gate=%s',
+                    getattr(web.profile, 'name', ''), _auth_gate(final_url, body) or 'none')
         final = urlsplit(final_url)
         account_matches = parse_qs(final.query).get("act") == [account_id]
         gate = _auth_gate(final_url, body)
