@@ -121,7 +121,7 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         target = 'https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=111111&business_id=222222'
         self.web.fetch_text = AsyncMock(side_effect=[
             (200,self.native_gate(),'https://business.facebook.com/business/loginpage/'),
-            (200,'native callback','https://business.facebook.com/'),
+            (200,'native callback','https://business.facebook.com/business/loginrequest/fb/'),
             (200,document(),target)])
         client = await AdsManagerPrivateHttp.open(self.web,
             account_id='111111',business_id='222222',actor_id='123456')
