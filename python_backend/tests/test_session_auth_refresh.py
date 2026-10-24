@@ -2,7 +2,10 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from app.session_auth_refresh import refresh_saved_auth_context
+from app.session_auth_refresh import (
+    persist_and_refresh_saved_auth_context,
+    refresh_saved_auth_context,
+)
 
 
 class SavedAuthRefreshTests(unittest.IsolatedAsyncioTestCase):
@@ -28,6 +31,30 @@ class SavedAuthRefreshTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(context._cookie_persistor,fresh_persistor)
         self.assertEqual(context.proxy,"http://new-fixture-proxy:80")
         self.assertEqual(context.user_agent,"Fresh fixture")
+        resolver.resolve.assert_awaited_once_with("14")
+
+    async def test_flushes_meta_rotation_before_comparing_saved_session(self):
+        context=self.context()
+        fresh=self.context(xs="fixture-fresh")
+
+        async def close_profile_session():
+            context.cookies["xs"]="fixture-fresh"
+
+        session=SimpleNamespace(
+            context=context,
+            close=AsyncMock(side_effect=close_profile_session),
+        )
+
+        async def resolve_after_close(profile):
+            session.close.assert_awaited_once()
+            return fresh
+
+        resolver=SimpleNamespace(resolve=AsyncMock(side_effect=resolve_after_close))
+        self.assertTrue(await persist_and_refresh_saved_auth_context(
+            session,resolver,context,
+        ))
+        self.assertEqual(context.cookies["xs"],"fixture-fresh")
+        self.assertEqual(context._loaded_cookies,context.cookies)
         resolver.resolve.assert_awaited_once_with("14")
 
     async def test_same_expired_session_is_not_reported_restored(self):
