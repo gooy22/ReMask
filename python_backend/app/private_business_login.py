@@ -18,6 +18,27 @@ SOURCE_GB = 'https://static.xx.fbcdn.net/rsrc.php/v4iEB24/y1/l/en_GB-j/Ok9Q1EXGe
 SOURCES = {SOURCE, SOURCE_GB}
 
 
+def native_gate_render_shape(body):
+    """Code identifiers only: never page props, field values or auth data."""
+    from .private_ads_document import _JSON_SCRIPT_RE
+    scripts = [match.group(1) for match in _JSON_SCRIPT_RE.finditer(body)]
+    calls, constructors = [], []
+    identifier = r'[A-Za-z_$][A-Za-z0-9_.$-]{0,119}'
+    for source in scripts:
+        source = source.replace(r'\"', '"')
+        for module, method in re.findall(r'\[\s*"(' + identifier + r')"\s*,\s*"(' + identifier + r')"', source):
+            if any(word in (module + method).lower() for word in ('render', 'react', 'hydrate')):
+                pair = [module, method]
+                if pair not in calls:
+                    calls.append(pair)
+        for module in re.findall(r'(?:"__m"|\b__m)\s*:\s*"(' + identifier + r')"', source):
+            if 'login' in module.lower() and module not in constructors:
+                constructors.append(module)
+    return {'root_in_body': ROOT in body,
+            'root_script_count': sum(ROOT in source for source in scripts),
+            'renderer_calls': calls[:8], 'login_constructors': constructors[:8]}
+
+
 def native_business_login_continuation(body, return_url, *, diagnostic=None):
     from .private_contract_discovery import Parser, _LANGUAGE, _walk, _pairs, _literal, _script_urls
     from .private_ads_document import _JSON_SCRIPT_RE

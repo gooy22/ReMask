@@ -86,6 +86,15 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
 
     async def claim(self):self.claims += 1
 
+    def test_native_gate_shape_excludes_props_and_credentials(self):
+        from app.private_business_login import native_gate_render_shape
+        body = '<script>{"require":[["ReactRenderer","hydrate",null,[{"constructor":{"__m":"LoginView.react"},"props":{"password":"SECRET","token":"SECRET"}}]]]}</script>'
+        shape = native_gate_render_shape(body)
+        self.assertEqual(shape['renderer_calls'], [['ReactRenderer','hydrate']])
+        self.assertEqual(shape['login_constructors'], ['LoginView.react'])
+        self.assertNotIn('SECRET', str(shape))
+        self.assertNotIn('password', str(shape))
+
     def native_gate(self, **overrides):
         from app.private_business_login import ROOT, SOURCE
         target = 'https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=111111&business_id=222222'
