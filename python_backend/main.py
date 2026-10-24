@@ -2331,7 +2331,7 @@ async def profile_live_inventory(
                 for row in partial_businesses:
                     diagnostics.extend(item for item in row.get('diagnostics', []) if isinstance(item,dict))
                 gates={row.get('auth_gate') for row in diagnostics if row.get('auth_gate')}
-                blocked_code=next((code for code in ('CHECKPOINT_REQUIRED','TWO_FACTOR_REQUIRED','SESSION_EXPIRED','BUSINESS_LOGIN_GATE') if code in gates),'')
+                blocked_code=next((code for code in ('CHECKPOINT_REQUIRED','TWO_FACTOR_REQUIRED','SESSION_EXPIRED','BUSINESS_LOGIN_GATE','META_REAUTH_REQUIRED') if code in gates),'')
                 connection_codes={row.get('code') for row in diagnostics}
                 error_code=blocked_code or next((code for code in ('PRIVATE_HTTP_PROXY_UNAVAILABLE',
                     'PRIVATE_HTTP_READ_TIMEOUT','PRIVATE_HTTP_CONNECTION_UNAVAILABLE','PRIVATE_HTTP_PROTOCOL_ERROR',
@@ -2714,6 +2714,7 @@ async def profile_live_inventory(
                         'SESSION_EXPIRED',
                         'TWO_FACTOR_REQUIRED',
                         'BUSINESS_LOGIN_GATE',
+                        'META_REAUTH_REQUIRED',
                     } or not known_business_ids:
                         raise
                     diagnostic=(
@@ -2884,6 +2885,7 @@ async def profile_live_inventory(
                                 'SESSION_EXPIRED',
                                 'TWO_FACTOR_REQUIRED',
                                 'BUSINESS_LOGIN_GATE',
+                                'META_REAUTH_REQUIRED',
                             }
                         ):
                             log.warning(
