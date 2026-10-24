@@ -321,6 +321,12 @@ class AdsManagerPrivateHttp:
                     (continued.path == '/login.php' or continued.path.rstrip('/') == '/login'
                      or continued.path.startswith('/login/')))
                 if continued_gate == 'CHECKPOINT_REQUIRED' or credential_form or facebook_login:
+                    from .private_business_login import native_gate_render_shape
+                    log.info('ads_business_continuation_auth profile=%s gate=%s facebook_login_route=%s login_form_marker=%s password_input=%s render_shape=%s',
+                        getattr(web.profile, 'name', ''), continued_gate or credential_form,
+                        facebook_login, bool(credential_form),
+                        bool(re.search(r'''<input\b[^>]*\btype\s*=\s*["']password["']''', continued_body, re.I)),
+                        native_gate_render_shape(continued_body))
                     raise fail(continued_gate, 'Facebook authentication is required', False)
                 if str(web.profile.cookies.get('c_user') or '') != actor_id:
                     raise fail('ACTOR_MISMATCH', 'Business continuation changed profile identity')
