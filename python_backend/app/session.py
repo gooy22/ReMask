@@ -4,7 +4,7 @@ import asyncio
 import logging
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -53,6 +53,8 @@ class ProfileContext:
     inventory_updated_at: int = 0
     inventory_source: str = ""
     direct_test_until: int = 0
+    _cookie_persistor: Any = field(default=None, repr=False, compare=False)
+    _loaded_cookies: dict[str, str] = field(default_factory=dict, repr=False, compare=False)
 
 
 class ProfileResolver:
@@ -288,6 +290,55 @@ class ProfileResolver:
             )
         return [p for p in profiles if isinstance(p, dict)]
 
+    async def persist_cookie_refresh(
+        self, profile_id: str, actor_id: str, expected_xs: str,
+        cookies: dict[str, str],
+    ) -> bool:
+        """Write Meta-issued cookies back only to the same saved profile."""
+        profile_id = str(profile_id or "").strip()
+        actor_id = str(actor_id or "").strip()
+        expected_xs = str(expected_xs or "")
+        if (not self.url or not self.key or not profile_id or not actor_id
+                or not expected_xs or not isinstance(cookies, dict)
+                or len(cookies) > 500
+                or str(cookies.get("c_user") or "") != actor_id
+                or not str(cookies.get("xs") or "").strip()):
+            return False
+        if any(not isinstance(k, str) or not k or not isinstance(v, str)
+               or len(k) > 256 or len(v) > 8192 for k, v in cookies.items()):
+            return False
+        headers = {
+            "Accept": "application/json",
+            "X-Remask-Internal-Key": str(self.key),
+        }
+        payload = {
+            "action": "refresh_profile_cookies",
+            "profile_id": profile_id,
+            "actor_id": actor_id,
+            "expected_xs": expected_xs,
+            "cookies": cookies,
+        }
+        try:
+            # This is a single idempotent local profile-store update. Never
+            # retry with stale auth material or include it in diagnostics.
+            async with aiohttp.ClientSession(timeout=self.timeout, headers=headers) as client:
+                async with client.post(self.url, json=payload) as response:
+                    if response.status >= 400:
+                        logging.getLogger("remask.profile_resolver").warning(
+                            "profile_cookie_refresh_rejected profile=%s status=%d",
+                            profile_id, response.status,
+                        )
+                        return False
+                    result = await response.json(content_type=None)
+                    return (isinstance(result, dict) and result.get("ok") is True
+                            and result.get("updated") is True)
+        except Exception as exc:
+            logging.getLogger("remask.profile_resolver").warning(
+                "profile_cookie_refresh_failed profile=%s kind=%s",
+                profile_id, type(exc).__name__,
+            )
+            return False
+
     async def resolve(self, profile_id: str) -> ProfileContext:
         payload = await self._fetch(
             params={"profile_id": profile_id},
@@ -325,7 +376,7 @@ class ProfileResolver:
                 category="invalid_profile_context",
             )
 
-        return ProfileContext(
+        context = ProfileContext(
             profile_id=profile_id,
             cookies=cookie_map,
             proxy=proxy,
@@ -373,6 +424,9 @@ class ProfileResolver:
             ),
             inventory_source=str(payload.get("inventory_source") or "").strip(),
         )
+        context._loaded_cookies = dict(cookie_map)
+        context._cookie_persistor = self.persist_cookie_refresh
+        return context
 
 
 class MetaSession:
@@ -531,10 +585,33 @@ class MetaSession:
                 await self._graph_api.close()
                 self._graph_api = None
 
+        refreshed_cookies: dict[str, str] | None = None
         async with self._facebook_lock:
             if self._facebook_session is not None:
-                await self._facebook_session.close()
+                current = self._facebook_session
+                await current.close()
+                refreshed_cookies = dict(current.profile.cookies)
                 self._facebook_session = None
+
+        initial = dict(self.context._loaded_cookies or self.context.cookies)
+        actor_id = str(initial.get("c_user") or "")
+        if (refreshed_cookies is not None and actor_id
+                and refreshed_cookies.get("c_user") == actor_id
+                and str(refreshed_cookies.get("xs") or "").strip()
+                and refreshed_cookies != initial):
+            self.context.cookies = refreshed_cookies
+            persistor = self.context._cookie_persistor
+            if callable(persistor):
+                try:
+                    await persistor(
+                        self.context.profile_id, actor_id,
+                        str(initial.get("xs") or ""), refreshed_cookies,
+                    )
+                except Exception as exc:
+                    logging.getLogger("remask.profile_resolver").warning(
+                        "profile_cookie_refresh_failed profile=%s kind=%s",
+                        self.context.profile_id, type(exc).__name__,
+                    )
 
         async with self._session_lock:
             if self._session is not None and not self._session.closed:
