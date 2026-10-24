@@ -17,11 +17,18 @@ async def refresh_saved_auth_context(resolver: Any, context: Any) -> bool:
             or str(cookies.get("c_user") or "") != str(old.get("c_user") or "")
             or not str(cookies.get("xs") or "").strip()):
         return False
-    # A login redirect cannot be repaired by repeating requests with the same
-    # expired credentials. Use a newly saved session when one is available.
-    if cookies == old:
+    # Only a changed session cookie can recover an authentication redirect.
+    # Ignore unrelated cookie updates (for example, preferences) so callers
+    # never retry the same expired login state.
+    if str(cookies.get("xs") or "") == str(old.get("xs") or ""):
         return False
     context.cookies = dict(cookies)
+    # MetaSession.close() uses this baseline for its cookie compare-and-swap.
+    # Move it with the session or later Meta-issued updates will be discarded.
+    context._loaded_cookies = dict(cookies)
+    fresh_persistor = getattr(fresh, "_cookie_persistor", None)
+    if callable(fresh_persistor):
+        context._cookie_persistor = fresh_persistor
     context.proxy = getattr(fresh, "proxy", None)
     context.user_agent = str(getattr(fresh, "user_agent", "") or "")
     return True
