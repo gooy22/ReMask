@@ -586,6 +586,8 @@ RUN set -eux; \
     php /tmp/remask-tests/private-inventory-identity.test.php; \
     php /tmp/remask-tests/template-targeting-context.test.php; \
     php /tmp/remask-tests/readiness.test.php; \
+    php -l /var/www/html/ajax/pythonProfileContext.php; \
+    grep -q 'refresh_profile_cookies' /var/www/html/ajax/pythonProfileContext.php; \
     chown -R www-data:www-data /var/lib/remask /var/www/html; \
     chmod 700 /var/lib/remask; \
     chmod +x /var/www/html/docker-start.sh; \
