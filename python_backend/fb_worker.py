@@ -225,8 +225,17 @@ class FacebookWebSession:
 
     async def close(self) -> None:
         async with self._session_lock:
-            if self.session is not None and not self.session.closed:
-                await self.session.close()
+            if self.session is not None:
+                # HTTPX applies Meta Set-Cookie headers to this profile-bound
+                # jar. Preserve only a snapshot for the same actor; never allow
+                # a redirect to silently switch the profile identity.
+                snapshot = self.session.facebook_cookie_snapshot()
+                original_actor = str(self.profile.cookies.get("c_user") or "")
+                if (snapshot.get("c_user") == original_actor
+                        and str(snapshot.get("xs") or "").strip()):
+                    self.profile.cookies = snapshot
+                if not self.session.closed:
+                    await self.session.close()
 
             self.session = None
 
