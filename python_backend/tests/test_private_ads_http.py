@@ -148,6 +148,20 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('/business/loginrequest/fb/?',self.web.fetch_text.await_args_list[1].args[0])
         self.assertEqual(self.web.session.calls, [])
 
+    async def test_native_handoff_credential_response_stops_and_keeps_secrets_out_of_logs(self):
+        self.web.fetch_text = AsyncMock(side_effect=[
+            (200,self.native_gate(),'https://business.facebook.com/business/loginpage/'),
+            (200,'<form id="login_form"><input type="password" value="SECRET"></form>',
+             'https://www.facebook.com/login.php')])
+        with self.assertLogs('remask.private_ads_http',level='INFO') as logs:
+            with self.assertRaises(ProvisioningError):
+                await AdsManagerPrivateHttp.open(self.web,
+                    account_id='111111',business_id='222222',actor_id='123456')
+        self.assertEqual(self.web.fetch_text.await_count,2)
+        self.assertEqual(self.web.session.calls,[])
+        self.assertIn('password_input=True',' '.join(logs.output))
+        self.assertNotIn('SECRET',' '.join(logs.output))
+
     def test_native_gate_accepts_serverjs_loader_metadata_without_changing_props(self):
         from app.private_business_login import native_business_login_continuation, ROOT, SOURCE
         target = 'https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=111111&business_id=222222'
