@@ -247,7 +247,7 @@ def _extract_business_login_continuation(
     for candidate in parser.candidates:
         attrs = candidate["attrs"]
         label = re.sub(
-            r"\\s+", " ", str(candidate["text"] or attrs.get("aria-label") or "")
+            r"\s+", " ", str(candidate["text"] or attrs.get("aria-label") or "")
         ).strip()
         score, label_kind = _score(label)
         if score:
