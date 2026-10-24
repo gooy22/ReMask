@@ -291,12 +291,14 @@ class AdsManagerPrivateHttp:
         if status == 200 and _auth_gate(final_url, body) == 'BUSINESS_LOGIN_GATE':
             from .private_ads_document import business_login_continuation, business_login_public_sources
             continuation = business_login_continuation(final_url, body)
+            gate_contract = {}
             if not continuation:
                 from .private_business_login import native_business_login_continuation
-                continuation = native_business_login_continuation(body, url)
+                continuation = native_business_login_continuation(body, url, diagnostic=gate_contract)
             if not continuation:
-                log.info('ads_business_continuation_missing profile=%s public_scripts=%s',
-                    getattr(web.profile, 'name', ''), business_login_public_sources(body))
+                log.info('ads_business_continuation_missing profile=%s contract_reason=%s public_scripts=%s',
+                    getattr(web.profile, 'name', ''), gate_contract.get('reason', 'anchor_missing'),
+                    business_login_public_sources(body))
             if continuation:
                 # Follow only the link actually supplied by Meta for this
                 # document. No guessed controller, credential POST or retry loop.
