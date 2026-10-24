@@ -11,13 +11,15 @@ const targetingCode=source.slice(source.indexOf('function remaskPrivateTargeting
   source.indexOf('// A selected RK needs'));
 function targetingFixture(){
   const calls=[];
-  const ctx={URLSearchParams,state:{profile:'38',targets:[]},accounts:['act_120249912222240685'],mode:'DRAFT',
+  const ctx={URLSearchParams,MutationObserver:class{observe(){} disconnect(){}},state:{profile:'38',targets:[]},accounts:['act_120249912222240685'],mode:'DRAFT',
     remaskModuleControls:{isTargetingType:type=>type==='work_positions'},
     $:()=>({value:ctx.mode}),selectedAccountIds:()=>ctx.accounts,targetMode:()=>ctx.state.targets.length>0,
     apiJson:async(url,options)=>{
       const body=Object.fromEntries(new URLSearchParams(options.body));calls.push({url,body});
       if(ctx.failure)throw new Error(ctx.failure);
       if(ctx.pending)await ctx.pending;
+      if(url==='ajax/metaTemplateTargetingSearch.php'&&body.module_only==='1')
+        return {data:[],checked_live:false,source:'private_meta_module_reference',template_account_bound:false};
       return {...{data:[{id:'6003277229371'}],profile:body.profile,account_id:body.account_id,resource:body.type,
         checked_live:true,account_scope_verified:true},...ctx.response};
     }};
@@ -34,14 +36,28 @@ test('selected RK targeting uses persistent suggestions unless an explicit refre
   assert.match(route, /\$input\['force'\]\s*\?\?\s*''\)\s*===\s*'1'/);
   assert.doesNotMatch(route, /RemaskAdvertisingAssetBridge::read\([^;]*,\$type,true\)/);
 });
-test('selected RK reads fresh GEO, interests, behaviors and languages in its exact scope',async()=>{
-  for(const [type,resource] of [['locations','locations'],['interests','interests'],['behaviors','behaviors'],['languages','locales']]){
+test('selected RK reads GEO fallback, interests and behaviors in its exact scope',async()=>{
+  for(const [type,resource] of [['locations','locations'],['interests','interests'],['behaviors','behaviors']]){
     const {ctx,calls,search}=targetingFixture();const result=await search(type);
-    assert.deepEqual(calls,[{url:'ajax/metaTargetingSearch.php',body:{type:resource,q:'fitness',limit:'25',
+    const scoped=()=>calls.filter(call=>call.url==='ajax/metaTargetingSearch.php');
+    assert.deepEqual(scoped(),[{url:'ajax/metaTargetingSearch.php',body:{type:resource,q:'fitness',limit:'25',
       profile:'38',account_id:'120249912222240685',execution_mode:'DRAFT'}}]);
     assert.equal(result.data[0].id,'6003277229371');
-    ctx.mode='PUBLISH';await search(type);assert.equal(calls[1].body.execution_mode,'PUBLISH');
+    ctx.mode='PUBLISH';await search(type);
+    assert.equal(scoped()[1].body.execution_mode,'PUBLISH');
+    const referenceCalls=calls.filter(call=>call.url==='ajax/metaTemplateTargetingSearch.php');
+    assert.equal(referenceCalls.length,type==='locations'?2:0);
+    if(type==='locations')assert.equal(referenceCalls[0].body.module_only,'1');
   }
+});
+test('selected RK accepts unbound local language reference data without account reads',async()=>{
+  const {ctx,calls,search}=targetingFixture();const result=await search('languages');
+  assert.equal(result.checked_live,false);
+  assert.equal(result.source,'private_meta_module_reference');
+  assert.equal(result.template_account_bound,false);
+  assert.deepEqual(calls,[{url:'ajax/metaTemplateTargetingSearch.php',body:{type:'locales',q:'fitness',limit:'25',module_only:'1'}}]);
+  ctx.mode='PUBLISH';await search('languages');
+  assert.deepEqual(calls[1],calls[0]);
 });
 test('installed picker reference URL also uses the selected RK live read',async()=>{
   const {calls,search}=targetingFixture();await search('interests','ajax/metaTemplateTargetingSearch.php');
