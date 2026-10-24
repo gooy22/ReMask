@@ -122,9 +122,16 @@ class _BusinessGateParser(HTMLParser):
         self.has_credentials = False
         self.form_counter = 0
         self.external_fields: dict[str, list[tuple[str, str]]] = {}
+        self.visible_text: list[str] = []
 
     def _current_hidden(self) -> bool:
         return any(hidden for _, hidden in self.element_stack)
+
+    def _current_text_suppressed(self) -> bool:
+        return any(
+            tag in {"head", "script", "style", "template", "noscript"}
+            for tag, _ in self.element_stack
+        )
 
     def _current_form(self) -> str:
         return self.form_stack[-1] if self.form_stack else ""
@@ -198,6 +205,9 @@ class _BusinessGateParser(HTMLParser):
         self.handle_endtag(tag)
 
     def handle_data(self, data: str) -> None:
+        if self._current_hidden() or self._current_text_suppressed():
+            return
+        self.visible_text.append(data)
         for candidate in self.active_controls:
             candidate["text"] += data
 
@@ -226,16 +236,15 @@ def _extract_business_login_continuation(
         return None, "invalid_response_body"
     if len(body) > 2_000_000:
         return None, "response_body_too_large"
-    lowered = body.casefold()
-    if any(marker in lowered for marker in _CHALLENGE_MARKERS):
-        return None, "authentication_challenge"
-
     parser = _BusinessGateParser()
     try:
         parser.feed(body)
         parser.close()
     except Exception:
         return None, "malformed_gate_markup"
+    visible_text = re.sub(r"\\s+", " ", " ".join(parser.visible_text)).casefold()
+    if any(marker in visible_text for marker in _CHALLENGE_MARKERS):
+        return None, "authentication_challenge"
     if parser.has_credentials:
         return None, "credential_input_present"
 
