@@ -9,10 +9,31 @@ if (typeof creativeTargetSearchConfig !== 'function') {
         behaviors:{input:'behaviorQuery',results:'behaviorResults',pills:'selectedBehaviors',state:'behaviors'},
         locales:{input:'languageQuery',results:'languageResults',pills:'selectedLanguages',state:'languages'}
     };
+    // Search is automatic while typing. Keep the obsolete buttons out of the
+    // visible form so the old click listeners cannot issue duplicate reads.
+    for (const id of ['geoSearch','interestSearch']) {
+        const button=$(id);
+        if(!button)continue;
+        button.hidden=true;
+        button.disabled=true;
+        button.tabIndex=-1;
+        button.setAttribute('aria-hidden','true');
+    }
+    const targetingFailureMessage = error => {
+        const raw=String(error?.code||error?.payload?.error?.code||error?.payload?.code||
+            error?.payload?.error||error?.payload?.message||error?.message||'').toUpperCase();
+        if(/CHECKPOINT|TWO_FACTOR|SESSION_EXPIRED|BUSINESS_LOGIN_GATE|LOGIN/.test(raw))
+            return 'Обновите Facebook-сессию.';
+        return 'Список сейчас недоступен. Выбранные настройки не изменены.';
+    };
     const runPicker = async (type, offset=0) => {
         const cfg=pickerConfig[type], input=cfg&&$(cfg.input), box=cfg&&$(cfg.results);
         if(!input||!box)return;
         const query=input.value.trim();
+        if(query.length<2){
+            pickerControllers[type]?.abort();delete pickerControllers[type];delete pickerPages[type];
+            box.textContent='';return;
+        }
         if(offset && (pickerPages[type]?.query!==query || pickerPages[type]?.next_offset!==offset))return;
         pickerControllers[type]?.abort();
         const controller=new AbortController(); pickerControllers[type]=controller;
@@ -76,10 +97,8 @@ if (typeof creativeTargetSearchConfig !== 'function') {
         } catch(error){
             if(error?.name==='AbortError'||pickerControllers[type]!==controller)return;
             if(offset){
-                const hint=document.createElement('div');hint.className='muted';
-                hint.textContent='Не удалось загрузить следующую страницу. Повторите поиск.';box.appendChild(hint);
-            } else box.textContent=error.payload?.error?.message||error.payload?.message||error.meta?.message||
-                error.message||'Не удалось загрузить справочник Meta. Повторите поиск.';
+                box.textContent=targetingFailureMessage(error);
+            } else box.textContent=targetingFailureMessage(error);
         } finally {if(pickerControllers[type]===controller)delete pickerControllers[type];}
     };
     searchTargeting=type=>runPicker(type);
@@ -91,7 +110,8 @@ if (typeof creativeTargetSearchConfig !== 'function') {
         input.placeholder='Выберите из списка или введите название';
         let focusTimer=0;
         input.addEventListener('focus',()=>{
-            clearTimeout(focusTimer);focusTimer=setTimeout(()=>runPicker(type),240);
+            clearTimeout(focusTimer);
+            if(input.value.trim().length>=2)focusTimer=setTimeout(()=>runPicker(type),240);
         });
         // Own the debounce before legacy input handlers, which otherwise issue
         // duplicate reads (and immediately submit one-character queries).

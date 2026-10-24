@@ -111,14 +111,21 @@ function fixture(){
 
 
   const launch=fixture();const replies=[],launchRequests=[];
-  for(const id of ['geoQuery','geoResults','selectedGeo'])launch.nodes.set(id,id.endsWith('Query')?new Input():new Element());
+  for(const id of ['geoQuery','geoResults','selectedGeo','geoSearch','interestSearch'])
+    launch.nodes.set(id,id.endsWith('Query')?new Input():new Element());
   let legacyReads=0;
   launch.nodes.get('geoQuery').addEventListener('input',()=>legacyReads++);
   launch.nodes.get('geoQuery').addEventListener('keydown',()=>legacyReads++);
+  let launchFailure=null;
   Object.assign(launch.ctx,{$:id=>launch.nodes.get(id),state:{geo:[]},formPost:body=>body,
-    apiJson:async(url,options)=>{launchRequests.push({url,options});return new Promise(resolve=>replies.push(resolve));},
+    apiJson:async(url,options)=>{launchRequests.push({url,options});if(launchFailure)throw launchFailure;return new Promise(resolve=>replies.push(resolve));},
     renderPills(){},invalidateLaunchReview(){},validateReady(){}});
   vm.runInContext(read('railway-targeting-pickers.js'),launch.ctx);
+  assert.equal(launch.nodes.get('geoSearch').hidden,true,'the obsolete GEO search button is hidden');
+  assert.equal(launch.nodes.get('interestSearch').hidden,true,'the obsolete interest search button is hidden');
+  launch.nodes.get('geoQuery').fire('focus');
+  assert.equal(launchRequests.length,0,'focusing an empty field does not request the full Meta catalog');
+  launch.nodes.get('geoQuery').value='Ukraine';
   let request=launch.ctx.searchTargeting('locations');
   launch.nodes.get('geoQuery').fire('input');replies.shift()({data:[{key:'UA',type:'country',name:'Ukraine'}]});await request;
   assert.equal(launch.nodes.get('geoResults').children.length,0,'Launch rejects old results while typing');
@@ -129,7 +136,12 @@ function fixture(){
   replies.shift()({data:[{key:'UA',type:'country',name:'Ukraine'}]});await request;
   launch.nodes.get('geoResults').children[0].fire('click');
   assert.equal(launch.ctx.state.geo[0].key,'UA','selection keeps the original country key');
-  console.log('Launch choices: query invalidation and original selection IDs passed.');
+  launch.nodes.get('geoQuery').value='Ukraine';
+  launchFailure=Object.assign(new Error('PRIVATE_ADS_DRAFT_RESOURCE_READ_INCOMPLETE'),{code:'PRIVATE_ADS_DRAFT_RESOURCE_READ_INCOMPLETE'});
+  await launch.ctx.searchTargeting('locations');
+  assert.equal(launch.nodes.get('geoResults').textContent,'Список сейчас недоступен. Выбранные настройки не изменены.');
+  assert.doesNotMatch(launch.nodes.get('geoResults').textContent,/PRIVATE_ADS_DRAFT/,'internal Meta codes stay out of the UI');
+  console.log('Launch choices: no extra search buttons, no blank catalog fetch, friendly errors and exact selection IDs passed.');
   for(const id of ['interestQuery','interestResults','selectedInterests'])launch.nodes.set(id,id.endsWith('Query')?new Input():new Element());
   launch.ctx.state.interests=[];
   // Installation has already occurred; create a new fixture with its elements
@@ -141,6 +153,7 @@ function fixture(){
     apiJson:async(url,options)=>{pageRequests.push({url,options});return new Promise(resolve=>pageReplies.push(resolve));},
     renderPills(){},invalidateLaunchReview(){},validateReady(){}});
   vm.runInContext(read('railway-targeting-pickers.js'),paged.ctx);
+  paged.nodes.get('interestQuery').value='Travel';
   let first=paged.ctx.searchTargeting('interests');
   pageReplies.shift()({data:[{id:'100001',name:'First interest',path:['Category']}],
     next_offset:100,offset:0,truncated:true,source:'private_meta_template_reference'});
