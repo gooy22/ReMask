@@ -16,12 +16,13 @@ def _reject(code):
         "Session comparison was not performed; saved profile data is unchanged.", retryable=False)
 
 
-def _login_shape(body, final_url):
+def _login_shape(body, final_url, *, include_entry=False):
     class Forms(HTMLParser):
         def __init__(self):
             super().__init__()
             self.forms, self.current, self.logout_link = [], None, False
             self.hidden_depth, self.visible_depth, self.text = 0, 0, ''
+            self.anchor, self.anchor_text, self.entry_url = None, '', None
 
         def handle_starttag(self, tag, attrs):
             if tag in {'script','style','head','template'}:
@@ -51,6 +52,7 @@ def _login_shape(body, final_url):
                     if name not in self.current['input_names']:
                         self.current['input_names'].append(name)
             elif tag == 'a':
+                self.anchor, self.anchor_text = attrs.get('href'), ''
                 try:
                     target = urlsplit(urljoin(final_url, attrs.get('href') or ''))
                     if target.hostname in {'www.facebook.com','facebook.com','m.facebook.com'} and target.path in {'/logout.php','/logout/'}:
@@ -65,8 +67,21 @@ def _login_shape(body, final_url):
                 self.visible_depth = max(0, self.visible_depth - 1)
             if tag == 'form':
                 self.current = None
+            elif tag == 'a' and self.anchor:
+                if ' '.join(self.anchor_text.split()).casefold() == 'use another profile':
+                    try:
+                        target = urlsplit(urljoin(final_url, self.anchor))
+                        if (target.scheme == 'https' and target.hostname in {'www.facebook.com','facebook.com','m.facebook.com'}
+                                and target.path in {'/login','/login/','/login.php'} and not target.fragment
+                                and not target.username and not target.password and not target.port):
+                            self.entry_url = target.geturl()
+                    except ValueError:
+                        pass
+                self.anchor, self.anchor_text = None, ''
 
         def handle_data(self, data):
+            if self.anchor and not self.hidden_depth and len(self.anchor_text) < 200:
+                self.anchor_text += data[:200]
             if self.hidden_depth or not self.visible_depth or len(self.text) >= 800:
                 return
             text = ' '.join(data.split())[:1200]
@@ -77,7 +92,13 @@ def _login_shape(body, final_url):
 
     parser = Forms()
     parser.feed(body)
-    return {'forms':parser.forms, 'logout_link':parser.logout_link, 'server_text':parser.text}
+    entry = urlsplit(parser.entry_url) if parser.entry_url else None
+    shape = {'forms':parser.forms, 'logout_link':parser.logout_link, 'server_text':parser.text,
+        'other_profile_entry':{'ready':entry is not None,
+            'host':entry.hostname if entry else '', 'path':entry.path if entry else '',
+            'query_keys':sorted(set(parse_qs(entry.query)) & {'next','login_attempt','lwv','skip_api_login','ref',
+                'initial_actor_id','login_source','display','locale','id','nux_source'}) if entry else []}}
+    return (shape, parser.entry_url) if include_entry else shape
 
 
 def _transport_kind(error):
@@ -89,13 +110,38 @@ def _transport_kind(error):
         'WriteError','ProxyError','RemoteProtocolError','LocalProtocolError'} else 'unavailable'
 
 
+def _transport_reason(error):
+    text, seen = '', set()
+    try:
+        for _ in range(8):
+            if error is None or id(error) in seen:
+                break
+            seen.add(id(error))
+            text += ' ' + type(error).__name__ + ' ' + str(error)[:2000]
+            error = error.__cause__ or error.__context__
+        text = text.casefold()
+        for reason, markers in (
+            ('certificate_verification',('certificate_verify','certificateverification','certificateverify')),
+            ('dns_failure',('gaierror','name or service not known','name resolution')),
+            ('tls_handshake',('sslerror','sslcert','wrong_version_number','unexpected_eof','eof occurred','tlsv1_alert')),
+            ('connection_reset',('connection reset','connectionreseterror')),
+            ('connection_refused',('connection refused','connectionrefusederror')),
+            ('proxy_connect_rejected',('proxyerror',)),
+            ('timeout',('timeout','timed out'))):
+            if any(marker in text for marker in markers):
+                return reason
+    except Exception:
+        pass
+    return 'unavailable'
+
+
 async def probe_document(context, payload, *, web_factory=None):
     required = {"cookies", "business_id", "ad_account_id"}
     if (not isinstance(payload, dict) or not required <= set(payload)
             or set(payload) - required - {"document_kind"}):
         raise _reject("INVALID_INPUT")
     kind = payload.get('document_kind', 'adsmanager')
-    if not isinstance(kind, str) or kind not in {'adsmanager','identity','saved_identity','login_document'}:
+    if not isinstance(kind, str) or kind not in {'adsmanager','identity','saved_identity','login_document','login_other_profile'}:
         raise _reject('INVALID_DOCUMENT')
     business, account = payload["business_id"], payload["ad_account_id"]
     if any(not isinstance(value, str) or not re.fullmatch(r"\d{5,30}", value)
@@ -123,7 +169,7 @@ async def probe_document(context, payload, *, web_factory=None):
         raise _reject("ACCOUNT_CONTEXT_UNAVAILABLE")
     from fb_worker import FacebookWebSession, WebProfile
     selected_cookies = dict(context.cookies) if kind == 'saved_identity' else dict(cookies)
-    if kind == 'login_document':
+    if kind in {'login_document','login_other_profile'}:
         # Read the public login form with the same device/proxy/UA, without
         # forwarding either saved or supplied authentication cookies.
         selected_cookies = {key:value for key,value in selected_cookies.items()
@@ -139,11 +185,28 @@ async def probe_document(context, payload, *, web_factory=None):
            f"?act={account}&business_id={business}")
     if kind in {'identity', 'saved_identity'}:
         url = 'https://www.facebook.com/me'
-    elif kind == 'login_document':
+    elif kind in {'login_document','login_other_profile'}:
         url = 'https://www.facebook.com/login/'
+    from .private_session_wire import SessionWireEvidence
+    wire = SessionWireEvidence(actor, context.user_agent)
+    followed = False
     try:
         async with asyncio.timeout(35):
+            if callable(getattr(web, '_ensure_session', None)):
+                try:
+                    await wire.attach(web)
+                except Exception:
+                    wire.errors += 1
             status, body, final_url = await web.fetch_text(url, max_bytes=5_000_001, document_navigation=True)
+            shape, entry = _login_shape(body, final_url, include_entry=True)
+            if (kind == 'login_other_profile' and status == 200 and entry and entry != final_url
+                    and _bootstrap_evidence(final_url, body, profile, actor)['document_actor'] in {'logged_out','absent'}):
+                # Follow only the actual first-party, GET-only account-selector
+                # link. No invented login URL, form submission or JS execution.
+                status, body, final_url = await web.fetch_text(entry, max_bytes=5_000_001,
+                    document_navigation=True, referer=final_url)
+                followed = True
+                shape = _login_shape(body, final_url)
         evidence = _bootstrap_evidence(final_url, body, profile, actor)
         final = urlsplit(final_url)
         scope = (kind == 'adsmanager' and status == 200 and len(body.encode()) <= 5_000_000 and final.scheme == "https"
@@ -159,15 +222,19 @@ async def probe_document(context, payload, *, web_factory=None):
             except ProvisioningError as error:
                 context_code = error.code
         return {**result, "response_received": True, "http_status": status,
+            "wire":wire.snapshot(),
             "legacy_gate": _auth_gate(final_url, body) or "none",
-            "login_shape":_login_shape(body, final_url),
+            "login_shape":shape, "other_profile_entry_followed":followed,
             "evidence": evidence, "document_scope_matches": scope,
             "bootstrap_context_confirmed": confirmed, "bootstrap_context_code": context_code}
     except Exception as error:
         # No exception text/response fragments and no automatic network retry.
         return {**result, "response_received": False,
+            "wire":wire.snapshot(),
             "error_code": "PRIVATE_SESSION_PROBE_READ_UNAVAILABLE",
             "transport_failure_kind":_transport_kind(error),
+            "transport_failure_reason":_transport_reason(error),
             "error_type": type(error).__name__ if re.fullmatch(r"[A-Za-z_]{1,60}", type(error).__name__) else "Exception"}
     finally:
+        wire.detach()
         await web.close()

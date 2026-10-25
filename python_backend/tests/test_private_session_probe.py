@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock
 
-from app.private_session_probe import probe_document, _login_shape, _transport_kind
+from app.private_session_probe import probe_document, _login_shape, _transport_kind, _transport_reason
 from app.provisioning.models import ProvisioningError
 from tests.test_private_ads_draft import document
 
@@ -170,3 +170,107 @@ class SessionProbeTests(unittest.IsolatedAsyncioTestCase):
         for value in ('head-secret','input-secret','script-secret','style-secret','short-secret','url-secret','A'*80):
             self.assertNotIn(value, text)
         self.assertEqual(_login_shape(document(), 'https://www.facebook.com/')['server_text'], '')
+
+    async def test_actual_wire_cookies_and_meta_deletions_are_visible_without_values(self):
+        import httpx
+        from http.cookiejar import Cookie
+        calls = []
+        def respond(request):
+            calls.append(request)
+            if len(calls) == 1:
+                return httpx.Response(302, headers=[('Location','https://business.facebook.com/business/loginpage/?next=uri-secret'),
+                    ('Set-Cookie','c_user=deleted; Domain=.facebook.com; Path=/; Max-Age=0'),
+                    ('Set-Cookie','xs=deleted; Domain=.facebook.com; Path=/; Max-Age=0')], extensions={'http_version':b'HTTP/2'})
+            return httpx.Response(200, text=document('0'), extensions={'http_version':b'HTTP/2'})
+        created = []
+        class WireWeb:
+            def __init__(self, profile):
+                self.profile = profile
+                jar = httpx.Cookies()
+                for name, value in profile.cookies.items():
+                    jar.jar.set_cookie(Cookie(0,name,value,None,False,'.facebook.com',True,True,'/',True,True,
+                        None,True,None,None,{},False))
+                self.client = httpx.AsyncClient(transport=httpx.MockTransport(respond), cookies=jar,
+                    headers={'User-Agent':profile.user_agent})
+                created.append(self)
+            async def _ensure_session(self):
+                return SimpleNamespace(_client=self.client)
+            async def fetch_text(self, url, **kwargs):
+                response = await self.client.get(url, follow_redirects=True)
+                return response.status_code, response.text, str(response.url)
+            async def close(self):
+                await self.client.aclose()
+        payload = self.payload()
+        result = await probe_document(self.context(), payload, web_factory=WireWeb)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual([row['header_auth_state'] for row in result['wire']['requests']], ['matches','absent'])
+        self.assertEqual(result['wire']['requests'][0]['header_auth_cookie_names'], ['c_user','xs'])
+        self.assertEqual(result['wire']['responses'][0]['auth_cookie_deleted'], ['c_user','xs'])
+        self.assertEqual(result['wire']['measurement_errors'], 0)
+        self.assertTrue(all(row['method'] == 'GET' and row['user_agent_matches'] for row in result['wire']['requests']))
+        self.assertTrue(created[0].client.is_closed)
+        self.assertEqual(created[0].client.event_hooks['request'], [])
+        self.assertEqual(created[0].profile.cookies, payload['cookies'])
+        for secret in ('import-fixture-secret','uri-secret','proxy-fixture-secret','synthetic-session-value'):
+            self.assertNotIn(secret, str(result))
+
+    async def test_wire_observer_failure_does_not_prevent_the_original_read(self):
+        factory = self.factory()
+        self.web._ensure_session = AsyncMock(side_effect=RuntimeError('private-secret'))
+        result = await probe_document(self.context(), self.payload(), web_factory=factory)
+        self.assertTrue(result['bootstrap_context_confirmed'])
+        self.assertEqual(result['wire']['measurement_errors'], 1)
+        self.web.fetch_text.assert_awaited_once()
+        self.assertNotIn('private-secret', str(result))
+
+    def test_actual_other_profile_link_has_bounded_metadata_and_never_returns_query_values(self):
+        body = '<a href="/login.php?skip_api_login=1&amp;next=uri-secret"><span>Use another profile</span></a>'
+        shape, private = _login_shape(body, 'https://www.facebook.com/login/', include_entry=True)
+        self.assertTrue(shape['other_profile_entry']['ready'])
+        self.assertEqual(shape['other_profile_entry']['path'], '/login.php')
+        self.assertEqual(shape['other_profile_entry']['query_keys'], ['next','skip_api_login'])
+        self.assertIn('next=uri-secret', private)
+        self.assertNotIn('uri-secret', str(shape))
+        for href in ('https://unreviewed.invalid/login/', 'http://www.facebook.com/login/',
+                'https://www.facebook.com:443/login/', '/logout.php', '#switch'):
+            shape, private = _login_shape('<a href="'+href+'">Use another profile</a>',
+                'https://www.facebook.com/login/', include_entry=True)
+            self.assertFalse(shape['other_profile_entry']['ready'])
+            self.assertIsNone(private)
+
+    async def test_other_profile_mode_follows_only_the_actual_reviewed_get_link_once(self):
+        payload = self.payload(); payload['document_kind'] = 'login_other_profile'
+        factory = self.factory()
+        self.web.fetch_text.side_effect = [(200,
+            '<a href="/login.php?next=uri-secret&amp;skip_api_login=1">Use another profile</a>',
+            'https://www.facebook.com/login/'), (200,
+            '<form method="post" action="/login/device-based/regular/login/"><input name="email"><input name="pass"><input name="lsd" value="csrf-secret"></form>',
+            'https://www.facebook.com/login.php?next=uri-secret&skip_api_login=1')]
+        result = await probe_document(self.context(), payload, web_factory=factory)
+        self.assertTrue(result['other_profile_entry_followed'])
+        self.assertEqual(self.web.fetch_text.await_count, 2)
+        self.assertEqual(self.web.fetch_text.await_args_list[1].args[0],
+            'https://www.facebook.com/login.php?next=uri-secret&skip_api_login=1')
+        self.assertEqual(result['login_shape']['forms'][0]['input_names'], ['email','pass','lsd'])
+        self.assertFalse(result['persisted'])
+        self.assertFalse(result['objects_created'])
+        self.assertNotIn('uri-secret', str(result))
+        self.assertNotIn('csrf-secret', str(result))
+
+    async def test_missing_or_same_document_entry_never_invents_a_second_url(self):
+        for body in ('<div role="button">Use another profile</div>',
+                '<a href="/login/">Use another profile</a>',
+                '<a href="https://unreviewed.invalid/login/">Use another profile</a>'):
+            payload = self.payload(); payload['document_kind'] = 'login_other_profile'
+            factory = self.factory(final='https://www.facebook.com/login/', body=body)
+            result = await probe_document(self.context(), payload, web_factory=factory)
+            self.assertFalse(result['other_profile_entry_followed'])
+            self.web.fetch_text.assert_awaited_once()
+
+    def test_transport_reason_reduces_exception_chain_to_a_fixed_category(self):
+        import ssl
+        error = RuntimeError('https://user:proxy-secret@proxy.invalid/')
+        error.__cause__ = ssl.SSLError('CERTIFICATE_VERIFY_FAILED private-secret')
+        self.assertEqual(_transport_reason(error), 'certificate_verification')
+        self.assertEqual(_transport_reason(ConnectionResetError('private-secret')), 'connection_reset')
+        self.assertEqual(_transport_reason(RuntimeError('private-secret')), 'unavailable')
