@@ -136,6 +136,19 @@ class AdvertisingBridgeTests(unittest.TestCase):
             self.assertIn(error.code, (400, 405))
         self.assertEqual(self.worker_requests, [])
 
+    def test_session_probe_document_selector_only_forwards_reviewed_fixed_reads(self):
+        payload = {'action':'private_session_probe','profile_id':'4','business_id':'222222',
+            'ad_account_id':'111111','cookies':{'c_user':'123456','xs':'fixture'}}
+        self.worker_requests.clear()
+        for kind in ('adsmanager','identity','saved_identity','login_document'):
+            status, result = self.request({**payload, 'document_kind':kind})
+            self.assertEqual(status, 200, result)
+            self.assertEqual(self.worker_requests[-1]['payload']['document_kind'], kind)
+        before = len(self.worker_requests)
+        status, _ = self.request({**payload,'document_kind':'https://unreviewed.invalid/'})
+        self.assertEqual(status, 400)
+        self.assertEqual(len(self.worker_requests), before)
+
     def test_selected_masked_card_survives_real_php_review_bridge(self):
         payload = {'action': 'private_launch_review', 'profile_id': '7', 'business_id': '111111111',
             'ad_account_id': '222222222', 'page_id': '333333333', 'launch': {'creative': {'message': 'fixture'}},

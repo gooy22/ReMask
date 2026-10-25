@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock
 
-from app.private_session_probe import probe_document
+from app.private_session_probe import probe_document, _login_shape, _transport_kind
 from app.provisioning.models import ProvisioningError
 from tests.test_private_ads_draft import document
 
@@ -110,3 +110,52 @@ class SessionProbeTests(unittest.IsolatedAsyncioTestCase):
                 ("https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=999999&business_id=222222", document())):
             result = await probe_document(self.context(), self.payload(), web_factory=self.factory(final, body))
             self.assertFalse(result["bootstrap_context_confirmed"])
+
+    async def test_fixed_identity_and_anonymous_login_reads_preserve_cookie_source(self):
+        for kind, target in (("identity","https://www.facebook.com/me"),
+                ("saved_identity","https://www.facebook.com/me"),
+                ("login_document","https://www.facebook.com/login/")):
+            context, payload, factory = self.context(), self.payload(), self.factory()
+            payload['document_kind'] = kind
+            before = copy.deepcopy(payload)
+            await probe_document(context, payload, web_factory=factory)
+            self.web.fetch_text.assert_awaited_once_with(target, max_bytes=5_000_001, document_navigation=True)
+            sent = factory.call_args.args[0].cookies
+            if kind == 'identity':
+                self.assertEqual(sent, payload['cookies'])
+            elif kind == 'saved_identity':
+                self.assertEqual(sent, context.cookies)
+            else:
+                self.assertEqual(sent, {'datr':'fixture-device'})
+                for secret in ('xs','c_user','fr','pas'):
+                    self.assertNotIn(secret, sent)
+            self.assertEqual(payload, before)
+
+    async def test_document_selector_never_accepts_an_arbitrary_url_or_untyped_value(self):
+        for kind in ('https://unreviewed.invalid/', 'facebook.com', {}, []):
+            payload = self.payload(); payload['document_kind'] = kind
+            factory = self.factory()
+            with self.assertRaises(ProvisioningError):
+                await probe_document(self.context(), payload, web_factory=factory)
+            factory.assert_not_called()
+
+    def test_form_shape_uses_real_elements_and_excludes_all_values_and_unknown_routes(self):
+        body = '<script>const decoy = `<form action="/login.php"><input name="pass">`;</script>'
+        body += '<form method="POST" action="/login/device-based/regular/login/?token=query-secret">'
+        body += '<input name="email" value="user-secret"><input name="pass" value="password-secret">'
+        body += '<input name="lsd" value="csrf-secret"></form>'
+        body += '<form action="https://unreviewed.invalid/path-secret"><input name="private-name-secret" value="value-secret"></form>'
+        shape = _login_shape(body, 'https://www.facebook.com/login/')
+        self.assertEqual(len(shape['forms']), 2)
+        self.assertEqual(shape['forms'][0], {'method':'POST','action_host':'www.facebook.com',
+            'action_path':'/login/device-based/regular/login/','input_names':['email','pass','lsd']})
+        self.assertEqual(shape['forms'][1]['action_path'], 'unreviewed')
+        for secret in ('query-secret','user-secret','password-secret','csrf-secret','path-secret','private-name-secret','value-secret','unreviewed.invalid'):
+            self.assertNotIn(secret, str(shape))
+
+    def test_failure_kind_is_allowlisted_and_has_no_error_text_or_raw_payload(self):
+        for payload, expected in (({'transport_failure':{'kind':'ReadTimeout','message':'secret'}}, 'ReadTimeout'),
+                ({'transport_failure':{'kind':'secret'}}, 'unavailable'), ([], 'unavailable'),
+                ({'transport_failure':[]}, 'unavailable')):
+            error = RuntimeError('secret'); error.meta_payload = payload
+            self.assertEqual(_transport_kind(error), expected)
