@@ -91,6 +91,7 @@ jobs:
       - name: Private Launch catalog and funding interface
         run: |
           node tests/launch-private-catalog.test.cjs
+          php tests/private-launch-meta-marker.test.php
           node tests/launch-batch-review.test.cjs
       - name: Installed Launch UI to PHP targeting bridge
         run: node tests/launch-ui-php-targeting-bridge.test.cjs
@@ -104,7 +105,9 @@ jobs:
         run: node tests/payment-inspection-ui.test.cjs
 
       - name: Authenticated targeting choices and stale response guards
-        run: node tests/targeting-picker-runtime.test.cjs
+        run: |
+          node tests/targeting-picker-runtime.test.cjs
+          node tests/creative-targeting-roundtrip.test.cjs
 
       - name: Advertising estimate retry and account selection guards
         run: node tests/advertising-estimate-retry.test.cjs

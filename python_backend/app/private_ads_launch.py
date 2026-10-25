@@ -64,6 +64,20 @@ class AdsManagerLaunch:
         target = {"profile_id": str(profile_id), **{key: identity(payload.get(key))
                   for key in ("business_id", "ad_account_id", "page_id")}}
         raw_launch = payload.get("launch")
+        # The legacy Launch UI adds this flag while composing Meta builder
+        # fields. It is transport metadata only and is not part of the private
+        # Ads Manager launch contract. Strip only the exact boolean marker from
+        # the supported base/override shapes before applying strict validation.
+        # Keep unknown fields (and malformed marker values) intact so they are
+        # still rejected below.
+        if isinstance(raw_launch, dict):
+            raw_launch = copy.deepcopy(raw_launch)
+            if raw_launch.get("_meta_official_v1") is True:
+                raw_launch.pop("_meta_official_v1")
+            for key in ("base", "override"):
+                section = raw_launch.get(key)
+                if isinstance(section, dict) and section.get("_meta_official_v1") is True:
+                    section.pop("_meta_official_v1")
         if isinstance(raw_launch, dict) and {"base", "override"} & set(raw_launch):
             if set(raw_launch) - {"base", "override"}:
                 raise fail("INVALID_INPUT", "Launch overrides contain unsupported sections")
