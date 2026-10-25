@@ -131,7 +131,10 @@ class AdvertisingBridgeTests(unittest.TestCase):
             urllib.request.urlopen(self.url + '?action=private_session_probe&profile_id=4', timeout=5)
             self.fail('GET must not accept cookie context')
         except urllib.error.HTTPError as error:
-            self.assertEqual(error.code, 405)
+            # Production request policy returns 405; the fixture auth stub
+            # instead lets the bridge's read-action whitelist reject it.
+            self.assertIn(error.code, (400, 405))
+        self.assertEqual(self.worker_requests, [])
 
     def test_selected_masked_card_survives_real_php_review_bridge(self):
         payload = {'action': 'private_launch_review', 'profile_id': '7', 'business_id': '111111111',
