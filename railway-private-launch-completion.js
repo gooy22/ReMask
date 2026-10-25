@@ -1,6 +1,6 @@
 /* REMASK_PRIVATE_CREATIVE_LAUNCH_COMPLETION_V1 */
-// Unbound templates may use the reference catalog. A selected RK uses its
-// exact private scope; cached options are suggestions, never live permission proof.
+// Unbound templates may use the reference catalog. A selected RK must use its
+// own fresh private reads, never another profile's cached targeting options.
 function remaskPrivateTargetingScope() {
     const accounts=selectedAccountIds().map(value=>String(value).replace(/^act_/,''));
     if(accounts.length!==1)return null;
@@ -16,7 +16,7 @@ apiJson = async function(url, options = {}) {
             && (typeof options.body === 'string' || typeof options.body?.get === 'function')) {
         const input = typeof options.body === 'string' ? new URLSearchParams(options.body) : options.body;
         const body = new URLSearchParams();
-        for (const key of ['type','q','limit','offset','force']) {
+        for (const key of ['type','q','limit','offset']) {
             const value = input.get(key);
             if (value !== null) body.set(key, value);
         }
@@ -26,42 +26,12 @@ apiJson = async function(url, options = {}) {
             || (typeof remaskModuleControls!=='undefined' && remaskModuleControls.isTargetingType(type) ? type : null);
         const scope=resource ? remaskPrivateTargetingScope() : null;
         if(scope){
-            // Country, region and language IDs are stable Meta reference data.
-            // Use the installed local Meta module map first; it carries no
-            // account permission and cannot authorize a draft mutation.
-            if(['locations','locales'].includes(resource) && input.get('force')!=='1'){
-                const moduleBody=new URLSearchParams();
-                for(const key of ['type','q','limit','offset']){
-                    const value=input.get(key);if(value!==null)moduleBody.set(key,value);
-                }
-                moduleBody.set('type',resource);
-                moduleBody.set('module_only','1');
-                try{
-                    const moduleResult=await remaskPrivateOriginalTargetingApiJson(
-                        'ajax/metaTemplateTargetingSearch.php',{...options,body:moduleBody.toString()});
-                    const current=remaskPrivateTargetingScope();
-                    if(JSON.stringify(current)!==JSON.stringify(scope))throw new Error('TARGETING_SELECTION_CHANGED');
-                    const moduleSuggestion=moduleResult?.checked_live===false
-                        && moduleResult?.source==='private_meta_module_reference'
-                        && moduleResult?.template_account_bound===false
-                        && Array.isArray(moduleResult?.data)
-                        && (moduleResult.data.length>0 || resource==='locales');
-                    if(moduleSuggestion)return moduleResult;
-                }catch(error){
-                    if(error?.message==='TARGETING_SELECTION_CHANGED' || options.signal?.aborted)throw error;
-                    // Missing city or postal data continues through the exact-account Meta search.
-                }
-            }
             for(const [key,value] of Object.entries(scope))body.set(key,value);
             body.set('type',resource);
             const result=await remaskPrivateOriginalTargetingApiJson('ajax/metaTargetingSearch.php',{...options,body:body.toString()});
             const current=remaskPrivateTargetingScope();
             if(JSON.stringify(current)!==JSON.stringify(scope))throw new Error('TARGETING_SELECTION_CHANGED');
-            const liveRead=result?.checked_live===true && result?.account_scope_verified===true;
-            const cachedSuggestion=result?.checked_live===false && result?.account_scope_verified===false
-                && result?._cache?.hit===true && result?._cache?.cached_only===true
-                && result?.availability!=='NOT_LOADED';
-            if((!liveRead && !cachedSuggestion)
+            if(result?.checked_live!==true || result?.account_scope_verified!==true
                     || String(result.profile)!==scope.profile || String(result.account_id)!==scope.account_id
                     || result.resource!==resource)throw new Error('TARGETING_SOURCE_SCOPE_UNVERIFIED');
             return result;
@@ -70,22 +40,6 @@ apiJson = async function(url, options = {}) {
     }
     return remaskPrivateOriginalTargetingApiJson(url, options);
 };
-
-// Replace internal resource codes with a short, actionable audience message.
-function remaskPrivateAudienceStatus(){
-    const status=$('customAudienceStatus');
-    if(!status)return;
-    const raw=String(status.textContent||'').trim();
-    if(!/^Custom Audience discovery failed:/i.test(raw))return;
-    const code=raw.slice(raw.indexOf(':')+1).trim().toUpperCase();
-    status.textContent=/SESSION|CHECKPOINT|LOGIN|TWO_FACTOR/.test(code)
-        ? 'Обновите Facebook-сессию, чтобы загрузить свои аудитории.'
-        : 'Meta не вернула список собственных аудиторий для выбранного РК. Это поле необязательное; остальные настройки сохранены.';
-}
-const remaskPrivateAudienceStatusRoot=$('singleAudienceBox')||document.body;
-if(remaskPrivateAudienceStatusRoot)new MutationObserver(remaskPrivateAudienceStatus)
-    .observe(remaskPrivateAudienceStatusRoot,{childList:true,subtree:true,characterData:true});
-remaskPrivateAudienceStatus();
 
 // A selected RK needs its own promotable Pages, not only the profile's old
 // inventory. Cache misses are refreshed by the private worker automatically.

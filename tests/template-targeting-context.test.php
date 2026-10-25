@@ -27,21 +27,6 @@ foreach([['profile'=>'foreign'],['checked_live'=>false],['account_id'=>''],['bus
     try { RemaskTemplateTargetingContext::referenceResponse('20',array_replace($proof,$bad)); throw new LogicException('unverified context accepted'); }
     catch(RuntimeException $error) { expect($error->getMessage()==='TEMPLATE_LOOKUP_ACCESS_UNVERIFIED','discovery proof guard'); }
 }
-$cachedOptions=array_replace($proof,[
-    'checked_live'=>false,'account_scope_verified'=>false,'template_account_bound'=>false,
-    'source'=>'private_meta_targeting_option_index',
-    'data'=>[['id'=>'123456','name'=>'Travel','type'=>'interests']],
-    '_cache'=>['hit'=>true,'cached_only'=>true,'index'=>true,'stale'=>false],
-]);
-expect(RemaskTemplateTargetingContext::referenceResponse('20',$cachedOptions)===$cachedOptions,
-    'account-scoped saved Meta options are usable as suggestions without claiming live permission');
-$unmarkedCache=$cachedOptions;
-$unmarkedCache['_cache']['cached_only']=false;
-try { RemaskTemplateTargetingContext::referenceResponse('20',$unmarkedCache);
-    throw new LogicException('unmarked cached option accepted as live proof'); }
-catch(RuntimeException $error) {
-    expect($error->getMessage()==='TEMPLATE_LOOKUP_ACCESS_UNVERIFIED','cached options never substitute for fresh permission proof');
-}
 try {RemaskTemplateTargetingContext::referenceResponse('20',['detail'=>'TEMPLATE_REFERENCE_READ_TIMEOUT']);throw new LogicException('failed worker accepted');}
 catch(RuntimeException $error){expect($error->getMessage()==='TEMPLATE_REFERENCE_READ_TIMEOUT','typed string failure preserved');}
 $context=RemaskTemplateTargetingContext::resolve($profiles,$load);
@@ -183,12 +168,4 @@ expect(!str_contains(json_encode($unbound),'old-owned-hash'),'nested owned media
 $endpoint=file_get_contents(dirname(__DIR__).'/railway-template-targeting-search.php');
 expect(!str_contains($endpoint,"\$input['profile']") && !str_contains($endpoint,"\$input['account_id']"),'client cannot choose destination through template lookup');
 expect(str_contains($endpoint,"'checked_live'") && str_contains($endpoint,"'account_scope_verified'"),'actual Meta read proof remains required');
-$cachedIndexAt=strpos($endpoint,"\$cacheMeta=\$result['_cache'] ?? []");
-$liveProofAt=strpos($endpoint,"if ((\$result['checked_live'] ?? null) !== true");
-expect($cachedIndexAt!==false && $liveProofAt!==false && $cachedIndexAt<$liveProofAt,
-    'saved index values are returned as suggestions before the live-read proof gate');
-$moduleOnlyAt=strpos($endpoint,'if ($moduleOnly)');
-$profileLookupAt=strpos($endpoint,'$profiles = []');
-expect($moduleOnlyAt!==false && $profileLookupAt!==false && $moduleOnlyAt<$profileLookupAt,
-    'static GEO/language misses return before opening any profile or Meta context');
 echo "Template targeting uses automatic scoped reads without a publishing binding.\n";

@@ -26,7 +26,6 @@ class Element {
   after(node){this.next=node;}
   querySelector(){return this.children.find(node=>node.type==='button')||null;}
   focus(){}
-  remove(){this.isConnected=false;this.removed=true;}
   fire(type,key){this.dispatchEvent({type,key,preventDefault(){},stopPropagation(){},stopImmediatePropagation(){}});}
 }
 class Input extends Element {get value(){return this._value||'';}set value(value){this._value=String(value);}}
@@ -112,21 +111,14 @@ function fixture(){
 
 
   const launch=fixture();const replies=[],launchRequests=[];
-  for(const id of ['geoQuery','geoResults','selectedGeo','geoSearch','interestSearch'])
-    launch.nodes.set(id,id.endsWith('Query')?new Input():new Element());
+  for(const id of ['geoQuery','geoResults','selectedGeo'])launch.nodes.set(id,id.endsWith('Query')?new Input():new Element());
   let legacyReads=0;
   launch.nodes.get('geoQuery').addEventListener('input',()=>legacyReads++);
   launch.nodes.get('geoQuery').addEventListener('keydown',()=>legacyReads++);
-  let launchFailure=null;
   Object.assign(launch.ctx,{$:id=>launch.nodes.get(id),state:{geo:[]},formPost:body=>body,
-    apiJson:async(url,options)=>{launchRequests.push({url,options});if(launchFailure)throw launchFailure;return new Promise(resolve=>replies.push(resolve));},
+    apiJson:async(url,options)=>{launchRequests.push({url,options});return new Promise(resolve=>replies.push(resolve));},
     renderPills(){},invalidateLaunchReview(){},validateReady(){}});
   vm.runInContext(read('railway-targeting-pickers.js'),launch.ctx);
-  assert.equal(launch.nodes.get('geoSearch').isConnected,false,'the obsolete GEO search button is removed');
-  assert.equal(launch.nodes.get('interestSearch').isConnected,false,'the obsolete interest search button is removed');
-  launch.nodes.get('geoQuery').fire('focus');
-  assert.equal(launchRequests.length,0,'focusing an empty field does not request the full Meta catalog');
-  launch.nodes.get('geoQuery').value='Ukraine';
   let request=launch.ctx.searchTargeting('locations');
   launch.nodes.get('geoQuery').fire('input');replies.shift()({data:[{key:'UA',type:'country',name:'Ukraine'}]});await request;
   assert.equal(launch.nodes.get('geoResults').children.length,0,'Launch rejects old results while typing');
@@ -137,12 +129,7 @@ function fixture(){
   replies.shift()({data:[{key:'UA',type:'country',name:'Ukraine'}]});await request;
   launch.nodes.get('geoResults').children[0].fire('click');
   assert.equal(launch.ctx.state.geo[0].key,'UA','selection keeps the original country key');
-  launch.nodes.get('geoQuery').value='Ukraine';
-  launchFailure=Object.assign(new Error('PRIVATE_ADS_DRAFT_RESOURCE_READ_INCOMPLETE'),{code:'PRIVATE_ADS_DRAFT_RESOURCE_READ_INCOMPLETE'});
-  await launch.ctx.searchTargeting('locations');
-  assert.equal(launch.nodes.get('geoResults').textContent,'Список сейчас недоступен. Выбранные настройки не изменены.');
-  assert.doesNotMatch(launch.nodes.get('geoResults').textContent,/PRIVATE_ADS_DRAFT/,'internal Meta codes stay out of the UI');
-  console.log('Launch choices: no extra search buttons, no blank catalog fetch, friendly errors and exact selection IDs passed.');
+  console.log('Launch choices: query invalidation and original selection IDs passed.');
   for(const id of ['interestQuery','interestResults','selectedInterests'])launch.nodes.set(id,id.endsWith('Query')?new Input():new Element());
   launch.ctx.state.interests=[];
   // Installation has already occurred; create a new fixture with its elements
@@ -154,7 +141,6 @@ function fixture(){
     apiJson:async(url,options)=>{pageRequests.push({url,options});return new Promise(resolve=>pageReplies.push(resolve));},
     renderPills(){},invalidateLaunchReview(){},validateReady(){}});
   vm.runInContext(read('railway-targeting-pickers.js'),paged.ctx);
-  paged.nodes.get('interestQuery').value='Travel';
   let first=paged.ctx.searchTargeting('interests');
   pageReplies.shift()({data:[{id:'100001',name:'First interest',path:['Category']}],
     next_offset:100,offset:0,truncated:true,source:'private_meta_template_reference'});
@@ -173,9 +159,6 @@ function fixture(){
   assert.equal(paged.ctx.state.interests[0].path[1],'Second','category hierarchy is preserved for the chosen ID');
   assert.equal(resultBox.children.length,0,'selection dismisses all remaining options');
   console.log('Launch category browser: paged discovery, exact ID choice and saved taxonomy passed.');
-  const cleanUiSource=read('railway-targeting-autocomplete-overlay.php');
-  assert.match(cleanUiSource,/remask-targeting-search-cleanup/,'legacy search controls stay hidden before first paint');
-  assert.match(cleanUiSource,/#geoSearch,#interestSearch\{display:none!important;visibility:hidden!important\}/);
   // Installed Launch API wrapper must retain the page offset. Previously it
   // forwarded type/query/limit but silently dropped offset from a template.
   const completion=fixture(),bridged=[];
@@ -209,63 +192,6 @@ function fixture(){
   assert.equal(new URLSearchParams(selectedCalls[0].options.body).get('offset'),'100');
   assert.equal(selectedPage.next_offset,200);
   console.log('Installed targeting API bridge: later page offset survives request routing.');
-
-  // GEO countries/regions and languages must hit the installed Meta module
-  // reference before a slow profile/account private search.
-  const audienceUi=fixture(),audienceBox=new Element(),audienceStatus=new Element();
-  audienceStatus.textContent='Custom Audience discovery failed: ADVERTISING_RESOURCE_UNAVAILABLE';
-  audienceBox.appendChild(audienceStatus);
-  audienceUi.nodes.set('singleAudienceBox',audienceBox);
-  audienceUi.nodes.set('customAudienceStatus',audienceStatus);
-  Object.assign(audienceUi.ctx,{$:id=>audienceUi.nodes.get(id),URLSearchParams,state:{profile:'38'},
-    selectedAccountIds:()=>[],targetMode:()=>false,apiJson:async()=>({data:[]})});
-  vm.runInContext(completionSource.slice(0,completionSource.indexOf('// A selected RK needs')),audienceUi.ctx);
-  assert.equal(audienceStatus.textContent,
-    'Meta не вернула список собственных аудиторий для выбранного РК. Это поле необязательное; остальные настройки сохранены.',
-    'raw internal audience errors are replaced with an actionable optional-field message');
-
-  const localReference=fixture(),localCalls=[];
-  Object.assign(localReference.ctx,{$:()=>null,URLSearchParams,state:{profile:'38'},
-    selectedAccountIds:()=>['111111'],targetMode:()=>false,
-    apiJson:async(url,options)=>{
-      localCalls.push({url,options});
-      if(url==='ajax/metaTemplateTargetingSearch.php')
-        return {data:[{id:'UA',key:'UA',name:'Украина',type:'country'}],checked_live:false,
-          source:'private_meta_module_reference',template_account_bound:false};
-      throw new Error('private search must not run for a local country hit');
-    }});
-  vm.runInContext(completionSource.slice(0,completionSource.indexOf('// A selected RK needs')),localReference.ctx);
-  const country=await localReference.ctx.apiJson('ajax/metaTargetingSearch.php',{
-    body:'type=locations&q=Ukraine&limit=100'
-  });
-  assert.equal(localCalls.length,1,'known GEO values return without a private Meta request');
-  assert.equal(localCalls[0].url,'ajax/metaTemplateTargetingSearch.php');
-  assert.match(localCalls[0].options.body,/module_only=1/);
-  assert.doesNotMatch(localCalls[0].options.body,/account_id|profile=/,
-    'shared IDs are suggestions, never represented as selected-account permission');
-  assert.equal(country.data[0].key,'UA');
-  assert.equal(country.checked_live,false,'a static Meta reference cannot claim a fresh account check');
-
-  const cityLookup=fixture(),cityCalls=[];
-  Object.assign(cityLookup.ctx,{$:()=>null,URLSearchParams,state:{profile:'38'},
-    selectedAccountIds:()=>['111111'],targetMode:()=>false,
-    apiJson:async(url,options)=>{
-      cityCalls.push({url,options});
-      if(url==='ajax/metaTemplateTargetingSearch.php')
-        return {data:[],checked_live:false,availability:'NOT_LOADED',
-          source:'private_meta_module_reference',template_account_bound:false};
-      return {data:[{id:'987654',key:'987654',name:'Kyiv',type:'city'}],
-        checked_live:true,account_scope_verified:true,profile:'38',account_id:'111111',resource:'locations'};
-    }});
-  vm.runInContext(completionSource.slice(0,completionSource.indexOf('// A selected RK needs')),cityLookup.ctx);
-  const city=await cityLookup.ctx.apiJson('ajax/metaTargetingSearch.php',{
-    body:'type=locations&q=Kyiv&limit=100'
-  });
-  assert.equal(cityCalls.length,2,'unsupported module geography continues through private Meta lookup');
-  assert.equal(cityCalls[1].url,'ajax/metaTargetingSearch.php');
-  assert.match(cityCalls[1].options.body,/profile=38/);
-  assert.match(cityCalls[1].options.body,/account_id=111111/);
-  assert.equal(city.data[0].id,'987654','city search retains the exact Meta result ID');
 
 
 

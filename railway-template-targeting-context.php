@@ -68,23 +68,6 @@ final class RemaskTemplateTargetingContext {
             throw new RuntimeException(is_string($code) && preg_match('/^[A-Z][A-Z0-9_]{2,119}$/D',$code)
                 ? $code : 'TEMPLATE_LOOKUP_UNAVAILABLE');
         }
-        $cache=$data['_cache'] ?? [];
-        $cachedOptions=is_array($cache) && ($cache['hit'] ?? false)===true
-            && ($cache['cached_only'] ?? false)===true
-            && ($data['checked_live'] ?? null)===false
-            && ($data['account_scope_verified'] ?? null)===false
-            && ($data['source_context_discovered'] ?? null)===true
-            && ($data['template_account_bound'] ?? null)===false
-            && in_array($data['source'] ?? '',[
-                'private_meta_targeting_option_index','ads_manager_private_http','private_meta_targetingbrowse'
-            ],true)
-            && is_array($data['data'] ?? null)
-            && count($data['data'])>0
-            && ($data['profile'] ?? '')===$profile
-            && ($data['transport'] ?? '')==='private_http_h2'
-            && preg_match('/^[0-9]{5,30}$/D',(string)($data['account_id'] ?? ''))
-            && preg_match('/^[0-9]{5,30}$/D',(string)($data['business_id'] ?? ''));
-        if ($cachedOptions) return $data;
         if (($data['profile']??'')!==$profile || ($data['checked_live']??null)!==true
             || ($data['account_scope_verified']??null)!==true || ($data['transport']??'')!=='private_http_h2'
             || ($data['source_context_discovered']??null)!==true

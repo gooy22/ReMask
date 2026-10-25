@@ -1,6 +1,5 @@
 import asyncio
 import unittest
-import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -29,9 +28,9 @@ class TemplateReferenceTests(unittest.IsolatedAsyncioTestCase):
             patcher = patch('app.private_template_reads.'+name, mock)
             patcher.start(); self.addCleanup(patcher.stop)
 
-    async def read(self, operation='audience_estimate', inputs=None, resource_store=None):
+    async def read(self, operation='audience_estimate', inputs=None):
         return await read_template_reference(self.web,self.catalog,self.context,operation,
-            self.inputs if inputs is None else inputs, resource_store=resource_store)
+            self.inputs if inputs is None else inputs)
 
     async def test_new_profile_discovers_reference_without_saved_inventory_or_global_ready(self):
         result = await self.read()
@@ -131,50 +130,6 @@ class TemplateReferenceTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(reader.read.await_args.args[2]['limit'],20000)
             await self.read('interests',{'q':'fitness','limit':20000})
             self.assertEqual(reader.read.await_args.args[2]['limit'],500)
-
-    async def test_launch_targeting_reuses_scoped_persistent_index_before_meta(self):
-        self.context.ad_accounts = [self.account]
-        saved = {'data':[{'id':'987654','name':'Travel','type':'interests'}],
-            'account_id':'111111','business_id':'222222','checked_live':False,
-            'account_scope_verified':False,'checked_at':int(time.time()),
-            'source':'private_meta_targeting_option_index',
-            '_cache':{'hit':True,'cached_only':True,'index':True,'stale':False,
-                'fetched_at':int(time.time())}}
-        resources = SimpleNamespace(TARGETING_OPTION_TYPES=frozenset({'interests','behaviors','locations','locales'}),
-            get=AsyncMock(return_value=saved))
-        result = await self.read('interests', {'q':'trav','limit':50}, resource_store=resources)
-        self.assertEqual(result['data'][0]['id'],'987654')
-        self.assertFalse(result['checked_live'])
-        self.assertFalse(result['account_scope_verified'])
-        self.assertEqual(result['source'],'private_meta_targeting_option_index')
-        self.assertEqual(result['profile'],'20')
-        self.assertEqual(result['business_id'],'222222')
-        self.discovery.assert_not_awaited()
-        self.helper.assert_not_awaited()
-        resources.get.assert_awaited_once()
-        self.assertEqual(resources.get.await_args.kwargs['actor_id'],'999999')
-        self.assertNotIn('force',resources.get.await_args.kwargs)
-
-    async def test_launch_targeting_cache_miss_refreshes_through_persistent_resource_store(self):
-        self.context.ad_accounts = [self.account]
-        cached = {'data':[],'availability':'NOT_LOADED',
-            '_cache':{'hit':False,'cached_only':True}}
-        fresh = {'data':[{'id':'987654','name':'Travel','type':'interests'}],
-            'account_id':'111111','checked_live':True,'account_scope_verified':True,
-            'checked_at':int(time.time()),'source':'ads_manager_private_http',
-            '_cache':{'hit':False,'cached_only':False,'stale':False}}
-        resources = SimpleNamespace(TARGETING_OPTION_TYPES=frozenset({'interests','behaviors','locations','locales'}),
-            get=AsyncMock(side_effect=[cached,fresh]))
-        result = await self.read('interests', {'q':'Travel','limit':50}, resource_store=resources)
-        self.assertEqual(result['data'][0]['id'],'987654')
-        self.assertTrue(result['checked_live'])
-        self.assertTrue(result['account_scope_verified'])
-        self.assertEqual(result['profile'],'20')
-        self.assertEqual(result['business_id'],'222222')
-        self.assertEqual(resources.get.await_count,2)
-        self.assertTrue(resources.get.await_args.kwargs['force'])
-        self.assertIs(resources.get.await_args.kwargs['web'],self.web)
-        self.assertEqual(resources.get.await_args.kwargs['values']['ad_account_id'],'111111')
 
     async def test_owned_resources_and_mutations_are_rejected_before_network(self):
         for operation,inputs in [('preview',{}),('PUBLISH',{}),('images',{}),

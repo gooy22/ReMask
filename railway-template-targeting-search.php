@@ -24,20 +24,9 @@ try {
     if (!preg_match('/^(0|[1-9][0-9]{0,4})$/D',$rawOffset) || (int)$rawOffset>19900 || (int)$rawOffset%100!==0)
         throw new InvalidArgumentException('INVALID_TARGETING_OFFSET');
     $offset=(int)$rawOffset;
-    $moduleOnly = (string)($input['module_only'] ?? '') === '1';
-    if (array_key_exists('module_only',$input) && !$moduleOnly)
-        throw new InvalidArgumentException('INVALID_TARGETING_MODE');
-    if ($moduleOnly && !in_array($type,['locations','locales'],true))
-        throw new InvalidArgumentException('INVALID_TARGETING_MODE');
     $module = RemaskModuleTargetingReference::search($type,$query,
         __DIR__.'/../classes/meta-targeting-reference.json',$offset);
     if ($module !== null) { MetaEndpoint::ok($module); exit; }
-    if ($moduleOnly) {
-        MetaEndpoint::ok(['data'=>[],'checked_live'=>false,'availability'=>'NOT_LOADED',
-            'source'=>'private_meta_module_reference','offset'=>$offset,'next_offset'=>null,
-            'template_account_bound'=>false]);
-        exit;
-    }
     $reference = new RemaskTemplateTargetingReference(dirname(ACCOUNTSFILENAME).'/template-targeting-'.hash('sha256',ACCOUNTSFILENAME).'.json');
     $cached = $reference->get($type, $query, time(), $offset);
     if ($cached !== null) { MetaEndpoint::ok($cached); exit; }
@@ -67,20 +56,6 @@ try {
             // Complete bounded reference tree is cached; browser responses stay at 100 choices.
             $result = RemaskTemplateTargetingContext::readReference($context['profile'],$type,
                 ['q'=>$query,'limit'=>$query==='' ? 20000 : 50]);
-            $cacheMeta=$result['_cache'] ?? [];
-            if (($cacheMeta['hit'] ?? false)===true && ($cacheMeta['cached_only'] ?? false)===true
-                && in_array($result['source'] ?? '',[
-                    'private_meta_targeting_option_index','ads_manager_private_http','private_meta_targetingbrowse'
-                ],true) && is_array($result['data'] ?? null) && count($result['data'])>0) {
-                MetaEndpoint::ok(['data'=>$result['data'], 'checked_live'=>false,
-                    'offset'=>$offset, 'next_offset'=>$result['next_offset'] ?? null,
-                    'truncated'=>($result['truncated'] ?? false) === true,
-                    'catalog_count'=>(int)($result['catalog_count'] ?? count($result['data'])),
-                    'source'=>$result['source'], 'template_account_bound'=>false,
-                    'reference_checked_at'=>(int)($result['checked_at'] ?? 0),
-                    'reference_stale'=>($cacheMeta['stale'] ?? false)===true]);
-                exit;
-            }
             if (($result['checked_live'] ?? null) !== true || ($result['account_scope_verified'] ?? null) !== true)
                 throw new RuntimeException('TEMPLATE_LOOKUP_ACCESS_UNVERIFIED');
             $reference->put($type, $query, $result, time());

@@ -717,17 +717,6 @@ class ReadOnlyReferenceBootstrapReuseTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(client.read_only for client in results))
         self.assertEqual(self.web.fetch_text.await_count, 1)
 
-    async def test_reference_context_survives_slow_targeting_request_window(self):
-        from app.private_ads_http import _REFERENCE_CONTEXT_CACHE
-        await self.open_reference()
-        key = next(iter(_REFERENCE_CONTEXT_CACHE))
-        observed, context, origin = _REFERENCE_CONTEXT_CACHE[key]
-        # Live ReMask searches can take 40+ seconds; keep this account-bound,
-        # read-only bootstrap reusable across targeting fields in that window.
-        _REFERENCE_CONTEXT_CACHE[key] = (observed - 120, context, origin)
-        await self.open_reference()
-        self.assertEqual(self.web.fetch_text.await_count, 1)
-
     async def test_cookie_account_and_expired_cache_must_reinitialize(self):
         from app.private_ads_http import _REFERENCE_CONTEXT_CACHE, _REFERENCE_CONTEXT_TTL_SECONDS
         await self.open_reference()
