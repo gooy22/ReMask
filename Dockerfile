@@ -177,7 +177,7 @@ RUN set -eux; \
     grep -q "hierarchy_sync_result_put" /var/www/html/ajax/metaHierarchy.php; \
     grep -q "\$action === 'sync_result'" /var/www/html/ajax/metaHierarchy.php; \
     grep -q 'syncApiJson' /var/www/html/scripts/workspace.js; \
-    ! grep -q '��� ads_management' /var/www/html/scripts/workspace.js; \
+    ! grep -q 'нет ads_management' /var/www/html/scripts/workspace.js; \
     grep -Fq "'proxy_configured' => \$proxy !== null" /var/www/html/ajax/metaHierarchy.php; \
     grep -q 'ad_account_bindings' /opt/remask-python/main.py; \
     grep -q 'confirmed_ad_account_bindings_for_profile' /opt/remask-python/app/provisioning/state.py; \
@@ -356,7 +356,7 @@ RUN set -eux; \
     grep -q 'python-worker-ui-v220' /var/www/html/workspace.php; \
     if grep -Fq '\\`' /var/www/html/scripts/workspace.js; then echo 'workspace-invalid-backtick' >&2; exit 92; fi; \
     grep -q 'error_id' /var/www/html/ajax/metaProfileManager.php; \
-    ! grep -q '������ Cookies JSON ⥪�饩 FB-��ᨨ' /var/www/html/scripts/workspace.js; \
+    ! grep -q 'Добавь Cookies JSON текущей FB-сессии' /var/www/html/scripts/workspace.js; \
     ! grep -Fq "value.trim()||'[]'" /var/www/html/scripts/workspace.js; \
     grep -q 'metaProfileManager.php' /var/www/html/ajax/metaHierarchy.php; \
     grep -q 'addOrUpdateAccount' /var/www/html/ajax/metaProfileManager.php; \
@@ -534,7 +534,7 @@ RUN set -eux; \
     grep -q 'creativeModal' /var/www/html/creatives.php; \
     grep -q 'REMASK_PERSISTENCE_ROOT_V1' /var/www/html/settings.php; \
     grep -q 'REMASK_CREATIVE_LIBRARY_V1' /var/www/html/settings.php; \
-    grep -q "'creatives.php','fa-images','�ॠ⨢�'" /var/www/html/menu.php; \
+    grep -q "'creatives.php','fa-images','Креативы'" /var/www/html/menu.php; \
     grep -q 'creativeLibrarySelect' /var/www/html/launch.php; \
     grep -q 'REMASK_CREATIVE_LIBRARY_LAUNCH_V1' /var/www/html/scripts/launch.js; \
     grep -q "form.append('media_library_id'" /var/www/html/scripts/launch.js; \
