@@ -21,7 +21,7 @@ log = logging.getLogger("remask_worker")
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
-async def buffered_response(method, open_response, size, *, retry_read=False, validate=None):
+async def buffered_response(method, open_response, size, *, retry_read=False, validate=None, reader=None):
     """Finish a bounded read before exposing bytes; retry an interrupted GET once.
 
     Callers keep the same profile client and request arguments. HTTP rejection,
@@ -34,7 +34,7 @@ async def buffered_response(method, open_response, size, *, retry_read=False, va
             async with open_response() as response:
                 if validate is not None:
                     validate(response)
-                raw = await response.content.read(size)
+                raw = await reader(response) if reader is not None else await response.content.read(size)
                 return response, raw
         except (httpx.ConnectError, httpx.ReadError, httpx.RemoteProtocolError) as error:
             kind = next(name for cls, name in (

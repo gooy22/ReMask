@@ -370,7 +370,10 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
                 web._fetch_dtsg_refresh_token = AsyncMock()
                 with self.assertRaises(RemoteRequestError) as caught:
                     await web.bootstrap()
-                self.assertEqual(len(calls), 1)
+                self.assertEqual(len(calls), 2 if isinstance(failure, httpx.ConnectError) else 1)
+                self.assertEqual({str(request.url) for request in calls}, {web.ADS_MANAGER_URL})
+                self.assertEqual({request.method for request in calls}, {'GET'})
+                self.assertEqual({request.headers.get('cookie') for request in calls}, {'c_user=123'})
                 web._fetch_dtsg_refresh_token.assert_not_awaited()
                 self.assertFalse(caught.exception.request_may_have_been_sent)
                 self.assertEqual(caught.exception.transport_stage, "bootstrap")

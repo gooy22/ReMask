@@ -628,7 +628,8 @@ class FacebookWebSession:
 
             for bootstrap_url in bootstrap_urls:
                 try:
-                    async with session.get(
+                    from app.private_http import buffered_response
+                    response, candidate_body = await buffered_response('GET', lambda: session.get(
                         bootstrap_url,
                         proxy=self.profile.proxy,
                         headers={
@@ -645,76 +646,75 @@ class FacebookWebSession:
                             "Sec-Fetch-User": "?1",
                             "Upgrade-Insecure-Requests": "1",
                         },
-                        allow_redirects=True,
-                    ) as response:
-                        candidate_body = await response.text()
-                        candidate_url = str(response.url)
+                        allow_redirects=True, request_timeout_seconds=max(30, self.timeout_seconds),
+                    ), 16 * 1024 * 1024 + 1, retry_read=True, reader=lambda response: response.text())
+                    candidate_url = str(response.url)
 
-                        if response.status >= 500:
-                            attempts.append(
-                                f"{bootstrap_url}: HTTP {response.status}"
-                            )
-                            continue
-
-                        parts = urlsplit(candidate_url)
-                        route = parts.path.lower()
-                        if (
-                            "/login" in route
-                            or "/checkpoint" in route
-                            or _has_login_form(candidate_body)
-                        ):
-                            auth_attempts.append({"auth_reason": "checkpoint_redirect" if "/checkpoint" in route
-                                else "login_redirect" if "/login" in route else "login_form",
-                                "final_url": f"{parts.scheme}://{parts.hostname or ''}{parts.path}"})
-                            error = AuthenticationError("Meta requires session restoration before bootstrap.")
-                            error.meta_payload = {"business_precheck": auth_attempts}
-                            error.request_may_have_been_sent = False
-                            error.transport_stage = "bootstrap"
-                            raise error
-
-                        if len(candidate_body) > len(best_authenticated_body):
-                            best_authenticated_body = candidate_body
-                            best_authenticated_url = candidate_url
-
-                        candidate_dtsg = self._first_match(
-                            candidate_body,
-                            token_patterns,
+                    if response.status >= 500:
+                        attempts.append(
+                            f"{bootstrap_url}: HTTP {response.status}"
                         )
-                        if not candidate_dtsg:
-                            normalized_sources = self._match_sources(candidate_body)
-                            marker_names = [
-                                marker
-                                for marker in (
-                                    "DTSGInitialData",
-                                    "DTSGInitData",
-                                    '"fb_dtsg"',
-                                    'name="fb_dtsg"',
-                                    "name='fb_dtsg'",
-                                    "CurrentUserInitialData",
-                                )
-                                if any(marker in source for source in normalized_sources)
-                            ]
-                            surface = (
-                                f"HTTP {response.status} final={candidate_url} "
-                                f"bytes={len(candidate_body)}"
-                            )
-                            if marker_names:
-                                attempts.append(
-                                    f"{bootstrap_url}: {surface} markers="
-                                    + ",".join(marker_names)
-                                    + " but no usable fb_dtsg was parsed"
-                                )
-                            else:
-                                attempts.append(
-                                    f"{bootstrap_url}: {surface} no DTSG marker"
-                                )
-                            continue
+                        continue
 
-                        body = candidate_body
-                        final_url = candidate_url
-                        bootstrap_source = bootstrap_url
-                        fb_dtsg = candidate_dtsg
-                        break
+                    parts = urlsplit(candidate_url)
+                    route = parts.path.lower()
+                    if (
+                        "/login" in route
+                        or "/checkpoint" in route
+                        or _has_login_form(candidate_body)
+                    ):
+                        auth_attempts.append({"auth_reason": "checkpoint_redirect" if "/checkpoint" in route
+                            else "login_redirect" if "/login" in route else "login_form",
+                            "final_url": f"{parts.scheme}://{parts.hostname or ''}{parts.path}"})
+                        error = AuthenticationError("Meta requires session restoration before bootstrap.")
+                        error.meta_payload = {"business_precheck": auth_attempts}
+                        error.request_may_have_been_sent = False
+                        error.transport_stage = "bootstrap"
+                        raise error
+
+                    if len(candidate_body) > len(best_authenticated_body):
+                        best_authenticated_body = candidate_body
+                        best_authenticated_url = candidate_url
+
+                    candidate_dtsg = self._first_match(
+                        candidate_body,
+                        token_patterns,
+                    )
+                    if not candidate_dtsg:
+                        normalized_sources = self._match_sources(candidate_body)
+                        marker_names = [
+                            marker
+                            for marker in (
+                                "DTSGInitialData",
+                                "DTSGInitData",
+                                '"fb_dtsg"',
+                                'name="fb_dtsg"',
+                                "name='fb_dtsg'",
+                                "CurrentUserInitialData",
+                            )
+                            if any(marker in source for source in normalized_sources)
+                        ]
+                        surface = (
+                            f"HTTP {response.status} final={candidate_url} "
+                            f"bytes={len(candidate_body)}"
+                        )
+                        if marker_names:
+                            attempts.append(
+                                f"{bootstrap_url}: {surface} markers="
+                                + ",".join(marker_names)
+                                + " but no usable fb_dtsg was parsed"
+                            )
+                        else:
+                            attempts.append(
+                                f"{bootstrap_url}: {surface} no DTSG marker"
+                            )
+                        continue
+
+                    body = candidate_body
+                    final_url = candidate_url
+                    bootstrap_source = bootstrap_url
+                    fb_dtsg = candidate_dtsg
+                    break
 
                 except (asyncio.TimeoutError, aiohttp.ClientError, httpx.HTTPError) as exc:
                     # The failed profile route cannot establish cookie expiry.
@@ -872,10 +872,11 @@ class FacebookWebSession:
         # Recovery pages are document navigations too. Opt in at the caller
         # rather than changing generic bundle/API/CDN reads across the app.
         facebook_host = hostname == "facebook.com" or hostname.endswith(".facebook.com")
-        if facebook_host and (hostname == "business.facebook.com" or document_navigation) and not (
+        document_request = facebook_host and (hostname == "business.facebook.com" or document_navigation) and not (
             parts.path.lower().endswith((".js", ".css", ".json"))
             or "/api/" in parts.path.lower()
-        ):
+        )
+        if document_request:
             request_headers.update({
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Accept-Language": "en-US,en;q=0.9",
@@ -890,8 +891,9 @@ class FacebookWebSession:
             from app.private_http import buffered_response
             response, raw = await buffered_response('GET', lambda: session.get(
                 target, proxy=self.profile.proxy, headers=request_headers,
-                allow_redirects=True), max(1, int(max_bytes)) + 1,
-                retry_read=facebook_host and document_navigation)
+                allow_redirects=True, **({'request_timeout_seconds':max(30, self.timeout_seconds)}
+                    if document_request else {})), max(1, int(max_bytes)) + 1,
+                retry_read=document_request)
             if len(raw) > max_bytes:
                 raw = raw[:max_bytes]
 
