@@ -49,7 +49,6 @@ COPY .deploy/clean-preview-valid/runtime.b64.* /tmp/remask-parts/
 COPY railway-*.php railway-*.js /tmp/
 COPY tests/payment-card-vault.test.php /tmp/remask-tests/payment-card-vault.test.php
 COPY tests/credential-key-compat.test.php /tmp/remask-tests/credential-key-compat.test.php
-COPY tests/private-launch-meta-marker.test.php /tmp/remask-tests/private-launch-meta-marker.test.php
 COPY tests/private-inventory-identity.test.php /tmp/remask-tests/private-inventory-identity.test.php
 COPY tests/template-targeting-context.test.php /tmp/remask-tests/template-targeting-context.test.php
 COPY tests/readiness.test.php /tmp/remask-tests/readiness.test.php
@@ -58,8 +57,6 @@ COPY docker-start.sh /tmp/docker-start.sh
 RUN set -eux; \
     php /tmp/remask-tests/payment-card-vault.test.php; \
     php /tmp/remask-tests/credential-key-compat.test.php; \
-    php -l /tmp/railway-private-launch-meta-marker.php; \
-    php /tmp/remask-tests/private-launch-meta-marker.test.php; \
     cp /tmp/railway-v100-creativeLibrary.php /tmp/remask-v100-creativeLibrary.php; \
     cp /tmp/railway-v100-creativePreview.php /tmp/remask-v100-creativePreview.php; \
     cp /tmp/railway-v100-creatives.php /tmp/remask-v100-creatives.php; \
@@ -308,7 +305,7 @@ RUN set -eux; \
     grep -q 'REMASK_FULL_META_LAUNCH_V1' /var/www/html/scripts/launch.js; \
     grep -q 'launchMetaSdkFields' /var/www/html/launch.php; \
     grep -q 'remaskCurrentMetaBuilderForJob' /var/www/html/scripts/launch.js; \
-    grep -q '20261023-private-launch-meta-marker-v1' /var/www/html/launch.php; \
+    grep -q '20261021-managed-media-preflight' /var/www/html/launch.php; \
     grep -q 'REMASK_META_VISUAL_EDITORS_V1' /var/www/html/scripts/launch.js; \
     grep -q 'REMASK_LANGUAGE_SEARCH_V1' /var/www/html/classes/MetaAdsService.php; \
     grep -q "'type' => 'adlocale'" /var/www/html/classes/MetaAdsService.php; \
@@ -318,10 +315,10 @@ RUN set -eux; \
     grep -q 'languageQuery' /var/www/html/scripts/launch.js; \
     grep -q 'mbLanguageSearch' /var/www/html/creatives.php; \
     grep -q 'languages:{input' /var/www/html/scripts/creatives.js; \
-    grep -q '20261023-private-launch-meta-marker-v1' /var/www/html/launch.php; \
+    grep -q '20261021-managed-media-preflight' /var/www/html/launch.php; \
     grep -q 'languages-v117' /var/www/html/creatives.php; \
     grep -q 'rmMetaVisualModal' /var/www/html/launch.php; \
-    grep -q '20261023-private-launch-meta-marker-v1' /var/www/html/launch.php; \
+    grep -q '20261021-managed-media-preflight' /var/www/html/launch.php; \
     grep -Fq "kind === 'geo' || kind === 'excludedGeo'" /var/www/html/scripts/creatives.js; \
     grep -q "state.behaviors = Array.isArray(targeting.behaviors)" /var/www/html/scripts/launch.js; \
     grep -q 'mbGeoSearch' /var/www/html/creatives.php; \
@@ -509,7 +506,7 @@ RUN set -eux; \
     php -r 'require "/var/www/html/classes/MetaOfficialFields.php"; $base=["campaign"=>[],"adset"=>["targeting"=>[]],"creative"=>[],"ad"=>[]]; foreach([["image_hash"=>"abcDEF_123"],["video_id"=>"123456"],["creative_id"=>"987654"]] as $m){$p=MetaOfficialFields::applyBuilderToPayload($base,["existing_media"=>$m]);$c=$p["creative"]; if(isset($m["image_hash"])&&($c["existing_image_hash"]??"")!==$m["image_hash"])exit(71); if(isset($m["video_id"])&&($c["existing_video_id"]??"")!==$m["video_id"])exit(72); if(isset($m["creative_id"])&&($c["existing_creative_id"]??"")!==$m["creative_id"])exit(73);}'; \
     grep -q 'ad_creatives' /var/www/html/ajax/metaCreativeCapabilities.php; \
     grep -q "'video_id'" /var/www/html/classes/MetaOfficialFields.php; \
-    grep -q '20261023-private-launch-meta-marker-v1' /var/www/html/launch.php; \
+    grep -q '20261021-managed-media-preflight' /var/www/html/launch.php; \
     php -l /var/www/html/classes/MetaSdkSchema.php; \
     php -l /var/www/html/ajax/metaSdkSchema.php; \
     grep -q 'metaSdkFields' /var/www/html/creatives.php; \

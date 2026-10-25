@@ -693,12 +693,10 @@ NEW_BULK_PAGES;
     if ($pageLoaderCount!==1 || $pageRendererCount!==1) throw new RuntimeException('Exact-RK Page binding adapter did not match Launch');
     $js.="\n".file_get_contents('/tmp/railway-launch-private-catalog.js');
 }
-require_once '/tmp/railway-private-launch-meta-marker.php';
-$js=remask_patch_private_launch_meta_marker($js);
 file_put_contents($jsPath,$js);
 $phpPath=$root.'/launch.php';
 $php=file_get_contents($phpPath);
-$php=preg_replace('#scripts/launch\\.js(?:\\?[^"\\\']*)?#','scripts/launch.js?v=20261023-private-launch-meta-marker-v1',$php,1);
+$php=preg_replace('#scripts/launch\\.js(?:\\?[^"\\\']*)?#','scripts/launch.js?v=20261021-managed-media-preflight',$php,1);
 $php=str_replace('official API, read only','состояние оплаты, read only',$php);
 $php=str_replace('Одна настройка → много FB-профилей и RK. Каждая цель использует свой token, proxy и account-specific assets.',
     'Сохранённые РК и FP доступны без новой синхронизации. Доступ FP для рекламы и привязку карты ещё нужно проверить.',$php);

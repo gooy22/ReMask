@@ -426,15 +426,7 @@ console.log('Private Launch catalog and funding truth checks passed');
     {headline:'Second',link:'https://example.com/b'}];
   vm.runInContext(`let remaskSelectedCreativePreset={format:'CAROUSEL',carousel:[
     {media_library_id:'m-first'},{media_library_id:'m-second'}]}`,privateCtx);
-  config.payload._meta_official_v1=true;
   const carousel=await privateCtx.remaskPrivatePrepareConfig();
-  assert.equal(carousel.payload._meta_official_v1,undefined,
-    'the legacy official-builder marker must not be serialized into private Launch sections');
-  assert.equal(carousel._targets[0].launch.base._meta_official_v1,undefined,
-    'the exact per-RK draft payload must omit UI-only root markers');
-  assert.equal(config.payload._meta_official_v1,true,
-    'private preparation must not mutate the visible Launch form');
-  delete config.payload._meta_official_v1;
   assert.equal(carousel.payload.creative.official_params,undefined,'omit empty optional maps before the associative PHP bridge');
   assert.equal(carousel._targets[0].launch.override.creative.official_params,undefined);
   assert.equal(JSON.stringify(config.payload.creative.official_params),'{}','preparation must preserve the original form');
@@ -639,9 +631,6 @@ console.log('Private Launch catalog and funding truth checks passed');
 
 (async()=>{
   const overlay=fs.readFileSync(path.join(__dirname,'..','railway-launch-private-catalog-overlay.php'),'utf8');
-  assert.ok(overlay.includes("require_once '/tmp/railway-private-launch-meta-marker.php';"));
-  assert.ok(overlay.includes('$js=remask_patch_private_launch_meta_marker($js);'));
-  assert.ok(overlay.includes('scripts/launch.js?v=20261023-private-launch-meta-marker-v1'));
   assert.match(overlay,/\/payment-methods\?'\.http_build_query\(\$paymentQuery/);
   assert.match(overlay,/'business_id'=>self::id\(\$account\['business_id'\]/);
   assert.match(overlay,/'account_name'=>trim\(\(string\)\(\$account\['name'\]/);

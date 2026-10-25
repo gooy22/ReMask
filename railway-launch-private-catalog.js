@@ -417,9 +417,6 @@ async function remaskPrivatePrepareConfig() {
     const executionMode=remaskPrivateExecutionMode(config);
     delete config.payload.execution_mode;
     config.payload.execution_mode=executionMode;
-    // This is only a legacy PHP/Graph marker; private Launch accepts Meta sections only.
-    // REMASK_PRIVATE_LAUNCH_META_MARKER_V1
-    delete config.payload._meta_official_v1;
     const creative=config.payload.creative||(config.payload.creative={});
     // PHP's associative JSON decode/encode turns an empty {} into []. These
     // optional maps contain no settings; omit them before the worker bridge

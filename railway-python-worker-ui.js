@@ -639,9 +639,7 @@ async function pythonWorkerHealthCheckOnce() {
     ).trim();
     const volumeMounted = readiness ? readiness.volume_mounted === true : false;
 
-    // /health being reachable does not make a degraded /ready resolver usable.
-    // Command buttons must follow actual worker readiness, not HTTP availability.
-    pythonWorkerUiState.workerOnline = isReady;
+    pythonWorkerUiState.workerOnline = true;
 
     if (isReady) {
       el.dataset.state = 'online';

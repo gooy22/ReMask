@@ -461,34 +461,6 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
         self.session.facebook_web.assert_not_awaited()
         self.assertEqual(self.client.posts, [])
 
-    async def test_draft_strips_only_legacy_meta_marker_before_launch_validation(self):
-        self.payload['launch']['execution_mode'] = 'DRAFT'
-        direct = copy.deepcopy(self.payload)
-        direct['launch']['_meta_official_v1'] = True
-        direct_plan = self.owner.ads_manager.plan(profile_id='19', payload=direct)
-        self.assertTrue(direct_plan['configuration_valid'])
-        self.assertNotIn('_meta_official_v1', direct_plan['launch'])
-
-        wrapped = copy.deepcopy(self.payload)
-        wrapped['launch'] = {'base': copy.deepcopy(wrapped['launch']), 'override': {}}
-        wrapped['launch']['base']['_meta_official_v1'] = True
-        wrapped_plan = self.owner.ads_manager.plan(profile_id='19', payload=wrapped)
-        self.assertTrue(wrapped_plan['configuration_valid'])
-        self.assertNotIn('_meta_official_v1', wrapped_plan['launch'])
-
-        malformed = copy.deepcopy(self.payload)
-        malformed['launch']['_meta_official_v1'] = 'true'
-        with self.assertRaises(ProvisioningError):
-            self.owner.ads_manager.plan(profile_id='19', payload=malformed)
-
-        unsupported = copy.deepcopy(self.payload)
-        unsupported['launch']['unknown_ui_section'] = {}
-        with self.assertRaises(ProvisioningError) as error:
-            self.owner.ads_manager.plan(profile_id='19', payload=unsupported)
-        self.assertIn('unsupported sections', str(error.exception))
-        self.session.facebook_web.assert_not_awaited()
-        self.assertEqual(self.client.posts, [])
-
     async def test_staged_media_rejects_client_paths_urls_and_foreign_checksum_before_network(self):
         self.payload['launch']['execution_mode'] = 'DRAFT'
         creative = self.payload['launch']['creative']

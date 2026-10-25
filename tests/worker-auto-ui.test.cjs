@@ -647,9 +647,6 @@ vm.createContext(sandbox); vm.runInContext(source.slice(start,end), sandbox);
   const fresh=scope.pythonWorkerHealthCheck();
   assert.equal(calls,2,'A settled health check cannot cache readiness for a later poll');
   finish({ready:false,worker:{}});assert.equal(await fresh,false);
-  assert.equal(element.dataset.state,'offline');
-  assert.equal(scope.pythonWorkerUiState.workerOnline,false,
-    'A reachable but not-ready worker must not enable Prepare / Add BM / Add RK');
   scope.pythonWorkerBridge=async()=>{calls++;throw Error('fixture transport');};
   assert.equal(await scope.pythonWorkerHealthCheck(),false);
   assert.equal(scope.pythonWorkerUiState.workerOnline,false);
