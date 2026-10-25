@@ -80,6 +80,10 @@ async def execute(web, operation, *, before_submit=None, business='', variables=
     log.info('[%s] static_contract operation=%s doc_id=%s revision=%s kind=%s browser_started=False',
         getattr(getattr(web, 'profile', None), 'name', ''), operation, row['doc_id'], _manifest()['revision'], row['operation_kind'])
     kwargs = {'friendly_name': row['friendly_name'], 'endpoint_url': row['endpoint_url'], 'business_context_id': business}
+    if row['operation_kind'] == 'query' and before_submit is None:
+        # A reviewed read is still one POST. It must not inherit the generic
+        # 15s profile budget while HTML and native renewal already allow 30s.
+        kwargs['read_timeout_seconds'] = 30
     if before_submit is not None:
         kwargs['before_submit'] = before_submit
     submit = getattr(web, 'graphql', None)

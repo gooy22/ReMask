@@ -1154,8 +1154,15 @@ class FacebookWebSession:
         before_submit: Any | None = None,
         business_context_id: str = "",
         multipart_files: dict[str, Any] | None = None,
+        read_timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
 
+        if read_timeout_seconds is not None and (
+                before_submit is not None or multipart_files is not None
+                or type(read_timeout_seconds) not in (int, float)
+                or not 1 <= read_timeout_seconds <= 60):
+            raise RemoteRequestError('Invalid private query read budget.',
+                request_may_have_been_sent=False, transport_stage='before_graphql_submit')
         effective_doc_id = str(doc_id or "").strip()
 
         if not effective_doc_id:
@@ -1333,6 +1340,8 @@ class FacebookWebSession:
             headers["X-FB-Friendly-Name"] = friendly_name
 
         post_options: dict[str, Any] = {}
+        if read_timeout_seconds is not None:
+            post_options['request_timeout_seconds'] = read_timeout_seconds
         if multipart_files is not None:
             if (not isinstance(multipart_files, dict) or not multipart_files
                     or any(not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,79}", key)
