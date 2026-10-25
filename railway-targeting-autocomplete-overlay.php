@@ -379,7 +379,16 @@ $launchPhp = $root . '/launch.php';
 if (is_file($launchPhp)) {
     $php = file_get_contents($launchPhp);
     if ($php === false) { fwrite(STDERR, "[remask targeting overlay] cannot read launch.php\n"); exit(51); }
-    $tag = '<script src="scripts/targeting-autocomplete.js?v=20261014-targeting-choices"></script>';
+    // Hide legacy controls before first paint; runtime JS removes their nodes.
+    $earlyStyle = '<style id="remask-targeting-search-cleanup">#geoSearch,#interestSearch{display:none!important;visibility:hidden!important}</style>';
+    if (strpos($php, 'remask-targeting-search-cleanup') === false) {
+        if (stripos($php, '</head>') !== false) {
+            $php = str_ireplace('</head>', $earlyStyle . "\n</head>", $php);
+        } else {
+            $php = $earlyStyle . "\n" . $php;
+        }
+    }
+    $tag = '<script src="scripts/targeting-autocomplete.js?v=20261024-targeting-no-search"></script>';
     if (strpos($php, 'targeting-autocomplete.js') === false) {
         if (stripos($php, '</body>') !== false) {
             $php = str_ireplace('</body>', $tag . "\n</body>", $php);

@@ -11,13 +11,15 @@ const targetingCode=source.slice(source.indexOf('function remaskPrivateTargeting
   source.indexOf('// A selected RK needs'));
 function targetingFixture(){
   const calls=[];
-  const ctx={URLSearchParams,state:{profile:'38',targets:[]},accounts:['act_120249912222240685'],mode:'DRAFT',
+  const ctx={URLSearchParams,MutationObserver:class{observe(){} disconnect(){}},state:{profile:'38',targets:[]},accounts:['act_120249912222240685'],mode:'DRAFT',
     remaskModuleControls:{isTargetingType:type=>type==='work_positions'},
     $:()=>({value:ctx.mode}),selectedAccountIds:()=>ctx.accounts,targetMode:()=>ctx.state.targets.length>0,
     apiJson:async(url,options)=>{
       const body=Object.fromEntries(new URLSearchParams(options.body));calls.push({url,body});
       if(ctx.failure)throw new Error(ctx.failure);
       if(ctx.pending)await ctx.pending;
+      if(url==='ajax/metaTemplateTargetingSearch.php'&&body.module_only==='1')
+        return {data:[],checked_live:false,source:'private_meta_module_reference',template_account_bound:false};
       return {...{data:[{id:'6003277229371'}],profile:body.profile,account_id:body.account_id,resource:body.type,
         checked_live:true,account_scope_verified:true},...ctx.response};
     }};
@@ -25,14 +27,37 @@ function targetingFixture(){
   return {ctx,calls,search:(type='interests',url='ajax/metaTargetingSearch.php')=>ctx.apiJson(url,
     {body:new URLSearchParams({type,q:'fitness',profile:'WRONG',account_id:'999999',limit:'25'}).toString()})};
 }
-test('selected RK reads fresh GEO, interests, behaviors and languages in its exact scope',async()=>{
-  for(const [type,resource] of [['locations','locations'],['interests','interests'],['behaviors','behaviors'],['languages','locales']]){
+test('selected RK targeting uses persistent suggestions unless an explicit refresh is requested',()=>{
+  const php=fs.readFileSync(path.join(__dirname,'..','railway-launch-private-catalog-overlay.php'),'utf8');
+  const start=php.indexOf("file_put_contents($root.'/ajax/metaTargetingSearch.php'");
+  const end=php.indexOf("file_put_contents($root.'/ajax/metaAssetReadiness.php'",start);
+  assert.ok(start>=0 && end>start,'targeting route must be present');
+  const route=php.slice(start,end);
+  assert.match(route, /\$input\['force'\]\s*\?\?\s*''\)\s*===\s*'1'/);
+  assert.doesNotMatch(route, /RemaskAdvertisingAssetBridge::read\([^;]*,\$type,true\)/);
+});
+test('selected RK reads GEO fallback, interests and behaviors in its exact scope',async()=>{
+  for(const [type,resource] of [['locations','locations'],['interests','interests'],['behaviors','behaviors']]){
     const {ctx,calls,search}=targetingFixture();const result=await search(type);
-    assert.deepEqual(calls,[{url:'ajax/metaTargetingSearch.php',body:{type:resource,q:'fitness',limit:'25',
+    const scoped=()=>calls.filter(call=>call.url==='ajax/metaTargetingSearch.php');
+    assert.deepEqual(scoped(),[{url:'ajax/metaTargetingSearch.php',body:{type:resource,q:'fitness',limit:'25',
       profile:'38',account_id:'120249912222240685',execution_mode:'DRAFT'}}]);
     assert.equal(result.data[0].id,'6003277229371');
-    ctx.mode='PUBLISH';await search(type);assert.equal(calls[1].body.execution_mode,'PUBLISH');
+    ctx.mode='PUBLISH';await search(type);
+    assert.equal(scoped()[1].body.execution_mode,'PUBLISH');
+    const referenceCalls=calls.filter(call=>call.url==='ajax/metaTemplateTargetingSearch.php');
+    assert.equal(referenceCalls.length,type==='locations'?2:0);
+    if(type==='locations')assert.equal(referenceCalls[0].body.module_only,'1');
   }
+});
+test('selected RK accepts unbound local language reference data without account reads',async()=>{
+  const {ctx,calls,search}=targetingFixture();const result=await search('languages');
+  assert.equal(result.checked_live,false);
+  assert.equal(result.source,'private_meta_module_reference');
+  assert.equal(result.template_account_bound,false);
+  assert.deepEqual(calls,[{url:'ajax/metaTemplateTargetingSearch.php',body:{type:'locales',q:'fitness',limit:'25',module_only:'1'}}]);
+  ctx.mode='PUBLISH';await search('languages');
+  assert.deepEqual(calls[1],calls[0]);
 });
 test('installed picker reference URL also uses the selected RK live read',async()=>{
   const {calls,search}=targetingFixture();await search('interests','ajax/metaTemplateTargetingSearch.php');
@@ -64,9 +89,22 @@ test('failed scoped read never falls back to cached or another profile reference
   ctx.failure='SESSION_EXPIRED';await assert.rejects(search,/SESSION_EXPIRED/);
   assert.equal(calls.length,1);assert.equal(calls[0].url,'ajax/metaTargetingSearch.php');
 });
-test('foreign, cached and incomplete proof cannot supply scoped targeting choices',async()=>{
+test('fresh exact-scope Meta results and explicitly cached suggestions are selectable',async()=>{
+  const {ctx,search}=targetingFixture();
+  ctx.response={checked_live:false,account_scope_verified:false,
+    _cache:{hit:true,cached_only:true,stale:false}};
+  const result=await search();
+  assert.equal(result.checked_live,false);
+  assert.equal(result.account_scope_verified,false);
+  assert.equal(result._cache.cached_only,true);
+});
+test('foreign, unmarked, or unloaded cache cannot supply scoped targeting choices',async()=>{
   for(const response of [{profile:'16'},{account_id:'999999'},{resource:'behaviors'},
-      {checked_live:false},{account_scope_verified:false}]){
+      {checked_live:false},{account_scope_verified:false},
+      {checked_live:false,account_scope_verified:false,_cache:{hit:false,cached_only:true}},
+      {checked_live:false,account_scope_verified:false,availability:'NOT_LOADED',
+        _cache:{hit:true,cached_only:true}},
+      {checked_live:false,account_scope_verified:false,_cache:{hit:true,cached_only:false}}]){
     const {ctx,search}=targetingFixture();ctx.response=response;
     await assert.rejects(search,/TARGETING_SOURCE_SCOPE_UNVERIFIED/);
   }

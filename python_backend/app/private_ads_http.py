@@ -28,7 +28,7 @@ log = logging.getLogger("remask.private_ads_http")
 # Short-lived read-only Ads Manager bootstrap reuse. These are session
 # credentials, NEVER permission proof or a writable client. Every consuming
 # resource read still requires its own live exact-account GET.
-_REFERENCE_CONTEXT_TTL_SECONDS = 45.0
+_REFERENCE_CONTEXT_TTL_SECONDS = 300.0
 _REFERENCE_CONTEXT_MAX_ENTRIES = 32
 _REFERENCE_CONTEXT_CACHE = OrderedDict()
 _REFERENCE_CONTEXT_LOCKS = WeakValueDictionary()
