@@ -140,7 +140,7 @@ class AdvertisingBridgeTests(unittest.TestCase):
         payload = {'action':'private_session_probe','profile_id':'4','business_id':'222222',
             'ad_account_id':'111111','cookies':{'c_user':'123456','xs':'fixture'}}
         self.worker_requests.clear()
-        for kind in ('adsmanager','identity','saved_identity','login_document'):
+        for kind in ('adsmanager','identity','saved_identity','login_document','login_other_profile'):
             status, result = self.request({**payload, 'document_kind':kind})
             self.assertEqual(status, 200, result)
             self.assertEqual(self.worker_requests[-1]['payload']['document_kind'], kind)
