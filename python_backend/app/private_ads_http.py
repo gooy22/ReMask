@@ -575,32 +575,38 @@ class AdsManagerPrivateHttp:
         if not self._profile_matches() or session.proxy != self._profile_proxy:
             raise fail("PROFILE_CONTEXT_UNAVAILABLE", "Advertising profile changed before dispatch", True)
         try:
-            async with session.request(method, url, headers=headers, allow_redirects=False,
-                                       request_timeout_seconds=300 if files else 60, **options) as response:
+            from .private_http import buffered_response
+            def validate_protocol(response):
                 if response.http_version != "HTTP/2":
                     raise fail("PROTOCOL_UNAVAILABLE", "Advertising origin did not negotiate HTTP/2", True)
-                raw = await response.content.read(2_000_001)
-                if len(raw) > 2_000_000:
-                    raise fail("RESPONSE_TOO_LARGE", "Advertising response exceeds its body budget")
-                try:
-                    result = _strict_response_json(raw)
-                except (ValueError, UnicodeDecodeError):
-                    if response.status != 200:
-                        raise AdsManagerResponseError({"http_status": response.status}) from None
-                    raise fail("RESPONSE_INVALID", "Advertising response could not be decoded") from None
-                if isinstance(result, dict) and (
-                        result.get("hasNext") is True or
-                        (isinstance(result.get("extensions"), dict) and
-                         result["extensions"].get("is_final") is False)):
-                    raise fail("RESPONSE_INCOMPLETE", "Meta returned an unfinished advertising response", True)
-                # The presence of an error envelope is a rejection even when
-                # its inner object/list is empty or malformed.
-                if isinstance(result, dict) and ("error" in result or "errors" in result):
-                    error = result.get("error")
-                    raise AdsManagerResponseError({**(error if isinstance(error, dict) else {}),
-                                                   "http_status": response.status})
+            def open_response():
+                if not self._profile_matches() or session.proxy != self._profile_proxy:
+                    raise fail("PROFILE_CONTEXT_UNAVAILABLE", "Advertising profile changed before dispatch", True)
+                return session.request(method, url, headers=headers, allow_redirects=False,
+                    request_timeout_seconds=300 if files else 60, **options)
+            response, raw = await buffered_response(method, open_response,
+                2_000_001, retry_read=method == 'GET', validate=validate_protocol)
+            if len(raw) > 2_000_000:
+                raise fail("RESPONSE_TOO_LARGE", "Advertising response exceeds its body budget")
+            try:
+                result = _strict_response_json(raw)
+            except (ValueError, UnicodeDecodeError):
                 if response.status != 200:
-                    raise AdsManagerResponseError({"http_status": response.status})
+                    raise AdsManagerResponseError({"http_status": response.status}) from None
+                raise fail("RESPONSE_INVALID", "Advertising response could not be decoded") from None
+            if isinstance(result, dict) and (
+                    result.get("hasNext") is True or
+                    (isinstance(result.get("extensions"), dict) and
+                     result["extensions"].get("is_final") is False)):
+                raise fail("RESPONSE_INCOMPLETE", "Meta returned an unfinished advertising response", True)
+            # The presence of an error envelope is a rejection even when
+            # its inner object/list is empty or malformed.
+            if isinstance(result, dict) and ("error" in result or "errors" in result):
+                error = result.get("error")
+                raise AdsManagerResponseError({**(error if isinstance(error, dict) else {}),
+                                               "http_status": response.status})
+            if response.status != 200:
+                raise AdsManagerResponseError({"http_status": response.status})
         except Exception as exc:
             if isinstance(exc, ProvisioningError):
                 log.warning('ads_request_failed profile=%s method=%s route_kind=%s alias_edge=%s code=%s',
