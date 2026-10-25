@@ -162,6 +162,7 @@ class StaticReadBootstrapRetryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(web.graphql.await_args_list[0], web.graphql.await_args_list[1])
         self.assertEqual(web.graphql.call_args.kwargs['business_context_id'], BM)
         self.assertNotIn('before_submit', web.graphql.call_args.kwargs)
+        self.assertEqual(web.graphql.call_args.kwargs['read_timeout_seconds'], 30)
 
     async def test_query_retries_timeout_wrapped_by_business_auth_precheck(self):
         from tests.test_fb_worker_request_envelope import BusinessAuthenticationPrecheckTests
@@ -195,6 +196,8 @@ class StaticReadBootstrapRetryTests(unittest.IsolatedAsyncioTestCase):
             await execute(web, 'CLAIM', business=BM, page=RK, join='fixture', before_submit=intent)
         self.assertIs(caught.exception, error)
         self.assertEqual(web.graphql.await_count, 1)
+
+        self.assertNotIn('read_timeout_seconds', web.graphql.call_args.kwargs)
 
     async def test_unknown_post_and_untyped_failures_do_not_enter_bootstrap_retry(self):
         for error in (self.timeout(stage='graphql', sent=True),
