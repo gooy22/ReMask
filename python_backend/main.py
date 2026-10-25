@@ -3977,6 +3977,32 @@ async def private_session_probe(profile_id: str, payload: dict = Body(...)):
             'message':'Saved profile context is unavailable.', 'retryable':False}) from None
 
 
+@app.post('/api/v1/profiles/{profile_id}/private-draft-read',dependencies=[Depends(require_key)])
+async def private_draft_read(profile_id: str, payload: dict = Body(...)):
+    import re
+    if set(payload) != {'job_id'} or not isinstance(payload.get('job_id'), str) or not re.fullmatch(r'[a-f0-9]{32}', payload['job_id']):
+        raise HTTPException(status_code=400, detail='PRIVATE_DRAFT_READ_INVALID_INPUT')
+    view = await store.job_view(payload['job_id'])
+    if not view or view.get('status') not in {'FAILED', 'SUCCESS'}:
+        raise HTTPException(status_code=409, detail='PRIVATE_DRAFT_READ_JOB_NOT_SETTLED')
+    tasks = [task for item in view.get('items', []) if str(item.get('profile_id')) == profile_id
+             for task in item.get('tasks', []) if task.get('action') == 'private_launch']
+    if len(tasks) != 1 or not isinstance(tasks[0].get('payload'), dict):
+        raise HTTPException(status_code=409, detail='PRIVATE_DRAFT_READ_TARGET_AMBIGUOUS')
+    from app.private_draft_read_diagnostic import read_diagnostic
+    from app.session import ProfileSession
+    try:
+        context = await _resolve_read_profile(profile_id)
+        async with ProfileSession(context) as session:
+            result = await read_diagnostic(pool.private_launch.ads_manager,
+                profile_id=profile_id, context=context, session=session, payload=tasks[0]['payload'])
+        return {'ok': True, **result}
+    except ProvisioningError as error:
+        raise HTTPException(status_code=409, detail={'code':error.code, 'message':str(error), 'retryable':False}) from None
+    except (ProfileContextError, TimeoutError):
+        raise HTTPException(status_code=409, detail='PRIVATE_DRAFT_READ_CONTEXT_UNAVAILABLE') from None
+
+
 @app.post('/api/v1/profiles/{profile_id}/private-launch-review',dependencies=[Depends(require_key)])
 async def private_launch_review(profile_id: str, payload: dict = Body(...)):
     clean_profile=str(profile_id or '').strip()

@@ -163,6 +163,23 @@ try {
         rmx_pwj_out(['ok'=>true,'csrf'=>remask_csrf_token()]);
     }
 
+    if ($action === 'private_draft_read') {
+        if (strtoupper((string)($_SERVER['REQUEST_METHOD'] ?? 'GET')) !== 'POST') {
+            rmx_pwj_out(['ok'=>false,'error'=>'METHOD_NOT_ALLOWED'], 405);
+        }
+        $profileId = $input['profile_id'] ?? null;
+        $jobId = $input['job_id'] ?? null;
+        if (!is_string($profileId) || !preg_match('/^[0-9]{1,30}$/D', $profileId)
+            || !is_string($jobId) || !preg_match('/^[a-f0-9]{32}$/D', $jobId)) {
+            rmx_pwj_out(['ok'=>false,'error'=>'PRIVATE_DRAFT_READ_INVALID_INPUT'], 400);
+        }
+        if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
+        $read = rmx_pwj_worker_request('POST',
+            '/api/v1/profiles/' . rawurlencode($profileId) . '/private-draft-read',
+            ['job_id'=>$jobId], 150);
+        rmx_pwj_out(['ok'=>true,'read'=>$read]);
+    }
+
     if ($action === 'private_session_probe') {
         if (strtoupper((string)($_SERVER['REQUEST_METHOD'] ?? 'GET')) !== 'POST') {
             rmx_pwj_out(['ok'=>false,'error'=>'METHOD_NOT_ALLOWED'], 405);
