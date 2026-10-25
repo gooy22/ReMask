@@ -21,6 +21,31 @@ log = logging.getLogger("remask_worker")
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
+async def buffered_response(method, open_response, size, *, retry_read=False, validate=None):
+    """Finish a bounded read before exposing bytes; retry an interrupted GET once.
+
+    Callers keep the same profile client and request arguments. HTTP rejection,
+    decoding, timeout, cancellation and application errors are never retried.
+    The method guard also prevents a caller from enabling a POST replay.
+    """
+    attempts = 2 if method == 'GET' and retry_read else 1
+    for attempt in range(attempts):
+        try:
+            async with open_response() as response:
+                if validate is not None:
+                    validate(response)
+                raw = await response.content.read(size)
+                return response, raw
+        except (httpx.ConnectError, httpx.ReadError, httpx.RemoteProtocolError) as error:
+            kind = next(name for cls, name in (
+                (httpx.ConnectError, 'ConnectError'), (httpx.ReadError, 'ReadError'),
+                (httpx.RemoteProtocolError, 'RemoteProtocolError')) if isinstance(error, cls))
+            log.warning('private_buffered_read interrupted method=%s kind=%s retry=%s',
+                'GET' if method == 'GET' else 'other', kind, attempt + 1 < attempts)
+            if attempt + 1 == attempts:
+                raise
+
+
 class _Body:
     def __init__(self, response: httpx.Response, metric=None) -> None:
         self._chunks = response.aiter_bytes()

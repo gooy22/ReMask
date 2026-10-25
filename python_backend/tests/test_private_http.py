@@ -12,7 +12,7 @@ from h2.config import H2Configuration
 from h2.connection import H2Connection
 from h2.events import DataReceived, RequestReceived, StreamEnded
 
-from app.private_http import PrivateHttpClient
+from app.private_http import PrivateHttpClient, buffered_response
 from fb_worker import FacebookBootstrap, FacebookWebSession, RemoteRequestError, WebProfile
 
 
@@ -64,6 +64,110 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("protocol=HTTP/2", str(logs.output))
         self.assertNotIn("token", str(logs.output))
         self.assertNotIn("c_user", str(logs.output))
+
+    async def test_buffered_get_discards_partial_body_and_reuses_the_same_cookie_jar(self):
+        class Interrupted(httpx.AsyncByteStream):
+            async def __aiter__(self):
+                yield b'partial SECRET'
+                raise httpx.ReadError('SECRET credentials')
+        client = self.make(uid='123456')
+        requests = []
+        def handler(request):
+            requests.append(request)
+            return httpx.Response(200, stream=Interrupted(), headers={
+                'Set-Cookie':'xs=renewed; Domain=.facebook.com; Path=/; Secure'},
+                extensions={'http_version':b'HTTP/2'}) if len(requests) == 1 else httpx.Response(
+                    200, content=b'complete', extensions={'http_version':b'HTTP/2'})
+        await self.mock(client, handler)
+        with self.assertLogs('remask_worker', level='WARNING') as logs:
+            response, raw = await buffered_response('GET', lambda: client.get(
+                'https://www.facebook.com/?SECRET', proxy=client.proxy), 100, retry_read=True)
+        self.assertEqual(raw, b'complete')
+        self.assertEqual(response.http_version, 'HTTP/2')
+        self.assertEqual(len(requests), 2)
+        self.assertIn('c_user=123456', requests[1].headers['cookie'])
+        self.assertIn('xs=renewed', requests[1].headers['cookie'])
+        self.assertNotIn('SECRET', str(logs.output))
+
+    async def test_buffered_get_has_only_one_retry(self):
+        for error in (httpx.ConnectError, httpx.ReadError, httpx.RemoteProtocolError):
+            client = self.make()
+            requests = []
+            def handler(request):
+                requests.append(request)
+                raise error('SECRET', request=request)
+            await self.mock(client, handler)
+            with self.assertRaises(error):
+                await buffered_response('GET', lambda: client.get('https://www.facebook.com/'),
+                    100, retry_read=True)
+            self.assertEqual(len(requests), 2)
+
+    async def test_buffered_post_is_never_replayed_even_with_retry_flag(self):
+        client = self.make()
+        calls = []
+        def handler(request):
+            calls.append(request)
+            raise httpx.ReadError('disconnected after submission', request=request)
+        await self.mock(client, handler)
+        with self.assertRaises(httpx.ReadError):
+            await buffered_response('POST', lambda: client.post('https://www.facebook.com/api/graphql/',
+                data={'input':'single submission'}), 100, retry_read=True)
+        self.assertEqual(len(calls), 1)
+
+    async def test_buffered_get_does_not_retry_timeout_proxy_auth_or_application_errors(self):
+        for error in (httpx.ReadTimeout, httpx.ProxyError, ValueError, asyncio.CancelledError):
+            client = self.make()
+            calls = []
+            def handler(request):
+                calls.append(request)
+                raise error('SECRET')
+            await self.mock(client, handler)
+            with self.assertRaises(error):
+                await buffered_response('GET', lambda: client.get('https://www.facebook.com/'),
+                    100, retry_read=True)
+            self.assertEqual(len(calls), 1)
+
+    async def test_buffered_get_returns_http_rejections_without_retry(self):
+        for status in (302, 400, 401, 403, 429, 500):
+            client = self.make()
+            calls = []
+            def handler(request):
+                calls.append(request)
+                return httpx.Response(status, content=b'rejected')
+            await self.mock(client, handler)
+            response, raw = await buffered_response('GET', lambda: client.get('https://www.facebook.com/'),
+                100, retry_read=True)
+            self.assertEqual((response.status, raw, len(calls)), (status, b'rejected', 1))
+
+    async def test_buffered_protocol_validation_precedes_read_and_is_not_retried(self):
+        client = self.make()
+        calls = []
+        def handler(request):
+            calls.append(request)
+            return httpx.Response(200, content=b'refused protocol')
+        await self.mock(client, handler)
+        def validate(response):
+            if response.http_version != 'HTTP/2':
+                raise ValueError('HTTP/2 required')
+        with self.assertRaises(ValueError):
+            await buffered_response('GET', lambda: client.get('https://www.facebook.com/'),
+                100, retry_read=True, validate=validate)
+        self.assertEqual(len(calls), 1)
+
+    async def test_document_navigation_retries_a_disconnected_get_once(self):
+        web = FacebookWebSession(WebProfile('fixture', {'c_user':'123456'},
+            'http://127.0.0.1:1', 'fixture-UA'))
+        self.addAsyncCleanup(web.close)
+        client = await web._ensure_session()
+        calls = []
+        def handler(request):
+            calls.append(request)
+            if len(calls) == 1:
+                raise httpx.RemoteProtocolError('SECRET reset', request=request)
+            return httpx.Response(200, text='complete')
+        await self.mock(client, handler)
+        result = await web.fetch_text('https://adsmanager.facebook.com/', document_navigation=True)
+        self.assertEqual((result[0], result[1], len(calls)), (200, 'complete', 2))
 
     async def test_library_info_logging_does_not_expose_session_or_redirect_url(self):
         client = self.make()

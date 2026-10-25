@@ -887,33 +887,31 @@ class FacebookWebSession:
             request_headers["Referer"] = referer
 
         try:
-            async with session.get(
-                target,
-                proxy=self.profile.proxy,
-                headers=request_headers,
-                allow_redirects=True,
-            ) as response:
-                raw = await response.content.read(max(1, int(max_bytes)) + 1)
-                if len(raw) > max_bytes:
-                    raw = raw[:max_bytes]
+            from app.private_http import buffered_response
+            response, raw = await buffered_response('GET', lambda: session.get(
+                target, proxy=self.profile.proxy, headers=request_headers,
+                allow_redirects=True), max(1, int(max_bytes)) + 1,
+                retry_read=facebook_host and document_navigation)
+            if len(raw) > max_bytes:
+                raw = raw[:max_bytes]
 
-                charset = response.charset or "utf-8"
-                try:
-                    body = raw.decode(charset, errors="replace")
-                except LookupError:
-                    body = raw.decode("utf-8", errors="replace")
+            charset = response.charset or "utf-8"
+            try:
+                body = raw.decode(charset, errors="replace")
+            except LookupError:
+                body = raw.decode("utf-8", errors="replace")
 
-                response_headers = {
-                    str(key): str(value)
-                    for key, value in response.headers.items()
-                }
+            response_headers = {
+                str(key): str(value)
+                for key, value in response.headers.items()
+            }
 
-                return (
-                    response.status,
-                    body,
-                    str(response.url),
-                    response_headers,
-                )
+            return (
+                response.status,
+                body,
+                str(response.url),
+                response_headers,
+            )
 
         except asyncio.TimeoutError as exc:
             raise RemoteRequestError(
