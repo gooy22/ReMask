@@ -254,7 +254,7 @@ putenv('REMASK_PYTHON_WORKER_URL=http://127.0.0.1:8081');putenv('REMASK_WORKER_A
         self.assertEqual(request['query']['force'],'true')
         self.assertTrue(request['worker_key_present'])
 
-    def test_reviewed_targeting_families_keep_exact_scope_and_draft_mode_through_php(self):
+    def test_reviewed_targeting_families_default_to_cache_first_and_keep_exact_scope(self):
         for kind in ['interests','behaviors','locales','work_positions','education_statuses']:
             with self.subTest(kind=kind):
                 result=self.workspace_assets({'profile':'19','type':kind,'account_id':'act_333333333',
@@ -265,7 +265,22 @@ putenv('REMASK_PYTHON_WORKER_URL=http://127.0.0.1:8081');putenv('REMASK_WORKER_A
                 self.assertEqual(request['query']['execution_mode'],'DRAFT')
                 self.assertEqual(request['query']['account_id'],'333333333')
                 self.assertEqual(request['query']['query'],'selected query')
+                self.assertEqual(request['query']['force'],'false')
+                self.assertFalse(result['result']['checked_live'])
+
+    def test_reviewed_targeting_families_allow_explicit_live_refresh(self):
+        for kind in ['interests','behaviors','locales','work_positions','education_statuses']:
+            with self.subTest(kind=kind):
+                result=self.workspace_assets({'profile':'19','type':kind,'account_id':'act_333333333',
+                    'execution_mode':'DRAFT','q':'selected query','force':'1'},'metaTargetingSearch.php')
+                request=result['requests'][0]
+                self.assertEqual(request['path'],'/api/v1/profiles/19/advertising-resources')
+                self.assertEqual(request['query']['resource'],kind)
+                self.assertEqual(request['query']['execution_mode'],'DRAFT')
+                self.assertEqual(request['query']['account_id'],'333333333')
+                self.assertEqual(request['query']['query'],'selected query')
                 self.assertEqual(request['query']['force'],'true')
+                self.assertTrue(result['result']['checked_live'])
 
     def test_unreviewed_targeting_type_never_reaches_worker(self):
         result=self.workspace_assets({'profile':'19','type':'invented_type','account_id':'333333333'},

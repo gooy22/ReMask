@@ -3753,11 +3753,32 @@ async def private_advertising_resources(profile_id: str, resource: str, account_
                   'actor_id':str(context.cookies.get('c_user') or '')}
         actor = str(context.cookies.get('c_user') or '')
         cached = None
+        resources = pool.private_launch.resources
         if not force:
             with measure_phase('cache_lookup'):
-                cached = await pool.private_launch.resources.get(name=resource,values=values,actor_id=actor)
-            if cached.get('availability') != 'NOT_LOADED' and not cached.get('_cache', {}).get('stale'):
-                return {'ok':True,'profile':profile,'resource':resource,**cached}
+                cached = await resources.get(name=resource,values=values,actor_id=actor)
+            if cached.get('availability') != 'NOT_LOADED':
+                cache_meta = cached.get('_cache', {})
+                if not cache_meta.get('stale'):
+                    return {'ok':True,'profile':profile,'resource':resource,**cached}
+                # Previously observed targeting choices are useful suggestions
+                # while a refresh runs; they do not establish live permission.
+                if resource in getattr(resources, 'TARGETING_OPTION_TYPES', ()) and cached.get('data'):
+                    async def refresh_targeting_suggestions():
+                        try:
+                            async with ProfileSession(context) as refresh_session:
+                                refresh_web = await refresh_session.facebook_web()
+                                refresh_web.private_only = True
+                                await resources.get(name=resource, values=values, actor_id=actor,
+                                                    force=True, web=refresh_web)
+                        except Exception as error:
+                            log.info("targeting option refresh failed resource=%s error_type=%s",
+                                     resource, type(error).__name__)
+                    started = resources.schedule_refresh_once(
+                        name=resource, values=values, actor_id=actor,
+                        callback=refresh_targeting_suggestions)
+                    cached = {**cached, '_cache': {**cache_meta, 'refresh_pending': started}}
+                    return {'ok':True,'profile':profile,'resource':resource,**cached}
         try:
             with measure_phase('resource_read'):
                 async with ProfileSession(context) as session:
@@ -3806,7 +3827,39 @@ async def private_template_reference(profile_id: str, operation: str, payload: d
                 async with ProfileSession(context) as session:
                     web = await session.facebook_web()
                     web.private_only = True
-                    return await read_template_reference(web, adapter.catalog, context, operation, payload)
+                    result = await read_template_reference(
+                        web, adapter.catalog, context, operation, payload,
+                        resource_store=pool.private_launch.resources)
+            resources = pool.private_launch.resources
+            cache_meta = result.get('_cache', {}) if isinstance(result, dict) else {}
+            if (operation in getattr(resources, 'TARGETING_OPTION_TYPES', ())
+                    and cache_meta.get('stale') is True and result.get('data')):
+                actor = str(context.cookies.get('c_user') or '')
+                query = str(payload.get('q') or '').strip()
+                maximum = 20000 if not query else 500
+                limit = min(maximum, max(1, int(payload.get('limit', 100))))
+                refresh_values = {
+                    'profile_id': profile,
+                    'business_id': str(result.get('business_id') or ''),
+                    'ad_account_id': str(result.get('account_id') or ''),
+                    'query': query,
+                    'limit': limit,
+                }
+                async def refresh_targeting_suggestions():
+                    try:
+                        async with ProfileSession(context) as refresh_session:
+                            refresh_web = await refresh_session.facebook_web()
+                            refresh_web.private_only = True
+                            await resources.get(name=operation, values=refresh_values,
+                                actor_id=actor, force=True, web=refresh_web)
+                    except Exception as error:
+                        log.info('template targeting refresh failed resource=%s error_type=%s',
+                            operation, type(error).__name__)
+                started = resources.schedule_refresh_once(
+                    name=operation, values=refresh_values, actor_id=actor,
+                    callback=refresh_targeting_suggestions)
+                result = {**result, '_cache':{**cache_meta, 'refresh_pending':started}}
+            return result
         result = await asyncio.wait_for(read(), timeout=32)
         return {'ok': True, **result}
     except AuthenticationError as error:
