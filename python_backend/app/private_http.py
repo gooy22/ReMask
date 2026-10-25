@@ -6,6 +6,7 @@ Protocol negotiation never triggers a second application request.
 from __future__ import annotations
 
 import asyncio
+import json
 from contextlib import asynccontextmanager
 from http.cookiejar import Cookie
 import logging
@@ -13,7 +14,8 @@ from typing import Any
 
 import httpx
 from .direct_test import direct_test_deadline
-from .private_http_metrics import begin_request, end_request, request_hook, response_hook
+from .private_http_metrics import begin_request, end_request, request_hook, response_hook, error_kind
+from .private_http_stages import PrivateRequestStages
 
 log = logging.getLogger("remask_worker")
 # HTTPX's INFO messages include full redirect URLs (including session IDs).
@@ -155,6 +157,13 @@ class PrivateHttpClient:
         # HTTPX timeouts bound individual I/O phases. Also preserve the old
         # whole-request deadline, including stream consumption and redirects.
         metric, token = begin_request(self.profile_name)
+        stages = PrivateRequestStages()
+        extensions = dict(kwargs.pop('extensions', {}) or {})
+        if extensions.get('trace') is None:
+            extensions['trace'] = stages.trace
+        else:
+            stages.external_trace = True
+        kwargs['extensions'] = extensions
         error = None
         try:
             async with asyncio.timeout(request_budget):
@@ -169,6 +178,12 @@ class PrivateHttpClient:
                     yield PrivateResponse(response, metric)
         except BaseException as exc:
             error = exc
+            try:
+                log.warning('[%s] private_http_failure method=%s host=%s kind=%s stages=%s',
+                    self.profile_name, method.upper(), httpx.URL(url).host, error_kind(exc),
+                    json.dumps(stages.snapshot(), sort_keys=True, separators=(',', ':')))
+            except Exception:
+                pass
             raise
         finally:
             end_request(metric, token, error)
