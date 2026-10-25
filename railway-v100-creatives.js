@@ -679,6 +679,12 @@ function hydrateCreativeTargetingSelections() {
         for (const row of Array.isArray(geo?.cities) ? geo.cities : []) {
             if (row && typeof row === 'object' && row.key !== undefined) creativeTargetingSelections.geo.push({type:'city', ...row});
         }
+        for (const row of Array.isArray(geo?.zips) ? geo.zips : []) {
+            if (row && typeof row === 'object' && row.key !== undefined) creativeTargetingSelections.geo.push({type:'zip', ...row});
+        }
+        for (const row of Array.isArray(geo?.geo_markets) ? geo.geo_markets : []) {
+            if (row && typeof row === 'object' && row.key !== undefined) creativeTargetingSelections.geo.push({type:'geo_market', ...row});
+        }
     } catch {}
 
     try {

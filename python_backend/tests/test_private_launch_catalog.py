@@ -150,7 +150,13 @@ class PrivateLaunchCatalogTests(unittest.TestCase):
         # The installer now verifies that the actual bulk Page reader and
         # renderer were adapted. Retain their original shapes in this small
         # lint/idempotency fixture; complete runtime/browser tests execute them.
-        (root/'scripts/launch.js').write_text('''function validateReady(){}
+        (root/'scripts/launch.js').write_text('''/* REMASK_PRIVATE_LAUNCH_CATALOG_V1 */
+async function remaskPrivatePrepareConfig() {
+    delete config.payload.execution_mode;
+    config.payload.execution_mode=executionMode;
+    const creative=config.payload.creative;
+}
+function validateReady(){}
 async function loadTargetBindings() {
         const profiles = [...new Set(targets.map((t) => t.profile))];
         status.textContent = `Loading Pages for ${profiles.length} FB profile(s)...`;
@@ -170,6 +176,7 @@ function renderTargetBindings() {
         installer = Path(self.tmp.name)/'overlay.php'
         source = OVERLAY.read_text().replace("$root='/var/www/html';", '$root='+json.dumps(str(root))+';')
         source = source.replace('/tmp/railway-launch-private-catalog.js', str(ROOT/'railway-launch-private-catalog.js'))
+        source = source.replace("'/tmp/railway-private-launch-meta-marker.php'", json.dumps(str(ROOT/'railway-private-launch-meta-marker.php')))
         source = source.replace('/tmp/railway-confirmed-page-identities.php', str(ROOT/'railway-confirmed-page-identities.php'))
         source = source.replace('/tmp/railway-workspace-state.js', str(ROOT/'railway-workspace-state.js'))
         installer.write_text(source)
@@ -179,8 +186,11 @@ function renderTargetBindings() {
             self.assertEqual(result.returncode, 0, result.stderr)
         for file in [*root.glob('classes/*.php'),*root.glob('ajax/*.php')]:
             subprocess.run(['php','-l',str(file)],capture_output=True,check=True,timeout=10)
-        self.assertIn('20261021-managed-media-preflight', (root/'launch.php').read_text())
+        self.assertIn('20261023-private-launch-meta-marker-v1', (root/'launch.php').read_text())
         self.assertEqual((root/'scripts/launch.js').read_text().count('/* REMASK_PRIVATE_LAUNCH_CATALOG_V1 */'), 1)
+        installed_js=(root/'scripts/launch.js').read_text()
+        self.assertIn('REMASK_PRIVATE_LAUNCH_META_MARKER_V1', installed_js)
+        self.assertEqual(installed_js.count('delete config.payload._meta_official_v1;'), 1)
         for name in ['metaLaunchReview.php','metaDryRun.php','metaJobCreate.php','metaLaunch.php']:
             self.assertIn('PRIVATE_LAUNCH_VERIFICATION_REQUIRED',(root/'ajax'/name).read_text())
             self.assertNotIn('cachedAsset',(root/'ajax'/name).read_text())

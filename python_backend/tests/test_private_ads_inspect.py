@@ -26,6 +26,8 @@ class SavedDraftInspectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['execution_mode'], 'DRAFT_INSPECT')
         self.assertEqual(result['draft_objects'], {'campaign':'777771', 'ad_set':'777772', 'ad':'777773'})
         self.assertTrue(result['fragment_storage_verified'])
+        self.assertTrue(result['meta_validation_complete'])
+        self.assertTrue(result['draft_verified'])
         self.assertFalse(result['editor_verified'])
         self.assertIsNone(result['published'])
         self.assertEqual(result['fragment_reads'][0]['submitted_values']['objective'], 'LINK_CLICKS')
@@ -41,6 +43,47 @@ class SavedDraftInspectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result['actor_verified'])
         self.assertFalse(result['editor_verified'])
         self.assertIsNone(result['published'])
+        self.assertEqual(len(self.client.posts), 4)
+
+    async def test_campaign_with_foreign_parent_cannot_confirm_saved_hierarchy(self):
+        await self.saved()
+        before = copy.deepcopy(await self.owner.state.all_steps('image-launch'))
+        original, reads = self.client.get, []
+
+        async def foreign_parent(path, params):
+            reads.append(path)
+            row = await original(path, params)
+            if row.get('ad_object_type') == 'campaign':
+                row['parent_ad_object_id'] = '999999'
+            return row
+
+        self.client.get = foreign_parent
+        with patch.object(self.client, 'post', new=AsyncMock(side_effect=AssertionError('No POST'))) as post:
+            with self.assertRaises(ProvisioningError) as caught:
+                await self.launch()
+        self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_READ_RELATION_MISMATCH')
+        post.assert_not_awaited()
+        self.assertNotIn('/addraftfragment_222222', reads)
+        self.assertNotIn('/777771', reads)
+        self.assertEqual(await self.owner.state.all_steps('image-launch'), before)
+
+    async def test_root_campaign_accepts_missing_null_or_empty_parent(self):
+        await self.saved()
+        original = self.client.get
+        for parent in ('missing', None, ''):
+            async def root_parent(path, params):
+                row = await original(path, params)
+                if row.get('ad_object_type') == 'campaign':
+                    if parent == 'missing':
+                        row.pop('parent_ad_object_id', None)
+                    else:
+                        row['parent_ad_object_id'] = parent
+                return row
+            self.client.get = root_parent
+            with self.subTest(parent=parent):
+                result = await self.launch()
+                self.assertTrue(result['relationships_confirmed'])
+                self.assertEqual(result['mutation_posts'], 0)
         self.assertEqual(len(self.client.posts), 4)
 
     async def test_rejected_final_fragment_can_be_inspected_without_success_result_or_post_replay(self):
@@ -63,8 +106,32 @@ class SavedDraftInspectionTests(unittest.IsolatedAsyncioTestCase):
         post.assert_not_called(); payment.assert_not_called()
         self.assertEqual([row['validation_status'] for row in result['fragment_reads']],
                          ['VALIDATED', 'VALIDATED', 'HAS_ERRORS'])
+        self.assertFalse(result['meta_validation_complete'])
+        self.assertTrue(result['meta_validation_errors_present'])
+        self.assertFalse(result['draft_verified'])
         self.assertEqual(result['mutation_posts'], 0)
         self.assertFalse(result['editor_verified'])
+        self.assertEqual(await self.owner.state.all_steps('image-launch'), before)
+
+    async def test_unsettled_validation_cannot_be_reported_as_verified_draft(self):
+        await self.saved()
+        original = self.client.get
+
+        async def pending_validation(path, params):
+            row = await original(path, params)
+            if row.get('ad_object_type') == 'ad_set':
+                row.pop('active_errors', None)
+            return row
+
+        self.client.get = pending_validation
+        before = copy.deepcopy(await self.owner.state.all_steps('image-launch'))
+        with patch.object(self.client, 'post', new=AsyncMock(side_effect=AssertionError('No POST'))) as post:
+            report = await self.launch()
+        post.assert_not_awaited()
+        self.assertTrue(report['fragment_storage_verified'])
+        self.assertFalse(report['meta_validation_complete'])
+        self.assertFalse(report['meta_validation_errors_present'])
+        self.assertFalse(report['draft_verified'])
         self.assertEqual(await self.owner.state.all_steps('image-launch'), before)
 
     async def test_lost_draft_reply_returns_local_journal_diagnostic_without_meta_reads(self):
