@@ -159,3 +159,14 @@ class SessionProbeTests(unittest.IsolatedAsyncioTestCase):
                 ({'transport_failure':[]}, 'unavailable')):
             error = RuntimeError('secret'); error.meta_payload = payload
             self.assertEqual(_transport_kind(error), expected)
+
+    def test_server_text_is_bounded_and_excludes_scripts_input_values_raw_json_and_tokens(self):
+        body = '<head><title>head-secret</title></head><body><h1>Log into Facebook</h1>'
+        body += '<input value="input-secret"><script>script-secret</script><style>style-secret</style>'
+        body += '<p>access_token=short-secret https://www.facebook.com/?token=url-secret ' + 'A'*80 + '</p></body>'
+        text = _login_shape(body, 'https://www.facebook.com/login/')['server_text']
+        self.assertIn('Log into Facebook', text)
+        self.assertLessEqual(len(text), 800)
+        for value in ('head-secret','input-secret','script-secret','style-secret','short-secret','url-secret','A'*80):
+            self.assertNotIn(value, text)
+        self.assertEqual(_login_shape(document(), 'https://www.facebook.com/')['server_text'], '')

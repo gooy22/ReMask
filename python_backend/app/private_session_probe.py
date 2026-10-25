@@ -21,8 +21,13 @@ def _login_shape(body, final_url):
         def __init__(self):
             super().__init__()
             self.forms, self.current, self.logout_link = [], None, False
+            self.hidden_depth, self.visible_depth, self.text = 0, 0, ''
 
         def handle_starttag(self, tag, attrs):
+            if tag in {'script','style','head','template'}:
+                self.hidden_depth += 1
+            elif tag in {'body','div','span','p','h1','h2','button','label','a','form'}:
+                self.visible_depth += 1
             attrs = dict(attrs)
             if tag == 'form':
                 self.current = None
@@ -54,12 +59,25 @@ def _login_shape(body, final_url):
                     pass
 
         def handle_endtag(self, tag):
+            if tag in {'script','style','head','template'}:
+                self.hidden_depth = max(0, self.hidden_depth - 1)
+            elif tag in {'body','div','span','p','h1','h2','button','label','a','form'}:
+                self.visible_depth = max(0, self.visible_depth - 1)
             if tag == 'form':
                 self.current = None
 
+        def handle_data(self, data):
+            if self.hidden_depth or not self.visible_depth or len(self.text) >= 800:
+                return
+            text = ' '.join(data.split())[:1200]
+            text = re.sub(r'https?://\S+', '[url]', text, flags=re.I)
+            text = re.sub(r'(?i)\b(access_token|fb_dtsg|lsd|password|cookie)\s*[:=]\s*\S+', r'\1=[redacted]', text)
+            text = re.sub(r'[A-Za-z0-9_%:+/=-]{32,}', '[redacted]', text)
+            self.text = (self.text + ' ' + text).strip()[:800]
+
     parser = Forms()
     parser.feed(body)
-    return {'forms':parser.forms, 'logout_link':parser.logout_link}
+    return {'forms':parser.forms, 'logout_link':parser.logout_link, 'server_text':parser.text}
 
 
 def _transport_kind(error):
