@@ -108,6 +108,31 @@ class AdvertisingBridgeTests(unittest.TestCase):
         with response:
             return response.status, json.loads(response.read())
 
+    def test_session_probe_has_a_separate_read_route_and_only_forwards_cookie_context(self):
+        payload = {'action':'private_session_probe', 'profile_id':'4', 'business_id':'222222',
+            'ad_account_id':'111111', 'cookies':{'c_user':'123456', 'xs':'fixture-import'},
+            'password':'must-not-be-forwarded', 'execution_mode':'PUBLISH'}
+        self.worker_requests.clear()
+        status, result = self.request(payload)
+        self.assertEqual(status, 200, result)
+        self.assertEqual(len(self.worker_requests), 1)
+        forwarded = self.worker_requests[0]
+        self.assertEqual(forwarded['path'], '/api/v1/profiles/4/private-session-probe')
+        self.assertEqual(forwarded['payload'], {key:payload[key] for key in ('business_id','ad_account_id','cookies')})
+
+    def test_session_probe_rejects_invalid_input_before_worker_and_is_post_only(self):
+        self.worker_requests.clear()
+        for cookies in ([], {}, ['fixture'], None):
+            status, _ = self.request({'action':'private_session_probe', 'profile_id':'4',
+                'business_id':'222222', 'ad_account_id':'111111', 'cookies':cookies})
+            self.assertEqual(status, 400)
+        self.assertEqual(self.worker_requests, [])
+        try:
+            urllib.request.urlopen(self.url + '?action=private_session_probe&profile_id=4', timeout=5)
+            self.fail('GET must not accept cookie context')
+        except urllib.error.HTTPError as error:
+            self.assertEqual(error.code, 405)
+
     def test_selected_masked_card_survives_real_php_review_bridge(self):
         payload = {'action': 'private_launch_review', 'profile_id': '7', 'business_id': '111111111',
             'ad_account_id': '222222222', 'page_id': '333333333', 'launch': {'creative': {'message': 'fixture'}},
