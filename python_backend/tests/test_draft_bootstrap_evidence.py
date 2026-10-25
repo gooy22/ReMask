@@ -1,7 +1,7 @@
 import json
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from app.private_ads_document import _auth_gate
 from app.private_ads_http import AdsManagerPrivateHttp, _bootstrap_evidence
@@ -37,6 +37,11 @@ class BootstrapEvidenceTests(unittest.IsolatedAsyncioTestCase):
         for actor, state in (("123456", "matches"), ("999999", "mismatch"), ("0", "logged_out")):
             with self.subTest(actor=actor):
                 self.assertEqual(self.evidence("https://adsmanager.facebook.com/", document(actor))["document_actor"], state)
+
+    def test_script_text_and_return_query_do_not_establish_an_actual_login_form(self):
+        for body in ('<script>const example = `<form id="login_form" action="/login/">`;</script>',
+                     '<form action="/settings?next=/login/"></form>'):
+            self.assertFalse(self.evidence("https://business.facebook.com/latest/home", body)["login_form"])
 
     def test_request_echo_and_duplicate_json_cannot_confirm_actor(self):
         for body in (json.dumps({"request": json.loads(document())}),
@@ -97,3 +102,19 @@ class BootstrapEvidenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client.context.account_id, "111111")
         self.assertEqual(client.context.business_id, "222222")
         self.assertFalse(client.read_only)
+
+    async def test_diagnostic_parser_failure_cannot_change_gate_or_leak_exception_text(self):
+        for final, body, rejected in (("https://business.facebook.com/business/loginpage/", "", True),
+                ("https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=111111&business_id=222222", document(), False)):
+            web = SimpleNamespace(profile=self.profile(), fetch_text=AsyncMock(return_value=(200, body, final)))
+            with patch("app.private_ads_http._bootstrap_evidence", side_effect=AssertionError("body-secret")):
+                with self.assertLogs("remask.private_ads_http", "INFO") as logs:
+                    if rejected:
+                        with self.assertRaises(ProvisioningError) as caught:
+                            await AdsManagerPrivateHttp.open(web, account_id="111111", business_id="222222", actor_id="123456")
+                        self.assertEqual(caught.exception.code, "PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE")
+                    else:
+                        client = await AdsManagerPrivateHttp.open(web, account_id="111111", business_id="222222", actor_id="123456")
+                        self.assertEqual(client.context.actor_id, "123456")
+            self.assertIn('"evidence_error":"unavailable"', "\n".join(logs.output))
+            self.assertNotIn("body-secret", "\n".join(logs.output))

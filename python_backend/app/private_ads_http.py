@@ -16,6 +16,7 @@ import json
 import hashlib
 import logging
 import re
+from html.parser import HTMLParser
 from urllib.parse import parse_qs, urlsplit
 
 from .private_ads_draft import fail, flatten_params, identity
@@ -135,7 +136,24 @@ def _bootstrap_evidence(url, body, profile, actor_id):
     # Passing only scheme/host/path to the existing classifier cannot match
     # login/checkpoint strings embedded in a return URL's query parameters.
     path_gate = _auth_gate("https://" + host + final.path, "")
-    login_form = bool(re.search(r"<form\b[^>]*(?:\bid\s*=\s*['\"]login_form['\"]|\baction\s*=\s*['\"][^'\"]*/login)", body, re.I))
+    class LoginForm(HTMLParser):
+        found = False
+
+        def handle_starttag(self, tag, attrs):
+            if tag != "form":
+                return
+            attrs = dict(attrs)
+            try:
+                action_path = urlsplit(attrs.get("action") or "").path.casefold()
+            except ValueError:
+                action_path = ""
+            if (str(attrs.get("id") or "").casefold() == "login_form"
+                    or action_path.startswith("/login")):
+                self.found = True
+
+    form_parser = LoginForm()
+    form_parser.feed(body)
+    login_form = form_parser.found
     actor_state = "absent"
     try:
         actors = set()
@@ -343,10 +361,15 @@ class AdsManagerPrivateHttp:
             final.path == "/adsmanager/manage/campaigns",
             account_matches,
             parse_qs(final.query).get("business_id") == [business_id], gate or "none")
+        try:
+            evidence = json.dumps(_bootstrap_evidence(final_url, body, web.profile, actor_id),
+                sort_keys=True, separators=(",", ":"))
+        except Exception:
+            # Diagnostic parsing must never change authentication or dispatch.
+            # Do not log exception text, which may include response fragments.
+            evidence = '{"evidence_error":"unavailable"}'
         log.info("ads_bootstrap_evidence profile=%s evidence=%s",
-            getattr(web.profile, "name", ""), json.dumps(
-                _bootstrap_evidence(final_url, body, web.profile, actor_id),
-                sort_keys=True, separators=(",", ":")))
+            getattr(web.profile, "name", ""), evidence)
         if gate:
             raise fail(gate, "Ads Manager requires restoration of the profile session", True)
         if (status != 200 or len(body.encode()) > 5_000_000 or final.scheme != "https"
