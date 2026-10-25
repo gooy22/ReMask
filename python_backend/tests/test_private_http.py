@@ -35,6 +35,38 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
         client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler),
             cookies=cookies, trust_env=False)
 
+    async def test_transport_failure_logs_only_reviewed_phase_metadata(self):
+        client = self.make()
+        async def handler(request):
+            trace = request.extensions['trace']
+            for event in ('connection.connect_tcp.started','proxy.start_tls.complete',
+                    'http2.send_request_headers.complete','http2.send_request_body.complete',
+                    'http2.receive_response_headers.started'):
+                await trace(event, {'SECRET':'credentials, headers and payload'})
+            raise httpx.ReadTimeout('SECRET', request=request)
+        await self.mock(client, handler)
+        with self.assertLogs('remask_worker', level='WARNING') as logs:
+            with self.assertRaises(httpx.ReadTimeout):
+                async with client.post('https://business.facebook.com/api/graphql/?SECRET',
+                        data={'token':'SECRET'}) as response:
+                    await response.text()
+        text = str(logs.output)
+        self.assertIn('http2.receive_response_headers', text)
+        self.assertIn('h2_body_sent', text)
+        self.assertNotIn('SECRET', text)
+
+    async def test_existing_caller_trace_is_preserved(self):
+        client = self.make()
+        trace = AsyncMock()
+        def handler(request):
+            self.assertIs(request.extensions['trace'], trace)
+            self.assertEqual(request.extensions['fixture_option'], 'unchanged')
+            return httpx.Response(200,text='ok')
+        await self.mock(client, handler)
+        async with client.get('https://www.facebook.com/',
+                extensions={'trace':trace,'fixture_option':'unchanged'}) as response:
+            self.assertEqual(await response.text(),'ok')
+
     async def test_cookies_are_profile_scoped_and_not_sent_to_proxy_check_or_cdn(self):
         seen = []
         def handler(request):
