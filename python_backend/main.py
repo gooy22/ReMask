@@ -3960,6 +3960,23 @@ async def private_launch_contract_register(step_name: str, payload: dict = Body(
         },
     }
 
+@app.post('/api/v1/profiles/{profile_id}/private-session-probe',dependencies=[Depends(require_key)])
+async def private_session_probe(profile_id: str, payload: dict = Body(...)):
+    clean_profile = str(profile_id or '').strip()
+    if not clean_profile or len(clean_profile) > 160:
+        raise HTTPException(status_code=400, detail='INVALID_PROFILE_ID')
+    from app.private_session_probe import probe_document
+    try:
+        context = await _resolve_read_profile(clean_profile)
+        return {'ok': True, **await probe_document(context, payload)}
+    except ProvisioningError as error:
+        raise HTTPException(status_code=409,
+            detail={'code':error.code, 'message':str(error), 'retryable':False}) from None
+    except (ProfileContextError, TimeoutError):
+        raise HTTPException(status_code=409, detail={'code':'PRIVATE_SESSION_PROBE_CONTEXT_UNAVAILABLE',
+            'message':'Saved profile context is unavailable.', 'retryable':False}) from None
+
+
 @app.post('/api/v1/profiles/{profile_id}/private-launch-review',dependencies=[Depends(require_key)])
 async def private_launch_review(profile_id: str, payload: dict = Body(...)):
     clean_profile=str(profile_id or '').strip()

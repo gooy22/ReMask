@@ -163,6 +163,27 @@ try {
         rmx_pwj_out(['ok'=>true,'csrf'=>remask_csrf_token()]);
     }
 
+    if ($action === 'private_session_probe') {
+        if (strtoupper((string)($_SERVER['REQUEST_METHOD'] ?? 'GET')) !== 'POST') {
+            rmx_pwj_out(['ok'=>false,'error'=>'METHOD_NOT_ALLOWED'], 405);
+        }
+        $profileId = trim((string)($input['profile_id'] ?? ''));
+        $businessId = $input['business_id'] ?? null;
+        $accountId = $input['ad_account_id'] ?? null;
+        $cookies = $input['cookies'] ?? null;
+        if ($profileId === '' || strlen($profileId) > 160
+            || !is_string($businessId) || !preg_match('/^\d{5,30}$/D', $businessId)
+            || !is_string($accountId) || !preg_match('/^\d{5,30}$/D', $accountId)
+            || !is_array($cookies) || array_is_list($cookies) || count($cookies) < 2 || count($cookies) > 64) {
+            rmx_pwj_out(['ok'=>false,'error'=>'PRIVATE_SESSION_PROBE_INVALID_INPUT'], 400);
+        }
+        if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
+        $probe = rmx_pwj_worker_request('POST',
+            '/api/v1/profiles/' . rawurlencode($profileId) . '/private-session-probe',
+            ['business_id'=>$businessId,'ad_account_id'=>$accountId,'cookies'=>$cookies], 50);
+        rmx_pwj_out(['ok'=>true,'probe'=>$probe]);
+    }
+
     if ($action === 'health' || $action === 'ready') {
         $health = rmx_pwj_worker_request('GET', '/health');
 
