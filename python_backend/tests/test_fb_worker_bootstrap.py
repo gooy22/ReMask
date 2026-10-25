@@ -1,4 +1,8 @@
 import unittest
+import asyncio
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
+import httpx
 from unittest.mock import AsyncMock
 
 from fb_worker import AuthenticationError, FacebookWebSession, WebProfile, _has_login_form
@@ -149,6 +153,90 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await session.bootstrap()).fb_dtsg, 'fixture-token')
         collect.assert_not_awaited()
         self.assertEqual(len(client.calls), 1)
+
+    async def test_bootstrap_recovers_interrupted_text_on_same_route_with_document_budget(self):
+        for error in (httpx.ConnectError, httpx.ReadError, httpx.RemoteProtocolError):
+            session, _ = self.session('', '')
+            session.timeout_seconds = 15
+            calls = []
+            @asynccontextmanager
+            async def get(url, **kwargs):
+                calls.append((url, kwargs))
+                async def text():
+                    if len(calls) == 1:
+                        raise error('SECRET connection failure')
+                    return '["DTSGInitialData",[],{"token":"fixture-token"}]'
+                yield SimpleNamespace(status=200, url=url, text=text)
+            session._ensure_session = AsyncMock(return_value=SimpleNamespace(get=get))
+            self.assertEqual((await session.bootstrap()).fb_dtsg, 'fixture-token')
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(calls[0], calls[1])
+            self.assertEqual(calls[0][1]['request_timeout_seconds'], 30)
+            session._fetch_dtsg_refresh_token.assert_not_awaited()
+
+    async def test_bootstrap_keeps_a_larger_existing_document_budget(self):
+        session, client = self.session('["DTSGInitialData",[],{"token":"fixture-token"}]',
+            'https://business.facebook.com/latest/home')
+        session.timeout_seconds = 45
+        observed = []
+        original = client.get
+        def get(url, **kwargs):
+            observed.append(kwargs)
+            return original(url, **kwargs)
+        client.get = get
+        await session.bootstrap()
+        self.assertEqual(observed[0]['request_timeout_seconds'], 45)
+
+    async def test_html_read_budget_and_retry_are_scoped_to_document_requests(self):
+        for url, navigation, expected in (
+            ('https://business.facebook.com/latest/settings', False, True),
+            ('https://adsmanager.facebook.com/adsmanager/manage/campaigns', True, True),
+            ('https://www.facebook.com/', False, False),
+            ('https://business.facebook.com/api/graphql/', False, False),
+            ('https://static.xx.fbcdn.net/bundle.js', True, False)):
+            session, _ = self.session('', '')
+            session.timeout_seconds = 15
+            calls = []
+            @asynccontextmanager
+            async def get(target, **kwargs):
+                calls.append(kwargs)
+                yield SimpleNamespace(status=200,url=target,charset='utf-8',headers={},
+                    content=SimpleNamespace(read=AsyncMock(return_value=b'fixture')))
+            session._ensure_session = AsyncMock(return_value=SimpleNamespace(get=get))
+            self.assertEqual((await session.fetch_text(url, document_navigation=navigation))[1], 'fixture')
+            self.assertEqual(calls[0].get('request_timeout_seconds'), 30 if expected else None)
+
+    async def test_business_document_recovers_one_disconnect_without_a_post(self):
+        session, _ = self.session('', '')
+        calls = []
+        @asynccontextmanager
+        async def get(url, **kwargs):
+            calls.append((url,kwargs))
+            if len(calls) == 1:
+                raise httpx.ConnectError('SECRET')
+            yield SimpleNamespace(status=200,url=url,charset='utf-8',headers={},
+                content=SimpleNamespace(read=AsyncMock(return_value=b'fixture')))
+        session._ensure_session = AsyncMock(return_value=SimpleNamespace(get=get))
+        self.assertEqual((await session.fetch_text('https://business.facebook.com/latest/home'))[1], 'fixture')
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0], calls[1])
+
+    async def test_document_timeout_does_not_start_another_origin_or_csrf_refresh(self):
+        from fb_worker import RemoteRequestError
+        session, _ = self.session('', '')
+        calls = []
+        @asynccontextmanager
+        async def get(url, **kwargs):
+            calls.append((url,kwargs))
+            raise asyncio.TimeoutError('SECRET')
+            yield
+        session._ensure_session = AsyncMock(return_value=SimpleNamespace(get=get))
+        with self.assertRaises(RemoteRequestError) as caught:
+            await session.bootstrap()
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][1]['request_timeout_seconds'], 30)
+        session._fetch_dtsg_refresh_token.assert_not_awaited()
+        self.assertNotIn('SECRET', str(caught.exception))
 
 
 if __name__ == "__main__":
