@@ -16,6 +16,7 @@ import json
 import hashlib
 import logging
 import re
+from html.parser import HTMLParser
 from urllib.parse import parse_qs, urlsplit
 
 from .private_ads_draft import fail, flatten_params, identity
@@ -115,6 +116,67 @@ def _walk(value, depth=0):
     elif isinstance(value, list):
         for child in value:
             yield from _walk(child, depth + 1)
+
+
+def _bootstrap_evidence(url, body, profile, actor_id):
+    """Read-only evidence; never emit query values, HTML or credentials.
+
+    Keep the current gate and dispatch decisions unchanged. The independent
+    path-only classification exposes a possible query-string false positive.
+    Only reviewed literal routes/hosts can appear in logs.
+    """
+    final = urlsplit(url)
+    hosts = {"adsmanager.facebook.com", "business.facebook.com", "www.facebook.com",
+             "facebook.com", "m.facebook.com"}
+    routes = {"/adsmanager/manage/campaigns", "/business/loginpage/", "/business/loginpage",
+              "/login/", "/login", "/login.php", "/checkpoint/", "/checkpoint",
+              "/latest/home", "/latest/home/", "/"}
+    host = final.hostname if final.hostname in hosts else "unreviewed"
+    path = final.path if host != "unreviewed" and final.path in routes else "unreviewed"
+    # Passing only scheme/host/path to the existing classifier cannot match
+    # login/checkpoint strings embedded in a return URL's query parameters.
+    path_gate = _auth_gate("https://" + host + final.path, "")
+    class LoginForm(HTMLParser):
+        found = False
+
+        def handle_starttag(self, tag, attrs):
+            if tag != "form":
+                return
+            attrs = dict(attrs)
+            try:
+                action_path = urlsplit(attrs.get("action") or "").path.casefold()
+            except ValueError:
+                action_path = ""
+            if (str(attrs.get("id") or "").casefold() == "login_form"
+                    or action_path.startswith("/login")):
+                self.found = True
+
+    form_parser = LoginForm()
+    form_parser.feed(body)
+    login_form = form_parser.found
+    actor_state = "absent"
+    try:
+        actors = set()
+        for payload in _ads_document_payloads(body):
+            for node in _walk(payload):
+                if (isinstance(node, list) and len(node) >= 3
+                        and node[0] == "CurrentUserInitialData" and node[1] == []
+                        and isinstance(node[2], dict)):
+                    value = node[2].get("USER_ID")
+                    if isinstance(value, str) and value.isdigit():
+                        actors.add(value)
+        if actors:
+            actor_state = ("matches" if actors == {actor_id} else
+                           "logged_out" if actors == {"0"} else "mismatch")
+    except (ProvisioningError, ValueError, RecursionError):
+        actor_state = "unavailable"
+    auth = {name: str(profile.cookies.get(name) or "") for name in ("c_user", "xs")}
+    fingerprint = hashlib.sha256(json.dumps(auth, sort_keys=True,
+        separators=(",", ":")).encode()).hexdigest()
+    return {"final_host": host, "final_path": path, "path_gate": path_gate or "none",
+            "login_form": login_form, "document_actor": actor_state,
+            "profile_actor_matches": auth["c_user"] == actor_id,
+            "proxy_configured": bool(profile.proxy), "auth_cookie_fingerprint": fingerprint}
 
 
 def _unique(values, code):
@@ -299,6 +361,15 @@ class AdsManagerPrivateHttp:
             final.path == "/adsmanager/manage/campaigns",
             account_matches,
             parse_qs(final.query).get("business_id") == [business_id], gate or "none")
+        try:
+            evidence = json.dumps(_bootstrap_evidence(final_url, body, web.profile, actor_id),
+                sort_keys=True, separators=(",", ":"))
+        except Exception:
+            # Diagnostic parsing must never change authentication or dispatch.
+            # Do not log exception text, which may include response fragments.
+            evidence = '{"evidence_error":"unavailable"}'
+        log.info("ads_bootstrap_evidence profile=%s evidence=%s",
+            getattr(web.profile, "name", ""), evidence)
         if gate:
             raise fail(gate, "Ads Manager requires restoration of the profile session", True)
         if (status != 200 or len(body.encode()) > 5_000_000 or final.scheme != "https"
