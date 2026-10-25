@@ -178,9 +178,16 @@ try {
             rmx_pwj_out(['ok'=>false,'error'=>'PRIVATE_SESSION_PROBE_INVALID_INPUT'], 400);
         }
         if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
+        $probePayload = ['business_id'=>$businessId,'ad_account_id'=>$accountId,'cookies'=>$cookies];
+        if (isset($input['document_kind'])) {
+            if (!is_string($input['document_kind']) || !in_array($input['document_kind'], ['adsmanager','identity','saved_identity','login_document'], true)) {
+                rmx_pwj_out(['ok'=>false,'error'=>'PRIVATE_SESSION_PROBE_INVALID_DOCUMENT'], 400);
+            }
+            $probePayload['document_kind'] = $input['document_kind'];
+        }
         $probe = rmx_pwj_worker_request('POST',
             '/api/v1/profiles/' . rawurlencode($profileId) . '/private-session-probe',
-            ['business_id'=>$businessId,'ad_account_id'=>$accountId,'cookies'=>$cookies], 50);
+            $probePayload, 50);
         rmx_pwj_out(['ok'=>true,'probe'=>$probe]);
     }
 
