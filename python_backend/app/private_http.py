@@ -171,8 +171,9 @@ class PrivateHttpClient:
             kwargs["timeout"] = httpx.Timeout(request_budget)
         log.info("[%s] private_http start method=%s host=%s", self.profile_name,
                  method.upper(), httpx.URL(url).host)
-        # HTTPX timeouts bound individual I/O phases. Also preserve the old
-        # whole-request deadline, including stream consumption and redirects.
+        # HTTPX timeouts bound individual I/O phases. Preserve a whole-attempt
+        # deadline too, including stream consumption. A second budget is needed
+        # only when the trace proves the first attempt failed before HTTP/2 send.
         metric, token = begin_request(self.profile_name)
         extensions = dict(kwargs.pop('extensions', {}) or {})
         external_trace = extensions.get('trace') is not None
@@ -180,16 +181,16 @@ class PrivateHttpClient:
         stages = PrivateRequestStages()
         response_yielded = False
         try:
-            async with asyncio.timeout(request_budget):
-                for attempt in range(2):
-                    stages = PrivateRequestStages()
-                    stages.external_trace = external_trace
-                    request_extensions = dict(extensions)
-                    if not external_trace:
-                        request_extensions['trace'] = stages.trace
-                    request_kwargs = dict(kwargs)
-                    request_kwargs['extensions'] = request_extensions
-                    try:
+            for attempt in range(2):
+                stages = PrivateRequestStages()
+                stages.external_trace = external_trace
+                request_extensions = dict(extensions)
+                if not external_trace:
+                    request_extensions['trace'] = stages.trace
+                request_kwargs = dict(kwargs)
+                request_kwargs['extensions'] = request_extensions
+                try:
+                    async with asyncio.timeout(request_budget):
                         async with self._client.stream(
                             method, url, follow_redirects=redirects, **request_kwargs,
                         ) as response:
@@ -200,25 +201,25 @@ class PrivateHttpClient:
                             )
                             response_yielded = True
                             yield PrivateResponse(response, metric)
-                        break
-                    except (httpx.ConnectError, httpx.ConnectTimeout):
-                        snapshot = stages.snapshot()
-                        retry_before_send = (
-                            attempt == 0 and not response_yielded and not external_trace
-                            and snapshot['phase'] == 'proxy.start_tls'
-                            and snapshot['state'] == 'failed'
-                            and snapshot['tcp_connect_observed'] is True
-                            and snapshot['tls_completed'] is False
-                            and snapshot['h2_headers_sent'] is False
-                            and snapshot['h2_body_sent'] is False
-                            and snapshot['measurement_errors'] == 0
-                        )
-                        if not retry_before_send:
-                            raise
-                        log.warning(
-                            '[%s] private_http_connect_retry method=%s host=%s phase=proxy.start_tls attempt=1',
-                            self.profile_name, method.upper(), httpx.URL(url).host,
-                        )
+                    break
+                except (httpx.ConnectError, httpx.ConnectTimeout, TimeoutError):
+                    snapshot = stages.snapshot()
+                    retry_before_send = (
+                        attempt == 0 and not response_yielded and not external_trace
+                        and snapshot['phase'] == 'proxy.start_tls'
+                        and snapshot['state'] == 'failed'
+                        and snapshot['tcp_connect_observed'] is True
+                        and snapshot['tls_completed'] is False
+                        and snapshot['h2_headers_sent'] is False
+                        and snapshot['h2_body_sent'] is False
+                        and snapshot['measurement_errors'] == 0
+                    )
+                    if not retry_before_send:
+                        raise
+                    log.warning(
+                        '[%s] private_http_connect_retry method=%s host=%s phase=proxy.start_tls attempt=1',
+                        self.profile_name, method.upper(), httpx.URL(url).host,
+                    )
         except BaseException as exc:
             error = exc
             try:
