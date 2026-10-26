@@ -21,13 +21,15 @@ class DraftReadDiagnosticTests(unittest.IsolatedAsyncioTestCase):
                  'values':[{'field':key,'new_value':value} for key,value in values.items()],
                  'validation_status':'VALIDATED', 'active_errors':[]}]))
         session = SimpleNamespace(facebook_web=AsyncMock(return_value=object()))
+        open_client = AsyncMock(return_value=client)
         with patch('app.private_draft_read_diagnostic.saved_draft_intent', new=AsyncMock(return_value=intent)), \
-                patch('app.private_draft_read_diagnostic.AdsManagerPrivateHttp.open', new=AsyncMock(return_value=client)):
+                patch('app.private_draft_read_diagnostic.AdsManagerPrivateHttp.open', new=open_client):
             result = await read_diagnostic(object(), profile_id='4', context=object(), session=session, payload={})
         self.assertEqual([call.args[0] for call in client.get.await_args_list],
                          ['/addraft_444444','/addraftfragment_555555'])
         client.post.assert_not_awaited()
         self.assertTrue(client.read_only)
+        self.assertTrue(open_client.await_args.kwargs['reference_read'])
         self.assertFalse(result['draft_verified'])
         self.assertFalse(result['persisted'])
         self.assertEqual(result['advertising_mutation_posts'], 0)

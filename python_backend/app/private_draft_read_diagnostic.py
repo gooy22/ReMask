@@ -65,7 +65,7 @@ async def read_diagnostic(adapter, *, profile_id, context, session, payload):
         raise fail("RECONCILE_REQUIRED", "Saved draft has no exact read handle")
     web = await session.facebook_web()
     client = await AdsManagerPrivateHttp.open(web, account_id=target["ad_account_id"],
-        business_id=target["business_id"], actor_id=actor)
+        business_id=target["business_id"], actor_id=actor, reference_read=True)
     client.read_only = True
     draft = await client.get("/addraft_" + draft_id,
         {"fields": ["id", "account_id", "author_id", "ownership_type"]})
