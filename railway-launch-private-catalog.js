@@ -811,10 +811,30 @@ function remaskPrivateRenderJob(job) {
                         const read=response?.read;
                         if(read?.draft_verified!==false||read?.advertising_mutation_posts!==0||read?.persisted!==false)
                             throw new Error('Сервер не подтвердил режим чтения.');
-                        const rows=read.fragment_reads||[];
+                        const rows=Array.isArray(read.fragment_reads)?read.fragment_reads:[];
                         const matching=rows.filter(row=>row.relationships_match===true&&row.settings_match===true).length;
+                        const safeShape=value=>{
+                            if(!value||typeof value!=='object')return 'unknown';
+                            if(Object.prototype.hasOwnProperty.call(value,'value'))return String(value.value);
+                            if(Number.isSafeInteger(value.length))return String(value.type||'value')+':'+value.length;
+                            return String(value.type||'unknown');
+                        };
+                        const details=rows.map(row=>{
+                            const checks=row.checks&&typeof row.checks==='object'?row.checks:{};
+                            const relationFailures=Object.entries(checks).filter(([,ok])=>ok!==true).map(([key])=>key);
+                            const fields=Array.isArray(row.settings_diagnostic?.fields)?row.settings_diagnostic.fields:[];
+                            const settingFailures=fields.filter(field=>field.matches!==true).map(field=>
+                                field.field+'['+field.count+'] '+safeShape(field.expected)+' / '+safeShape(field.observed));
+                            const parent=row.observed?.parent_ad_object_id;
+                            const parentValue=parent?.present===true?safeShape(parent):'absent';
+                            return (row.level||'fragment')+': relation '+(relationFailures.length?relationFailures.join(','):'OK')+
+                                '; settings '+(settingFailures.length?settingFailures.join(','):'OK')+'; parent '+parentValue;
+                        }).join(' | ');
+                        const pending=read.pending_stage&&typeof read.pending_stage==='object'
+                            ?String(read.pending_stage.stage||'unknown')+' ('+String(read.pending_stage.reason||'unknown')+')':'';
                         result.textContent='Прочитан черновик '+read.draft_id+'. Связи и настройки совпали: '+matching+'/'+rows.length+
-                            '. '+(read.pending_stage?'Ожидает продолжения: '+read.pending_stage+'. ':'')+
+                            '. '+(details?'Детали: '+details+'. ':'')+
+                            (pending?'Ожидает продолжения: '+pending+'. ':'')+
                             'Полнота черновика и редактор этим чтением не подтверждены.';
                     }catch(error){
                         result.textContent='Чтение Meta не завершено: '+String(error?.code||error?.message||error)+
