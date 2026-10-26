@@ -428,6 +428,28 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
         context._cookie_persistor.assert_not_awaited()
         self.assertEqual(context.cookies, {'c_user':'123','xs':'old-xs'})
 
+    async def test_completed_writeback_cannot_replace_a_newer_context_loaded_while_awaiting(self):
+        context = ProfileContext(profile_id='fixture', cookies={'c_user':'123','xs':'old-xs'},
+            proxy='http://127.0.0.1:1', user_agent='fixture-UA')
+        context._loaded_cookies = dict(context.cookies)
+        async def persist(*args):
+            # The HTTP CAS completed, then another saved-session reload won
+            # before its response returned to this client's close operation.
+            context.cookies = {'c_user':'123','xs':'newer-saved-session'}
+            context._loaded_cookies = dict(context.cookies)
+            return True
+        context._cookie_persistor = AsyncMock(side_effect=persist)
+        session = MetaSession(context)
+        self.addAsyncCleanup(session.close)
+        web = await session.facebook_web()
+        client = await web._ensure_session()
+        await self.mock(client, lambda request: httpx.Response(200, text='fixture',
+            headers={'Set-Cookie':'xs=client-rotation; Domain=.facebook.com; Path=/; Secure'}))
+        await web.fetch_text('https://www.facebook.com/')
+        await session.close()
+        self.assertEqual(context.cookies, {'c_user':'123','xs':'newer-saved-session'})
+        self.assertEqual(context._loaded_cookies, context.cookies)
+
     async def test_host_or_path_scoped_cookie_cannot_become_a_shared_profile_cookie(self):
         web = FacebookWebSession(WebProfile('fixture', {'c_user':'123','xs':'old-xs'},
             'http://127.0.0.1:1','fixture-UA'))

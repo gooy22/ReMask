@@ -631,7 +631,8 @@ class MetaSession:
                         "profile_cookie_refresh_failed profile=%s kind=%s",
                         profile_id, type(exc).__name__,
                     )
-            if persisted:
+            if (persisted and getattr(self.context, 'cookies', None) == initial
+                    and str(getattr(self.context, 'profile_id', '')) == profile_id):
                 self.context.cookies = refreshed_cookies
                 if hasattr(self.context, '_loaded_cookies'):
                     self.context._loaded_cookies = dict(refreshed_cookies)
