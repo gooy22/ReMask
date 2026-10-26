@@ -15,6 +15,21 @@ class SavedDraftInspectionTests(unittest.IsolatedAsyncioTestCase):
         await self.launch()
         self.payload['reconcile_only'] = True
 
+    async def test_native_account_parent_is_root_only_and_read_only(self):
+        await self.saved()
+        self.client.draft_root_parent_id = '666666'
+        self.client.fragments['111111']['parent_ad_object_id'] = '666666'
+        before = copy.deepcopy(await self.owner.state.all_steps('image-launch'))
+        with patch.object(self.client, 'post', new=AsyncMock(side_effect=AssertionError('No POST'))) as post:
+            result = await self.launch()
+        self.assertTrue(result['draft_verified'])
+        post.assert_not_awaited()
+        self.assertEqual(await self.owner.state.all_steps('image-launch'), before)
+        self.client.fragments['222222']['parent_ad_object_id'] = '666666'
+        with self.assertRaises(ProvisioningError) as caught:
+            await self.launch()
+        self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_READ_RELATION_MISMATCH')
+
     async def test_fresh_reads_of_saved_hierarchy_never_upload_publish_or_activate(self):
         await self.saved()
         before = copy.deepcopy(await self.owner.state.all_steps('image-launch'))

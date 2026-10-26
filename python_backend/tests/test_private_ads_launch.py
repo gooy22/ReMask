@@ -45,6 +45,45 @@ class ImageClient(DraftClient):
         return await super().get(path, params)
 
 class LaunchTests(unittest.IsolatedAsyncioTestCase):
+    async def test_reviewed_parent_read_fix_resumes_same_draft_without_replaying_prefix(self):
+        from app.private_ads_launch import DRAFT_PARENT_READ_PREDECESSOR
+        self.payload['launch']['execution_mode'] = 'DRAFT'
+        current = self.owner.ads_manager.source_digest
+        self.owner.ads_manager.source_digest = DRAFT_PARENT_READ_PREDECESSOR
+        original = self.client.get
+        async def pending(path, params):
+            row = await original(path, params)
+            if row.get('ad_object_type') == 'campaign':
+                raise ProvisioningError('PRIVATE_ADS_DRAFT_READ_PENDING', 'Fixture pending read', retryable=True)
+            return row
+        self.client.get = pending
+        with self.assertRaises(ProvisioningError):
+            await self.launch()
+        prefix = copy.deepcopy(self.client.posts)
+        self.assertEqual(len(prefix), 2)
+        self.owner.ads_manager.source_digest = current
+        self.client.draft_root_parent_id = '666666'
+        async def root_account(path, params):
+            row = await original(path, params)
+            if row.get('ad_object_type') == 'campaign':
+                row['parent_ad_object_id'] = '666666'
+            return row
+        self.client.get = root_account
+        result = await self.launch()
+        self.assertTrue(result['draft_verified'])
+        self.assertFalse(result['published'])
+        self.assertEqual(result['resumed_source_digest'], DRAFT_PARENT_READ_PREDECESSOR)
+        self.assertEqual(self.client.uploads, 1)
+        self.assertEqual(self.client.posts[:2], prefix)
+        self.assertEqual(len(self.client.posts), 4)
+        await self.launch()
+        self.assertEqual(len(self.client.posts), 4)
+        self.payload['launch']['campaign']['name'] = 'changed'
+        with self.assertRaises(ProvisioningError) as caught:
+            await self.launch()
+        self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_SAVED_OPERATION_MISMATCH')
+        self.assertEqual(len(self.client.posts), 4)
+
     async def asyncSetUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

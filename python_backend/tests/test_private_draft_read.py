@@ -12,7 +12,8 @@ class DraftReadDiagnosticTests(unittest.IsolatedAsyncioTestCase):
         values = {'name':'fixture campaign', 'status':'PAUSED'}
         intent = (target, 'saved-key', 'fingerprint', '333333', 'source', '444444',
                   [('campaign', '555555', values, None)], {'stage':'FRAGMENT_AD_SET'})
-        client = SimpleNamespace(read_only=False, post=AsyncMock(side_effect=AssertionError('No POST')),
+        client = SimpleNamespace(read_only=False, context=SimpleNamespace(account_id='111111'),
+            post=AsyncMock(side_effect=AssertionError('No POST')),
             get=AsyncMock(side_effect=[
                 {'id':'444444', 'account_id':'111111', 'author_id':'333333', 'ownership_type':'USER'},
                 {'id':'555555', 'account_id':'111111', 'ad_draft_id':'444444',
