@@ -106,7 +106,7 @@ find "$DATA_DIR" -type f -exec chmod 600 {} +
 # Remove only abandoned atomic temp files, never profiles, jobs, backups or media.
 find "$DATA_DIR" -type f -name '*.tmp-*' -mmin +1440 -delete
 # Migrate legacy credentials before opening the service. An invalid key/data aborts startup.
-php -r 'require $argv[1]."/settings.php";require $argv[1]."/classes/AccountStoreFactory.php";$store=AccountStoreFactory::create(ACCOUNTSFILENAME);$profiles=$store->deserialize();if ($store instanceof FbAccountSerializer) $store->serialize($profiles);echo "[profile-storage] ready count=".count($store->deserialize())." encrypted=1 key_encoding=".CredentialVault::environmentEncoding()."\n";' "$ROOT"
+php -r 'require $argv[1]."/settings.php";require $argv[1]."/classes/AccountStoreFactory.php";$store=AccountStoreFactory::create(ACCOUNTSFILENAME);$profiles=$store->deserialize();if ($store instanceof FbAccountSerializer) $store->ensureEncrypted();echo "[profile-storage] ready count=".count($store->deserialize())." encrypted=1 key_encoding=".CredentialVault::environmentEncoding()."\n";' "$ROOT"
 chown -R www-data:www-data "$DATA_DIR"
 chmod 700 "$REMASK_PHP_SESSION_DIR" 2>/dev/null || true
 chown www-data:www-data "$REMASK_PHP_SESSION_DIR" 2>/dev/null || true
