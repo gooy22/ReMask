@@ -1,6 +1,6 @@
 <?php
 declare(strict_types=1);
-$runtime = getcwd();
+$runtime = getenv('REMASK_RUNTIME_ROOT') ?: getcwd();
 require $runtime.'/classes/FbAccount.php';
 require $runtime.'/classes/RemaskProxy.php';
 require $runtime.'/classes/FbAccountSerializer.php';

@@ -380,6 +380,11 @@ echo json_encode(['token'=>$saved->token,'cookies'=>$saved->cookies,'proxy'=>$sa
             capture_output=True,text=True,timeout=15)
         self.assertEqual(result.returncode,0,'Installed Workspace module: '+result.stderr)
 
+        session_test=subprocess.run(['php',str(ROOT/'tests/profile-startup-backup.test.php')],
+            cwd=self.root,env={**self.env,'REMASK_RUNTIME_ROOT':str(self.root)},
+            capture_output=True,text=True,timeout=15)
+        self.assertEqual(session_test.returncode,0,'Profile startup backup: '+session_test.stderr)
+
     def test_installed_instagram_template_save_reopen_and_duplicate_without_fb_context(self):
         import threading
         from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
