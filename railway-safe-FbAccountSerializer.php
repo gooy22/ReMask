@@ -50,6 +50,29 @@ class FbAccountSerializer implements ProfileStoreInterface
         });
     }
 
+    public function compareAndSwapCookies(string $name, string $actor, string $expectedXs, array $cookies): bool
+    {
+        require_once __DIR__ . '/RemaskCookieSession.php';
+        try {
+            $this->mutate(function (array $accounts) use ($name, $actor, $expectedXs, $cookies) {
+                foreach ($accounts as $index=>$account) {
+                    if ($account->name!==$name) continue;
+                    $next=RemaskCookieSession::replacement($account, $actor, $expectedXs, $cookies);
+                    if ($next===null) throw new RuntimeException('PROFILE_SESSION_CHANGED');
+                    $updated=clone $account;
+                    $updated->cookies=$next;
+                    $accounts[$index]=$updated;
+                    return $accounts;
+                }
+                throw new RuntimeException('PROFILE_SESSION_CHANGED');
+            });
+            return true;
+        } catch (RuntimeException $error) {
+            if ($error->getMessage()==='PROFILE_SESSION_CHANGED') return false;
+            throw $error;
+        }
+    }
+
     public function getAccountByName($name): ?FbAccount
     {
         foreach ($this->deserialize() as $account) {
