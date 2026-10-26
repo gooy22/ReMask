@@ -3,6 +3,83 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
 const source = fs.readFileSync(path.join(__dirname, '..', 'railway-launch-private-catalog.js'), 'utf8');
+
+// Reopen the original retained Draft in a browser with empty localStorage.
+// A fresh Meta read may fail; it must not create/retry a job, drop receipts,
+// enable delivery, or turn accepted campaign data into a completed Draft.
+(async()=>{
+  class Element {
+    constructor(){this.children=[];this.style={};this.events={};this._text='';}
+    set textContent(value){this._text=String(value);this.children=[];}
+    get textContent(){return this._text+this.children.map(child=>child.textContent).join(' ');}
+    set innerHTML(_value){throw new Error('Private job data must use text nodes.');}
+    appendChild(child){this.children.push(child);return child;}
+    replaceChildren(){this.children=[];this._text='';}
+    setAttribute(){}
+    addEventListener(name,handler){this.events[name]=handler;}
+  }
+  const controls=Object.fromEntries(['preflight','syncMeta','loadFunding','fundingStatus',
+    'reviewLaunch','launchButton','serverDryRun','dryRunPlan','reviewStatus','launchResult',
+    'jobItems','jobSummary','recentJobSelect','jobActionSelect','retryFailed','forceRetryReview',
+    'continueJob','refreshInsights','activateJobAds','pauseJobAds'].map(id=>[id,new Element()]));
+  const id='a'.repeat(32),profile='4',draft='1000001',campaign='1000002';
+  const job={id,status:'FAILED',items_total:1,items:[{profile_id:profile,status:'FAILED',tasks:[{
+    id:'task',action:'private_launch',status:'FAILED',attempt:5,error_code:'READ_RELATION_MISMATCH',
+    error_message:'<img src=x onerror=alert(1)>',payload:{ad_account_id:'120248891583720408',
+      launch:{base:{execution_mode:'DRAFT'}}}}],advertising_steps:[
+    {task_id:'task',step:'ADS_MANAGER:DRAFT',entity_id:draft,status:'SUCCESS',verified:true},
+    {task_id:'task',step:'ADS_MANAGER:FRAGMENT_CAMPAIGN',entity_id:campaign,status:'RECONCILE_REQUIRED',verified:false}]}]};
+  const original=JSON.stringify(job),storage=new Map(),calls=[];
+  let legacyRenders=0;
+  const ctx={console,URL,queueMicrotask,setTimeout:handler=>queueMicrotask(handler),
+    $:name=>controls[name],state:{},fundingState(){},fundingReviewLabel(){},loadFunding:async()=>{},validateReady(){},
+    renderJob(){legacyRenders++;},localStorage:{getItem:key=>storage.get(key)||null,
+      setItem:(key,value)=>storage.set(key,value),removeItem:key=>storage.delete(key)},
+    window:{location:{href:'https://remask.fixture/launch.php?private_job='+id},history:{replaceState(_a,_b,url){ctx.window.location.href=url;}}},
+    document:{readyState:'loading',addEventListener(){},createElement:()=>new Element(),
+      querySelector:()=>({content:'fixture-csrf'})},
+    fetch:async(_url,options)=>{
+      const request=JSON.parse(options.body);calls.push(request);
+      if(request.action==='status')return {ok:true,json:async()=>({ok:true,job})};
+      if(request.action==='private_draft_read')return {ok:false,status:502,
+        json:async()=>({ok:false,code:'PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE',message:'Meta requires sign-in'})};
+      throw new Error('Unexpected write: '+request.action);
+    }};
+  vm.createContext(ctx);vm.runInContext(source,ctx);
+  await ctx.remaskPrivateRestoreSourceJob();
+  assert.match(controls.jobSummary.textContent,/FAILED/);
+  assert.match(controls.jobItems.textContent,new RegExp(draft));
+  assert.match(controls.jobItems.textContent,new RegExp(campaign));
+  assert.match(controls.jobItems.textContent,/квитанция, чтение не подтверждено/);
+  assert.equal(controls.activateJobAds.disabled,true);
+  assert.equal(controls.retryFailed.disabled,true,'legacy retries must not receive a private worker handle');
+  assert.equal(JSON.parse(storage.get('remask_private_source_job_v1')).job_id,id);
+  assert.equal(controls.recentJobSelect.value,'private:'+id);
+  const idsCell=controls.jobItems.children[0].children[5];
+  const button=idsCell.children.find(child=>child.textContent==='Проверить черновик в Meta');
+  assert.ok(button,'a settled saved Draft offers an explicit read');
+  await button.events.click();
+  assert.match(idsCell.textContent,/BUSINESS_LOGIN_GATE/);
+  assert.match(idsCell.textContent,new RegExp(campaign));
+  assert.equal(button.disabled,false);
+  assert.equal(JSON.stringify(job),original,'the read failure must preserve the immutable source journal');
+  assert.deepEqual(calls.map(row=>row.action),['status','private_draft_read']);
+  assert.equal(calls[1].profile_id,profile);assert.equal(calls[1].job_id,id);
+  ctx.renderJob({id:'legacy',items:[]});
+  assert.equal(legacyRenders,0,'late legacy init must not erase the restored private result');
+  assert.match(controls.jobItems.textContent,new RegExp(campaign));
+  assert.match(controls.jobItems.textContent,/BUSINESS_LOGIN_GATE/,'late legacy reads must retain the fresh read failure too');
+  let intercepted=false;
+  await controls.recentJobSelect.events.change({preventDefault(){},stopImmediatePropagation(){intercepted=true;}});
+  assert.equal(intercepted,true,'the private recent entry must not reach the legacy job endpoint');
+  assert.deepEqual(calls.map(row=>row.action),['status','private_draft_read','status']);
+  controls.recentJobSelect.value='legacy';
+  controls.recentJobSelect.events.change({});ctx.renderJob({id:'legacy',items:[]});
+  assert.equal(legacyRenders,1,'explicitly selecting a legacy recent job still works');
+  calls.length=0;storage.clear();ctx.window.location.href='https://remask.fixture/launch.php?private_job=https://other.invalid';
+  await ctx.remaskPrivateRestoreSourceJob();assert.equal(calls.length,0);
+  console.log('Private Draft reopens from its exact handle; rejected Meta reads retain receipts without advertising writes.');
+})().catch(error=>{console.error(error);process.exitCode=1;});
 const workerBridge = fs.readFileSync(path.join(__dirname, '..', 'railway-python-worker-jobs-overlay.php'), 'utf8');
 const targetingAutocomplete = fs.readFileSync(path.join(__dirname, '..', 'railway-targeting-autocomplete-overlay.php'), 'utf8');
 assert.match(targetingAutocomplete, /const identity = \[input\.id, input\.name, input\.placeholder,/,

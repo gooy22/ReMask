@@ -749,6 +749,97 @@ function remaskPrivateFinalizeJob(job) {
     return status;
 }
 let remaskPrivatePollGeneration=0;
+// The private worker journal is a different schema/store from legacy metaJobs.
+// Restore it by its own handle and render retained receipts without claiming
+// that accepted fragments or an old SUCCESS are a fresh Meta read.
+function remaskPrivateIsJob(job) {
+    return /^[a-f0-9]{32}$/.test(String(job?.id||'')) && (job.items||[]).some(item=>
+        (item.tasks||[]).some(task=>['private_launch','private_delivery'].includes(task.action)));
+}
+function remaskPrivateRememberJob(jobId) {
+    if(!/^[a-f0-9]{32}$/.test(String(jobId||'')))return;
+    try{localStorage.setItem('remask_private_source_job_v1',JSON.stringify({job_id:jobId}));}catch(_){}
+    try{
+        const url=new URL(window.location.href);
+        url.searchParams.set('private_job',jobId);
+        window.history.replaceState(null,'',url.toString());
+    }catch(_){}
+}
+function remaskPrivateRecentJob(job) {
+    const select=$('recentJobSelect');
+    if(!select||typeof document==='undefined'||!remaskPrivateIsJob(job))return;
+    const value='private:'+job.id;
+    let entry=Array.from(select.children||[]).find(child=>child.value===value);
+    if(!entry){entry=document.createElement('option');entry.value=value;select.appendChild(entry);}
+    entry.textContent='Meta · '+job.id+' · '+job.status;select.value=value;
+}
+function remaskPrivateRenderJob(job) {
+    if(!remaskPrivateIsJob(job)||typeof document==='undefined')return;
+    const body=$('jobItems'),summary=$('jobSummary');
+    if(!body||!summary)return;
+    summary.textContent='Задача '+job.id+' · '+job.status+' · сохранённый журнал. Проверка в Meta выполняется отдельно.';
+    body.replaceChildren();
+    for(const item of job.items||[]){
+        for(const task of item.tasks||[]){
+            const steps=(item.advertising_steps||[]).filter(step=>step.task_id===task.id);
+            const ids=steps.filter(step=>step.entity_id).map(step=>step.step+': '+step.entity_id+
+                (step.verified===true?' (чтение подтверждено)':' (квитанция, чтение не подтверждено)'));
+            const payload=task.payload||{};
+            const tr=document.createElement('tr');
+            for(const value of [String(item.profile_id||'')+' / '+String(payload.ad_account_id||''),
+                task.status,steps.at(-1)?.step||task.action,task.attempt||0,'HTTP/2',ids.join('\n'),
+                '', '', '', '',[task.error_code,task.error_message].filter(Boolean).join(': ')]){
+                const td=document.createElement('td');td.textContent=String(value??'');
+                td.style.whiteSpace='pre-wrap';tr.appendChild(td);
+            }
+            const launch=payload.launch;
+            const draftMode=(launch?.base?.execution_mode||launch?.execution_mode)==='DRAFT';
+            const sameProfileTasks=(job.items||[]).filter(row=>row.profile_id===item.profile_id)
+                .flatMap(row=>row.tasks||[]).filter(row=>row.action==='private_launch');
+            if(task.action==='private_launch'&&draftMode&&sameProfileTasks.length===1&&
+                ['SUCCESS','FAILED','PARTIAL'].includes(job.status)&&
+                steps.some(step=>step.step==='ADS_MANAGER:DRAFT'&&step.entity_id)&&
+                !steps.some(step=>step.step==='ADS_MANAGER:PUBLISH')){
+                const button=document.createElement('button');button.type='button';
+                button.className='btn btn-secondary';button.textContent='Проверить черновик в Meta';
+                const result=document.createElement('div');result.className='muted';
+                button.addEventListener('click',async()=>{
+                    button.disabled=true;result.textContent='Читаю сохранённый черновик. Рекламные объекты не создаются…';
+                    try{
+                        const response=await remaskPrivateWorker({action:'private_draft_read',
+                            profile_id:String(item.profile_id),job_id:job.id});
+                        const read=response?.read;
+                        if(read?.draft_verified!==false||read?.advertising_mutation_posts!==0||read?.persisted!==false)
+                            throw new Error('Сервер не подтвердил режим чтения.');
+                        const rows=read.fragment_reads||[];
+                        const matching=rows.filter(row=>row.relationships_match===true&&row.settings_match===true).length;
+                        result.textContent='Прочитан черновик '+read.draft_id+'. Связи и настройки совпали: '+matching+'/'+rows.length+
+                            '. '+(read.pending_stage?'Ожидает продолжения: '+read.pending_stage+'. ':'')+
+                            'Полнота черновика и редактор этим чтением не подтверждены.';
+                    }catch(error){
+                        result.textContent='Чтение Meta не завершено: '+String(error?.code||error?.message||error)+
+                            '. Сохранённые ID и исходная попытка остаются в журнале.';
+                    }finally{button.disabled=false;}
+                });
+                tr.children[5].appendChild(button);tr.children[5].appendChild(result);
+            }
+            body.appendChild(tr);
+        }
+    }
+    // The legacy buttons dispatch to the legacy store. Never send a private
+    // worker handle there, or expose publication controls for a DRAFT.
+    for(const id of ['retryFailed','forceRetryReview','continueJob','refreshInsights']){
+        if($(id))$(id).disabled=true;
+    }
+    const draftOnly=(job.items||[]).flatMap(item=>item.tasks||[]).every(task=>
+        task.action==='private_launch'&&
+        (task.payload?.launch?.base?.execution_mode||task.payload?.launch?.execution_mode)==='DRAFT');
+    if(draftOnly){
+        for(const id of ['activateJobAds','pauseJobAds'])if($(id))$(id).disabled=true;
+    }
+    if($('jobActionSelect'))$('jobActionSelect').hidden=draftOnly;
+    remaskPrivateRecentJob(job);
+}
 async function remaskPrivatePollJob(jobId) {
     const generation=++remaskPrivatePollGeneration;
     let failures=0;
@@ -758,8 +849,9 @@ async function remaskPrivatePollJob(jobId) {
         try{
             const data=await remaskPrivateWorker({action:'status',job_id:jobId});
             if(generation!==remaskPrivatePollGeneration)return null;
-            failures=0;
             const job=data?.job||{};
+            if(job.id!==jobId||!remaskPrivateIsJob(job))throw new Error('Worker returned another job.');
+            failures=0;
             if(typeof state!=='undefined'){
                 state.privateAdvertisingJob=job;
                 const tasks=(job.items||[]).flatMap(item=>item.tasks||[]);
@@ -775,7 +867,8 @@ async function remaskPrivatePollJob(jobId) {
                     if(typeof renderJobActionMenu==='function')renderJobActionMenu();
                 }
             }
-            const done=Number(job.items_done||job.items_completed||0);
+            remaskPrivateRenderJob(job);
+            const done=(job.items||[]).filter(item=>['SUCCESS','FAILED','PARTIAL'].includes(item.status)).length;
             const total=Number(job.items_total||0);
             const advertising=(job.items||[]).flatMap(item=>item.advertising_steps||[]);
             const publishing=advertising.some(step=>step.publication?.code==='PUBLISH_PENDING');
@@ -870,14 +963,44 @@ if(typeof setJobDeliveryStatus==='function')setJobDeliveryStatus=remaskPrivateDe
 async function remaskPrivateRestoreSourceJob(){
     let saved=null;
     try{saved=JSON.parse(localStorage.getItem('remask_private_source_job_v1')||'null');}catch(_){}
-    if(saved&&typeof saved.job_id==='string'&&/^[A-Za-z0-9_-]{1,100}$/.test(saved.job_id)){
-        await remaskPrivatePollJob(saved.job_id);
+    let linked='';
+    try{linked=new URL(window.location.href).searchParams.get('private_job')||'';}catch(_){}
+    const jobId=linked||saved?.job_id;
+    if(typeof jobId==='string'&&/^[a-f0-9]{32}$/.test(jobId)){
+        const job=await remaskPrivatePollJob(jobId);
+        if(remaskPrivateIsJob(job))remaskPrivateRememberJob(jobId);
     }
 }
 if(typeof document!=='undefined'){
     if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>remaskPrivateRestoreSourceJob(),{once:true});
     else remaskPrivateRestoreSourceJob();
 }
+// A late legacy init/status response must not erase the restored worker view.
+// Explicitly choosing a legacy recent job leaves private polling first.
+if(typeof renderJob==='function'){
+    const remaskLegacyRenderJob=renderJob;
+    renderJob=function(job){
+        const selected=typeof state!=='undefined'?state.privateAdvertisingJob:null;
+        if(remaskPrivateIsJob(selected))return;
+        return remaskLegacyRenderJob(job);
+    };
+}
+if(typeof loadRecentJobs==='function'){
+    const remaskLegacyRecentJobs=loadRecentJobs;
+    loadRecentJobs=async function(){
+        await remaskLegacyRecentJobs();
+        if(typeof state!=='undefined')remaskPrivateRecentJob(state.privateAdvertisingJob);
+    };
+}
+if(typeof document!=='undefined')$('recentJobSelect')?.addEventListener('change',async event=>{
+    const value=String($('recentJobSelect').value||'');
+    if(/^private:[a-f0-9]{32}$/.test(value)){
+        event.preventDefault();event.stopImmediatePropagation();
+        await remaskPrivatePollJob(value.slice(8));return;
+    }
+    if(typeof state!=='undefined')state.privateAdvertisingJob=null;
+    ++remaskPrivatePollGeneration;
+},true);
 async function remaskPrivateCreateJob() {
     if(remaskPrivateLaunchBusy)return null;
     remaskPrivateLaunchBusy=true;validateReady();
@@ -899,7 +1022,7 @@ async function remaskPrivateCreateJob() {
         const jobId=String(accepted?.job?.job_id||'').trim();
         if(!jobId)throw new Error('Сервер не вернул номер задачи.');
         remaskPrivateShow('Задача запущена. Результат появится в «Задачи и результаты».');
-        try{localStorage.setItem('remask_private_source_job_v1',JSON.stringify({job_id:jobId}));}catch(_){}
+        remaskPrivateRememberJob(jobId);
         remaskPrivatePollJob(jobId);
         return accepted;
     }catch(error){

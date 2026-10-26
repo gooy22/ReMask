@@ -210,6 +210,22 @@ class AdvertisingBridgeTests(unittest.TestCase):
         self.assertEqual(result['message'], 'PYTHON_WORKER_INVALID_JSON')
         self.assertNotIn('forwarded', result)
 
+    def test_saved_draft_read_preserves_auth_failure_without_private_material(self):
+        self.worker.fail_posts = True
+        secret = 'synthetic-session-material-never-expose'
+        self.worker.error_payload = {'detail': {
+            'code': 'PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE', 'retryable': True,
+            'message': 'Cookie=' + secret, 'response': {'html': secret}}}
+        self.worker_requests.clear()
+        status, result = self.request({'action': 'private_draft_read',
+            'profile_id': '4', 'job_id': 'a' * 32})
+        self.assertEqual(status, 502)
+        self.assertEqual(result['code'], 'PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE')
+        self.assertTrue(result['retryable'])
+        self.assertNotIn(secret, json.dumps(result))
+        self.assertEqual(self.worker_requests, [{'method': 'POST',
+            'path': '/api/v1/profiles/4/private-draft-read', 'payload': {'job_id': 'a' * 32}}])
+
     def test_disabled_and_missing_read_contract_flags_survive_bridge(self):
         _, result = self.request({'action': 'private_launch_contracts'})
         self.assertFalse(result['contracts']['AD']['active'])
