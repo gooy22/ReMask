@@ -26,6 +26,21 @@ class FbAccountSerializer implements ProfileStoreInterface
         });
     }
 
+    /** Migrate plaintext once; an encrypted profile must never rotate its backup on boot. */
+    public function ensureEncrypted(): void
+    {
+        $handle = AtomicJsonFile::lock($this->filename);
+        try {
+            $rows = AtomicJsonFile::read($this->filename);
+            $accounts = $this->decodeAccounts(AtomicJsonFile::encode($rows));
+            if (getenv('REMASK_ENCRYPT_PROFILE_JSON') !== '1') return;
+            if (count($rows) === count($accounts) && count(array_filter($rows,
+                static fn($row) => is_array($row) && is_string($row['credentials_encrypted'] ?? null))) === count($rows)) return;
+            AtomicJsonFile::replace($this->filename, $this->encodeAccounts($accounts), true,
+                $this->encodeAccounts($accounts));
+        } finally { AtomicJsonFile::unlock($handle); }
+    }
+
     public function deserialize(): array
     {
         $handle = AtomicJsonFile::lock($this->filename, LOCK_SH);
