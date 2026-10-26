@@ -88,6 +88,27 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(requests), 2)
         self.assertIn('private_http_connect_retry', str(logs.output))
 
+    async def test_proxy_tls_request_timeout_retries_once_before_http2_send(self):
+        client = self.make()
+        requests = []
+        async def handler(request):
+            requests.append(request)
+            trace = request.extensions['trace']
+            await trace('connection.connect_tcp.started', {})
+            if len(requests) == 1:
+                await trace('proxy.start_tls.failed', {})
+                await asyncio.sleep(0.03)
+            else:
+                await trace('proxy.start_tls.complete', {})
+            return httpx.Response(200, content=b'ok', extensions={'http_version': b'HTTP/2'})
+        await self.mock(client, handler)
+        with self.assertLogs('remask_worker', level='WARNING') as logs:
+            async with client.post('https://business.facebook.com/api/graphql',
+                    data={'operation':'READ_RK'}, request_timeout_seconds=0.01) as response:
+                self.assertEqual(await response.text(), 'ok')
+        self.assertEqual(len(requests), 2)
+        self.assertIn('private_http_connect_retry', str(logs.output))
+
     async def test_connect_error_after_http2_headers_is_not_retried(self):
         client = self.make()
         requests = []
