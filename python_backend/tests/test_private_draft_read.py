@@ -2,7 +2,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from app.private_draft_read_diagnostic import read_diagnostic, scalar_shape
+from app.private_draft_read_diagnostic import read_diagnostic, scalar_shape, values_diagnostic
 from app.provisioning.models import ProvisioningError
 
 
@@ -50,6 +50,33 @@ class DraftReadDiagnosticTests(unittest.IsolatedAsyncioTestCase):
         for value in ('credential fixture', {'token':'fixture'}, ['fixture'], 'https://example.com/?token=fixture'):
             self.assertNotIn('value', scalar_shape(value))
         self.assertEqual(scalar_shape('addraft_444444')['value'], 'addraft_444444')
+
+    def test_field_diagnostic_distinguishes_changed_missing_and_encoded_values(self):
+        rows = [{'field':'objective', 'new_value':'"LINK_CLICKS"'},
+                {'field':'status', 'new_value':'ACTIVE'},
+                {'field':'is_odax_campaign_group', 'new_value':False}]
+        result = values_diagnostic(rows, {'objective':'LINK_CLICKS', 'status':'PAUSED',
+            'buying_type':'AUCTION'}, '222222')
+        fields = {row['field']: row for row in result['fields']}
+        self.assertTrue(fields['objective']['matches'])
+        self.assertEqual(fields['objective']['json_decoded']['value'], 'LINK_CLICKS')
+        self.assertFalse(fields['status']['matches'])
+        self.assertEqual(fields['status']['observed']['value'], 'ACTIVE')
+        self.assertEqual(fields['buying_type']['count'], 0)
+        self.assertEqual(result['unexpected_row_count'], 1)
+
+    def test_field_diagnostic_never_exposes_text_nested_credentials_or_unknown_names(self):
+        import json
+        secret = 'private-ad-text-and-credential-fixture'
+        rows = [{'field':'name', 'new_value':secret},
+                {'field':'creative', 'new_value':json.dumps({'password':secret})},
+                {'field':secret, 'new_value':secret}, {'field':[]}]
+        result = values_diagnostic(rows, {'name':secret, 'creative':{'password':secret}}, '222222')
+        encoded = json.dumps(result)
+        self.assertNotIn(secret, encoded)
+        self.assertNotIn('password', encoded)
+        self.assertEqual(result['unexpected_row_count'], 2)
+        self.assertEqual(result['unexpected_reviewed_fields'], [])
 
 
 class DraftReadApiTests(unittest.IsolatedAsyncioTestCase):

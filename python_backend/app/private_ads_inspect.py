@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 from functools import lru_cache
 import json
+import logging
 import re
 
 from .private_ads_draft import FRAGMENT_FIELDS, LEVELS, fail, fragment_parent_matches, fragment_values_match, identity
@@ -209,6 +210,12 @@ async def inspect_saved_draft(adapter, *, profile_id, context, session, payload)
         if level == "ad" and values.get("adset_id") != objects["ad_set"]:
             raise fail("READ_RELATION_MISMATCH", "Saved Ad has another Ad Set relationship")
         if not fragment_values_match(row.get("values"), values, business_id=target["business_id"]):
+            # Import only on the read-failure path; this module supplies the
+            # saved-intent checks also used by the diagnostic endpoint.
+            from .private_draft_read_diagnostic import values_diagnostic
+            logging.getLogger(__name__).warning("draft_value_mismatch profile=%s level=%s diagnostic=%s",
+                profile_id, level, json.dumps(values_diagnostic(row.get("values"), values,
+                    target["business_id"]), sort_keys=True, separators=(",", ":")))
             raise fail("READ_SPEC_MISMATCH", "Fresh draft values differ from the original submitted fields")
         objects[level] = identity(row.get("ad_object_id"))
         if confirmed_object is not None and objects[level] != confirmed_object:

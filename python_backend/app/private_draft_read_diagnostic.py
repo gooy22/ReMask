@@ -5,11 +5,12 @@ Only exact handles already retained by the original job can be read.
 """
 from __future__ import annotations
 
+import json
 import re
 
 from .private_ads_draft import FRAGMENT_FIELDS, fail, fragment_parent_matches, fragment_values_match
 from .private_ads_http import AdsManagerPrivateHttp
-from .private_ads_inspect import adapter_scope, saved_draft_intent, validation_diagnostic
+from .private_ads_inspect import _validation_fields, adapter_scope, saved_draft_intent, validation_diagnostic
 
 
 def scalar_shape(value):
@@ -20,9 +21,40 @@ def scalar_shape(value):
         result["value"] = value
     elif isinstance(value, str):
         result["length"] = len(value)
-        if (value in {"", "campaign", "ad_set", "ad", "VALIDATED", "HAS_ERRORS", "PENDING", "PAUSED", "ACTIVE"}
+        if (value in {"", "campaign", "ad_set", "ad", "VALIDATED", "HAS_ERRORS", "PENDING", "PAUSED", "ACTIVE",
+                      "AUCTION", "LINK_CLICKS", "OUTCOME_TRAFFIC"}
                 or re.fullmatch(r"(?:(?:addraft|addraftfragment|act)_)?[0-9]{1,40}", value)):
             result["value"] = value
+    return result
+
+
+def values_diagnostic(rows, expected, business_id):
+    """Explain the existing strict comparison without returning ad text or secrets."""
+    result = {"collection": scalar_shape(rows), "fields": []}
+    if not isinstance(rows, list) or len(rows) > 101:
+        return result
+    wanted = dict(expected)
+    if any(isinstance(row, dict) and row.get("field") == "acting_business_id" for row in rows):
+        wanted["acting_business_id"] = business_id
+    result["row_count"] = len(rows)
+    result["unexpected_row_count"] = sum(not isinstance(row, dict)
+        or not isinstance(row.get("field"), str) or row["field"] not in wanted for row in rows)
+    result["unexpected_reviewed_fields"] = sorted({row["field"] for row in rows
+        if isinstance(row, dict) and isinstance(row.get("field"), str)
+        and row["field"] not in wanted and row["field"] in _validation_fields()})
+    for field, value in sorted(wanted.items()):
+        found = [row for row in rows if isinstance(row, dict) and row.get("field") == field]
+        item = {"field": field, "count": len(found), "expected": scalar_shape(value),
+                "matches": fragment_values_match(found, {field: value})}
+        if len(found) == 1:
+            actual = found[0].get("new_value")
+            item["observed"] = scalar_shape(actual)
+            if isinstance(actual, str) and len(actual) <= 16000:
+                try:
+                    item["json_decoded"] = scalar_shape(json.loads(actual))
+                except (ValueError, RecursionError):
+                    pass
+        result["fields"].append(item)
     return result
 
 
@@ -55,6 +87,7 @@ async def read_diagnostic(adapter, *, profile_id, context, session, payload):
                 for field in ("id", "ad_draft_id", "ad_object_id", "ad_object_type",
                               "parent_ad_object_id", "validation_status", "status")},
             "settings_match": fragment_values_match(row.get("values"), values, business_id=target["business_id"]),
+            "settings_diagnostic": values_diagnostic(row.get("values"), values, target["business_id"]),
             "active_error_diagnostic": validation_diagnostic(row.get("active_errors"), observed="active_errors" in row)})
         if not all(checks.values()):
             break
