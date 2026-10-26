@@ -11,6 +11,8 @@ import math
 import re
 from typing import Any
 
+from .meta_auth_document import auth_gate as _auth_gate
+
 
 _JSON_SCRIPT_RE = re.compile(r"<script\b[^>]*>(.*?)</script\s*>", re.IGNORECASE | re.DOTALL)
 _REQUEST_KEYS = {"variables", "params", "request", "input", "query", "preloadparams"}
@@ -70,19 +72,6 @@ def _response_only(value: Any, depth: int = 0, decode_string: bool = False) -> A
         if isinstance(decoded, (dict, list)):
             return _response_only(decoded, depth + 1)
     return value
-
-
-def _auth_gate(url: str, body: str) -> str:
-    folded_url = str(url or "").casefold()
-    folded_body = str(body or "").casefold()
-    if "/checkpoint" in folded_url:
-        return "CHECKPOINT_REQUIRED"
-    login_form = bool(re.search(r"<form\b[^>]*(?:\bid\s*=\s*['\"]login_form['\"]|\baction\s*=\s*['\"][^'\"]*/login)", folded_body))
-    if "/login" in folded_url or login_form:
-        if "business.facebook.com/business/loginpage" in folded_url:
-            return "BUSINESS_LOGIN_GATE"
-        return "SESSION_EXPIRED"
-    return ""
 
 
 def _json_payloads(body: str) -> list[Any]:

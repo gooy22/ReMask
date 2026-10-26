@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import html
-from html.parser import HTMLParser
 import json
 import logging
 import os
@@ -16,31 +15,10 @@ import aiohttp
 import httpx
 
 from app.private_http import PrivateHttpClient
+from app.meta_auth_document import has_login_form as _has_login_form
 
 
 log = logging.getLogger("remask_worker")
-
-
-class _LoginFormParser(HTMLParser):
-    """Recognize actual login forms, ignoring script text and comments."""
-    def __init__(self):
-        super().__init__(convert_charrefs=True)
-        self.found = False
-
-    def handle_starttag(self, tag, attrs):
-        if tag.lower() != "form":
-            return
-        values = dict(attrs)
-        action = urlsplit(values.get("action") or "").path.lower()
-        self.found |= (str(values.get("id") or "").lower() == "login_form"
-                       or action == "/login.php" or action == "/login"
-                       or action.startswith("/login/"))
-
-
-def _has_login_form(body: str) -> bool:
-    parser = _LoginFormParser()
-    parser.feed(body)
-    return parser.found
 
 
 # ---------------------------------------------------------------------------

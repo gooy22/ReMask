@@ -16,13 +16,13 @@ import json
 import hashlib
 import logging
 import re
-from html.parser import HTMLParser
 from urllib.parse import parse_qs, urlsplit
 
 from .private_ads_draft import fail, flatten_params, identity
 from .private_ads_document import (_auth_gate, _json_payloads, _JSON_SCRIPT_RE,
                                    _response_only, _strict_json, _strict_json_decoder)
 from .provisioning.models import ProvisioningError
+from .meta_auth_document import has_login_form
 
 log = logging.getLogger("remask.private_ads_http")
 
@@ -121,8 +121,7 @@ def _walk(value, depth=0):
 def _bootstrap_evidence(url, body, profile, actor_id):
     """Read-only evidence; never emit query values, HTML or credentials.
 
-    Keep the current gate and dispatch decisions unchanged. The independent
-    path-only classification exposes a possible query-string false positive.
+    Report the same route/form classification used by the dispatch guard.
     Only reviewed literal routes/hosts can appear in logs.
     """
     final = urlsplit(url)
@@ -133,27 +132,9 @@ def _bootstrap_evidence(url, body, profile, actor_id):
               "/latest/home", "/latest/home/", "/"}
     host = final.hostname if final.hostname in hosts else "unreviewed"
     path = final.path if host != "unreviewed" and final.path in routes else "unreviewed"
-    # Passing only scheme/host/path to the existing classifier cannot match
-    # login/checkpoint strings embedded in a return URL's query parameters.
+    # This field reports route evidence separately from actual HTML forms.
     path_gate = _auth_gate("https://" + host + final.path, "")
-    class LoginForm(HTMLParser):
-        found = False
-
-        def handle_starttag(self, tag, attrs):
-            if tag != "form":
-                return
-            attrs = dict(attrs)
-            try:
-                action_path = urlsplit(attrs.get("action") or "").path.casefold()
-            except ValueError:
-                action_path = ""
-            if (str(attrs.get("id") or "").casefold() == "login_form"
-                    or action_path.startswith("/login")):
-                self.found = True
-
-    form_parser = LoginForm()
-    form_parser.feed(body)
-    login_form = form_parser.found
+    login_form = has_login_form(body)
     actor_state = "absent"
     try:
         actors = set()
