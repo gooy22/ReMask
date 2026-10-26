@@ -380,17 +380,6 @@ class BusinessPageTests(unittest.IsolatedAsyncioTestCase):
         await self._seed_existing_bundles()
         item = 'workspace-business-page-facebook:' + UID + '-' + BM2
         scope = 'workspace-business-page:' + BM2
-        manifest = Path(self.tmp.name) / 'page-reset.json'
-        manifest.write_text(json.dumps({'version': 1, 'repairs': [{
-            'id': 'fixture-page-reset-business-pages',
-            'item_id': item,
-            'profile_id': '15',
-            'business_id': BM2,
-            'actor_id': UID,
-            'page_name': 'PrgssTeam',
-            'authorized_at': 1791527732,
-            'reason': 'Synthetic test fixture.',
-        }]}))
         await BusinessPageStore(self.state, self.context, BM2).patch(creation_item_id=item, creation_profile_id='15')
         await self.state.set_running(item, '15', scope, ProvisioningStep.FAN_PAGES)
         rejected = {'phase': 'PAGE_CREATE_REJECTED', 'resume_from': 'MANUAL_REQUIRED',
@@ -492,6 +481,17 @@ class BusinessPageTests(unittest.IsolatedAsyncioTestCase):
         await self._seed_existing_bundles()
         item = 'workspace-business-page-facebook:' + UID + '-' + BM2
         scope = 'workspace-business-page:' + BM2
+        manifest = Path(self.tmp.name) / 'page-reset.json'
+        manifest.write_text(json.dumps({'version': 1, 'repairs': [{
+            'id': 'fixture-page-reset-business-pages',
+            'item_id': item,
+            'profile_id': '15',
+            'business_id': BM2,
+            'actor_id': UID,
+            'page_name': 'PrgssTeam',
+            'authorized_at': 1791527732,
+            'reason': 'Synthetic test fixture.',
+        }]}))
         await BusinessPageStore(self.state, self.context, BM2).patch(creation_item_id=item, creation_profile_id='15')
         await self.state.set_running(item, '15', scope, ProvisioningStep.FAN_PAGES)
         await self.state.checkpoint(item, '15', scope, ProvisioningStep.FAN_PAGES,
