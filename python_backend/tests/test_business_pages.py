@@ -380,6 +380,17 @@ class BusinessPageTests(unittest.IsolatedAsyncioTestCase):
         await self._seed_existing_bundles()
         item = 'workspace-business-page-facebook:' + UID + '-' + BM2
         scope = 'workspace-business-page:' + BM2
+        manifest = Path(self.tmp.name) / 'page-reset.json'
+        manifest.write_text(json.dumps({'version': 1, 'repairs': [{
+            'id': 'fixture-page-reset-business-pages',
+            'item_id': item,
+            'profile_id': '15',
+            'business_id': BM2,
+            'actor_id': UID,
+            'page_name': 'PrgssTeam',
+            'authorized_at': 1791527732,
+            'reason': 'Synthetic test fixture.',
+        }]}))
         await BusinessPageStore(self.state, self.context, BM2).patch(creation_item_id=item, creation_profile_id='15')
         await self.state.set_running(item, '15', scope, ProvisioningStep.FAN_PAGES)
         rejected = {'phase': 'PAGE_CREATE_REJECTED', 'resume_from': 'MANUAL_REQUIRED',
@@ -489,7 +500,7 @@ class BusinessPageTests(unittest.IsolatedAsyncioTestCase):
                 'target_names': ['PrgssTeam'], 'active_before_ids': [FP1],
                 'transport': 'business_suite_page_static_http2'})
         await self.state.init()
-        self.assertEqual((await apply_page_intent_resets(self.state))[0]['outcome'], 'APPLIED')
+        self.assertEqual((await apply_page_intent_resets(self.state, manifest))[0]['outcome'], 'APPLIED')
         self.assertEqual(self.meta.posts, [])
         payload = {'desired': {'ad_accounts': 2}, 'parameters': {'AD_ACCOUNT': {'currency': 'USD', 'timezone_id': 1}}}
         with patch('app.provisioning.private_create_handlers._rk_inventory',
@@ -499,7 +510,7 @@ class BusinessPageTests(unittest.IsolatedAsyncioTestCase):
                 item_id='reset-then-prepare', profile_id='15', context=self.context, session=self.session, payload=payload)
             posts = copy.deepcopy(self.meta.posts)
             await self.state.init()
-            self.assertEqual((await apply_page_intent_resets(self.state))[0]['outcome'], 'ALREADY_APPLIED')
+            self.assertEqual((await apply_page_intent_resets(self.state, manifest))[0]['outcome'], 'ALREADY_APPLIED')
             await PrepareService(self.state, ProvisioningService(self.state)).run(
                 item_id='repeat-after-reset', profile_id='15', context=self.context, session=self.session, payload=payload)
         self.assertTrue(result['ready_to_launch'])
