@@ -67,6 +67,7 @@ class BootstrapEvidenceTests(unittest.IsolatedAsyncioTestCase):
             ('https://business.facebook.com/business/loginpage/', '', 'BUSINESS_LOGIN_GATE'),
             ('https://BUSINESS.FACEBOOK.COM/business/loginpage?next=/checkpoint/', '', 'BUSINESS_LOGIN_GATE'),
             ('https://www.facebook.com/login.php?next=/checkpoint/', '', 'SESSION_EXPIRED'),
+            ('https://www.facebook.com/business/loginpage/', '', 'SESSION_EXPIRED'),
             ('https://m.facebook.com/login/device-based/regular/login/', '', 'SESSION_EXPIRED'),
             ('https://www.facebook.com/checkpoint/?next=/login/', '', 'CHECKPOINT_REQUIRED'),
             ('https://business.facebook.com/latest/home', '<FORM ID=login_form>', 'SESSION_EXPIRED'),

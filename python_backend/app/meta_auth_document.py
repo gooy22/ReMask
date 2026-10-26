@@ -28,7 +28,7 @@ def auth_route_gate(url):
     if host == "business.facebook.com" and (
             path == "/business/loginpage" or path.startswith("/business/loginpage/")):
         return "BUSINESS_LOGIN_GATE"
-    if re.search(r"(?:^|/)login(?:\.php)?(?:/|$)", path):
+    if re.search(r"(?:^|/)login(?:page|\.php)?(?:/|$)", path):
         return "SESSION_EXPIRED"
     return ""
 
