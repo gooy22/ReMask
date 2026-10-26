@@ -281,6 +281,11 @@ class AdsManagerPrivateHttp:
         from .direct_test import direct_test_deadline
         self._direct_deadline = direct_test_deadline(self._profile_name, str(web.profile.cookies.get('c_user') or '')) if not self._profile_proxy else 0
 
+    @property
+    def draft_root_parent_id(self):
+        """The native advertising identity, usable only after exact alias proof."""
+        return self._native_account_id
+
     def _cookies(self):
         # Digest remains private memory. A renewed/changed profile document
         # requires new initialization before another advertising request.

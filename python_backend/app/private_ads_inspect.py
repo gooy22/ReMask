@@ -6,7 +6,7 @@ from functools import lru_cache
 import json
 import re
 
-from .private_ads_draft import FRAGMENT_FIELDS, LEVELS, fail, fragment_values_match, identity
+from .private_ads_draft import FRAGMENT_FIELDS, LEVELS, fail, fragment_parent_matches, fragment_values_match, identity
 from .private_ads_http import AdsManagerPrivateHttp
 from .private_launch import _launch_fingerprint
 
@@ -201,7 +201,8 @@ async def inspect_saved_draft(adapter, *, profile_id, context, session, payload)
         adapter_scope(row, target["ad_account_id"])
         parent = objects.get("campaign" if level == "ad_set" else "ad_set") if level != "campaign" else None
         if (row.get("id") != fragment_id or row.get("ad_draft_id") != draft_id or row.get("ad_object_type") != level
-                or row.get("parent_ad_object_id") not in ((None, "") if parent is None else (parent,))):
+                or not fragment_parent_matches(row.get("parent_ad_object_id"), level=level,
+                    parent_id=parent, root_account_id=getattr(client, "draft_root_parent_id", client.context.account_id))):
             raise fail("READ_RELATION_MISMATCH", "Fresh fragment relationships differ from the saved draft")
         if level != "campaign" and values.get("campaign_id") != objects["campaign"]:
             raise fail("READ_RELATION_MISMATCH", "Saved Ad Set or Ad has another Campaign relationship")

@@ -559,6 +559,37 @@ class DraftClient:
 
 
 class PublisherTests(unittest.IsolatedAsyncioTestCase):
+    async def test_native_account_parent_confirms_root_without_publishing(self):
+        self.client.draft_root_parent_id = '666666'
+        original = self.client.get
+        async def root_account(path, params):
+            row = await original(path, params)
+            if row.get('ad_object_type') == 'campaign':
+                row['parent_ad_object_id'] = '666666'
+            return row
+        self.client.get = root_account
+        verify = AsyncMock(side_effect=AssertionError('No publication'))
+        result = await self.publisher.run(self.client, name='source-flow', levels=self.levels,
+            verify_objects=verify, draft_only=True)
+        self.assertTrue(result['draft_verified'])
+        self.assertFalse(result['published'])
+        self.assertEqual(len(self.client.posts), 4)
+        self.assertFalse(any(path.endswith('/publish') for path, _params in self.client.posts))
+        verify.assert_not_awaited()
+
+    async def test_account_parent_on_child_is_rejected_before_next_write(self):
+        original = self.client.get
+        async def account_parent(path, params):
+            row = await original(path, params)
+            if row.get('ad_object_type') == 'ad_set':
+                row['parent_ad_object_id'] = '111111'
+            return row
+        self.client.get = account_parent
+        with self.assertRaises(ProvisioningError) as caught:
+            await self.launch()
+        self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_READ_RELATION_MISMATCH')
+        self.assertEqual(len(self.client.posts), 3)
+
     async def asyncSetUp(self):
         await JournalTests.asyncSetUp(self)
         self.publisher = AdsManagerDraftPublisher(self.sender)

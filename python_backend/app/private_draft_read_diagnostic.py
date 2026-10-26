@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import re
 
-from .private_ads_draft import FRAGMENT_FIELDS, fail, fragment_values_match
+from .private_ads_draft import FRAGMENT_FIELDS, fail, fragment_parent_matches, fragment_values_match
 from .private_ads_http import AdsManagerPrivateHttp
 from .private_ads_inspect import adapter_scope, saved_draft_intent, validation_diagnostic
 
@@ -47,7 +47,8 @@ async def read_diagnostic(adapter, *, profile_id, context, session, payload):
         checks = {"id": row.get("id") == fragment_id,
             "ad_draft_id": row.get("ad_draft_id") == draft_id,
             "ad_object_type": row.get("ad_object_type") == level,
-            "parent_ad_object_id": row.get("parent_ad_object_id") in ((None, "") if parent is None else (parent,))}
+            "parent_ad_object_id": fragment_parent_matches(row.get("parent_ad_object_id"), level=level,
+                parent_id=parent, root_account_id=getattr(client, "draft_root_parent_id", client.context.account_id))}
         reads.append({"level": level, "fragment_id": fragment_id,
             "relationships_match": all(checks.values()), "checks": checks,
             "observed": {field: {"present": field in row, **scalar_shape(row.get(field))}
