@@ -138,11 +138,16 @@ class PrivateHttpClient:
         result: dict[str, str] = {}
         for cookie in self._client.cookies.jar:
             domain = str(cookie.domain or "").lstrip(".").casefold()
-            if domain != "facebook.com" and not domain.endswith(".facebook.com"):
+            # The flat stored profile cannot represent host/path-specific
+            # cookies safely. Only persist the reviewed shared root scope.
+            if domain != "facebook.com" or cookie.path != "/":
                 continue
             if not cookie.name or cookie.value is None or cookie.is_expired():
                 continue
-            result[str(cookie.name)] = str(cookie.value)
+            name, value = str(cookie.name), str(cookie.value)
+            if name in result and result[name] != value:
+                return {}  # Ambiguous cookies must never overwrite a profile.
+            result[name] = value
         return result
 
     async def close(self) -> None:

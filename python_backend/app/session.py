@@ -607,12 +607,12 @@ class MetaSession:
                 and refreshed_cookies.get("c_user") == actor_id
                 and str(refreshed_cookies.get("xs") or "").strip()
                 and refreshed_cookies != initial):
-            self.context.cookies = refreshed_cookies
             persistor = getattr(self.context, "_cookie_persistor", None)
+            persisted = not callable(persistor)
             if callable(persistor):
                 profile_id = str(getattr(self.context, "profile_id", "") or "")
                 try:
-                    await persistor(
+                    persisted = await persistor(
                         profile_id, actor_id,
                         str(initial.get("xs") or ""), refreshed_cookies,
                     )
@@ -621,6 +621,10 @@ class MetaSession:
                         "profile_cookie_refresh_failed profile=%s kind=%s",
                         profile_id, type(exc).__name__,
                     )
+            if persisted:
+                self.context.cookies = refreshed_cookies
+                if hasattr(self.context, '_loaded_cookies'):
+                    self.context._loaded_cookies = dict(refreshed_cookies)
 
         async with self._session_lock:
             if self._session is not None and not self._session.closed:

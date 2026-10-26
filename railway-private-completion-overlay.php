@@ -112,61 +112,15 @@ if (strtoupper((string)($_SERVER['REQUEST_METHOD'] ?? 'GET')) === 'POST') {
         require_once __DIR__ . '/../classes/AccountStoreFactory.php';
         require_once __DIR__ . '/../classes/RemaskCookieProfile.php';
         $store = AccountStoreFactory::create(ACCOUNTSFILENAME);
-        $account = $store->getAccountByName($profile);
-        if (!$account) {
-            http_response_code(404);
-            echo json_encode(['ok'=>false,'error'=>'PROFILE_NOT_FOUND']);
-            exit;
+        if (!method_exists($store, 'compareAndSwapCookies')) {
+            throw new RuntimeException('PROFILE_COOKIE_CAS_UNAVAILABLE');
         }
-        $toMap = static function ($value): array {
-            if (!is_array($value)) return [];
-            $map = [];
-            if (!array_is_list($value)) {
-                foreach ($value as $name => $cookieValue) {
-                    if (is_array($cookieValue)) {
-                        $name = $cookieValue['name'] ?? '';
-                        $cookieValue = $cookieValue['value'] ?? null;
-                    }
-                    if (!is_string($name) && !is_int($name)) continue;
-                    if (!is_string($cookieValue) && !is_int($cookieValue)) continue;
-                    $name = trim((string)$name);
-                    $cookieValue = (string)$cookieValue;
-                    if ($name === '') continue;
-                    if (isset($map[$name]) && $map[$name] !== $cookieValue) {
-                        throw new InvalidArgumentException();
-                    }
-                    $map[$name] = $cookieValue;
-                }
-                return $map;
-            }
-            foreach ($value as $row) {
-                if (!is_array($row) || !is_string($row['name'] ?? null) ||
-                    (!is_string($row['value'] ?? null) && !is_int($row['value'] ?? null))) continue;
-                $name = trim($row['name']);
-                $cookieValue = (string)$row['value'];
-                if ($name === '') continue;
-                if (isset($map[$name]) && $map[$name] !== $cookieValue) {
-                    throw new InvalidArgumentException();
-                }
-                $map[$name] = $cookieValue;
-            }
-            return $map;
-        };
-        $oldCookies = $toMap($account->cookies ?? []);
-        if (($oldCookies['c_user'] ?? '') !== $actor ||
-            !hash_equals((string)($oldCookies['xs'] ?? ''), $expectedXs)) {
+        if (!$store->compareAndSwapCookies($profile, $actor, $expectedXs, $cookieInput)) {
             http_response_code(409);
             echo json_encode(['ok'=>false,'error'=>'PROFILE_SESSION_CHANGED']);
             exit;
         }
-        $rows = RemaskCookieProfile::validate($cookieInput, $account->proxy ?? null, false, $profile);
-        $newCookies = $toMap($rows);
-        if (($newCookies['c_user'] ?? '') !== $actor || trim((string)($newCookies['xs'] ?? '')) === '') {
-            throw new InvalidArgumentException();
-        }
-        $account->cookies = $newCookies;
-        $store->addOrUpdateAccount($account);
-        echo json_encode(['ok'=>true,'updated'=>true,'cookie_count'=>count($newCookies)]);
+        echo json_encode(['ok'=>true,'updated'=>true]);
     } catch (Throwable $e) {
         http_response_code(400);
         echo json_encode(['ok'=>false,'error'=>'PROFILE_COOKIE_REFRESH_FAILED']);

@@ -328,6 +328,34 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(context.cookies, {'c_user':'123','xs':'old-xs'})
         context._cookie_persistor.assert_not_awaited()
 
+    async def test_cookie_persistence_rejection_keeps_the_original_context(self):
+        context = ProfileContext(profile_id='fixture', cookies={'c_user':'123','xs':'old-xs'},
+            proxy='http://127.0.0.1:1', user_agent='fixture-UA')
+        context._loaded_cookies = dict(context.cookies)
+        context._cookie_persistor = AsyncMock(return_value=False)
+        session = MetaSession(context)
+        self.addAsyncCleanup(session.close)
+        web = await session.facebook_web()
+        client = await web._ensure_session()
+        await self.mock(client, lambda request: httpx.Response(200, text='continued',
+            headers={'Set-Cookie':'xs=new-xs; Domain=.facebook.com; Path=/; Secure'}))
+        await web.fetch_text('https://business.facebook.com/', document_navigation=True)
+        await session.close()
+        self.assertEqual(context.cookies, {'c_user':'123','xs':'old-xs'})
+        self.assertEqual(context._loaded_cookies, context.cookies)
+
+    async def test_host_or_path_scoped_cookie_cannot_become_a_shared_profile_cookie(self):
+        web = FacebookWebSession(WebProfile('fixture', {'c_user':'123','xs':'old-xs'},
+            'http://127.0.0.1:1','fixture-UA'))
+        self.addAsyncCleanup(web.close)
+        client = await web._ensure_session()
+        await self.mock(client, lambda request: httpx.Response(200,text='scoped',headers=[
+            ('Set-Cookie','xs=host-xs; Path=/; Secure'),
+            ('Set-Cookie','xs=path-xs; Domain=.facebook.com; Path=/business/; Secure')]))
+        await web.fetch_text('https://business.facebook.com/business/',document_navigation=True)
+        await web.close()
+        self.assertEqual(web.profile.cookies, {'c_user':'123','xs':'old-xs'})
+
     async def test_graphql_multipart_stream_keeps_auth_and_claim_before_one_post(self):
         import io
         web = FacebookWebSession(WebProfile('fixture', {'c_user':'123'}, 'http://127.0.0.1:1', 'fixture-UA'))
