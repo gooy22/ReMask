@@ -1,8 +1,9 @@
 <?php
 declare(strict_types=1);
-require '/var/www/html/classes/FbAccount.php';
-require '/var/www/html/classes/RemaskProxy.php';
-require '/var/www/html/classes/FbAccountSerializer.php';
+$runtime=getcwd();
+require $runtime.'/classes/FbAccount.php';
+require $runtime.'/classes/RemaskProxy.php';
+require $runtime.'/classes/FbAccountSerializer.php';
 function expectCookie(bool $ok, string $message): void { if (!$ok) throw new RuntimeException($message); }
 $dir=sys_get_temp_dir().'/remask-cookie-cas-'.bin2hex(random_bytes(5));
 mkdir($dir,0700);

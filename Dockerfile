@@ -53,6 +53,7 @@ COPY tests/private-launch-meta-marker.test.php /tmp/remask-tests/private-launch-
 COPY tests/private-inventory-identity.test.php /tmp/remask-tests/private-inventory-identity.test.php
 COPY tests/template-targeting-context.test.php /tmp/remask-tests/template-targeting-context.test.php
 COPY tests/readiness.test.php /tmp/remask-tests/readiness.test.php
+COPY tests/profile-cookie-cas.test.php /tmp/remask-tests/profile-cookie-cas.test.php
 COPY docker-start.sh /tmp/docker-start.sh
 
 RUN set -eux; \
