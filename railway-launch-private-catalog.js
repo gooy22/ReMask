@@ -765,6 +765,14 @@ function remaskPrivateRememberJob(jobId) {
         window.history.replaceState(null,'',url.toString());
     }catch(_){}
 }
+function remaskPrivateRecentJob(job) {
+    const select=$('recentJobSelect');
+    if(!select||typeof document==='undefined'||!remaskPrivateIsJob(job))return;
+    const value='private:'+job.id;
+    let entry=Array.from(select.children||[]).find(child=>child.value===value);
+    if(!entry){entry=document.createElement('option');entry.value=value;select.appendChild(entry);}
+    entry.textContent='Meta · '+job.id+' · '+job.status;select.value=value;
+}
 function remaskPrivateRenderJob(job) {
     if(!remaskPrivateIsJob(job)||typeof document==='undefined')return;
     const body=$('jobItems'),summary=$('jobSummary');
@@ -830,6 +838,7 @@ function remaskPrivateRenderJob(job) {
         for(const id of ['activateJobAds','pauseJobAds'])if($(id))$(id).disabled=true;
     }
     if($('jobActionSelect'))$('jobActionSelect').hidden=draftOnly;
+    remaskPrivateRecentJob(job);
 }
 async function remaskPrivatePollJob(jobId) {
     const generation=++remaskPrivatePollGeneration;
@@ -976,7 +985,19 @@ if(typeof renderJob==='function'){
         return remaskLegacyRenderJob(job);
     };
 }
-if(typeof document!=='undefined')$('recentJobSelect')?.addEventListener('change',()=>{
+if(typeof loadRecentJobs==='function'){
+    const remaskLegacyRecentJobs=loadRecentJobs;
+    loadRecentJobs=async function(){
+        await remaskLegacyRecentJobs();
+        if(typeof state!=='undefined')remaskPrivateRecentJob(state.privateAdvertisingJob);
+    };
+}
+if(typeof document!=='undefined')$('recentJobSelect')?.addEventListener('change',async event=>{
+    const value=String($('recentJobSelect').value||'');
+    if(/^private:[a-f0-9]{32}$/.test(value)){
+        event.preventDefault();event.stopImmediatePropagation();
+        await remaskPrivatePollJob(value.slice(8));return;
+    }
     if(typeof state!=='undefined')state.privateAdvertisingJob=null;
     ++remaskPrivatePollGeneration;
 },true);

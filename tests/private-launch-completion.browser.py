@@ -334,6 +334,7 @@ class InstalledLaunchTests(unittest.TestCase):
         original=json.dumps(self.saved_private_job,sort_keys=True)
         self.page.locator('#jobItems').get_by_text('1000002',exact=False).wait_for()
         self.assertIn('FAILED',self.page.locator('#jobSummary').inner_text())
+        self.assertEqual(self.page.locator('#recentJobSelect').input_value(),'private:'+'a'*32)
         self.assertIn('квитанция, чтение не подтверждено',self.page.locator('#jobItems').inner_text())
         self.assertTrue(self.page.locator('#activateJobAds').is_disabled())
         self.assertTrue(self.page.locator('#retryFailed').is_disabled())

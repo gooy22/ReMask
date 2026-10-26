@@ -54,6 +54,7 @@ const source = fs.readFileSync(path.join(__dirname, '..', 'railway-launch-privat
   assert.equal(controls.activateJobAds.disabled,true);
   assert.equal(controls.retryFailed.disabled,true,'legacy retries must not receive a private worker handle');
   assert.equal(JSON.parse(storage.get('remask_private_source_job_v1')).job_id,id);
+  assert.equal(controls.recentJobSelect.value,'private:'+id);
   const idsCell=controls.jobItems.children[0].children[5];
   const button=idsCell.children.find(child=>child.textContent==='Проверить черновик в Meta');
   assert.ok(button,'a settled saved Draft offers an explicit read');
@@ -68,7 +69,12 @@ const source = fs.readFileSync(path.join(__dirname, '..', 'railway-launch-privat
   assert.equal(legacyRenders,0,'late legacy init must not erase the restored private result');
   assert.match(controls.jobItems.textContent,new RegExp(campaign));
   assert.match(controls.jobItems.textContent,/BUSINESS_LOGIN_GATE/,'late legacy reads must retain the fresh read failure too');
-  controls.recentJobSelect.events.change();ctx.renderJob({id:'legacy',items:[]});
+  let intercepted=false;
+  await controls.recentJobSelect.events.change({preventDefault(){},stopImmediatePropagation(){intercepted=true;}});
+  assert.equal(intercepted,true,'the private recent entry must not reach the legacy job endpoint');
+  assert.deepEqual(calls.map(row=>row.action),['status','private_draft_read','status']);
+  controls.recentJobSelect.value='legacy';
+  controls.recentJobSelect.events.change({});ctx.renderJob({id:'legacy',items:[]});
   assert.equal(legacyRenders,1,'explicitly selecting a legacy recent job still works');
   calls.length=0;storage.clear();ctx.window.location.href='https://remask.fixture/launch.php?private_job=https://other.invalid';
   await ctx.remaskPrivateRestoreSourceJob();assert.equal(calls.length,0);
