@@ -68,6 +68,45 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
                 extensions={'trace':trace,'fixture_option':'unchanged'}) as response:
             self.assertEqual(await response.text(),'ok')
 
+    async def test_proxy_tls_connect_error_retries_once_before_http2_send(self):
+        client = self.make()
+        requests = []
+        async def handler(request):
+            requests.append(request)
+            trace = request.extensions['trace']
+            await trace('connection.connect_tcp.started', {})
+            if len(requests) == 1:
+                await trace('proxy.start_tls.failed', {})
+                raise httpx.ConnectError('proxy TLS setup failed', request=request)
+            await trace('proxy.start_tls.complete', {})
+            return httpx.Response(200, content=b'ok', extensions={'http_version': b'HTTP/2'})
+        await self.mock(client, handler)
+        with self.assertLogs('remask_worker', level='WARNING') as logs:
+            async with client.post('https://business.facebook.com/api/graphql',
+                    data={'operation':'READ_RK'}) as response:
+                self.assertEqual(await response.text(), 'ok')
+        self.assertEqual(len(requests), 2)
+        self.assertIn('private_http_connect_retry', str(logs.output))
+
+    async def test_connect_error_after_http2_headers_is_not_retried(self):
+        client = self.make()
+        requests = []
+        async def handler(request):
+            requests.append(request)
+            trace = request.extensions['trace']
+            for event in ('connection.connect_tcp.started', 'proxy.start_tls.complete',
+                    'http2.send_request_headers.complete', 'http2.send_request_body.complete'):
+                await trace(event, {})
+            raise httpx.ConnectError('connection failed after send', request=request)
+        await self.mock(client, handler)
+        with self.assertLogs('remask_worker', level='WARNING') as logs:
+            with self.assertRaises(httpx.ConnectError):
+                async with client.post('https://business.facebook.com/api/graphql',
+                        data={'operation':'CREATE'}) as response:
+                    await response.text()
+        self.assertEqual(len(requests), 1)
+        self.assertNotIn('private_http_connect_retry', str(logs.output))
+
     async def test_cookies_are_profile_scoped_and_not_sent_to_proxy_check_or_cdn(self):
         seen = []
         def handler(request):
@@ -826,11 +865,12 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
             server.close()
             await server.wait_closed()
 
-    async def test_all_facebook_origins_have_http2_only_transport_without_retries(self):
+    async def test_all_facebook_origins_use_http2_only_proxy_transport(self):
         client = self.make()
         transports = set()
         for host in ('facebook.com', 'business.facebook.com', 'www.facebook.com',
-                     'secure.facebook.com', 'adsmanager.facebook.com', 'm.facebook.com', 'static.xx.fbcdn.net'):
+                     'secure.facebook.com', 'adsmanager.facebook.com', 'adsmanager-graph.facebook.com',
+                     'm.facebook.com', 'static.xx.fbcdn.net'):
             with self.subTest(host=host):
                 transport = client._client._transport_for_url(httpx.URL('https://' + host + '/api/graphql/'))
                 self.assertTrue(transport._pool._http2)
@@ -842,3 +882,4 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(host=host):
                 other = client._client._transport_for_url(httpx.URL('https://' + host))
                 self.assertTrue(other._pool._http1)
+                self.assertEqual(other._pool._retries, 0)
