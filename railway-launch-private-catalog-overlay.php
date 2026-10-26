@@ -698,7 +698,7 @@ $js=remask_patch_private_launch_meta_marker($js);
 file_put_contents($jsPath,$js);
 $phpPath=$root.'/launch.php';
 $php=file_get_contents($phpPath);
-$php=preg_replace('#scripts/launch\\.js(?:\\?[^"\\\']*)?#','scripts/launch.js?v=20261023-private-launch-meta-marker-v1',$php,1);
+$php=preg_replace('#scripts/launch\\.js(?:\\?[^"\\\']*)?#','scripts/launch.js?v=20261023-private-launch-meta-marker-v1-draft-jobs-v1',$php,1);
 $php=str_replace('official API, read only','состояние оплаты, read only',$php);
 $php=str_replace('Одна настройка → много FB-профилей и RK. Каждая цель использует свой token, proxy и account-specific assets.',
     'Сохранённые РК и FP доступны без новой синхронизации. Доступ FP для рекламы и привязку карты ещё нужно проверить.',$php);

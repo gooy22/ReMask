@@ -622,7 +622,7 @@ try {
     $safeMessage = preg_match('/^[A-Z][A-Z0-9_]{2,100}$/D', $message)
         ? $message : 'PYTHON_WORKER_FAILED';
     error_log('[python-worker-jobs] ' . get_class($e) . ': ' . $safeMessage);
-    if (($action ?? '') === 'private_launch_review' && $e instanceof RmxPwjWorkerHttpError
+    if (in_array(($action ?? ''), ['private_launch_review','private_draft_read'], true) && $e instanceof RmxPwjWorkerHttpError
         && preg_match('/^[A-Z0-9_]{1,100}$/D', (string)($e->detail['code'] ?? ''))) {
         // Preserve the typed readiness failure across PHP. Do not make the
         // browser recover control flow from JSON embedded in an error string.

@@ -309,6 +309,8 @@ RUN set -eux; \
     grep -q 'REMASK_FULL_META_LAUNCH_V1' /var/www/html/scripts/launch.js; \
     grep -q 'launchMetaSdkFields' /var/www/html/launch.php; \
     grep -q 'remaskCurrentMetaBuilderForJob' /var/www/html/scripts/launch.js; \
+    grep -q 'function remaskPrivateRenderJob' /var/www/html/scripts/launch.js; \
+    grep -q 'draft-jobs-v1' /var/www/html/launch.php; \
     grep -q '20261023-private-launch-meta-marker-v1' /var/www/html/launch.php; \
     grep -q 'REMASK_META_VISUAL_EDITORS_V1' /var/www/html/scripts/launch.js; \
     grep -q 'REMASK_LANGUAGE_SEARCH_V1' /var/www/html/classes/MetaAdsService.php; \

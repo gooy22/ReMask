@@ -64,11 +64,21 @@ class InstalledLaunchTests(unittest.TestCase):
         self.waiting_pages=[]
         self.worker_requests=[]
         self.review_ready=False
+        self.saved_private_job=None
+        if self._testMethodName=='test_saved_private_draft_read_failure_preserves_receipts':
+            self.saved_private_job={'id':'a'*32,'status':'FAILED','items_total':1,'items':[{
+                'profile_id':'4','status':'FAILED','tasks':[{'id':'task','action':'private_launch',
+                    'status':'FAILED','attempt':5,'error_code':'PRIVATE_ADS_DRAFT_READ_RELATION_MISMATCH',
+                    'payload':{'ad_account_id':'111111','launch':{'base':{'execution_mode':'DRAFT'}}}}],
+                'advertising_steps':[
+                    {'task_id':'task','step':'ADS_MANAGER:DRAFT','entity_id':'1000001','verified':True},
+                    {'task_id':'task','step':'ADS_MANAGER:FRAGMENT_CAMPAIGN','entity_id':'1000002','verified':False}]}]}
         self.page = self.browser.new_page()
         self.page.set_default_timeout(5000)
         self.page.on('pageerror', lambda e: self.errors.append(str(e)))
         self.page.route('**/*', self.route)
-        self.page.goto('https://remask.fixture/launch.php')
+        self.page.goto('https://remask.fixture/launch.php'+
+            ('?private_job='+self.saved_private_job['id'] if self.saved_private_job else ''))
         self.page.wait_for_function('window.fixtureLaunch && document.querySelector("#bundleSelect option[value=fixture]") === null')
         self.page.wait_for_function('document.querySelector("#creativeLibrarySelect option[value=preset]") !== null')
 
@@ -211,7 +221,13 @@ class InstalledLaunchTests(unittest.TestCase):
             self.assertEqual(request.headers.get('x-remask-csrf'),'fixture-csrf')
             fields=json.loads(request.post_data or '{}');self.worker_requests.append(fields)
             action=fields.get('action')
-            if action=='private_launch_media_inspect':
+            if action=='status' and self.saved_private_job:
+                self.assertEqual(fields['job_id'],self.saved_private_job['id'])
+                data={'ok':True,'job':self.saved_private_job}
+            elif action=='private_draft_read' and self.saved_private_job:
+                route.fulfill(status=502,json={'ok':False,'code':'PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE',
+                    'message':'Meta requires sign-in'});return
+            elif action=='private_launch_media_inspect':
                 from app.private_launch import _effective_launch_payload
                 from app.private_launch_media import local_references
                 launch_payload=fields.get('launch')
@@ -313,6 +329,25 @@ class InstalledLaunchTests(unittest.TestCase):
                 if self.foreign_bundle_media:
                     data['media'][0]['id'] = 'm-' + 'f' * 24
         route.fulfill(status=status, json={'ok':status==200,'data':data,'error':{'message':'MEDIA_LIBRARY_ITEM_UNAVAILABLE'}})
+
+    def test_saved_private_draft_read_failure_preserves_receipts(self):
+        original=json.dumps(self.saved_private_job,sort_keys=True)
+        self.page.locator('#jobItems').get_by_text('1000002',exact=False).wait_for()
+        self.assertIn('FAILED',self.page.locator('#jobSummary').inner_text())
+        self.assertIn('квитанция, чтение не подтверждено',self.page.locator('#jobItems').inner_text())
+        self.assertTrue(self.page.locator('#activateJobAds').is_disabled())
+        self.assertTrue(self.page.locator('#retryFailed').is_disabled())
+        self.page.get_by_role('button',name='Проверить черновик в Meta',exact=True).click()
+        self.page.locator('#jobItems').get_by_text('Чтение Meta не завершено:',exact=False).wait_for()
+        text=self.page.locator('#jobItems').inner_text()
+        self.assertIn('PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE',text)
+        self.assertIn('1000001',text);self.assertIn('1000002',text)
+        self.assertEqual(json.dumps(self.saved_private_job,sort_keys=True),original)
+        reads=[row for row in self.worker_requests if row.get('action')=='private_draft_read']
+        self.assertEqual(reads,[{'action':'private_draft_read','profile_id':'4','job_id':'a'*32}])
+        self.assertFalse(any(row.get('action') in {'create','retry','retry_failed'} for row in self.worker_requests))
+        self.assertEqual(json.loads(self.page.evaluate('localStorage.getItem("remask_private_source_job_v1")')),
+                         {'job_id':'a'*32})
 
     def test_bundle_restore_rejects_foreign_media_without_checksums(self):
         self.page.locator('#creativeLibrarySelect').select_option('preset')
