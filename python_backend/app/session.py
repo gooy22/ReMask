@@ -450,6 +450,8 @@ class MetaSession:
         self._session_lock = asyncio.Lock()
         self._facebook_session: FacebookWebSession | None = None
         self._facebook_lock = asyncio.Lock()
+        self._facebook_cookie_baseline: dict[str, str] | None = None
+        self._facebook_profile_id = ""
         self._graph_api: FacebookGraphApi | None = None
         self._graph_lock = asyncio.Lock()
         self._business_browser: Any | None = None
@@ -502,9 +504,16 @@ class MetaSession:
         async with self._facebook_lock:
             current = self._facebook_session
             if current is None:
+                cookies = dict(self.context.cookies)
+                loaded = getattr(self.context, '_loaded_cookies', None) or cookies
+                # Freeze this client's durable baseline before another session
+                # can update the shared context. It is the CAS expectation,
+                # never the context's possibly newer value at close time.
+                self._facebook_cookie_baseline = dict(cookies) if loaded == cookies else None
+                self._facebook_profile_id = str(self.context.profile_id)
                 profile = WebProfile(
                     name=self.context.profile_id,
-                    cookies=dict(self.context.cookies),
+                    cookies=cookies,
                     proxy=self.context.proxy,
                     user_agent=self.context.user_agent,
                 )
@@ -587,21 +596,23 @@ class MetaSession:
                 self._graph_api = None
 
         refreshed_cookies: dict[str, str] | None = None
+        initial: dict[str, str] = {}
+        profile_id = ""
         async with self._facebook_lock:
             if self._facebook_session is not None:
+                initial = dict(self._facebook_cookie_baseline or {})
+                profile_id = self._facebook_profile_id
                 current = self._facebook_session
                 await current.close()
                 refreshed_cookies = dict(current.profile.cookies)
                 self._facebook_session = None
+                self._facebook_cookie_baseline = None
+                self._facebook_profile_id = ""
 
-        initial = dict(
-            getattr(self.context, "_loaded_cookies", None)
-            or getattr(self.context, "cookies", None)
-            or {}
-        )
         current_cookies = getattr(self.context, "cookies", None)
         actor_id = str(initial.get("c_user") or "")
         if (refreshed_cookies is not None and actor_id
+                and str(getattr(self.context, 'profile_id', '')) == profile_id
                 and isinstance(current_cookies, dict)
                 and current_cookies == initial
                 and refreshed_cookies.get("c_user") == actor_id
@@ -610,7 +621,6 @@ class MetaSession:
             persistor = getattr(self.context, "_cookie_persistor", None)
             persisted = not callable(persistor)
             if callable(persistor):
-                profile_id = str(getattr(self.context, "profile_id", "") or "")
                 try:
                     persisted = await persistor(
                         profile_id, actor_id,
