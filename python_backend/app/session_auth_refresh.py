@@ -22,6 +22,11 @@ async def refresh_saved_auth_context(resolver: Any, context: Any) -> bool:
     if cookies == old:
         return False
     context.cookies = dict(cookies)
+    if hasattr(context, '_loaded_cookies'):
+        # These credentials were just read from the durable store. Future
+        # HTTP clients must compare against this saved version, not the one
+        # that caused the previous authentication failure.
+        context._loaded_cookies = dict(cookies)
     context.proxy = getattr(fresh, "proxy", None)
     context.user_agent = str(getattr(fresh, "user_agent", "") or "")
     return True
