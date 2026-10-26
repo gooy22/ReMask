@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from .provisioning.models import ProvisioningError
+from .meta_auth_document import auth_route_gate
 
 
 def private_auth_error(exc):
@@ -15,7 +16,7 @@ def private_auth_error(exc):
     # Only structured evidence of the actual redirect proves a checkpoint.
     if "checkpoint_redirect" in reasons:
         code = "CHECKPOINT_REQUIRED"
-    elif any(isinstance(row, dict) and "/business/loginpage" in str(row.get("final_url", "")) for row in attempts):
+    elif any(isinstance(row, dict) and auth_route_gate(row.get("final_url")) == "BUSINESS_LOGIN_GATE" for row in attempts):
         code = "BUSINESS_LOGIN_GATE"
     elif not reasons and getattr(exc, 'transport_stage', '') == 'bootstrap':
         code = 'META_AUTH_TOKEN_UNAVAILABLE'
