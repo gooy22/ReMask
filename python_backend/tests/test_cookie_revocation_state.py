@@ -361,15 +361,15 @@ class ProfileResolverCookieRevalidationTests(unittest.IsolatedAsyncioTestCase):
             hashlib.sha256(b"other-actor-session").hexdigest(),
         ))
         resolver.persist_verified_previous_profile_cookies = AsyncMock(return_value=True)
-        meta_session = Mock()
+        meta_session_factory = Mock(return_value=SimpleNamespace())
 
-        with patch("app.session.MetaSession", return_value=meta_session):
+        with patch("app.session.MetaSession", meta_session_factory):
             restored = await resolver._restore_verified_previous_profile_cookies(
                 context, current_hash
             )
 
         self.assertFalse(restored)
-        meta_session.assert_not_called()
+        meta_session_factory.assert_not_called()
         resolver.persist_verified_previous_profile_cookies.assert_not_awaited()
 
     async def test_business_home_gate_does_not_globally_block_profile(self):
