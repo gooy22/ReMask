@@ -343,10 +343,14 @@ final class RemaskAdvertisingAssetBridge
         if ($offset && (!in_array($resource,self::targetingTypes(),true) && !in_array($resource,['interests','behaviors'],true)
                 || $query!=='')) throw new InvalidArgumentException('INVALID_TARGETING_OFFSET');
         if (session_status()===PHP_SESSION_ACTIVE) session_write_close();
+        $executionMode=(string)($input['execution_mode'] ?? 'DRAFT');
+        // Include both bounded reads and the single saved-session refresh.
+        // Draft Page discovery has a 120s worker budget; other catalogs use 65s.
+        $readTimeout=$resource==='pages' && $executionMode==='DRAFT' ? 270 : 150;
         $params=http_build_query(['resource'=>$resource,'account_id'=>$account,'force'=>$force?'true':'false',
             'query'=>$query,'limit'=>max(1,min(500,(int)($input['limit'] ?? 100))), 'offset'=>$offset,
-            'execution_mode'=>(string)($input['execution_mode'] ?? 'DRAFT')],'','&',PHP_QUERY_RFC3986);
-        $context=stream_context_create(['http'=>['method'=>'GET','timeout'=>85,'ignore_errors'=>true,
+            'execution_mode'=>$executionMode],'','&',PHP_QUERY_RFC3986);
+        $context=stream_context_create(['http'=>['method'=>'GET','timeout'=>$readTimeout,'ignore_errors'=>true,
             'follow_location'=>0,'header'=>"Accept: application/json\r\nX-Remask-Worker-Key: ".$key."\r\n"]]);
         $raw=@file_get_contents($base.'/api/v1/profiles/'.rawurlencode($profile).'/advertising-resources?'.$params,false,$context);
         $data=is_string($raw)?json_decode($raw,true):null;

@@ -17,7 +17,7 @@ from app.mirror import MirrorError, SnapshotMirror
 from app.models import CreateJobRequest, HealthResponse, JobAccepted, RetryResponse
 from app.runner import WorkerPool
 from app.session import ProfileContextError, ProfileSession, ProxyCheckError
-from app.session_auth_refresh import refresh_saved_auth_context
+from app.session_auth_refresh import refresh_saved_auth_context, read_with_saved_auth_refresh
 from app.direct_test import direct_test_result
 from app.store import JobStore
 from app.facebook_business_browser import BROWSER_TERMINAL_ACCESS_CODES, BrowserBusinessError, FacebookBusinessBrowser
@@ -3779,12 +3779,17 @@ async def private_advertising_resources(profile_id: str, resource: str, account_
                         callback=refresh_targeting_suggestions)
                     cached = {**cached, '_cache': {**cache_meta, 'refresh_pending': started}}
                     return {'ok':True,'profile':profile,'resource':resource,**cached}
-        try:
-            with measure_phase('resource_read'):
+        async def read_resource_once():
+            try:
                 async with ProfileSession(context) as session:
                     web = await session.facebook_web()
                     web.private_only = True
-                    result = await pool.private_launch.resources.get(name=resource,values=values,actor_id=actor,force=True,web=web)
+                    return await resources.get(name=resource,values=values,actor_id=actor,force=True,web=web)
+            except AuthenticationError as error:
+                raise private_auth_error(error) from None
+        try:
+            with measure_phase('resource_read'):
+                result = await read_with_saved_auth_refresh(pool.resolver, context, read_resource_once)
         except (AuthenticationError, RemoteRequestError, ProxyError, ProvisioningError,
                 ProfileContextError, asyncio.TimeoutError):
             if force or not cached or not cached.get('data'):
@@ -3983,19 +3988,26 @@ async def private_draft_read(profile_id: str, payload: dict = Body(...)):
     if set(payload) != {'job_id'} or not isinstance(payload.get('job_id'), str) or not re.fullmatch(r'[a-f0-9]{32}', payload['job_id']):
         raise HTTPException(status_code=400, detail='PRIVATE_DRAFT_READ_INVALID_INPUT')
     view = await store.job_view(payload['job_id'])
-    if not view or view.get('status') not in {'FAILED', 'SUCCESS'}:
+    if not view or view.get('status') not in {'FAILED', 'SUCCESS', 'PARTIAL'}:
         raise HTTPException(status_code=409, detail='PRIVATE_DRAFT_READ_JOB_NOT_SETTLED')
     tasks = [task for item in view.get('items', []) if str(item.get('profile_id')) == profile_id
              for task in item.get('tasks', []) if task.get('action') == 'private_launch']
     if len(tasks) != 1 or not isinstance(tasks[0].get('payload'), dict):
         raise HTTPException(status_code=409, detail='PRIVATE_DRAFT_READ_TARGET_AMBIGUOUS')
     from app.private_draft_read_diagnostic import read_diagnostic
+    from app.private_auth import private_auth_error
     from app.session import ProfileSession
+    from fb_worker import AuthenticationError
     try:
         context = await _resolve_read_profile(profile_id)
-        async with ProfileSession(context) as session:
-            result = await read_diagnostic(pool.private_launch.ads_manager,
-                profile_id=profile_id, context=context, session=session, payload=tasks[0]['payload'])
+        async def read_draft_once():
+            try:
+                async with ProfileSession(context) as session:
+                    return await read_diagnostic(pool.private_launch.ads_manager,
+                        profile_id=profile_id, context=context, session=session, payload=tasks[0]['payload'])
+            except AuthenticationError as error:
+                raise private_auth_error(error) from None
+        result = await read_with_saved_auth_refresh(pool.resolver, context, read_draft_once)
         return {'ok': True, **result}
     except ProvisioningError as error:
         raise HTTPException(status_code=409, detail={'code':error.code, 'message':str(error), 'retryable':False}) from None
