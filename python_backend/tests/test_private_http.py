@@ -364,7 +364,9 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
                 return httpx.Response(200, text='<form id="login_form">')
             if request.url.host == 'www.facebook.com' and request.url.path == '/me':
                 if f'c_user={actor}' in cookie and 'xs=imported-xs' in cookie:
-                    return httpx.Response(200, text=self.authenticated_document(actor))
+                    return httpx.Response(200, text=self.authenticated_document(actor), headers=[
+                        ('Set-Cookie', 'xs=; Domain=.facebook.com; Path=/; Max-Age=0; Secure'),
+                    ])
                 return httpx.Response(200, text='<form id="login_form">')
             raise AssertionError(f'unexpected profile probe {request.url.host}{request.url.path}')
 
