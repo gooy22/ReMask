@@ -697,6 +697,8 @@ async def create_ad_account_with_docids(
                 if isinstance(capture.get("request_envelope"), dict)
                 else {}
             ),
+            business_context_id=business,
+            business_loginpage_probe=("CREATE_RK" if capture.get("source") == "static_verified_settings_contract" else ""),
             before_submit=before_submit,
         )
     except Exception as exc:
