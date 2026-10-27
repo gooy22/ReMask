@@ -294,7 +294,7 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         ])
         session._fetch_dtsg_refresh_token.assert_not_awaited()
 
-    async def test_scoped_bootstrap_uses_selected_cookie_actor_when_generic_identity_candidate_differs(self):
+    async def test_scoped_bootstrap_rejects_mismatched_identity_after_all_profile_routes(self):
         expected_actor = "123456789"
         calls = []
         class Response:
@@ -312,30 +312,21 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
 
         session = FacebookWebSession(WebProfile(name="15",
             cookies={"c_user": expected_actor}, proxy=None, user_agent="fixture"))
-        client = Client()
-        session._ensure_session = AsyncMock(return_value=client)
+        session._ensure_session = AsyncMock(return_value=Client())
+        session._fetch_dtsg_refresh_token = AsyncMock(return_value=("", ""))
+        session.refresh_reviewed_modules = AsyncMock()
 
-        bootstrap = await session.bootstrap(allow_business_loginpage_probe=True)
-        self.assertFalse(bootstrap.profile_actor_verified)
-        self.assertEqual(bootstrap.actor_id, expected_actor)
-        self.assertEqual(bootstrap.fb_dtsg, "profile-token")
-        self.assertFalse(session._profile_session_identity_verified)
-        self.assertEqual(calls, ["https://www.facebook.com/me"])
-
-        with self.assertRaises(AuthenticationError):
-            await session._verified_profile_bootstrap(client, expected_actor, [],
-                require_actor_match=True)
-
-        calls.clear()
-        other = Client()
-        other.get = lambda url, **kwargs: (
-            calls.append(url) or Response("https://www.facebook.com/login.php", '<form id="login_form">')
-        )
-        session._ensure_session = AsyncMock(return_value=other)
-        session.invalidate_bootstrap()
         with self.assertRaises(AuthenticationError):
             await session.bootstrap(allow_business_loginpage_probe=True)
-        self.assertEqual(calls, ["https://www.facebook.com/me"])
+
+        self.assertFalse(session._profile_session_identity_verified)
+        self.assertIsNone(session._bootstrap)
+        self.assertEqual(calls, [
+            "https://www.facebook.com/me",
+            "https://www.facebook.com/settings",
+            "https://www.facebook.com/",
+        ])
+        session._fetch_dtsg_refresh_token.assert_not_awaited()
 
     async def test_exact_scoped_business_operation_continues_after_generic_business_loginpage(self):
         actor = "123456789"

@@ -886,7 +886,7 @@ class FacebookWebSession:
                 # to business/loginpage, mutate its in-memory cookies, and spend
                 # the Sync deadline before the same profile is checked.
                 return await self._verified_profile_bootstrap(
-                    session, expected_actor, [], require_actor_match=False,
+                    session, expected_actor, [], require_actor_match=True,
                 )
 
             token_patterns = list(self.FB_DTSG_PATTERNS)
