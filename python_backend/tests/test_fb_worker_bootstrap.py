@@ -744,12 +744,50 @@ class PreviousSessionReadRecoveryTests(unittest.IsolatedAsyncioTestCase):
             endpoint_url="https://business.facebook.com/api/graphql/",
             business_context_id="987654321",
             business_loginpage_probe="READ_RK",
-            read_timeout_seconds=30,
         )
 
         self.assertEqual(result, {"data": {"adaccounts": []}})
         session._retry_scoped_read_with_previous_session.assert_awaited_once()
+        self.assertIsNone(session._retry_scoped_read_with_previous_session.await_args.kwargs["read_timeout_seconds"])
         session._ensure_session.assert_not_awaited()
+
+    async def test_scoped_read_recovers_graphql_auth_rejection_without_explicit_timeout(self):
+        actor = "123456789"
+        session = FacebookWebSession(WebProfile(
+            name="15", cookies={"c_user": actor, "xs": "fixture-current"},
+            proxy="http://fixture-proxy:80", user_agent="Fixture",
+        ))
+        session._validate_business_loginpage_probe = Mock(return_value="READ_RK")
+        bootstrap = FacebookBootstrap(fb_dtsg="fixture-token", actor_id=actor)
+        session.bootstrap = AsyncMock(return_value=bootstrap)
+        session._business_bootstrap = AsyncMock(return_value=bootstrap)
+        response = SimpleNamespace(status=200, headers={},
+            text=AsyncMock(return_value='{"error":"1357001"}'))
+
+        @asynccontextmanager
+        async def post(*_args, **_kwargs):
+            yield response
+
+        client = SimpleNamespace(post=Mock(side_effect=lambda *_args, **_kwargs: post()))
+        session._ensure_session = AsyncMock(return_value=client)
+        session._retry_scoped_read_with_previous_session = AsyncMock(
+            return_value={"data": {"business": {"id": "987654321"}}},
+        )
+
+        result = await session.graphql(
+            "26033539376343649",
+            {"businessID": "987654321"},
+            friendly_name="BusinessAdAccounts",
+            endpoint_url="https://business.facebook.com/api/graphql/",
+            business_context_id="987654321",
+            business_loginpage_probe="READ_RK",
+        )
+
+        self.assertEqual(result, {"data": {"business": {"id": "987654321"}}})
+        session._retry_scoped_read_with_previous_session.assert_awaited_once()
+        self.assertIsNone(session._retry_scoped_read_with_previous_session.await_args.kwargs["read_timeout_seconds"])
+        session._ensure_session.assert_awaited_once()
+        client.post.assert_called_once()
 
     async def test_previous_session_cannot_recover_mutations_or_another_actor(self):
         actor = "123456789"

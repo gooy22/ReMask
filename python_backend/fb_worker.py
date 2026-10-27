@@ -1670,7 +1670,7 @@ class FacebookWebSession:
         request_envelope: dict[str, Any] | None,
         business_context_id: str,
         business_loginpage_probe: str,
-        read_timeout_seconds: float,
+        read_timeout_seconds: float | None,
     ) -> dict[str, Any] | None:
         """Retry one exact inventory read with a verified same-actor prior snapshot."""
         allowed_reads = {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS"}
@@ -1862,7 +1862,6 @@ class FacebookWebSession:
         except AuthenticationError as exc:
             if (scoped_probe in {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS"}
                     and before_submit is None and multipart_files is None
-                    and read_timeout_seconds == 30
                     and getattr(exc, "request_may_have_been_sent", False) is False):
                 recovered = await self._retry_scoped_read_with_previous_session(
                     effective_doc_id,
@@ -1872,7 +1871,7 @@ class FacebookWebSession:
                     request_envelope=request_envelope,
                     business_context_id=business_context_id,
                     business_loginpage_probe=business_loginpage_probe,
-                    read_timeout_seconds=float(read_timeout_seconds),
+                    read_timeout_seconds=read_timeout_seconds,
                 )
                 if recovered is not None:
                     return recovered
@@ -2132,7 +2131,6 @@ class FacebookWebSession:
                 exc.transport_stage = transport_stage
             if (scoped_probe in {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS"}
                     and before_submit is None and multipart_files is None
-                    and read_timeout_seconds == 30
                     and bool(getattr(exc, "request_rejected", False))
                     and str(getattr(exc, "transport_stage", ""))
                     in {"graphql_response", "graphql_redirect"}):
@@ -2144,7 +2142,7 @@ class FacebookWebSession:
                     request_envelope=request_envelope,
                     business_context_id=business_context_id,
                     business_loginpage_probe=business_loginpage_probe,
-                    read_timeout_seconds=float(read_timeout_seconds),
+                    read_timeout_seconds=read_timeout_seconds,
                 )
                 if recovered is not None:
                     return recovered
