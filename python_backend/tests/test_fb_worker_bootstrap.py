@@ -169,7 +169,6 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bootstrap.fb_dtsg, "profile-token")
         self.assertEqual([call[0] for call in calls], [
             "https://business.facebook.com/latest/home",
-            "https://business.facebook.com/latest/home",
             "https://www.facebook.com/me",
         ])
         session._fetch_dtsg_refresh_token.assert_not_awaited()
@@ -208,12 +207,50 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bootstrap.actor_id, expected_actor)
         self.assertEqual(bootstrap.fb_dtsg, "profile-token")
         self.assertEqual(calls, [
-            "https://business.facebook.com/latest/home",
             "https://www.facebook.com/me",
             "https://www.facebook.com/",
         ])
         session._fetch_dtsg_refresh_token.assert_not_awaited()
         session.refresh_reviewed_modules.assert_not_awaited()
+
+    async def test_profile_probe_tries_an_alternate_surface_after_transport_failure(self):
+        import httpx
+        calls = []
+        profile_html = (
+            '<script>CurrentUserInitialData = {"USER_ID":"123456789"};</script>'
+            '["DTSGInitialData",[],{"token":"profile-token"}]'
+        )
+        class Response:
+            status = 200
+            def __init__(self, url, body):
+                self.url, self.body = url, body
+            async def text(self): return self.body
+            async def __aenter__(self): return self
+            async def __aexit__(self, *args): return False
+        class Client:
+            def get(self, url, **kwargs):
+                calls.append(url)
+                if url == "https://www.facebook.com/me":
+                    raise httpx.ReadTimeout("temporary profile route timeout")
+                if url == "https://www.facebook.com/":
+                    return Response(url, profile_html)
+                raise AssertionError("the exact profile probe must not visit Business Suite")
+        session = FacebookWebSession(WebProfile(name="15",
+            cookies={"c_user": "123456789"}, proxy=None, user_agent="fixture"))
+        session._ensure_session = AsyncMock(return_value=Client())
+        session._fetch_dtsg_refresh_token = AsyncMock(return_value=("", ""))
+        session.refresh_reviewed_modules = AsyncMock()
+
+        bootstrap = await session.bootstrap(allow_business_loginpage_probe=True)
+
+        self.assertTrue(bootstrap.profile_actor_verified)
+        self.assertEqual(bootstrap.actor_id, "123456789")
+        self.assertEqual(bootstrap.fb_dtsg, "profile-token")
+        self.assertEqual(calls, [
+            "https://www.facebook.com/me",
+            "https://www.facebook.com/",
+        ])
+        session._fetch_dtsg_refresh_token.assert_not_awaited()
 
     async def test_business_loginpage_probe_rejects_actor_mismatch_and_other_login_routes(self):
         calls = []
@@ -249,7 +286,7 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         session.invalidate_bootstrap()
         with self.assertRaises(AuthenticationError):
             await session.bootstrap(allow_business_loginpage_probe=True)
-        self.assertEqual(calls, ["https://business.facebook.com/latest/home", "https://www.facebook.com/me"])
+        self.assertEqual(calls, ["https://www.facebook.com/me"])
 
     async def test_business_loginpage_bypass_is_limited_to_exact_pinned_contract_and_verified_reads(self):
         from app.static_meta_contracts import command
