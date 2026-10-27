@@ -989,6 +989,7 @@ class FacebookWebSession:
                                 and expected_actor.isdigit()):
                             return await self._verified_profile_bootstrap(
                                 session, expected_actor, auth_attempts,
+                                require_actor_match=require_actor_match,
                             )
                         error = AuthenticationError("Meta requires session restoration before bootstrap.")
                         error.meta_payload = {"business_precheck": auth_attempts}
