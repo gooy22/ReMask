@@ -823,6 +823,10 @@ class FacebookWebSession:
         allow_business_loginpage_probe: bool = False,
     ) -> FacebookBootstrap:
 
+        if (allow_business_loginpage_probe and self._bootstrap is not None
+                and not self._bootstrap.profile_actor_verified):
+            self._bootstrap = None
+            self._profile_session_identity_verified = False
         if (self._bootstrap is not None
                 and self._bootstrap.profile_actor_verified
                 and not allow_business_loginpage_probe):
@@ -835,6 +839,10 @@ class FacebookWebSession:
 
         async with self._bootstrap_lock:
 
+            if (allow_business_loginpage_probe and self._bootstrap is not None
+                    and not self._bootstrap.profile_actor_verified):
+                self._bootstrap = None
+                self._profile_session_identity_verified = False
             if (self._bootstrap is not None and self._bootstrap.profile_actor_verified
                     and not allow_business_loginpage_probe):
                 self._bootstrap = None
