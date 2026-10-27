@@ -1813,51 +1813,70 @@ class FacebookWebSession:
             business_context_id=business_context_id, multipart_files=multipart_files,
             read_timeout_seconds=read_timeout_seconds,
         )
-        if scoped_probe:
-            # Exact read-only asset contracts stay pinned to their requested
-            # BM/RK/Page IDs. Generic profile pages can report another actor
-            # while still providing the usable token needed for these reads.
-            # Changes still require the selected c_user to be verified.
-            scoped_read_only = scoped_probe in {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS"}
-            bootstrap = await self.bootstrap(
-                allow_business_loginpage_probe=True,
-                require_actor_match=not scoped_read_only,
-            )
-            current_actor = str(self.profile.cookies.get("c_user") or "").strip()
-            if not current_actor.isdigit() or bootstrap.actor_id != current_actor:
-                raise RemoteRequestError(
-                    "Scoped Business request actor does not match the selected profile.",
-                    request_may_have_been_sent=False,
-                    transport_stage="business_auth_precheck",
+        try:
+            if scoped_probe:
+                # Exact read-only asset contracts stay pinned to their requested
+                # BM/RK/Page IDs. Generic profile pages can report another actor
+                # while still providing the usable token needed for these reads.
+                # Changes still require the selected c_user to be verified.
+                scoped_read_only = scoped_probe in {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS"}
+                bootstrap = await self.bootstrap(
+                    allow_business_loginpage_probe=True,
+                    require_actor_match=not scoped_read_only,
                 )
-        else:
-            bootstrap = await self.bootstrap()
-        if urlsplit(endpoint).hostname == "business.facebook.com":
-            scoped_ids: set[str] = set()
-            if business_context_id:
-                if not str(business_context_id).isdigit():
-                    raise RemoteRequestError("Invalid Business HTTP context.", request_may_have_been_sent=False)
-                scoped_ids.add(str(business_context_id))
-            def collect_business(value):
-                if isinstance(value, dict):
-                    for key, child in value.items():
-                        if str(key).replace("_", "").lower() == "businessid" and str(child).isdigit():
-                            scoped_ids.add(str(child))
-                        else:
+                current_actor = str(self.profile.cookies.get("c_user") or "").strip()
+                if not current_actor.isdigit() or bootstrap.actor_id != current_actor:
+                    raise RemoteRequestError(
+                        "Scoped Business request actor does not match the selected profile.",
+                        request_may_have_been_sent=False,
+                        transport_stage="business_auth_precheck",
+                    )
+            else:
+                bootstrap = await self.bootstrap()
+            if urlsplit(endpoint).hostname == "business.facebook.com":
+                scoped_ids: set[str] = set()
+                if business_context_id:
+                    if not str(business_context_id).isdigit():
+                        raise RemoteRequestError("Invalid Business HTTP context.", request_may_have_been_sent=False)
+                    scoped_ids.add(str(business_context_id))
+                def collect_business(value):
+                    if isinstance(value, dict):
+                        for key, child in value.items():
+                            if str(key).replace("_", "").lower() == "businessid" and str(child).isdigit():
+                                scoped_ids.add(str(child))
+                            else:
+                                collect_business(child)
+                    elif isinstance(value, list):
+                        for child in value:
                             collect_business(child)
-                elif isinstance(value, list):
-                    for child in value:
-                        collect_business(child)
-            if business_context_id or ("adaccount" in friendly_name.lower() and "create" in friendly_name.lower()):
-                collect_business(variables)
-            if len(scoped_ids) > 1:
-                raise RemoteRequestError("Ambiguous Business context; no CREATE POST was sent.",
-                                         request_may_have_been_sent=False, transport_stage="business_auth_precheck")
-            bootstrap = await self._business_bootstrap(
-                bootstrap, business_id=next(iter(scoped_ids), ""),
-                business_create=friendly_name == "useBusinessCreationMutationMutation",
-                business_loginpage_probe=scoped_probe,
-            )
+                if business_context_id or ("adaccount" in friendly_name.lower() and "create" in friendly_name.lower()):
+                    collect_business(variables)
+                if len(scoped_ids) > 1:
+                    raise RemoteRequestError("Ambiguous Business context; no CREATE POST was sent.",
+                                             request_may_have_been_sent=False, transport_stage="business_auth_precheck")
+                bootstrap = await self._business_bootstrap(
+                    bootstrap, business_id=next(iter(scoped_ids), ""),
+                    business_create=friendly_name == "useBusinessCreationMutationMutation",
+                    business_loginpage_probe=scoped_probe,
+                )
+        except AuthenticationError as exc:
+            if (scoped_probe in {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS"}
+                    and before_submit is None and multipart_files is None
+                    and read_timeout_seconds == 30
+                    and getattr(exc, "request_may_have_been_sent", False) is False):
+                recovered = await self._retry_scoped_read_with_previous_session(
+                    effective_doc_id,
+                    variables,
+                    friendly_name=friendly_name,
+                    endpoint_url=endpoint_url,
+                    request_envelope=request_envelope,
+                    business_context_id=business_context_id,
+                    business_loginpage_probe=business_loginpage_probe,
+                    read_timeout_seconds=float(read_timeout_seconds),
+                )
+                if recovered is not None:
+                    return recovered
+            raise
         if not scoped_probe:
             from app.contract_maintenance.module_refresh import effective_doc_id as reviewed_doc_id
             effective_doc_id = reviewed_doc_id(self, friendly_name, effective_doc_id)
