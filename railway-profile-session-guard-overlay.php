@@ -244,7 +244,8 @@ function rmx_pm_txt_import(array $input, mixed $store, bool $preview): array {
             if (count($matches) !== 1) $record['error'] = 'AMBIGUOUS_EXISTING_PROFILE';
         }
         unset($record);
-        if ($enableDirect && (count($records) !== 1 || $records[0]['status'] !== 'ready')) {
+        if ($enableDirect && (count($records) !== 1 || $records[0]['status'] !== 'ready'
+            || $rawProxy !== '' || $sourceProfile !== '')) {
             throw new InvalidArgumentException('TXT_DIRECT_SINGLE_ACCOUNT_REQUIRED: выберите один новый аккаунт без прокси.');
         }
         $hasNewProfiles = count(array_filter($records, fn($r)=>$r['status'] === 'ready')) > 0;
