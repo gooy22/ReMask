@@ -681,7 +681,7 @@ class FacebookWebSession:
                 restore_cookies()
             try:
                 from app.private_http import buffered_response
-                probe_timeout_seconds=8.0
+                probe_timeout_seconds = 15.0 if target.startswith("https://adsmanager.facebook.com/") else 8.0
                 response, body = await asyncio.wait_for(
                     buffered_response(
                         "GET",
