@@ -68,6 +68,29 @@ final class ProfileCookieAuthStateStore
         }
     }
 
+    /** Remove a marker only after the matching saved session passed live read-only verification. */
+    public function clearIfVerified(string $profile, string $actor, string $expectedXsSha256): bool
+    {
+        $this->validate($profile, $actor, $expectedXsSha256);
+        $expected = strtolower($expectedXsSha256);
+        $lock = $this->lock(LOCK_EX);
+        try {
+            $all = $this->readUnlocked();
+            $row = $all[$profile] ?? null;
+            if (!is_array($row)
+                || !hash_equals((string)($row['actor_id'] ?? ''), $actor)
+                || !hash_equals((string)($row['xs_sha256'] ?? ''), $expected)) {
+                return false;
+            }
+            unset($all[$profile]);
+            $this->writeUnlocked($all);
+            return true;
+        } finally {
+            flock($lock, LOCK_UN);
+            fclose($lock);
+        }
+    }
+
     private function validate(string $profile, string $actor, string $hash): void
     {
         if ($profile === '' || strlen($profile) > 255
