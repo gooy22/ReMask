@@ -30,6 +30,11 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(client.close)
         return client
 
+    @staticmethod
+    def authenticated_document(actor="123"):
+        return (f'<script>CurrentUserInitialData = {{"USER_ID":"{actor}"}};</script>'
+                '["DTSGInitialData",[],{"token":"fixture-token"}]')
+
     async def mock(self, client, handler):
         cookies = client._client.cookies
         await client._client.aclose()
@@ -351,13 +356,10 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
         web = await session.facebook_web()
         client = await web._ensure_session()
         await self.mock(client, lambda request: httpx.Response(
-            200, text='continued',
+            200, text=self.authenticated_document(),
             headers={'Set-Cookie':'xs=new-xs; Domain=.facebook.com; Path=/; Secure'},
         ))
-        await web.fetch_text(
-            'https://business.facebook.com/business/loginrequest/fb/',
-            document_navigation=True,
-        )
+        await web.bootstrap()
         await session.close()
         self.assertEqual(context.cookies, {'c_user':'123','xs':'new-xs'})
         context._cookie_persistor.assert_awaited_once_with(
@@ -378,12 +380,11 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
         web = await session.facebook_web()
         client = await web._ensure_session()
         await self.mock(client, lambda request: httpx.Response(
-            200, text='redirected identity',
+            200, text=self.authenticated_document(),
             headers=[('Set-Cookie','c_user=456; Domain=.facebook.com; Path=/; Secure'),
                      ('Set-Cookie','xs=other-xs; Domain=.facebook.com; Path=/; Secure')],
         ))
-        await web.fetch_text('https://business.facebook.com/business/loginrequest/fb/',
-                             document_navigation=True)
+        await web.bootstrap()
         await session.close()
         self.assertEqual(context.cookies, {'c_user':'123','xs':'old-xs'})
         context._cookie_persistor.assert_not_awaited()
@@ -397,9 +398,9 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(session.close)
         web = await session.facebook_web()
         client = await web._ensure_session()
-        await self.mock(client, lambda request: httpx.Response(200, text='continued',
+        await self.mock(client, lambda request: httpx.Response(200, text=self.authenticated_document(),
             headers={'Set-Cookie':'xs=new-xs; Domain=.facebook.com; Path=/; Secure'}))
-        await web.fetch_text('https://business.facebook.com/', document_navigation=True)
+        await web.bootstrap()
         await session.close()
         self.assertEqual(context.cookies, {'c_user':'123','xs':'old-xs'})
         self.assertEqual(context._loaded_cookies, context.cookies)
@@ -416,8 +417,8 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
         for web, headers in ((first_web, {'Set-Cookie':'xs=new-xs; Domain=.facebook.com; Path=/; Secure'}),
                              (second_web, {})):
             client = await web._ensure_session()
-            await self.mock(client, lambda request, headers=headers: httpx.Response(200, text='fixture', headers=headers))
-            await web.fetch_text('https://www.facebook.com/')
+            await self.mock(client, lambda request, headers=headers: httpx.Response(200, text=self.authenticated_document(), headers=headers))
+            await web.bootstrap()
         await first.close()
         await second.close()
         self.assertEqual(context.cookies, {'c_user':'123','xs':'new-xs'})
@@ -436,9 +437,9 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(session.close)
         web = await session.facebook_web()
         client = await web._ensure_session()
-        await self.mock(client, lambda request: httpx.Response(200, text='fixture',
+        await self.mock(client, lambda request: httpx.Response(200, text=self.authenticated_document(),
             headers={'Set-Cookie':'xs=old-client-rotation; Domain=.facebook.com; Path=/; Secure'}))
-        await web.fetch_text('https://www.facebook.com/')
+        await web.bootstrap()
         fresh = ProfileContext(profile_id='fixture', cookies={'c_user':'123','xs':'saved-fresh'},
             proxy=context.proxy, user_agent=context.user_agent)
         resolver = SimpleNamespace(resolve=AsyncMock(return_value=fresh))
@@ -462,9 +463,9 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(session.close)
         web = await session.facebook_web()
         client = await web._ensure_session()
-        await self.mock(client, lambda request: httpx.Response(200, text='fixture',
+        await self.mock(client, lambda request: httpx.Response(200, text=self.authenticated_document(),
             headers={'Set-Cookie':'xs=rotated-fresh; Domain=.facebook.com; Path=/; Secure'}))
-        await web.fetch_text('https://www.facebook.com/')
+        await web.bootstrap()
         await session.close()
         context._cookie_persistor.assert_awaited_once_with(
             'fixture','123','saved-fresh',{'c_user':'123','xs':'rotated-fresh'})
@@ -480,9 +481,9 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(session.close)
         web = await session.facebook_web()
         client = await web._ensure_session()
-        await self.mock(client, lambda request: httpx.Response(200, text='fixture',
+        await self.mock(client, lambda request: httpx.Response(200, text=self.authenticated_document(),
             headers={'Set-Cookie':'xs=new-xs; Domain=.facebook.com; Path=/; Secure'}))
-        await web.fetch_text('https://www.facebook.com/')
+        await web.bootstrap()
         context.profile_id = 'different-profile'
         await session.close()
         context._cookie_persistor.assert_not_awaited()
@@ -503,9 +504,9 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(session.close)
         web = await session.facebook_web()
         client = await web._ensure_session()
-        await self.mock(client, lambda request: httpx.Response(200, text='fixture',
+        await self.mock(client, lambda request: httpx.Response(200, text=self.authenticated_document(),
             headers={'Set-Cookie':'xs=client-rotation; Domain=.facebook.com; Path=/; Secure'}))
-        await web.fetch_text('https://www.facebook.com/')
+        await web.bootstrap()
         await session.close()
         self.assertEqual(context.cookies, {'c_user':'123','xs':'newer-saved-session'})
         self.assertEqual(context._loaded_cookies, context.cookies)
