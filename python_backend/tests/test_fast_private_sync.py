@@ -37,7 +37,7 @@ class FastPrivateSyncTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(args[1], {"assetOwnerId": "123456789"})
         self.assertEqual(kwargs["business_loginpage_probe"], "LIST_PAGES")
         self.assertEqual(kwargs["read_timeout_seconds"], 30)
-        record.assert_awaited_once() if hasattr(record, "assert_awaited_once") else record.assert_called_once()
+        record.assert_called_once()
 
     async def snapshot(self):
         return await private_inventory_snapshot(
