@@ -5,6 +5,7 @@ foreach (['railway-private-form-schema.php'=>'classes/RemaskPrivateFormSchema.ph
           'railway-readiness.php'=>'classes/RemaskReadiness.php',
           'railway-ready-endpoint.php'=>'ready.php',
           'railway-private-inventory-identity.php'=>'classes/RemaskPrivateInventoryIdentity.php',
+          'railway-safe-ProfileCookieAuthStateStore.php'=>'classes/ProfileCookieAuthStateStore.php',
           'railway-template-targeting-context.php'=>'classes/RemaskTemplateTargetingContext.php',
           'railway-advertising-helper-client.php'=>'classes/RemaskAdvertisingHelperClient.php',
           'railway-template-advertising-helper.php'=>'ajax/metaTemplateAdvertisingHelper.php',
@@ -62,13 +63,29 @@ function completionReplace(string &$body, string $old, string $new, string $name
 }
 $resolver = file_get_contents($root.'/ajax/pythonProfileContext.php');
 completionReplace($resolver, "require_once __DIR__ . '/../classes/MetaEndpoint.php';",
-    "require_once __DIR__ . '/../classes/MetaEndpoint.php';\nrequire_once __DIR__ . '/../classes/RemaskPrivateInventoryIdentity.php';", 'resolver-identities-class');
+    "require_once __DIR__ . '/../classes/MetaEndpoint.php';\nrequire_once __DIR__ . '/../classes/RemaskPrivateInventoryIdentity.php';\nrequire_once __DIR__ . '/../classes/ProfileCookieAuthStateStore.php';", 'resolver-identities-class');
 completionReplace($resolver, '    $liveInventory = rmx_py_live_inventory($profile);', <<<'PHP_CODE'
     $liveInventory = rmx_py_live_inventory($profile);
     $confirmedBindings = json_decode((string)@file_get_contents('/var/lib/remask/workspace-provisioning-bindings.json'), true);
     $personalScope = (string)(rmx_py_cookie_map($account->cookies)['c_user'] ?? '');
     $liveInventory = RemaskPrivateInventoryIdentity::merge($liveInventory,
         is_array($confirmedBindings) ? $confirmedBindings : [], $profile, $personalScope);
+    $profileCookies = rmx_py_cookie_map($account->cookies);
+    $profileActor = (string)($profileCookies['c_user'] ?? '');
+    $profileXs = (string)($profileCookies['xs'] ?? '');
+    $cookieAuthState = new ProfileCookieAuthStateStore();
+    if ($profileActor !== '' && $profileXs !== ''
+        && $cookieAuthState->matches($profile, $profileActor, $profileXs)) {
+        http_response_code(409);
+        header('Content-Type: application/json; charset=utf-8');
+        header('Cache-Control: no-store');
+        echo json_encode([
+            'error' => 'BUSINESS_LOGIN_GATE',
+            'detail' => ['message' => 'Meta explicitly invalidated the saved profile session. Replace the saved session before launching again.'],
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        exit;
+    }
+    $cookieAuthState->clearIfStale($profile, $profileActor, $profileXs);
 PHP_CODE, 'resolver-confirmed-identities');
 file_put_contents($root.'/ajax/pythonProfileContext.php', $resolver);
 
@@ -94,24 +111,57 @@ if (strtoupper((string)($_SERVER['REQUEST_METHOD'] ?? 'GET')) === 'POST') {
         $raw = file_get_contents('php://input');
         if (!is_string($raw) || strlen($raw) > 2097152) throw new InvalidArgumentException();
         $input = json_decode($raw, true, 64, JSON_THROW_ON_ERROR);
-        if (!is_array($input) || ($input['action'] ?? '') !== 'refresh_profile_cookies') {
+        if (!is_array($input)) {
+            http_response_code(400);
+            echo json_encode(['ok'=>false,'error'=>'INVALID_ACTION']);
+            exit;
+        }
+        $action = (string)($input['action'] ?? '');
+        if (!in_array($action, ['refresh_profile_cookies','mark_profile_cookie_auth_revoked'], true)) {
             http_response_code(400);
             echo json_encode(['ok'=>false,'error'=>'INVALID_ACTION']);
             exit;
         }
         $profile = trim((string)($input['profile_id'] ?? ''));
         $actor = trim((string)($input['actor_id'] ?? ''));
-        $expectedXs = (string)($input['expected_xs'] ?? '');
-        $cookieInput = $input['cookies'] ?? null;
-        if ($profile === '' || strlen($profile) > 255 || $actor === '' ||
-            !ctype_digit($actor) || $expectedXs === '' || !is_array($cookieInput)) {
+        if ($profile === '' || strlen($profile) > 255 || $actor === '' || !ctype_digit($actor)) {
             throw new InvalidArgumentException();
         }
         require_once __DIR__ . '/../settings.php';
         require_once __DIR__ . '/../classes/FbAccount.php';
         require_once __DIR__ . '/../classes/AccountStoreFactory.php';
         require_once __DIR__ . '/../classes/RemaskCookieProfile.php';
+        require_once __DIR__ . '/../classes/RemaskCookieSession.php';
+        require_once __DIR__ . '/../classes/ProfileCookieAuthStateStore.php';
         $store = AccountStoreFactory::create(ACCOUNTSFILENAME);
+
+        if ($action === 'mark_profile_cookie_auth_revoked') {
+            $expectedHash = strtolower(trim((string)($input['expected_xs_sha256'] ?? '')));
+            if (!preg_match('/^[a-f0-9]{64}$/D', $expectedHash)) {
+                throw new InvalidArgumentException();
+            }
+            if (!method_exists($store, 'getAccountByName')) {
+                throw new RuntimeException('PROFILE_COOKIE_READ_UNAVAILABLE');
+            }
+            $account = $store->getAccountByName($profile);
+            $saved = $account ? RemaskCookieSession::map((array)$account->cookies) : [];
+            $savedXs = (string)($saved['xs'] ?? '');
+            if (!$account || (string)($saved['c_user'] ?? '') !== $actor || $savedXs === ''
+                || !hash_equals($expectedHash, hash('sha256', $savedXs))) {
+                http_response_code(409);
+                echo json_encode(['ok'=>false,'error'=>'PROFILE_SESSION_CHANGED']);
+                exit;
+            }
+            (new ProfileCookieAuthStateStore())->mark($profile, $actor, $expectedHash);
+            echo json_encode(['ok'=>true,'updated'=>true]);
+            exit;
+        }
+
+        $expectedXs = (string)($input['expected_xs'] ?? '');
+        $cookieInput = $input['cookies'] ?? null;
+        if ($expectedXs === '' || !is_array($cookieInput)) {
+            throw new InvalidArgumentException();
+        }
         if (!method_exists($store, 'compareAndSwapCookies')) {
             throw new RuntimeException('PROFILE_COOKIE_CAS_UNAVAILABLE');
         }
@@ -120,6 +170,9 @@ if (strtoupper((string)($_SERVER['REQUEST_METHOD'] ?? 'GET')) === 'POST') {
             echo json_encode(['ok'=>false,'error'=>'PROFILE_SESSION_CHANGED']);
             exit;
         }
+        (new ProfileCookieAuthStateStore())->clearIfStale(
+            $profile, $actor, (string)($cookieInput['xs'] ?? '')
+        );
         echo json_encode(['ok'=>true,'updated'=>true]);
     } catch (Throwable $e) {
         http_response_code(400);
