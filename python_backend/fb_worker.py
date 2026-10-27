@@ -668,6 +668,9 @@ class FacebookWebSession:
             "https://www.facebook.com/settings",
             "https://www.facebook.com/",
             "https://adsmanager.facebook.com/adsmanager/manage/campaigns",
+            "https://m.facebook.com/",
+            "https://mbasic.facebook.com/",
+            "https://mbasic.facebook.com/profile.php",
         )
         for target in targets:
             # Business login-page redirects can delete root-scope auth cookies
@@ -732,11 +735,16 @@ class FacebookWebSession:
             actor_verified = bool(expected_actor and expected_actor in users)
             token = self._first_match(body, list(self.FB_DTSG_PATTERNS))
             login_form = _has_login_form(body)
+            mobile_profile_route = (
+                parts.hostname in {"m.facebook.com", "mbasic.facebook.com"}
+                and path.rstrip("/") in {"", "/profile.php"}
+            )
             reason = (
                 "checkpoint_redirect" if "/checkpoint" in path
                 else "login_redirect" if "/login" in path
                 else "redirected_host" if (
                     parts.hostname != "www.facebook.com"
+                    and not mobile_profile_route
                     and not (
                         parts.hostname == "adsmanager.facebook.com"
                         and path.rstrip("/") == "/adsmanager/manage/campaigns"
@@ -781,12 +789,21 @@ class FacebookWebSession:
                 )
                 return bootstrap
 
-            # Login forms, redirects, and HTTP auth failures remain terminal.
-            # Strict bootstrap callers also require this generic page to expose
-            # the selected actor. Exact profile-scoped operations may accept a
-            # token from this page while treating its identity markup as
-            # unverified; their pinned operation and the exact Meta response
-            # determine access, while cookie writeback stays disabled.
+            # Business Suite can gate its own surface while an independent
+            # read-only profile route still confirms the imported actor. Keep
+            # trying only for this known Business-only login page; checkpoints,
+            # generic login pages and HTTP auth failures remain terminal.
+            if (reason == "login_redirect"
+                    and parts.hostname == "business.facebook.com"
+                    and path.rstrip("/") == "/business/loginpage"):
+                log.info(
+                    "[%s] Business loginpage on profile probe; trying next read-only identity route",
+                    self.profile.name,
+                )
+                continue
+
+            # Strict bootstrap callers require a read-only page to expose the
+            # selected actor before sending the pinned asset query.
             if reason not in {
                 "actor_unobserved",
                 "profile_token_unavailable",

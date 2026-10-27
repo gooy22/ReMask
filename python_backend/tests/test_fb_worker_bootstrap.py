@@ -336,6 +336,52 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         ])
         session._fetch_dtsg_refresh_token.assert_not_awaited()
 
+    async def test_scoped_bootstrap_uses_mobile_profile_after_business_loginpage(self):
+        expected_actor = "123456789"
+        mismatched = '<script>CurrentUserInitialData = {"USER_ID":"987654321"};</script>'
+        verified_mobile = (
+            '<script>CurrentUserInitialData = {"USER_ID":"123456789"};</script>'
+            '["DTSGInitialData",[],{"token":"mobile-profile-token"}]'
+        )
+        calls = []
+        ads_manager_url = "https://adsmanager.facebook.com/adsmanager/manage/campaigns"
+        mobile_url = "https://m.facebook.com/"
+        class Response:
+            status = 200
+            def __init__(self, url, body): self.url, self.body = url, body
+            async def text(self): return self.body
+            async def __aenter__(self): return self
+            async def __aexit__(self, *args): return False
+        class Client:
+            def get(self, url, **kwargs):
+                calls.append(url)
+                if url == ads_manager_url:
+                    return Response("https://business.facebook.com/business/loginpage/", "<html>Business login</html>")
+                if url == mobile_url:
+                    return Response(url, verified_mobile)
+                return Response(url, mismatched)
+
+        session = FacebookWebSession(WebProfile(name="15",
+            cookies={"c_user": expected_actor}, proxy=None, user_agent="fixture"))
+        session._ensure_session = AsyncMock(return_value=Client())
+        session._fetch_dtsg_refresh_token = AsyncMock(return_value=("", ""))
+        session.refresh_reviewed_modules = AsyncMock()
+
+        bootstrap = await session.bootstrap(allow_business_loginpage_probe=True)
+
+        self.assertTrue(bootstrap.profile_actor_verified)
+        self.assertEqual(bootstrap.actor_id, expected_actor)
+        self.assertEqual(bootstrap.fb_dtsg, "mobile-profile-token")
+        self.assertEqual(bootstrap.source_url, mobile_url)
+        self.assertEqual(calls, [
+            "https://www.facebook.com/me",
+            "https://www.facebook.com/settings",
+            "https://www.facebook.com/",
+            ads_manager_url,
+            mobile_url,
+        ])
+        session._fetch_dtsg_refresh_token.assert_not_awaited()
+
     async def test_scoped_bootstrap_rejects_mismatched_identity_after_all_profile_routes(self):
         expected_actor = "123456789"
         calls = []
@@ -368,6 +414,9 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
             "https://www.facebook.com/settings",
             "https://www.facebook.com/",
             "https://adsmanager.facebook.com/adsmanager/manage/campaigns",
+            "https://m.facebook.com/",
+            "https://mbasic.facebook.com/",
+            "https://mbasic.facebook.com/profile.php",
         ])
         session._fetch_dtsg_refresh_token.assert_not_awaited()
 
