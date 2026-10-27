@@ -139,7 +139,7 @@ async def run_bm_browser_canary() -> None:
             except ProfileContextError as exc:
                 rejected.append({
                     'profile_id':profile_id,
-                    'code':'PROFILE_CONTEXT_ERROR',
+                    'code':getattr(exc,'code','PROFILE_CONTEXT_ERROR'),
                     'detail':str(exc)[:300],
                 })
                 continue
@@ -1214,7 +1214,7 @@ async def profile_preflight(profile_id: str, purpose: str = 'business'):
     except ProfileContextError as exc:
         raise HTTPException(
             status_code=422,
-            detail=f'PROFILE_CONTEXT_ERROR: {exc}',
+            detail=f'{getattr(exc,"code","PROFILE_CONTEXT_ERROR")}: {exc}',
         ) from exc
 
     try:
@@ -1489,7 +1489,7 @@ async def profile_page_access(profile_id: str, account_id: str):
     except ValueError as exc:
         raise HTTPException(status_code=400,detail='INVALID_PAGE_ACCESS_TARGET') from exc
     except ProfileContextError as exc:
-        result=unverified_result(profile,account_id,'PROFILE_CONTEXT_ERROR')
+        result=unverified_result(profile,account_id,getattr(exc,'code','PROFILE_CONTEXT_ERROR'))
     except asyncio.TimeoutError as exc:
         result=unverified_result(profile,account_id,'PAGE_ACCESS_INSPECTION_TIMEOUT')
     except BrowserBusinessError as exc:
@@ -1527,7 +1527,7 @@ async def profile_payment_methods(profile_id: str, account_id: str, business_id:
     except ValueError as exc:
         raise HTTPException(status_code=400,detail=str(exc)) from exc
     except ProfileContextError as exc:
-        raise HTTPException(status_code=422,detail='PROFILE_CONTEXT_ERROR') from exc
+        raise HTTPException(status_code=422,detail=getattr(exc,'code','PROFILE_CONTEXT_ERROR')) from exc
     except asyncio.TimeoutError as exc:
         raise HTTPException(status_code=504,detail='PAYMENT_INSPECTION_TIMEOUT') from exc
     except BrowserBusinessError as exc:
@@ -4042,7 +4042,7 @@ async def private_launch_review(profile_id: str, payload: dict = Body(...)):
         raise HTTPException(
             status_code=409,
             detail={
-                'code':str(getattr(exc,'category','PROFILE_CONTEXT_ERROR')).upper(),
+                'code':getattr(exc,'code','PROFILE_CONTEXT_ERROR'),
                 'message':str(exc),
                 'retryable':bool(getattr(exc,'retryable',False)),
             },

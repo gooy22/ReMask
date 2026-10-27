@@ -481,8 +481,10 @@ try {
     $raw = @file_get_contents($base.'/api/v1/profiles/'.rawurlencode($profile).'/page-access?account_id='.rawurlencode($account),false,$ctx);
     $proof = is_string($raw) ? json_decode($raw,true) : null;
     if (!is_array($proof) || ($proof['profile_id'] ?? '') !== $profile || ($proof['account_id'] ?? '') !== $account) {
-        $code = is_array($proof) ? (string)($proof['detail'] ?? '') : '';
-        $known = ['CHECKPOINT_REQUIRED','SESSION_EXPIRED','TWO_FACTOR_REQUIRED','PROFILE_CONTEXT_ERROR','PAGE_ACCESS_INSPECTION_TIMEOUT'];
+        $detail=is_array($proof['detail'] ?? null) ? $proof['detail'] : [];
+        $code=is_string($detail['code'] ?? null) ? $detail['code']
+            : (is_string($proof['detail'] ?? null) ? $proof['detail'] : '');
+        $known = ['CHECKPOINT_REQUIRED','SESSION_EXPIRED','TWO_FACTOR_REQUIRED','BUSINESS_LOGIN_GATE','PROFILE_CONTEXT_ERROR','PAGE_ACCESS_INSPECTION_TIMEOUT'];
         $proof = ['diagnostic'=>['code'=>in_array($code,$known,true) ? $code : 'PAGE_ACCESS_RESULT_UNAVAILABLE']];
     }
     if (!isset($proof['profile_id'])) $proof['profile_id']=$profile;
@@ -526,8 +528,10 @@ try {
             && ($decoded['account_id'] ?? '')===$account) {
             $paymentProof=$decoded;
         } else {
-            $code=is_array($decoded) ? (string)($decoded['detail'] ?? '') : '';
-            $known=['CHECKPOINT_REQUIRED','SESSION_EXPIRED','TWO_FACTOR_REQUIRED',
+            $detail=is_array($decoded['detail'] ?? null) ? $decoded['detail'] : [];
+            $code=is_string($detail['code'] ?? null) ? $detail['code']
+                : (is_string($decoded['detail'] ?? null) ? $decoded['detail'] : '');
+            $known=['CHECKPOINT_REQUIRED','SESSION_EXPIRED','TWO_FACTOR_REQUIRED','BUSINESS_LOGIN_GATE',
                 'PROFILE_CONTEXT_ERROR','PAYMENT_INSPECTION_TIMEOUT','PAYMENT_BROWSER_CRASHED',
                 'PAYMENT_UI_UNAVAILABLE'];
             $paymentProof=['diagnostic'=>['code'=>in_array($code,$known,true)
@@ -574,6 +578,7 @@ async function checkAssetsSelection(){
     const phone={REQUIRED:'Meta требует подтверждения номера телефона перед рекламой.',VERIFIED:'Номер телефона уже подтверждён в Meta.',UNKNOWN:'Требование номера телефона не установлено. Отсутствие сообщения не подтверждает возможность публикации.'}[res?.advertiser_phone?.status||'UNKNOWN'];
     const reason=diagnostic?.code==='PAGE_ACCESS_MEMORY_LIMIT'?'Проверка доступа РК остановлена: недостаточно памяти для формы Ads Manager.':
       diagnostic?.code==='PAGE_ACCESS_INSPECTION_TIMEOUT'?'Проверка доступа РК не завершилась за отведённое время.':
+      diagnostic?.code==='BUSINESS_LOGIN_GATE'?'Meta отклонила сохранённую Facebook-сессию; для чтения FP требуется повторная авторизация.':
       diagnostic?.code==='CHECKPOINT_REQUIRED'?'Meta требует проверку Facebook-аккаунта.':
       diagnostic?.code==='PAGE_ACCESS_RESULT_UNAVAILABLE'?'Не удалось получить результат проверки доступа РК.':'';
     block.innerHTML=`<b>${esc(r.name||r.id)}</b><div class="sub">${esc(r.profile)} · ${esc(r.id)}</div>`+
