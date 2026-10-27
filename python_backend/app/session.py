@@ -485,6 +485,12 @@ class ProfileResolver:
                 retryable=True, category="auth_revalidation_transport",
             ) from failure
 
+        if auth_gate_code == "BUSINESS_LOGIN_GATE":
+            # Business Home is only a generic session probe. Its login gate
+            # cannot establish that every requested Meta resource is logged
+            # out. Let the caller perform its exact read and enforce its own
+            # auth, actor, and scope checks before any mutation.
+            return
         if auth_gate_code:
             known_gates = {
                 "BUSINESS_LOGIN_GATE": "business_login_gate",
