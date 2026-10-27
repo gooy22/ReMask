@@ -66,24 +66,27 @@ class _Action:
             log.info("[%s] private action close after auth gate failed type=%s",
                 self.profile, type(exc).__name__)
 
+    async def _run_once(self, operation):
+        self.web = await self.session.facebook_web()
+        self.web.private_only = True
+        try:
+            return await operation(self.web)
+        except ProvisioningError as exc:
+            if exc.code in {"BUSINESS_LOGIN_GATE", "SESSION_EXPIRED"}:
+                await self._close_read_session()
+            raise
+        except Exception as exc:
+            from ..private_auth import private_auth_error
+            auth = private_auth_error(exc)
+            if auth is None:
+                raise
+            if auth.code in {"BUSINESS_LOGIN_GATE", "SESSION_EXPIRED"}:
+                await self._close_read_session()
+            raise auth from None
+
     async def read(self, operation):
         async def once():
-            self.web = await self.session.facebook_web()
-            self.web.private_only = True
-            try:
-                return await operation(self.web)
-            except ProvisioningError as exc:
-                if exc.code in {"BUSINESS_LOGIN_GATE", "SESSION_EXPIRED"}:
-                    await self._close_read_session()
-                raise
-            except Exception as exc:
-                from ..private_auth import private_auth_error
-                auth = private_auth_error(exc)
-                if auth is None:
-                    raise
-                if auth.code in {"BUSINESS_LOGIN_GATE", "SESSION_EXPIRED"}:
-                    await self._close_read_session()
-                raise auth from None
+            return await self._run_once(operation)
 
         if self.profile_resolver is None:
             return await once()
@@ -91,6 +94,39 @@ class _Action:
         return await read_with_saved_auth_refresh(
             self.profile_resolver, self.context, once,
         )
+
+    async def submit(self, operation, has_submitted):
+        """Retry a create only when Meta proves its auth gate blocked the POST."""
+        try:
+            return await self._run_once(operation)
+        except ProvisioningError as exc:
+            diagnostics = getattr(exc, "inventory_diagnostics", [])
+            post_was_not_sent = any(
+                isinstance(row, dict) and row.get("post_not_sent") is True
+                for row in diagnostics
+            )
+            if (self.profile_resolver is None or has_submitted()
+                    or exc.code not in {"BUSINESS_LOGIN_GATE", "SESSION_EXPIRED"}
+                    or not post_was_not_sent):
+                raise
+            from ..session_auth_refresh import refresh_saved_auth_context
+            try:
+                changed = await asyncio.wait_for(
+                    refresh_saved_auth_context(self.profile_resolver, self.context),
+                    timeout=16.0,
+                )
+            except Exception as refresh_error:
+                log.info("[%s] private create auth refresh failed code=%s error_type=%s",
+                    self.profile, exc.code, type(refresh_error).__name__)
+                raise exc from None
+            log.info("[%s] private create auth refresh code=%s changed=%s",
+                self.profile, exc.code, changed)
+            if not changed:
+                raise
+            # The first attempt failed in Meta's pre-submit auth check. The
+            # durable before_submit callback never ran, so exactly one retry
+            # can still produce at most one CREATE POST.
+            return await self._run_once(operation)
 
     async def open(self):
         prior = self.prior if isinstance(self.prior, dict) else await self.store.step(self.item, self.step)
@@ -243,11 +279,14 @@ async def business_handler(session, params, state, *args, **kwargs):
         await action.checkpoint({"phase": "CREATE_SUBMIT_INTENT", "activity": "BM_PRIVATE_POST_INTENT"})
         submitted = True
     try:
-        created = await create_business_with_docids(action.web, business_name=name, user_email=email,
-            user_first_name=_clean(params.get("user_first_name") or params.get("first_name") or getattr(action.context, "first_name", "")),
-            user_last_name=_clean(params.get("user_last_name") or params.get("last_name") or getattr(action.context, "last_name", "")),
-            profile_display_name=_clean(params.get("profile_display_name") or getattr(action.context, "display_name", "")),
-            manual_doc_id=_clean(params.get("doc_id")), profile_id=action.profile, before_submit=before_submit)
+        created = await action.submit(
+            lambda web: create_business_with_docids(web, business_name=name, user_email=email,
+                user_first_name=_clean(params.get("user_first_name") or params.get("first_name") or getattr(action.context, "first_name", "")),
+                user_last_name=_clean(params.get("user_last_name") or params.get("last_name") or getattr(action.context, "last_name", "")),
+                profile_display_name=_clean(params.get("profile_display_name") or getattr(action.context, "display_name", "")),
+                manual_doc_id=_clean(params.get("doc_id")), profile_id=action.profile, before_submit=before_submit),
+            has_submitted=lambda: submitted,
+        )
         expected = _id(created.business_id)
         await action.checkpoint({"phase": "CREATE_RESULT_UNVERIFIED", "create_response_business_id": expected,
             "create_response_path": created.response_path})
@@ -337,8 +376,12 @@ async def ad_account_handler(session, params, state, *args, **kwargs):
         await action.checkpoint({"phase": "CREATE_SUBMIT_INTENT", "capture_doc_id": contract["doc_id"], "activity": "RK_PRIVATE_POST_INTENT"})
         submitted = True
     try:
-        created = await create_ad_account_with_docids(action.web, business_id=business, account_name=name,
-            currency=currency, timezone_id=timezone, profile_id=action.profile, captured_request=contract, before_submit=before_submit)
+        created = await action.submit(
+            lambda web: create_ad_account_with_docids(web, business_id=business, account_name=name,
+                currency=currency, timezone_id=timezone, profile_id=action.profile,
+                captured_request=contract, before_submit=before_submit),
+            has_submitted=lambda: submitted,
+        )
         expected = _id(created.ad_account_id)
         await action.checkpoint({"phase": "CREATE_RESULT_UNVERIFIED", "create_response_ad_account_id": expected,
             "create_response_path": created.response_path})
