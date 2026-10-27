@@ -700,6 +700,13 @@ async def create_ad_account_with_docids(
             before_submit=before_submit,
         )
     except Exception as exc:
+        # Preserve a positively identified Meta auth gate so the provisioning
+        # boundary can restore the same actor before any CREATE submit intent.
+        from fb_worker import AuthenticationError
+        if (isinstance(exc, AuthenticationError)
+                and getattr(exc, "request_may_have_been_sent", None) is False
+                and getattr(exc, "transport_stage", "") == "business_auth_precheck"):
+            raise
         payload = getattr(exc, "meta_payload", None)
         if not isinstance(payload, dict):
             payload = {}
