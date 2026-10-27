@@ -1368,15 +1368,14 @@ class FacebookWebSession:
         if operation not in allowed:
             reject()
         try:
-            from app.static_meta_contracts import command, contract_metadata
+            from app.static_meta_contracts import ENDPOINT, contract_metadata
             meta = contract_metadata(operation)
-            template = command(operation)
         except Exception:
             reject()
         endpoint = str(endpoint_url or self.GRAPHQL_URL).strip()
         if (str(doc_id or "").strip() != meta["doc_id"]
                 or friendly_name != meta["friendly_name"]
-                or endpoint != template["endpoint_url"]
+                or endpoint != ENDPOINT
                 or not isinstance(variables, dict)
                 or bool(request_envelope)):
             reject()
