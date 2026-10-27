@@ -656,6 +656,8 @@ class FacebookWebSession:
         session: PrivateHttpClient,
         expected_actor: str,
         attempts: list[dict[str, Any]],
+        *,
+        require_actor_match: bool = True,
     ) -> FacebookBootstrap:
         # The personal profile, home and settings documents are equivalent
         # read-only identity surfaces. /me can be a minimal or partially
@@ -737,8 +739,8 @@ class FacebookWebSession:
                 else "redirected_host" if parts.hostname != "www.facebook.com"
                 else "login_form" if login_form
                 else "http_auth" if response.status in {401, 403}
-                else "actor_mismatch" if users and not actor_verified
-                else "actor_unobserved" if not users
+                else "actor_mismatch" if require_actor_match and users and not actor_verified
+                else "actor_unobserved" if require_actor_match and not users
                 else "profile_token_unavailable" if not token
                 else "http_status" if response.status != 200
                 else ""
@@ -762,14 +764,14 @@ class FacebookWebSession:
                     jazoest=self._first_match(body, [r"""name=["']jazoest["'][^>]*value=["']([^"']+)["']"""]),
                     request_context=self._extract_request_context(body),
                     source_url=target,
-                    profile_actor_verified=True,
+                    profile_actor_verified=actor_verified,
                 )
                 self._bootstrap = bootstrap
-                self._profile_session_identity_verified = True
+                self._profile_session_identity_verified = actor_verified
                 log.info(
-                    "[%s] Meta profile identity independently verified for scoped Business read actor=%s route=%s",
+                    "[%s] Meta profile document supplied scoped bootstrap identity_verified=%s route=%s",
                     self.profile.name,
-                    expected_actor,
+                    actor_verified,
                     urlsplit(target).path or "/",
                 )
                 return bootstrap
@@ -887,7 +889,7 @@ class FacebookWebSession:
                 # to business/loginpage, mutate its in-memory cookies, and spend
                 # the Sync deadline before the same profile is checked.
                 return await self._verified_profile_bootstrap(
-                    session, expected_actor, [],
+                    session, expected_actor, [], require_actor_match=False,
                 )
 
             token_patterns = list(self.FB_DTSG_PATTERNS)
@@ -1373,9 +1375,12 @@ class FacebookWebSession:
                         }):
                     expected_actor = str(self.profile.cookies.get("c_user") or "").strip()
                     if expected_actor.isdigit() and expected_actor == bootstrap.actor_id:
-                        return await self._verified_profile_bootstrap(
-                            await self._ensure_session(), expected_actor, attempts,
-                        )
+                        # This operation has already passed the pinned static
+                        # contract and actor-binding checks. A generic Business
+                        # landing route can send valid sessions to loginpage;
+                        # let the exact GraphQL response decide whether this
+                        # selected profile may perform the requested operation.
+                        return bootstrap
                 log.warning("[%s] BUSINESS auth precheck stopped before POST attempts=%s",
                     self.profile.name, json.dumps(attempts, separators=(",", ":")))
                 self.invalidate_bootstrap()
