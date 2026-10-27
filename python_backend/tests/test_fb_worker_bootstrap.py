@@ -662,10 +662,6 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('SECRET', str(caught.exception))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class PreviousSessionReadRecoveryTests(unittest.IsolatedAsyncioTestCase):
     class Client:
         def __init__(self, cookies):
@@ -749,3 +745,26 @@ class PreviousSessionReadRecoveryTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertIsNone(result)
         construct.assert_not_called()
+
+        same_actor_session = FacebookWebSession(WebProfile(
+            name="15", cookies={"c_user": actor, "xs": "fixture-current"},
+            proxy="http://fixture-proxy:80", user_agent="Fixture",
+            recovery_cookies={"c_user": "999999999", "xs": "fixture-previous"},
+        ))
+        with patch("fb_worker.FacebookWebSession") as construct:
+            result = await same_actor_session._retry_scoped_read_with_previous_session(
+                "fixture-doc",
+                {"businessID": "987654321"},
+                friendly_name="BusinessAdAccounts",
+                endpoint_url="https://business.facebook.com/api/graphql/",
+                request_envelope=None,
+                business_context_id="987654321",
+                business_loginpage_probe="READ_RK",
+                read_timeout_seconds=30,
+            )
+        self.assertIsNone(result)
+        construct.assert_not_called()
+
+
+if __name__ == "__main__":
+    unittest.main()
