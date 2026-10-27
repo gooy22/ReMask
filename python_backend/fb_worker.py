@@ -1340,7 +1340,8 @@ class FacebookWebSession:
         business_create: bool = False, business_loginpage_probe: str = "",
     ) -> FacebookBootstrap:
         """Confirm Business auth using bounded, read-only operation surfaces."""
-        if (business_loginpage_probe in {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS", "CREATE_BM", "CREATE_RK", "CLAIM", "ASSIGN"}
+        if (business_loginpage_probe in {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS", "PRIVATE_RK_INVENTORY",
+                "CREATE_BM", "CREATE_RK", "CLAIM", "ASSIGN"}
                 and bootstrap.profile_actor_verified):
             return bootstrap
         source = str(getattr(bootstrap, "source_url", "") or "").strip()
@@ -1395,7 +1396,7 @@ class FacebookWebSession:
                 )
                 if (business_loginpage and status < 400
                         and business_loginpage_probe in {
-                            "READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS",
+                            "READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS", "PRIVATE_RK_INVENTORY",
                             "CREATE_BM", "CREATE_RK", "CLAIM", "ASSIGN",
                         }):
                     expected_actor = str(self.profile.cookies.get("c_user") or "").strip()
@@ -1523,7 +1524,7 @@ class FacebookWebSession:
         if not operation:
             return ""
         allowed = {
-            "READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS",
+            "READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS", "PRIVATE_RK_INVENTORY",
             "CREATE_BM", "CREATE_RK", "CLAIM", "ASSIGN", "LIST_PAGES",
         }
 
@@ -1536,6 +1537,19 @@ class FacebookWebSession:
 
         if operation not in allowed:
             reject()
+        if operation == "PRIVATE_RK_INVENTORY":
+            business = str(business_context_id or "").strip()
+            bound_business = variables.get("businessID") if isinstance(variables, dict) else None
+            if (not re.fullmatch(r"\d{5,40}", str(doc_id or "").strip())
+                    or not friendly_name or len(str(friendly_name)) > 200
+                    or str(endpoint_url or "").strip() != "https://business.facebook.com/api/graphql/"
+                    or not business.isdigit() or str(bound_business or "").strip() != business
+                    or isinstance(bound_business, bool)
+                    or request_envelope or not isinstance(variables, dict)
+                    or multipart_files is not None or read_timeout_seconds is not None
+                    or (before_submit is not None and not callable(before_submit))):
+                reject()
+            return operation
         if operation == "LIST_PAGES":
             actor = str(self.profile.cookies.get("c_user") or "").strip()
             endpoint = str(endpoint_url or "").strip()
@@ -1671,9 +1685,10 @@ class FacebookWebSession:
         business_context_id: str,
         business_loginpage_probe: str,
         read_timeout_seconds: float | None,
+        before_submit: Any | None = None,
     ) -> dict[str, Any] | None:
         """Retry one exact inventory read with a verified same-actor prior snapshot."""
-        allowed_reads = {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS"}
+        allowed_reads = {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS", "PRIVATE_RK_INVENTORY"}
         if (business_loginpage_probe not in allowed_reads
                 or self._previous_recovery_attempted):
             return None
@@ -1721,6 +1736,7 @@ class FacebookWebSession:
                 friendly_name=friendly_name,
                 endpoint_url=endpoint_url,
                 request_envelope=request_envelope,
+                before_submit=before_submit,
                 business_context_id=business_context_id,
                 read_timeout_seconds=read_timeout_seconds,
                 business_loginpage_probe=business_loginpage_probe,
@@ -1819,7 +1835,7 @@ class FacebookWebSession:
                 # BM/RK/Page IDs. Generic profile pages can report another actor
                 # while still providing the usable token needed for these reads.
                 # Changes still require the selected c_user to be verified.
-                scoped_read_only = scoped_probe in {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS"}
+                scoped_read_only = scoped_probe in {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS", "PRIVATE_RK_INVENTORY"}
                 bootstrap = await self.bootstrap(
                     allow_business_loginpage_probe=True,
                     require_actor_match=not scoped_read_only,
@@ -1860,9 +1876,11 @@ class FacebookWebSession:
                     business_loginpage_probe=scoped_probe,
                 )
         except AuthenticationError as exc:
-            if (scoped_probe in {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS"}
-                    and before_submit is None and multipart_files is None
-                    and getattr(exc, "request_may_have_been_sent", False) is False):
+            if ((scoped_probe in {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS"}
+                    and before_submit is None and multipart_files is None)
+                    or (scoped_probe == "PRIVATE_RK_INVENTORY" and callable(before_submit)
+                        and multipart_files is None)) and (
+                    getattr(exc, "request_may_have_been_sent", False) is False):
                 recovered = await self._retry_scoped_read_with_previous_session(
                     effective_doc_id,
                     variables,
@@ -1872,6 +1890,7 @@ class FacebookWebSession:
                     business_context_id=business_context_id,
                     business_loginpage_probe=business_loginpage_probe,
                     read_timeout_seconds=read_timeout_seconds,
+                    before_submit=before_submit,
                 )
                 if recovered is not None:
                     return recovered
@@ -2129,9 +2148,11 @@ class FacebookWebSession:
                 exc.request_may_have_been_sent = request_may_have_been_sent
             if not hasattr(exc, "transport_stage"):
                 exc.transport_stage = transport_stage
-            if (scoped_probe in {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS"}
-                    and before_submit is None and multipart_files is None
-                    and bool(getattr(exc, "request_rejected", False))
+            if ((scoped_probe in {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS"}
+                    and before_submit is None and multipart_files is None)
+                    or (scoped_probe == "PRIVATE_RK_INVENTORY" and callable(before_submit)
+                        and multipart_files is None)) and (
+                    bool(getattr(exc, "request_rejected", False))
                     and str(getattr(exc, "transport_stage", ""))
                     in {"graphql_response", "graphql_redirect"}):
                 recovered = await self._retry_scoped_read_with_previous_session(
@@ -2143,6 +2164,7 @@ class FacebookWebSession:
                     business_context_id=business_context_id,
                     business_loginpage_probe=business_loginpage_probe,
                     read_timeout_seconds=read_timeout_seconds,
+                    before_submit=before_submit,
                 )
                 if recovered is not None:
                     return recovered
