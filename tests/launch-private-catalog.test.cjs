@@ -184,6 +184,11 @@ assert.equal(controls.launchButton.textContent,'Сохранить чернов�
 assert.equal(Boolean(controls.reviewLaunch.title),false);
 assert.equal(Boolean(controls.reviewStatus.textContent),false);
 assert.equal(controls.preflight.textContent,'Загрузить сохранённые РК');
+assert.equal(context.remaskPrivatePageReadFailure({message:'Meta requires sign-in',payload:{code:'PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE',message:'Meta requires sign-in'}},'15','act_120249392950240046'),
+  'Профиль 15 / РК 120249392950240046: Meta вернула BUSINESS_LOGIN_GATE; список FP не загружен.');
+const safePageFailure=context.remaskPrivatePageReadFailure({message:'xs=PRIVATE_SECRET'},'15','act_120249392950240046');
+assert.match(safePageFailure,/PAGE_READ_FAILED/);
+assert.doesNotMatch(safePageFailure,/PRIVATE_SECRET/);
 console.log('Private Launch catalog and funding truth checks passed');
 
 // Direct Launch uses the visible Page control; even an old per-RK binding
@@ -727,6 +732,38 @@ console.log('Private Launch catalog and funding truth checks passed');
   assert.match(overlay,/'funding_verified'=>false/);
   assert.doesNotMatch(overlay,/'funding_verified'=>true/);
   assert.match(overlay,/PRIVATE_LAUNCH_VERIFICATION_REQUIRED/);
+  const pageLoader=overlay.match(/<<<'NEW_BULK_PAGES'\n([\s\S]*?)\nNEW_BULK_PAGES/)[1];
+  assert.ok(pageLoader.includes('remaskPrivatePageReadFailure'));
+  assert.ok(pageLoader.includes('FP не загружены'));
+  assert.ok(pageLoader.includes('catch (error)'));
+  {
+    const targetKey='15|120249392950240046|DRAFT';
+    let pageRenderCount=0;
+    let capturedPageError;
+    const pageCtx={
+      remaskPrivatePageReadFailure:(error,profile,accountId)=>{
+        capturedPageError={code:error?.code,payloadCode:error?.payload?.code,message:error?.message};
+        return context.remaskPrivatePageReadFailure(error,profile,accountId);
+      },
+      remaskPrivateExecutionMode:()=> 'DRAFT',
+      status:{textContent:'',classList:{add(){}}},
+      targets:[{profile:'15',account_id:'act_120249392950240046'}],
+      force:true,
+      state:{targetBindingAssets:{pages:{[targetKey]:[{id:'stale'}]},pageReadErrors:{}}},
+      runPool:async(rows,_workers,fn)=>{for(const row of rows)await fn(row);},
+      remaskPrivateAccountId:value=>String(value).replace(/^act_/,''),
+      apiJson:async()=>{throw {message:'Meta login required',payload:{code:'PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE',message:'Meta login required'}};},
+      formPost:value=>value,
+      renderTargetBindings(){pageRenderCount++;}
+    };
+    vm.createContext(pageCtx);
+    await vm.runInContext('(async()=>{\n'+pageLoader+'\n})()',pageCtx);
+    assert.match(pageCtx.status.textContent,/BUSINESS_LOGIN_GATE/);
+    assert.equal(Object.hasOwn(pageCtx.state.targetBindingAssets.pages,targetKey),false,
+      'a rejected live read must not leave stale Pages selectable for this exact RK');
+    assert.match(pageCtx.state.targetBindingAssets.pageReadErrors[targetKey],/BUSINESS_LOGIN_GATE/);
+    assert.equal(pageRenderCount,1);
+  }
   const readiness=overlay.match(/<<<'READINESS_UI'\n([\s\S]*?)\nREADINESS_UI/)[1];
   const output={}; let request;
   const ctx={selectedRows:()=>[{id:'act_333333333',profile:'7',name:'Saved RK'}],

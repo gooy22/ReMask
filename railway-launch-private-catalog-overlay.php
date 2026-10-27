@@ -681,14 +681,30 @@ if (strpos($js,'REMASK_PRIVATE_LAUNCH_CATALOG_V1')===false) {
 OLD_BULK_PAGES;
     $newPages=<<<'NEW_BULK_PAGES'
         const executionMode = remaskPrivateExecutionMode();
-        status.textContent = `Loading Pages for ${targets.length} RK...`;
+        status.textContent = `Загружаем страницы для ${targets.length} РК...`;
+        const pageReadErrors = [];
+        state.targetBindingAssets.pageReadErrors = state.targetBindingAssets.pageReadErrors || {};
         await runPool(targets, 4, async (target) => {
             const profile = target.profile, accountId = remaskPrivateAccountId(target.account_id);
-            const data = await apiJson('ajax/metaAssets.php', formPost({profile, resource: 'pages',
-                account_id: accountId, execution_mode: executionMode, force: force ? '1' : '0'}));
-            state.targetBindingAssets.pages[`${profile}|${accountId}|${executionMode}`] = data.data || [];
+            const key = `${profile}|${accountId}|${executionMode}`;
+            try {
+                const data = await apiJson('ajax/metaAssets.php', formPost({profile, resource: 'pages',
+                    account_id: accountId, execution_mode: executionMode, force: force ? '1' : '0'}));
+                state.targetBindingAssets.pages[key] = data.data || [];
+                delete state.targetBindingAssets.pageReadErrors[key];
+            } catch (error) {
+                delete state.targetBindingAssets.pages[key];
+                const detail = remaskPrivatePageReadFailure(error, profile, accountId);
+                state.targetBindingAssets.pageReadErrors[key] = detail;
+                pageReadErrors.push(detail);
+            }
             renderTargetBindings();
         });
+        if (pageReadErrors.length) {
+            status.textContent = 'FP не загружены: ' + pageReadErrors.join(' | ');
+            status.classList?.add('text-warning');
+            return;
+        }
 NEW_BULK_PAGES;
     $js=str_replace($oldPages,$newPages,$js,$pageLoaderCount);
     $js=str_replace('const pages = state.targetBindingAssets.pages[target.profile] || [];',
