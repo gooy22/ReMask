@@ -5,7 +5,6 @@ foreach (['railway-private-form-schema.php'=>'classes/RemaskPrivateFormSchema.ph
           'railway-readiness.php'=>'classes/RemaskReadiness.php',
           'railway-ready-endpoint.php'=>'ready.php',
           'railway-private-inventory-identity.php'=>'classes/RemaskPrivateInventoryIdentity.php',
-          'railway-safe-ProfileCookieAuthStateStore.php'=>'classes/ProfileCookieAuthStateStore.php',
           'railway-template-targeting-context.php'=>'classes/RemaskTemplateTargetingContext.php',
           'railway-advertising-helper-client.php'=>'classes/RemaskAdvertisingHelperClient.php',
           'railway-template-advertising-helper.php'=>'ajax/metaTemplateAdvertisingHelper.php',
@@ -63,31 +62,14 @@ function completionReplace(string &$body, string $old, string $new, string $name
 }
 $resolver = file_get_contents($root.'/ajax/pythonProfileContext.php');
 completionReplace($resolver, "require_once __DIR__ . '/../classes/MetaEndpoint.php';",
-    "require_once __DIR__ . '/../classes/MetaEndpoint.php';\nrequire_once __DIR__ . '/../classes/RemaskPrivateInventoryIdentity.php';\nrequire_once __DIR__ . '/../classes/ProfileCookieAuthStateStore.php';", 'resolver-identities-class');
+    "require_once __DIR__ . '/../classes/MetaEndpoint.php';\nrequire_once __DIR__ . '/../classes/RemaskPrivateInventoryIdentity.php';", 'resolver-identities-class');
 completionReplace($resolver, '    $liveInventory = rmx_py_live_inventory($profile);', <<<'PHP_CODE'
     $liveInventory = rmx_py_live_inventory($profile);
     $confirmedBindings = json_decode((string)@file_get_contents('/var/lib/remask/workspace-provisioning-bindings.json'), true);
     $personalScope = (string)(rmx_py_cookie_map($account->cookies)['c_user'] ?? '');
     $liveInventory = RemaskPrivateInventoryIdentity::merge($liveInventory,
         is_array($confirmedBindings) ? $confirmedBindings : [], $profile, $personalScope);
-    $profileCookies = rmx_py_cookie_map($account->cookies);
-    $profileActor = (string)($profileCookies['c_user'] ?? '');
-    $profileXs = (string)($profileCookies['xs'] ?? '');
-    $cookieAuthState = new ProfileCookieAuthStateStore();
-    $cookieAuthRevocationHash = '';
-    if ($profileActor !== '' && $profileXs !== ''
-        && $cookieAuthState->matches($profile, $profileActor, $profileXs)) {
-        // Return only the marker fingerprint. Python must prove the same actor
-        // is still authenticated with a read-only Meta document before clearing.
-        $cookieAuthRevocationHash = hash('sha256', $profileXs);
-    } else {
-        $cookieAuthState->clearIfStale($profile, $profileActor, $profileXs);
-    }
 PHP_CODE, 'resolver-confirmed-identities');
-completionReplace($resolver, '        \'cookies\' => rmx_py_cookie_map($account->cookies),', <<<'PHP_CODE'
-        'cookies' => rmx_py_cookie_map($account->cookies),
-        'cookie_auth_revocation_xs_sha256' => $cookieAuthRevocationHash,
-PHP_CODE, 'resolver-auth-marker-fingerprint');
 file_put_contents($root.'/ajax/pythonProfileContext.php', $resolver);
 
 // REMASK_PROFILE_COOKIE_REFRESH_V1: persist only Meta-issued same-actor session updates.
@@ -118,7 +100,7 @@ if (strtoupper((string)($_SERVER['REQUEST_METHOD'] ?? 'GET')) === 'POST') {
             exit;
         }
         $action = (string)($input['action'] ?? '');
-        if (!in_array($action, ['refresh_profile_cookies','mark_profile_cookie_auth_revoked','clear_profile_cookie_auth_verified','load_previous_profile_cookies','restore_previous_profile_cookies_verified'], true)) {
+        if (!in_array($action, ['refresh_profile_cookies'], true)) {
             http_response_code(400);
             echo json_encode(['ok'=>false,'error'=>'INVALID_ACTION']);
             exit;
@@ -133,113 +115,7 @@ if (strtoupper((string)($_SERVER['REQUEST_METHOD'] ?? 'GET')) === 'POST') {
         require_once __DIR__ . '/../classes/AccountStoreFactory.php';
         require_once __DIR__ . '/../classes/RemaskCookieProfile.php';
         require_once __DIR__ . '/../classes/RemaskCookieSession.php';
-        require_once __DIR__ . '/../classes/ProfileCookieAuthStateStore.php';
         $store = AccountStoreFactory::create(ACCOUNTSFILENAME);
-
-        if ($action === 'mark_profile_cookie_auth_revoked') {
-            $expectedHash = strtolower(trim((string)($input['expected_xs_sha256'] ?? '')));
-            if (!preg_match('/^[a-f0-9]{64}$/D', $expectedHash)) {
-                throw new InvalidArgumentException();
-            }
-            if (!method_exists($store, 'getAccountByName')) {
-                throw new RuntimeException('PROFILE_COOKIE_READ_UNAVAILABLE');
-            }
-            $account = $store->getAccountByName($profile);
-            $saved = $account ? RemaskCookieSession::map((array)$account->cookies) : [];
-            $savedXs = (string)($saved['xs'] ?? '');
-            if (!$account || (string)($saved['c_user'] ?? '') !== $actor || $savedXs === ''
-                || !hash_equals($expectedHash, hash('sha256', $savedXs))) {
-                http_response_code(409);
-                echo json_encode(['ok'=>false,'error'=>'PROFILE_SESSION_CHANGED']);
-                exit;
-            }
-            (new ProfileCookieAuthStateStore())->mark($profile, $actor, $expectedHash);
-            echo json_encode(['ok'=>true,'updated'=>true]);
-            exit;
-        }
-
-        if ($action === 'clear_profile_cookie_auth_verified') {
-            $expectedHash = strtolower(trim((string)($input['expected_xs_sha256'] ?? '')));
-            if (!preg_match('/^[a-f0-9]{64}$/D', $expectedHash)) {
-                throw new InvalidArgumentException();
-            }
-            if (!method_exists($store, 'getAccountByName')) {
-                throw new RuntimeException('PROFILE_COOKIE_READ_UNAVAILABLE');
-            }
-            $account = $store->getAccountByName($profile);
-            $saved = $account ? RemaskCookieSession::map((array)$account->cookies) : [];
-            $savedXs = (string)($saved['xs'] ?? '');
-            if (!$account || (string)($saved['c_user'] ?? '') !== $actor || $savedXs === ''
-                || !hash_equals($expectedHash, hash('sha256', $savedXs))) {
-                http_response_code(409);
-                echo json_encode(['ok'=>false,'error'=>'PROFILE_SESSION_CHANGED']);
-                exit;
-            }
-            $cleared = (new ProfileCookieAuthStateStore())->clearIfVerified(
-                $profile, $actor, $expectedHash
-            );
-            echo json_encode(['ok'=>true,'updated'=>$cleared]);
-            exit;
-        }
-
-        if ($action === 'load_previous_profile_cookies') {
-            $expectedCurrentHash = strtolower(trim((string)($input['expected_current_xs_sha256'] ?? '')));
-            if (!preg_match('/^[a-f0-9]{64}$/D', $expectedCurrentHash)
-                || !method_exists($store, 'getAccountByName')
-                || !method_exists($store, 'getPreviousAccountByName')) {
-                http_response_code(409);
-                echo json_encode(['ok'=>false,'error'=>'PROFILE_BACKUP_UNAVAILABLE']);
-                exit;
-            }
-            $current = $store->getAccountByName($profile);
-            $previous = $store->getPreviousAccountByName($profile);
-            $currentCookies = $current ? RemaskCookieSession::map((array)$current->cookies) : [];
-            $previousCookies = $previous ? RemaskCookieSession::map((array)$previous->cookies) : [];
-            $currentXs = (string)($currentCookies['xs'] ?? '');
-            $previousXs = (string)($previousCookies['xs'] ?? '');
-            if (!$current || !$previous
-                || (string)($currentCookies['c_user'] ?? '') !== $actor
-                || (string)($previousCookies['c_user'] ?? '') !== $actor
-                || $currentXs === '' || $previousXs === ''
-                || !hash_equals($expectedCurrentHash, hash('sha256', $currentXs))
-                || hash('sha256', $previousXs) === $expectedCurrentHash) {
-                http_response_code(409);
-                echo json_encode(['ok'=>false,'error'=>'PROFILE_SESSION_CHANGED']);
-                exit;
-            }
-            echo json_encode([
-                'ok'=>true,
-                'cookies'=>$previousCookies,
-                'previous_xs_sha256'=>hash('sha256', $previousXs),
-            ], JSON_UNESCAPED_SLASHES);
-            exit;
-        }
-
-        if ($action === 'restore_previous_profile_cookies_verified') {
-            $expectedCurrentHash = strtolower(trim((string)($input['expected_current_xs_sha256'] ?? '')));
-            $expectedPreviousHash = strtolower(trim((string)($input['expected_previous_xs_sha256'] ?? '')));
-            $cookieInput = $input['cookies'] ?? null;
-            if (!preg_match('/^[a-f0-9]{64}$/D', $expectedCurrentHash)
-                || !preg_match('/^[a-f0-9]{64}$/D', $expectedPreviousHash)
-                || !is_array($cookieInput) || array_is_list($cookieInput)
-                || !method_exists($store, 'restorePreviousCookiesIfUnchanged')) {
-                http_response_code(409);
-                echo json_encode(['ok'=>false,'error'=>'PROFILE_BACKUP_RESTORE_UNAVAILABLE']);
-                exit;
-            }
-            if (!$store->restorePreviousCookiesIfUnchanged(
-                $profile, $actor, $expectedCurrentHash, $expectedPreviousHash, $cookieInput
-            )) {
-                http_response_code(409);
-                echo json_encode(['ok'=>false,'error'=>'PROFILE_SESSION_CHANGED']);
-                exit;
-            }
-            (new ProfileCookieAuthStateStore())->clearIfStale(
-                $profile, $actor, (string)($cookieInput['xs'] ?? '')
-            );
-            echo json_encode(['ok'=>true,'updated'=>true]);
-            exit;
-        }
 
         $expectedXs = (string)($input['expected_xs'] ?? '');
         $cookieInput = $input['cookies'] ?? null;
@@ -254,9 +130,6 @@ if (strtoupper((string)($_SERVER['REQUEST_METHOD'] ?? 'GET')) === 'POST') {
             echo json_encode(['ok'=>false,'error'=>'PROFILE_SESSION_CHANGED']);
             exit;
         }
-        (new ProfileCookieAuthStateStore())->clearIfStale(
-            $profile, $actor, (string)($cookieInput['xs'] ?? '')
-        );
         echo json_encode(['ok'=>true,'updated'=>true]);
     } catch (Throwable $e) {
         http_response_code(400);

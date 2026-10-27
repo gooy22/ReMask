@@ -9,9 +9,6 @@ import asyncio
 import json
 from contextlib import asynccontextmanager
 from http.cookiejar import Cookie
-from http.cookies import SimpleCookie
-from datetime import datetime, timezone
-from email.utils import parsedate_to_datetime
 import logging
 from typing import Any
 
@@ -22,55 +19,6 @@ from .private_http_stages import PrivateRequestStages
 
 log = logging.getLogger("remask_worker")
 
-_AUTH_SESSION_COOKIE_NAMES = frozenset({"c_user", "xs"})
-
-
-def deleted_auth_cookie_names(headers: Any, response_url: Any) -> set[str]:
-    """Return root-scope Facebook auth cookies explicitly emptied/expired by Meta.
-
-    Host-only or path-scoped cookies cannot invalidate the flat profile cookie
-    session, so they are deliberately ignored. Cookie values are never returned.
-    """
-    host = str(getattr(response_url, "host", "") or "").casefold().rstrip(".")
-    if host != "facebook.com" and not host.endswith(".facebook.com"):
-        return set()
-    try:
-        set_cookie_headers = headers.get_list("set-cookie")
-    except Exception:
-        return set()
-    revoked: set[str] = set()
-    now = datetime.now(timezone.utc)
-    for header in set_cookie_headers:
-        parsed = SimpleCookie()
-        try:
-            parsed.load(str(header))
-        except Exception:
-            continue
-        for name, morsel in parsed.items():
-            if name not in _AUTH_SESSION_COOKIE_NAMES:
-                continue
-            domain = str(morsel["domain"] or "").lstrip(".").casefold().rstrip(".")
-            if domain != "facebook.com" or str(morsel["path"] or "") != "/":
-                continue
-            expired = str(morsel.value) == ""
-            max_age = str(morsel["max-age"] or "").strip()
-            if max_age:
-                try:
-                    expired = expired or int(max_age) <= 0
-                except ValueError:
-                    pass
-            expires = str(morsel["expires"] or "").strip()
-            if expires:
-                try:
-                    expiry = parsedate_to_datetime(expires)
-                    if expiry.tzinfo is None:
-                        expiry = expiry.replace(tzinfo=timezone.utc)
-                    expired = expired or expiry <= now
-                except (TypeError, ValueError, OverflowError):
-                    pass
-            if expired:
-                revoked.add(name)
-    return revoked
 # HTTPX's INFO messages include full redirect URLs (including session IDs).
 # This transport emits only method, host, status and negotiated protocol below.
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -150,7 +98,6 @@ class PrivateHttpClient:
         self.proxy = proxy
         self.profile_name = profile_name
         self._actor_id = str(cookies.get('c_user') or '')
-        self._auth_cookie_revocations: set[str] = set()
         self.direct_test_until = direct_test_deadline(profile_name, self._actor_id) if not proxy else 0
         self.timeout_seconds = timeout_seconds
         limits = httpx.Limits(max_connections=pool_size,
@@ -174,36 +121,18 @@ class PrivateHttpClient:
         facebook_transport = httpx.AsyncHTTPTransport(
             proxy=proxy, http1=False, http2=True, retries=0, limits=limits, trust_env=False,
         )
-        async def observe_response(response):
-            self._auth_cookie_revocations.update(
-                deleted_auth_cookie_names(response.headers, response.url)
-            )
-            await response_hook(response)
-
         self._client = httpx.AsyncClient(
             transport=transport, mounts={"https://*facebook.com": facebook_transport,
                 "https://*fbcdn.net": facebook_transport}, http2=True, trust_env=False,
             timeout=httpx.Timeout(timeout_seconds), cookies=jar,
             headers={"User-Agent": user_agent,
                      "Accept-Language": "en-US,en;q=0.9", "Accept": "*/*"},
-            event_hooks={'request': [request_hook], 'response': [observe_response]},
+            event_hooks={'request': [request_hook], 'response': [response_hook]},
         )
 
     @property
     def closed(self) -> bool:
         return self._client.is_closed
-
-    @property
-    def facebook_auth_cookie_revoked(self) -> bool:
-        # A deletion header is only a candidate revocation. Redirect chains can
-        # delete and then restore a root auth cookie; classify the final jar.
-        if not self._auth_cookie_revocations:
-            return False
-        final_cookies = self.facebook_cookie_snapshot()
-        return (
-            final_cookies.get("c_user") != self._actor_id
-            or not str(final_cookies.get("xs") or "").strip()
-        )
 
     def facebook_cookie_snapshot(self) -> dict[str, str]:
         """Return the current Facebook cookie jar without exposing it to logs."""
