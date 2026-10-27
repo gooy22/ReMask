@@ -387,6 +387,18 @@ class FacebookWebSession:
             )
         }
 
+    @staticmethod
+    def _restore_invalid_profile_cookie_snapshot(session: Any, expected_actor: str) -> None:
+        snapshot_fn = getattr(session, "facebook_cookie_snapshot", None)
+        restore_fn = getattr(session, "restore_profile_cookies", None)
+        if not callable(snapshot_fn) or not callable(restore_fn):
+            return
+        snapshot = snapshot_fn()
+        actor = str(snapshot.get("c_user") or snapshot.get("i_user") or "").strip()
+        if (actor != str(expected_actor).strip()
+                or not str(snapshot.get("xs") or "").strip()):
+            restore_fn()
+
     @classmethod
     def _first_match(
         cls,
@@ -714,6 +726,7 @@ class FacebookWebSession:
                     transport_stage="business_auth_precheck",
                 ) from exc
 
+            self._restore_invalid_profile_cookie_snapshot(session, expected_actor)
             final_url = str(response.url)
             parts = urlsplit(final_url)
             path = parts.path.lower()
@@ -879,6 +892,7 @@ class FacebookWebSession:
                         allow_redirects=True, request_timeout_seconds=max(30, self.timeout_seconds),
                     ), 16 * 1024 * 1024 + 1, retry_read=True, reader=lambda response: response.text())
                     candidate_url = str(response.url)
+                    self._restore_invalid_profile_cookie_snapshot(session, actor_id)
 
                     if response.status >= 500:
                         attempts.append(
@@ -976,6 +990,7 @@ class FacebookWebSession:
                     actor_id,
                     attempts,
                 )
+                self._restore_invalid_profile_cookie_snapshot(session, actor_id)
                 if refresh_token:
                     fb_dtsg = refresh_token
                     bootstrap_source = refresh_source
