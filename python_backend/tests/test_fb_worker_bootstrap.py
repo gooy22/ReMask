@@ -3,7 +3,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 import httpx
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from fb_worker import AuthenticationError, RemoteRequestError, FacebookBootstrap, FacebookWebSession, WebProfile, _has_login_form
 
@@ -724,6 +724,32 @@ class PreviousSessionReadRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(session._profile_session_identity_verified)
         self.assertIn(("READ_RK", "business", "account", actor, "fixture"),
                       session._business_read_proofs)
+
+    async def test_scoped_read_recovers_an_auth_gate_before_sending_its_post(self):
+        session = FacebookWebSession(WebProfile(
+            name="15", cookies={"c_user": "123456789", "xs": "fixture-current"},
+            proxy="http://fixture-proxy:80", user_agent="Fixture",
+        ))
+        session._validate_business_loginpage_probe = Mock(return_value="READ_RK")
+        session.bootstrap = AsyncMock(side_effect=AuthenticationError("fixture auth gate"))
+        session._retry_scoped_read_with_previous_session = AsyncMock(
+            return_value={"data": {"adaccounts": []}},
+        )
+        session._ensure_session = AsyncMock()
+
+        result = await session.graphql(
+            "fixture-doc-id",
+            {"businessID": "987654321"},
+            friendly_name="BusinessAdAccounts",
+            endpoint_url="https://business.facebook.com/api/graphql/",
+            business_context_id="987654321",
+            business_loginpage_probe="READ_RK",
+            read_timeout_seconds=30,
+        )
+
+        self.assertEqual(result, {"data": {"adaccounts": []}})
+        session._retry_scoped_read_with_previous_session.assert_awaited_once()
+        session._ensure_session.assert_not_awaited()
 
     async def test_previous_session_cannot_recover_mutations_or_another_actor(self):
         actor = "123456789"
