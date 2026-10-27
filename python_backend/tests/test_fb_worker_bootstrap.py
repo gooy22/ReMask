@@ -3,7 +3,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 import httpx
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from fb_worker import AuthenticationError, RemoteRequestError, FacebookBootstrap, FacebookWebSession, WebProfile, _has_login_form
 
@@ -664,3 +664,88 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PreviousSessionReadRecoveryTests(unittest.IsolatedAsyncioTestCase):
+    class Client:
+        def __init__(self, cookies):
+            self.cookies = dict(cookies)
+            self.closed = False
+
+        def facebook_cookie_snapshot(self):
+            return dict(self.cookies)
+
+        async def close(self):
+            self.closed = True
+
+    async def test_read_recovery_adopts_only_verified_same_actor_session(self):
+        actor = "123456789"
+        current_cookies = {"c_user": actor, "xs": "fixture-current"}
+        previous_cookies = {"c_user": actor, "xs": "fixture-previous"}
+        refreshed_cookies = {"c_user": actor, "xs": "fixture-refreshed"}
+        session = FacebookWebSession(WebProfile(
+            name="15", cookies=dict(current_cookies), proxy="http://fixture-proxy:80",
+            user_agent="Fixture", recovery_cookies=dict(previous_cookies),
+        ))
+        old_client = self.Client(current_cookies)
+        new_client = self.Client(refreshed_cookies)
+        session.session = old_client
+        verified = SimpleNamespace(
+            profile=SimpleNamespace(cookies=dict(previous_cookies)),
+            session=new_client,
+            _bootstrap=FacebookBootstrap(
+                fb_dtsg="fixture-token", actor_id=actor, profile_actor_verified=True,
+            ),
+            _profile_session_identity_verified=True,
+            _business_read_proofs={("READ_RK", "business", "account", actor, "fixture"): 1.0},
+            _reviewed_module_ids={"READ_RK": "fixture-doc"},
+            bootstrap=AsyncMock(),
+            graphql=AsyncMock(return_value={"data": {"adaccounts": []}}),
+            close=AsyncMock(),
+        )
+        with patch("fb_worker.FacebookWebSession", return_value=verified):
+            result = await session._retry_scoped_read_with_previous_session(
+                "26033539376343649",
+                {"businessID": "987654321"},
+                friendly_name="BusinessAdAccounts",
+                endpoint_url="https://business.facebook.com/api/graphql/",
+                request_envelope=None,
+                business_context_id="987654321",
+                business_loginpage_probe="READ_RK",
+                read_timeout_seconds=30,
+            )
+
+        self.assertEqual(result, {"data": {"adaccounts": []}})
+        verified.bootstrap.assert_awaited_once_with(
+            allow_business_loginpage_probe=True, require_actor_match=True,
+        )
+        verified.graphql.assert_awaited_once()
+        self.assertEqual(verified.graphql.await_args.kwargs["business_loginpage_probe"], "READ_RK")
+        self.assertEqual(session.profile.cookies, refreshed_cookies)
+        self.assertIs(session.session, new_client)
+        self.assertIsNone(session.profile.recovery_cookies)
+        self.assertTrue(old_client.closed)
+        self.assertTrue(session._profile_session_identity_verified)
+        self.assertIn(("READ_RK", "business", "account", actor, "fixture"),
+                      session._business_read_proofs)
+
+    async def test_previous_session_cannot_recover_mutations_or_another_actor(self):
+        actor = "123456789"
+        session = FacebookWebSession(WebProfile(
+            name="15", cookies={"c_user": actor, "xs": "fixture-current"},
+            proxy="http://fixture-proxy:80", user_agent="Fixture",
+            recovery_cookies={"c_user": "999999999", "xs": "fixture-previous"},
+        ))
+        with patch("fb_worker.FacebookWebSession") as construct:
+            result = await session._retry_scoped_read_with_previous_session(
+                "fixture-doc",
+                {"businessID": "987654321"},
+                friendly_name="CreateAdAccount",
+                endpoint_url="https://business.facebook.com/api/graphql/",
+                request_envelope=None,
+                business_context_id="987654321",
+                business_loginpage_probe="CREATE_RK",
+                read_timeout_seconds=30,
+            )
+        self.assertIsNone(result)
+        construct.assert_not_called()
