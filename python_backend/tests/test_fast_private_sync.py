@@ -13,6 +13,32 @@ class FastPrivateSyncTests(unittest.IsolatedAsyncioTestCase):
         self.web.fetch_text = AsyncMock()
         self.web.refresh_reviewed_modules = AsyncMock()
 
+    async def test_exact_pages_candidate_uses_profile_bound_loginpage_probe(self):
+        from types import SimpleNamespace
+        from app.facebook_docids import DocIdCandidate
+        candidate = DocIdCandidate(
+            operation="LIST_PAGES", doc_id="123456789012345",
+            friendly_name="AccountQualityUserPagesWrapper_UserPageQuery",
+            endpoint_url="https://www.facebook.com/api/graphql/",
+            variables_mode="account_quality_user_pages_v1",
+            source="runtime_bundle", priority=1, enabled=True,
+        )
+        self.web.profile = SimpleNamespace(cookies={"c_user": "123456789"})
+        self.web.graphql.return_value = {"data": {}}
+        with patch("app.facebook_page_discovery.list_candidates", return_value=[candidate]), patch(
+                "app.facebook_page_discovery.record_result") as record:
+            result = await list_pages_via_private_graphql(
+                self.web, allow_runtime_discovery=False,
+            )
+        self.assertEqual(result.pages, [])
+        self.assertFalse(result.inventory_complete)
+        self.web.graphql.assert_awaited_once()
+        args, kwargs = self.web.graphql.await_args
+        self.assertEqual(args[1], {"assetOwnerId": "123456789"})
+        self.assertEqual(kwargs["business_loginpage_probe"], "LIST_PAGES")
+        self.assertEqual(kwargs["read_timeout_seconds"], 30)
+        record.assert_awaited_once() if hasattr(record, "assert_awaited_once") else record.assert_called_once()
+
     async def snapshot(self):
         return await private_inventory_snapshot(
             self.web,
