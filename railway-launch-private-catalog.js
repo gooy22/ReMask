@@ -1,5 +1,19 @@
 /* REMASK_PRIVATE_LAUNCH_CATALOG_V1 */
 /* REMASK_PRIVATE_LAUNCH_CATALOG_V2 */
+function remaskPrivatePageReadFailure(error, profile, accountId) {
+    const rawCode=String(error?.code||error?.payload?.code||error?.payload?.error?.code||error?.error?.code||error?.data?.error?.code||'');
+    const rawMessage=String(error?.message||error?.payload?.message||error?.payload?.error?.message||error||'');
+    const gate=(rawCode+' '+rawMessage).match(/(?:\b|_)(CHECKPOINT_REQUIRED|TWO_FACTOR_REQUIRED|SESSION_EXPIRED|BUSINESS_LOGIN_GATE)\b/)?.[1];
+    const profileLabel=String(profile||'?').replace(/[^0-9]/g,'').slice(0,12)||'?';
+    const accountLabel=String(accountId||'').replace(/^act_/,'').replace(/[^0-9]/g,'').slice(0,30)||'?';
+    const scope=`Профиль ${profileLabel} / РК ${accountLabel}`;
+    if(gate==='BUSINESS_LOGIN_GATE')
+        return `${scope}: Meta вернула BUSINESS_LOGIN_GATE; список FP не загружен.`;
+    if(gate)
+        return `${scope}: требуется проверка Facebook-сессии (${gate}); список FP не загружен.`;
+    const code=rawCode.match(/^[A-Z0-9_]{1,100}$/)?.[0]||'PAGE_READ_FAILED';
+    return `${scope}: не удалось загрузить FP (${code}).`;
+}
 function remaskFundingState(info) {
     if (!info) return {label:'NOT LOADED',cls:'muted'};
     if (info.error) return {label:'ERROR',cls:'job-failed'};
