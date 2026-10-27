@@ -65,6 +65,7 @@ class WebProfile:
     cookies: dict[str, str]
     proxy: str | None
     user_agent: str
+    recovery_cookies: dict[str, str] | None = field(default=None, repr=False)
 
 
 @dataclass(slots=True)
@@ -154,6 +155,7 @@ class FacebookWebSession:
         self._profile_session_identity_verified = False
         self._business_read_proofs: dict[tuple[str, str, str, str, str], float] = {}
         self._graphql_request_counter = 0
+        self._previous_recovery_attempted = False
 
     # ------------------------------------------------------------------
     # Profile HTTP/2 lifecycle
@@ -1658,6 +1660,114 @@ class FacebookWebSession:
                     reject()
         return operation
 
+    async def _retry_scoped_read_with_previous_session(
+        self,
+        doc_id: str,
+        variables: dict[str, Any],
+        *,
+        friendly_name: str,
+        endpoint_url: str | None,
+        request_envelope: dict[str, Any] | None,
+        business_context_id: str,
+        business_loginpage_probe: str,
+        read_timeout_seconds: float,
+    ) -> dict[str, Any] | None:
+        """Retry one exact inventory read with a verified same-actor prior snapshot."""
+        allowed_reads = {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS"}
+        if (business_loginpage_probe not in allowed_reads
+                or self._previous_recovery_attempted):
+            return None
+        self._previous_recovery_attempted = True
+        raw = getattr(self.profile, "recovery_cookies", None)
+        actor = str(self.profile.cookies.get("c_user") or "").strip()
+        if not isinstance(raw, dict) or not actor.isdigit():
+            return None
+        candidate_cookies = dict(raw)
+        candidate_actor = str(candidate_cookies.get("c_user") or "").strip()
+        current_xs = str(self.profile.cookies.get("xs") or "").strip()
+        candidate_xs = str(candidate_cookies.get("xs") or "").strip()
+        if (candidate_actor != actor or not current_xs or not candidate_xs
+                or candidate_xs == current_xs
+                or any(not isinstance(key, str) or not isinstance(value, str)
+                       for key, value in candidate_cookies.items())):
+            return None
+
+        # Do not retain the spare auth material after starting its single,
+        # actor-verified read attempt.
+        self.profile.recovery_cookies = None
+        previous = FacebookWebSession(
+            WebProfile(
+                name=self.profile.name,
+                cookies=candidate_cookies,
+                proxy=self.profile.proxy,
+                user_agent=self.profile.user_agent,
+            ),
+            timeout_seconds=self.timeout_seconds,
+            pool_size=self.pool_size,
+        )
+        previous.defer_module_refresh = True
+        try:
+            await previous.bootstrap(
+                allow_business_loginpage_probe=True,
+                require_actor_match=True,
+            )
+            if (not previous._profile_session_identity_verified
+                    or not previous._bootstrap
+                    or previous._bootstrap.actor_id != actor):
+                return None
+            result = await previous.graphql(
+                doc_id,
+                dict(variables),
+                friendly_name=friendly_name,
+                endpoint_url=endpoint_url,
+                request_envelope=request_envelope,
+                business_context_id=business_context_id,
+                read_timeout_seconds=read_timeout_seconds,
+                business_loginpage_probe=business_loginpage_probe,
+            )
+            client = previous.session
+            if (not previous._profile_session_identity_verified
+                    or not previous._bootstrap
+                    or previous._bootstrap.actor_id != actor
+                    or client is None or client.closed):
+                return None
+            refreshed = client.facebook_cookie_snapshot()
+            if (str(refreshed.get("c_user") or "") != actor
+                    or not str(refreshed.get("xs") or "").strip()):
+                return None
+            previous.profile.cookies = dict(refreshed)
+
+            async with self._session_lock:
+                old = self.session
+                if old is not None and old is not client and not old.closed:
+                    await old.close()
+                self.session = client
+                previous.session = None
+                self.profile.cookies = dict(refreshed)
+                self._bootstrap = previous._bootstrap
+                self._profile_session_identity_verified = True
+                self._business_read_proofs.update(previous._business_read_proofs)
+                self._reviewed_module_ids = dict(
+                    getattr(previous, "_reviewed_module_ids", {}) or {}
+                )
+            log.info(
+                "[%s] verified previous same-actor session recovered for scoped read operation=%s",
+                self.profile.name, business_loginpage_probe,
+            )
+            return result
+        except asyncio.CancelledError:
+            await previous.close()
+            raise
+        except Exception as exc:
+            log.info(
+                "[%s] previous same-actor session read recovery unavailable kind=%s",
+                self.profile.name, type(exc).__name__,
+            )
+            return None
+        finally:
+            if previous.session is not None:
+                await previous.close()
+
     async def graphql(
         self,
         doc_id: str,
@@ -1950,6 +2060,7 @@ class FacebookWebSession:
                             "checkpoint_redirect" if "/checkpoint" in urlsplit(location).path.lower() else "login_redirect"}]}
                         error.transport_stage = "graphql_redirect"
                         error.request_may_have_been_sent = True
+                        error.request_rejected = True
                         raise error
 
                 payload = self._decode_graphql_body(raw_body)
@@ -2000,6 +2111,24 @@ class FacebookWebSession:
                 exc.request_may_have_been_sent = request_may_have_been_sent
             if not hasattr(exc, "transport_stage"):
                 exc.transport_stage = transport_stage
+            if (scoped_probe in {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS"}
+                    and before_submit is None and multipart_files is None
+                    and read_timeout_seconds == 30
+                    and bool(getattr(exc, "request_rejected", False))
+                    and str(getattr(exc, "transport_stage", ""))
+                    in {"graphql_response", "graphql_redirect"}):
+                recovered = await self._retry_scoped_read_with_previous_session(
+                    effective_doc_id,
+                    variables,
+                    friendly_name=friendly_name,
+                    endpoint_url=endpoint_url,
+                    request_envelope=request_envelope,
+                    business_context_id=business_context_id,
+                    business_loginpage_probe=business_loginpage_probe,
+                    read_timeout_seconds=float(read_timeout_seconds),
+                )
+                if recovered is not None:
+                    return recovered
             raise
 
         except RemoteRequestError as exc:
