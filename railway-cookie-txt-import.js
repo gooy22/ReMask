@@ -2,11 +2,14 @@
 (() => {
   'use strict';
   const labels = {ready:'Готов к импорту', imported:'Импортирован', already_exists:'Уже есть в системе',
-    duplicate_in_file:'Повтор в файле', error:'Ошибка'};
+    session_refreshed:'Cookies обновлены', duplicate_in_file:'Повтор в файле', error:'Ошибка'};
   const errors = {COOKIE_JSON_MISSING:'Не найден JSON cookies', COOKIE_JSON_INVALID:'Повреждён JSON cookies',
     COOKIE_SESSION_INVALID:'Некорректные c_user / xs или домен cookies', LOGIN_COOKIE_MISMATCH:'Логин не совпадает с c_user',
     MULTIPLE_COOKIE_SESSIONS:'Несколько сессий в одной записи', CONFLICTING_COOKIE_SESSIONS:'Разные сессии одного аккаунта',
-    TXT_SAVE_FAILED:'Сохранение остановлено. Повторный импорт проверит уже сохранённые профили.'};
+    TXT_SAVE_FAILED:'Сохранение остановлено. Повторный импорт проверит уже сохранённые профили.',
+    AMBIGUOUS_EXISTING_PROFILE:'ID найден в нескольких профилях. Cookies не обновлены.',
+    EXISTING_PROFILE_CHANGED:'Профиль изменился после распознавания. Cookies не обновлены.',
+    SESSION_REFRESH_SAVE_FAILED:'Не удалось сохранить cookies профиля.'};
   let dialog, raw = '', preview = null, busy = false;
 
   async function request(action, extra = {}) {
@@ -21,7 +24,7 @@
   const field = id => dialog.querySelector('#' + id);
   function setBusy(value) {
     busy = value;
-    for (const id of ['txtFile','txtProxy','txtProxySource','txtDirect','txtPreview','txtClose','txtSelectAll']) field(id).disabled = value;
+    for (const id of ['txtFile','txtProxy','txtProxySource','txtDirect','txtRefreshExisting','txtPreview','txtClose','txtSelectAll']) field(id).disabled = value;
     field('txtCommit').disabled = value || !preview || !dialog.querySelector('input[data-txt-line]:checked');
     dialog.querySelectorAll('input[data-txt-line]').forEach(input => { input.disabled = value; });
   }
@@ -46,9 +49,13 @@
     for (const record of data.records) {
       const row = document.createElement('tr');
       const select = document.createElement('td');
-      if (selectable && record.status === 'ready') {
-        const box = document.createElement('input'); box.type = 'checkbox'; box.checked = true;
-        box.dataset.txtLine = String(record.line); box.setAttribute('aria-label', 'Импортировать строку ' + record.line);
+      const canImport = selectable && record.status === 'ready';
+      const canRefresh = selectable && field('txtRefreshExisting').checked
+        && record.status === 'already_exists' && record.refreshable === true;
+      if (canImport || canRefresh) {
+        const box = document.createElement('input'); box.type = 'checkbox'; box.checked = canImport;
+        box.dataset.txtLine = String(record.line);
+        box.setAttribute('aria-label', (canRefresh ? 'Обновить cookies строки ' : 'Импортировать строку ') + record.line);
         box.addEventListener('change', () => setBusy(false)); select.append(box);
       }
       row.append(select);
@@ -60,8 +67,8 @@
     }
     field('txtSelectAll').checked = selectable && data.ready > 0;
     field('txtStatus').textContent = selectable
-      ? `Записей: ${data.total}. Готовы: ${data.ready}. Пропуски: ${data.skipped}. Ошибки: ${data.errors}. Номера уточняются при сохранении.`
-      : `Импортировано: ${data.imported}. Пропуски: ${data.skipped}. Ошибки: ${data.errors}. Обработано: ${data.processed} из ${data.total}. Facebook-сессии ещё не проверены.`;
+      ? `Записей: ${data.total}. Готовы к импорту: ${data.ready}. Совпавшие профили: ${(data.records||[]).filter(r=>r.refreshable).length}. Пропуски: ${data.skipped}. Ошибки: ${data.errors}.`
+      : `Импортировано: ${data.imported}. Cookies обновлено: ${data.refreshed||0}. Пропуски: ${data.skipped}. Ошибки: ${data.errors}. Обработано: ${data.processed} из ${data.total}. Вход в Facebook не проверен.`;
   }
   function createDialog() {
     dialog = document.createElement('dialog'); dialog.id = 'remaskTxtDialog';
@@ -71,19 +78,31 @@
       <p>Логин и пароль отделяются от JSON cookies автоматически. Аккаунт определяется по c_user. Пароль и 2FA не сохраняются.</p>
       <div style="display:grid;gap:12px"><label>TXT файл (UTF-8, до 2 МБ, до 500 записей)<br><input id="txtFile" type="file" accept=".txt,text/plain"></label>
       <label>Сохранённый прокси<br><select id="txtProxySource" style="width:100%"><option value="">Сначала распознайте файл</option></select></label>
-      <label>Прокси для выбранных аккаунтов<br><input id="txtProxy" type="password" autocomplete="off" placeholder="http:ip:port:login:password" style="width:100%"></label><label><input id="txtDirect" type="checkbox"> Без прокси: разрешить тест на 2 часа для одного выбранного аккаунта</label></div>
-      <p>Сначала распознай файл, затем выбери записи для импорта. Дубликаты пропускаются. Проверка формата не подтверждает вход в Facebook.</p>
+      <label>Прокси для выбранных аккаунтов<br><input id="txtProxy" type="password" autocomplete="off" placeholder="http:ip:port:login:password" style="width:100%"></label><label><input id="txtDirect" type="checkbox"> Без прокси: разрешить тест на 2 часа для одного выбранного аккаунта</label>
+      <label><input id="txtRefreshExisting" type="checkbox"> Обновить cookies у выбранных профилей, если Facebook ID найден ровно один раз</label></div>
+      <p>Совпавшие профили по умолчанию пропускаются. Обновление заменит только cookies и сохранит имя, токен, dtsg и прокси. Неоднозначные совпадения пропускаются. Cookies после сохранения ещё нужно проверить через Sync.</p>
       <button type="button" id="txtPreview">Распознать файл</button>
       <p id="txtStatus" role="status" aria-live="polite"></p>
       <div style="max-height:38vh;overflow:auto"><table style="width:100%;text-align:left"><thead><tr>
-      <th><input id="txtSelectAll" type="checkbox" aria-label="Выбрать все готовые записи"></th><th>Строка</th><th>Facebook ID</th><th>№ профиля</th><th>Результат</th>
+      <th><input id="txtSelectAll" type="checkbox" aria-label="Выбрать все доступные записи"></th><th>Строка</th><th>Facebook ID</th><th>№ профиля</th><th>Результат</th>
       </tr></thead><tbody id="txtResults"></tbody></table></div>
-      <div style="display:flex;gap:12px;margin-top:18px"><button type="button" id="txtCommit" disabled>Импортировать выбранные</button><button type="button" id="txtClose">Закрыть</button></div>`;
+      <div style="display:flex;gap:12px;margin-top:18px"><button type="button" id="txtCommit" disabled>Применить к выбранным</button><button type="button" id="txtClose">Закрыть</button></div>`;
     document.body.append(dialog);
     dialog.addEventListener('cancel', event => { if (busy) event.preventDefault(); });
-    dialog.addEventListener('close', () => { clear(); field('txtFile').value = ''; field('txtProxy').value = ''; field('txtProxySource').value = ''; field('txtDirect').checked = false; });
+    dialog.addEventListener('close', () => { clear(); field('txtFile').value = ''; field('txtProxy').value = ''; field('txtProxySource').value = ''; field('txtDirect').checked = false; field('txtRefreshExisting').checked = false; });
     field('txtClose').addEventListener('click', () => dialog.close());
     field('txtFile').addEventListener('change', clear);
+    field('txtRefreshExisting').addEventListener('change', () => {
+      const selected = new Set([...dialog.querySelectorAll('input[data-txt-line]:checked')]
+        .map(box => Number(box.dataset.txtLine)));
+      if (preview) {
+        render(preview, true);
+        dialog.querySelectorAll('input[data-txt-line]').forEach(box => {
+          box.checked = selected.has(Number(box.dataset.txtLine));
+        });
+      }
+      setBusy(false);
+    });
     field('txtSelectAll').addEventListener('change', () => {
       dialog.querySelectorAll('input[data-txt-line]').forEach(box => { box.checked = field('txtSelectAll').checked; });
       setBusy(false);
@@ -107,17 +126,22 @@
       const proxy = field('txtProxy').value.trim();
       const source_profile=field('txtProxySource').value;
       const direct = field('txtDirect').checked === true;
+      const refreshExisting = field('txtRefreshExisting').checked === true;
+      const selectedRecords = preview.records.filter(record => selected_lines.includes(Number(record.line)));
+      const needsProxy = selectedRecords.some(record => record.status === 'ready');
+      const refreshing = selectedRecords.some(record => record.status === 'already_exists' && record.refreshable === true);
       if(source_profile&&(proxy||direct)){field('txtStatus').textContent='Выберите один способ назначения прокси.';return;}
-      if (direct && (proxy || selected_lines.length !== 1)) { field('txtStatus').textContent = 'Без прокси выберите ровно один аккаунт и очистите прокси.'; return; }
-      if (!proxy && !source_profile && !direct) { field('txtStatus').textContent = 'Выберите сохранённый прокси, укажите новый или включите тест без прокси.'; return; }
+      if (direct && (proxy || selected_lines.length !== 1 || refreshing)) { field('txtStatus').textContent = 'Без прокси выберите ровно один новый аккаунт и очистите прокси.'; return; }
+      if (needsProxy && !proxy && !source_profile && !direct) { field('txtStatus').textContent = 'Для новых аккаунтов выберите сохранённый прокси, укажите новый или включите тест без прокси.'; return; }
       if (!selected_lines.length) return;
       setBusy(true);
       try {
-        const result = await request('import_txt', {selected_lines, proxy, source_profile, allow_direct_test:direct});
+        const result = await request('import_txt', {selected_lines, proxy, source_profile, allow_direct_test:direct,
+          refresh_existing_sessions:refreshExisting});
         render(result, false); raw = ''; preview = null; field('txtProxy').value = '';
         field('txtFile').value = '';
         // Refresh Workspace after closing, while keeping the import result reviewable.
-        if (result.imported > 0) dialog.addEventListener('close', () => window.location.reload(), {once:true});
+        if (result.imported > 0 || result.refreshed > 0) dialog.addEventListener('close', () => window.location.reload(), {once:true});
       } catch (error) { field('txtStatus').textContent = error.message; }
       finally { setBusy(false); }
     });

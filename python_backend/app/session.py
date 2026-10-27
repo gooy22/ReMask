@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -40,6 +41,7 @@ class ProfileContextError(RuntimeError):
             "session_expired": "SESSION_EXPIRED",
             "checkpoint_required": "CHECKPOINT_REQUIRED",
             "two_factor_required": "TWO_FACTOR_REQUIRED",
+            "auth_gate_unclassified": "META_AUTH_GATE_UNCLASSIFIED",
         }.get(self.category, "PROFILE_CONTEXT_ERROR")
 
 
@@ -484,14 +486,16 @@ class ProfileResolver:
             ) from failure
 
         if auth_gate_code:
-            category = {
+            known_gates = {
                 "BUSINESS_LOGIN_GATE": "business_login_gate",
                 "SESSION_EXPIRED": "session_expired",
                 "CHECKPOINT_REQUIRED": "checkpoint_required",
                 "TWO_FACTOR_REQUIRED": "two_factor_required",
-            }.get(auth_gate_code, "auth_revalidation_unconfirmed")
+            }
+            category = known_gates.get(auth_gate_code, "auth_gate_unclassified")
+            safe_gate_code = re.sub(r"[^A-Z0-9_]", "_", str(auth_gate_code).upper())[:48] or "EMPTY"
             raise ProfileContextError(
-                "Meta returned an authentication gate during read-only revalidation.",
+                f"Meta returned authentication gate ({safe_gate_code}) during read-only revalidation.",
                 retryable=False, category=category,
             )
         if bool(getattr(web, "auth_cookie_revoked", False)):
