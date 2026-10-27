@@ -556,7 +556,7 @@ async def list_pages_via_private_graphql(
         if (candidate.friendly_name == "AccountQualityUserPagesWrapper_UserPageQuery"
                 and candidate.endpoint_url == "https://www.facebook.com/api/graphql/"
                 and candidate.variables_mode == "account_quality_user_pages_v1"
-                and re.fullmatch(r"\\d{5,40}", candidate.doc_id)
+                and re.fullmatch(r"\d{5,40}", candidate.doc_id)
                 and cookie_actor.isdigit()):
             actor_id = cookie_actor
             scoped_probe = "LIST_PAGES"
