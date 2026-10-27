@@ -51,17 +51,52 @@ class _Action:
         self.store = kwargs.get("provisioning_state")
         self.step = step
         self.prior = kwargs.get("step_state")
+        self.profile_resolver = kwargs.get("profile_resolver")
         self.saved = {}
         if not self.profile or not self.item or not isinstance(self.store, ProvisioningStateStore):
             raise ProvisioningError("INTERNAL_STATE_ERROR", "Private action requires durable profile/job state.")
 
+    async def _close_read_session(self):
+        close = getattr(self.session, "close", None)
+        if not callable(close):
+            return
+        try:
+            await close()
+        except Exception as exc:
+            log.info("[%s] private action close after auth gate failed type=%s",
+                self.profile, type(exc).__name__)
+
+    async def read(self, operation):
+        async def once():
+            self.web = await self.session.facebook_web()
+            self.web.private_only = True
+            try:
+                return await operation(self.web)
+            except ProvisioningError as exc:
+                if exc.code in {"BUSINESS_LOGIN_GATE", "SESSION_EXPIRED"}:
+                    await self._close_read_session()
+                raise
+            except Exception as exc:
+                from ..private_auth import private_auth_error
+                auth = private_auth_error(exc)
+                if auth is None:
+                    raise
+                if auth.code in {"BUSINESS_LOGIN_GATE", "SESSION_EXPIRED"}:
+                    await self._close_read_session()
+                raise auth from None
+
+        if self.profile_resolver is None:
+            return await once()
+        from ..session_auth_refresh import read_with_saved_auth_refresh
+        return await read_with_saved_auth_refresh(
+            self.profile_resolver, self.context, once,
+        )
+
     async def open(self):
         prior = self.prior if isinstance(self.prior, dict) else await self.store.step(self.item, self.step)
         self.saved = dict((prior or {}).get("result") or {})
-        self.web = await self.session.facebook_web()
-        self.web.private_only = True
         current = _clean((getattr(self.context, 'cookies', {}) or {}).get('c_user'))
-        bootstrap = await self.web.bootstrap()
+        bootstrap = await self.read(lambda web: web.bootstrap())
         if not current.isdigit() or _clean(getattr(bootstrap, 'actor_id', '')) != current:
             raise ProvisioningError('SESSION_EXPIRED', 'Static action actor does not match the selected profile; no POST was sent.', retryable=True)
         return self
@@ -142,7 +177,9 @@ async def _rk_inventory(web, business, name, expected=""):
 async def _verify_rk(action, business, name, expected):
     for attempt in range(3):
         try:
-            proof = await _rk_inventory(action.web, business, name, expected)
+            async def read_inventory(web):
+                return await _rk_inventory(web, business, name, expected)
+            proof = await action.read(read_inventory)
             if proof["id"]:
                 return proof
         except ProvisioningError as exc:
@@ -177,7 +214,9 @@ async def business_handler(session, params, state, *args, **kwargs):
     if action.saved.get("business_name") and _clean(action.saved["business_name"]).casefold() != name.casefold():
         raise ProvisioningError("BUSINESS_CHECKPOINT_MISMATCH", "Saved CREATE belongs to another BM name.")
     expected = _id(action.saved.get("business_id") or action.saved.get("create_response_business_id") or state.get("business_id"))
-    before = await asyncio.wait_for(_business_inventory(action.web, expected), timeout=30)
+    async def read_business(web):
+        return await asyncio.wait_for(_business_inventory(web, expected), timeout=30)
+    before = await action.read(read_business)
     await action.checkpoint({"activity": "BM_PRIVATE_INVENTORY_PRECHECK",
         "inventory_verification": before.get("diagnostics", []), "inventory_complete": before["complete"]})
     named = [business for business, row_name in before["rows"].items() if row_name.casefold() == name.casefold()]
@@ -220,7 +259,9 @@ async def business_handler(session, params, state, *args, **kwargs):
             raise ProvisioningError(getattr(exc, "code", "PRIVATE_BM_NOT_SUBMITTED"), str(exc), retryable=bool(getattr(exc, "retryable", True))) from exc
         await action.checkpoint({"phase": "CREATE_RESULT_UNKNOWN"})
     for attempt in range(3):
-        proof = await asyncio.wait_for(_business_inventory(action.web, expected), timeout=30)
+        async def read_business_proof(web):
+            return await asyncio.wait_for(_business_inventory(web, expected), timeout=30)
+        proof = await action.read(read_business_proof)
         matches = [business for business, row_name in proof["rows"].items()
             if row_name.casefold() == name.casefold() and business not in before["rows"]]
         found = expected if expected in proof["rows"] else (matches[0] if not expected and len(matches) == 1 else "")
@@ -263,7 +304,9 @@ async def ad_account_handler(session, params, state, *args, **kwargs):
         raise ProvisioningError("AD_ACCOUNT_CHECKPOINT_MISMATCH", "An existing or pending RK operation in this BM belongs to another name; verify that operation first.")
     expected = _id(action.saved.get("ad_account_id") or action.saved.get("create_response_ad_account_id") or state.get("ad_account_id"))
     try:
-        before = await _rk_inventory(action.web, business, name, expected)
+        async def read_rk(web):
+            return await _rk_inventory(web, business, name, expected)
+        before = await action.read(read_rk)
     except ProvisioningError as exc:
         if getattr(exc, "inventory_diagnostics", None):
             await action.checkpoint({"inventory_verification": exc.inventory_diagnostics,
