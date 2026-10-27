@@ -1220,20 +1220,46 @@ async def profile_preflight(profile_id: str, purpose: str = 'business'):
     try:
         if purpose == 'business':
             from app.private_business_preflight import private_business_preflight
-            async with ProfileSession(context) as profile_session:
-                try:
-                    result = await private_business_preflight(profile_session, context, clean_profile)
-                except ProxyCheckError as exc:
-                    raise HTTPException(status_code=422, detail='PROXY_DEAD: ' + str(exc)) from exc
-                log.info('business private preflight profile=%s ready=%s session_ready=%s contract_ready=%s inventory_complete=%s error=%s total_ms=%s browser_started=False',
-                    clean_profile, result['bm_route_ready'], result['facebook_session_ready'],
-                    result['private_business']['contract_ready'], result['private_business']['inventory_complete'],
-                    result['private_business']['error_code'], result['total_ms'])
-                return result
+            async def run_business_preflight():
+                async with ProfileSession(context) as profile_session:
+                    return await private_business_preflight(profile_session, context, clean_profile)
+            try:
+                result = await run_business_preflight()
+            except ProxyCheckError as exc:
+                raise HTTPException(status_code=422, detail='PROXY_DEAD: ' + str(exc)) from exc
+            if result.get('auth_blocked'):
+                restore_previous = getattr(pool.resolver, 'restore_previous_profile_session_after_gate', None)
+                if callable(restore_previous):
+                    try:
+                        restored = await asyncio.wait_for(restore_previous(context), timeout=9.0)
+                    except Exception as recovery_error:
+                        restored = False
+                        log.info('business preflight profile=%s recovery failed type=%s',
+                            clean_profile, type(recovery_error).__name__)
+                    if restored:
+                        result = await run_business_preflight()
+            log.info('business private preflight profile=%s ready=%s session_ready=%s contract_ready=%s inventory_complete=%s error=%s total_ms=%s browser_started=False',
+                clean_profile, result['bm_route_ready'], result['facebook_session_ready'],
+                result['private_business']['contract_ready'], result['private_business']['inventory_complete'],
+                result['private_business']['error_code'], result['total_ms'])
+            return result
         if purpose == 'fan_pages':
             from app.private_page_preflight import private_page_preflight
-            async with ProfileSession(context) as profile_session:
-                result = await private_page_preflight(profile_session, context, clean_profile)
+            async def run_fan_page_preflight():
+                async with ProfileSession(context) as profile_session:
+                    return await private_page_preflight(profile_session, context, clean_profile)
+            result = await run_fan_page_preflight()
+            if result.get('auth_blocked'):
+                restore_previous = getattr(pool.resolver, 'restore_previous_profile_session_after_gate', None)
+                if callable(restore_previous):
+                    try:
+                        restored = await asyncio.wait_for(restore_previous(context), timeout=9.0)
+                    except Exception as recovery_error:
+                        restored = False
+                        log.info('fan page preflight profile=%s recovery failed type=%s',
+                            clean_profile, type(recovery_error).__name__)
+                    if restored:
+                        result = await run_fan_page_preflight()
             _remember_fp_auth_gate(clean_profile, result)
             return result
         async with ProfileSession(context) as profile_session:
@@ -2146,6 +2172,9 @@ async def profile_live_inventory(
             fast_sync_profile = str(os.getenv('REMASK_FAST_SYNC_PROFILE', '*')).strip()
             fast_sync = fast_sync_requested and bool(fast_sync_profile) and fast_sync_profile in {clean_profile, '*'}
             private_snapshot: dict[str,Any] = {}
+            private_gate_code = ""
+            from app.private_auth import private_auth_error
+            from app.private_transport_error import private_transport_error
             try:
                 facebook_web=await meta_transport.facebook_web()
                 facebook_web.defer_module_refresh=fast_sync
@@ -2169,13 +2198,73 @@ async def profile_live_inventory(
                     clean_profile,
                     exc.__class__.__name__,
                 )
-                from app.private_auth import private_auth_error
-                from app.private_transport_error import private_transport_error
                 auth_error=private_auth_error(exc)
                 _,transport_error=private_transport_error(exc)
-                private_snapshot={'diagnostics':[{'auth_gate':auth_error.code if auth_error else '',
-                    'code':auth_error.code if auth_error else transport_error['code']}]}
+                private_gate_code=auth_error.code if auth_error else ""
+                private_snapshot={'diagnostics':[{'auth_gate':private_gate_code,
+                    'code':private_gate_code or transport_error['code']}]}
 
+            def snapshot_auth_gate(snapshot):
+                gate_codes={'BUSINESS_LOGIN_GATE','SESSION_EXPIRED','CHECKPOINT_REQUIRED',
+                    'TWO_FACTOR_REQUIRED','META_AUTH_GATE_UNCLASSIFIED'}
+                rows=[]
+                if not isinstance(snapshot,dict):
+                    return ""
+                rows.extend(row for row in snapshot.get('diagnostics',[]) if isinstance(row,dict))
+                for business in snapshot.get('businesses',[]):
+                    if isinstance(business,dict):
+                        rows.extend(row for row in business.get('diagnostics',[]) if isinstance(row,dict))
+                return next((str(row.get('auth_gate') or row.get('code') or '')
+                    for row in rows
+                    if str(row.get('auth_gate') or row.get('code') or '') in gate_codes), "")
+
+            private_gate_code=private_gate_code or snapshot_auth_gate(private_snapshot)
+            if private_gate_code and not private_snapshot.get('ready'):
+                try:
+                    # Close the failed cookie jar before loading another verified
+                    # same-actor snapshot into this ProfileSession.
+                    await profile_session.close()
+                except Exception as close_error:
+                    log.info('live inventory profile=%s session close before recovery failed type=%s',
+                        clean_profile, type(close_error).__name__)
+                restored=False
+                restore_previous=getattr(pool.resolver,'restore_previous_profile_session_after_gate',None)
+                if callable(restore_previous):
+                    try:
+                        restored=await asyncio.wait_for(
+                            restore_previous(context), timeout=9.0,
+                        )
+                    except Exception as recovery_error:
+                        log.info('live inventory profile=%s previous-session recovery failed type=%s',
+                            clean_profile, type(recovery_error).__name__)
+                log.info('live inventory profile=%s previous-session recovery restored=%s gate=%s',
+                    clean_profile, restored, private_gate_code)
+                if restored:
+                    meta_transport=MetaTransportRouter(profile_session, private_only=True)
+                    try:
+                        facebook_web=await meta_transport.facebook_web()
+                        facebook_web.defer_module_refresh=fast_sync
+                        with measure_phase('inventory_read_retry'):
+                            private_snapshot=await hard_deadline(
+                                private_inventory_snapshot(
+                                    facebook_web,
+                                    known_accounts_by_business=known_accounts_by_business,
+                                    known_business_ids=known_business_ids,
+                                    personal_scope_id=personal_scope_id,
+                                    discover_businesses=not bool(requested_business_ids),
+                                    execute_read_queries=True,
+                                    fast_sync=fast_sync,
+                                ),
+                                budget(24.0),
+                            )
+                    except Exception as retry_error:
+                        log.info('live inventory profile=%s private-first retry unavailable=%s',
+                            clean_profile, retry_error.__class__.__name__)
+                        retry_auth=private_auth_error(retry_error)
+                        _,retry_transport=private_transport_error(retry_error)
+                        retry_gate=retry_auth.code if retry_auth else ""
+                        private_snapshot={'diagnostics':[{'auth_gate':retry_gate,
+                            'code':retry_gate or retry_transport['code']}]}
             sync_timings['inventory']=int((time.monotonic()-private_started)*1000)
             if isinstance(private_snapshot.get('timings_ms'),dict):
                 sync_timings['meta_reads']=private_snapshot['timings_ms']
