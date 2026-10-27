@@ -90,6 +90,9 @@ async def read_business_inventory(web, expected=''):
                 and node.get('scheduledForDeletion') is not True and isinstance(node.get('name'), str)):
             return {'rows': {expected: node['name']}, 'complete': False,
                     'source': 'static_http_exact_business_config', 'diagnostics': diagnostics}
+    begin = getattr(web, 'begin_business_read_verification', None)
+    if callable(begin):
+        begin('READ_BM')
     variables = command('READ_BM')['variables']
     for count in (200, 400, 800):
         variables['fetchNumberForBusinessScopes'] = count
@@ -104,10 +107,16 @@ async def read_business_inventory(web, expected=''):
         log.info('BM static inventory expected=%s verification=%s', expected, json.dumps(diag, separators=(',', ':')))
         if complete or not more or expected in rows:
             break
+    mark = getattr(web, 'mark_business_read_verified', None)
+    if callable(mark):
+        mark('READ_BM', complete=complete)
     return {'rows': rows, 'complete': complete, 'source': 'static_http_business_scopes', 'diagnostics': diagnostics}
 
 
 async def read_ad_account_inventory(web, business, name, expected=''):
+    begin = getattr(web, 'begin_business_read_verification', None)
+    if callable(begin):
+        begin('READ_RK', business)
     payload = await execute(web, 'READ_RK', business=business)
     diag = diagnostic('READ_RK', payload)
     normalized = _normalize_connected_inventory([payload], business)
@@ -127,6 +136,9 @@ async def read_ad_account_inventory(web, business, name, expected=''):
     ids = sorted(accounts)
     named = sorted(key for key, row in accounts.items() if str(row.get('name') or '').strip().casefold() == name.casefold())
     complete = bool(observations) and all(observations)
+    mark = getattr(web, 'mark_business_read_verified', None)
+    if callable(mark):
+        mark('READ_RK', business, complete=complete)
     selected = expected if expected and expected in ids else (named[0] if not expected and complete and len(named) == 1 else '')
     asset_ui_id = (identity(accounts.get(selected, {}).get('business_object_ui_id'))
                    if selected not in conflicting_aliases else '')
