@@ -909,14 +909,11 @@ class FacebookWebSession:
                     raise AuthenticationError(
                         "A profile-bound Business operation requires the selected c_user actor."
                     )
-                # Exact reviewed BM/RK/Page contracts use the imported profile
-                # identity directly. Visiting Business Suite first can redirect
-                # to business/loginpage, mutate its in-memory cookies, and spend
-                # the Sync deadline before the same profile is checked.
-                return await self._verified_profile_bootstrap(
-                    session, expected_actor, [], require_actor_match=require_actor_match,
-                )
 
+            # Prefer the Business home bootstrap used by the working private
+            # asset-read path. Only a confirmed Business loginpage below falls
+            # back to independent profile documents; exact asset queries still
+            # bind their actor and IDs to this selected profile.
             token_patterns = list(self.FB_DTSG_PATTERNS)
 
             bootstrap_urls = (
