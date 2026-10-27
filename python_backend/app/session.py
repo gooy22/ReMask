@@ -569,6 +569,10 @@ class ProfileResolver:
             profile_id, actor_id, expected_hash,
         )
         if not previous:
+            logging.getLogger("remask.profile_resolver").info(
+                "previous_profile_session_not_restored profile=%s reason=previous_snapshot_unavailable",
+                profile_id,
+            )
             return False
         previous_cookies, previous_hash = previous
         if (str(previous_cookies.get("c_user") or "") != actor_id
@@ -628,6 +632,12 @@ class ProfileResolver:
                 or str(verified_cookies.get("c_user") or "") != actor_id
                 or not verified_xs
                 or hashlib.sha256(verified_xs.encode("utf-8")).hexdigest() == expected_hash):
+            safe_gate = re.sub(r"[^A-Z0-9_]", "_", str(gate_code or "NONE").upper())[:48]
+            logging.getLogger("remask.profile_resolver").info(
+                "previous_profile_session_not_restored profile=%s reason=meta_probe_unverified gate=%s status=%s same_actor=%s",
+                profile_id, safe_gate, status,
+                str(verified_cookies.get("c_user") or "") == actor_id,
+            )
             return False
 
         current_cookies = getattr(context, "cookies", {})
