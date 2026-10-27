@@ -1355,7 +1355,7 @@ class FacebookWebSession:
             return ""
         allowed = {
             "READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS",
-            "CREATE_BM", "CREATE_RK", "CLAIM", "ASSIGN",
+            "CREATE_BM", "CREATE_RK", "CLAIM", "ASSIGN", "LIST_PAGES",
         }
 
         def reject():
@@ -1367,6 +1367,21 @@ class FacebookWebSession:
 
         if operation not in allowed:
             reject()
+        if operation == "LIST_PAGES":
+            actor = str(self.profile.cookies.get("c_user") or "").strip()
+            endpoint = str(endpoint_url or "").strip()
+            if (not re.fullmatch(r"\\d{5,40}", str(doc_id or "").strip())
+                    or friendly_name != "AccountQualityUserPagesWrapper_UserPageQuery"
+                    or endpoint != "https://www.facebook.com/api/graphql/"
+                    or not actor.isdigit()
+                    or variables != {"assetOwnerId": actor}
+                    or request_envelope
+                    or before_submit is not None
+                    or multipart_files is not None
+                    or read_timeout_seconds != 30
+                    or str(business_context_id or "").strip()):
+                reject()
+            return operation
         try:
             from app.static_meta_contracts import ENDPOINT, command, contract_metadata
             meta = contract_metadata(operation)
