@@ -343,6 +343,12 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
             cookies={"c_user": actor}, proxy=None, user_agent="fixture"))
         bootstrap = FacebookBootstrap(actor_id=actor, fb_dtsg="profile-token",
             source_url="https://www.facebook.com/me", profile_actor_verified=False)
+        class CookieSession:
+            restored = False
+            def facebook_cookie_snapshot(self): return {"xs": ""}
+            def restore_profile_cookies(self): self.restored = True
+        cookie_session = CookieSession()
+        session._ensure_session = AsyncMock(return_value=cookie_session)
         session.fetch_text = AsyncMock(return_value=(
             200, '<form id="login_form">', "https://business.facebook.com/business/loginpage/"
         ))
@@ -352,6 +358,7 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertIs(result, bootstrap)
+        self.assertTrue(cookie_session.restored)
         session.fetch_text.assert_awaited_once()
 
     async def test_business_loginpage_bypass_is_limited_to_exact_pinned_contract_and_verified_reads(self):
