@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 import time
@@ -54,6 +55,7 @@ class ProfileContext:
     inventory_source: str = ""
     direct_test_until: int = 0
     _cookie_persistor: Any = field(default=None, repr=False, compare=False)
+    _cookie_revoker: Any = field(default=None, repr=False, compare=False)
     _loaded_cookies: dict[str, str] = field(default_factory=dict, repr=False, compare=False)
 
 
@@ -185,6 +187,13 @@ class ProfileResolver:
                             ) from exc
 
                         if response.status >= 400 or not isinstance(payload, dict):
+                            auth_error = (payload.get("error") if isinstance(payload, dict) else "")
+                            if response.status == 409 and auth_error == "BUSINESS_LOGIN_GATE":
+                                raise ProfileContextError(
+                                    "Saved Facebook session was explicitly invalidated by Meta.",
+                                    retryable=False,
+                                    category="business_login_gate",
+                                )
                             detail = self._detail(payload)
                             suffix = f": {detail}" if detail else ""
                             retryable = self._retryable_http(response.status)
@@ -340,6 +349,44 @@ class ProfileResolver:
             )
             return False
 
+    async def persist_cookie_revocation(
+        self, profile_id: str, actor_id: str, expected_xs: str,
+    ) -> bool:
+        """Persist a same-profile marker after Meta explicitly deletes auth cookies."""
+        profile_id = str(profile_id or "").strip()
+        actor_id = str(actor_id or "").strip()
+        expected_xs = str(expected_xs or "")
+        if not self.url or not self.key or not profile_id or not actor_id or not expected_xs:
+            return False
+        payload = {
+            "action": "mark_profile_cookie_auth_revoked",
+            "profile_id": profile_id,
+            "actor_id": actor_id,
+            "expected_xs_sha256": hashlib.sha256(expected_xs.encode("utf-8")).hexdigest(),
+        }
+        headers = {
+            "Accept": "application/json",
+            "X-Remask-Internal-Key": str(self.key),
+        }
+        try:
+            async with aiohttp.ClientSession(timeout=self.timeout, headers=headers) as client:
+                async with client.post(self.url, json=payload) as response:
+                    if response.status >= 400:
+                        logging.getLogger("remask.profile_resolver").warning(
+                            "profile_cookie_revocation_rejected profile=%s status=%d",
+                            profile_id, response.status,
+                        )
+                        return False
+                    result = await response.json(content_type=None)
+                    return (isinstance(result, dict) and result.get("ok") is True
+                            and result.get("updated") is True)
+        except Exception as exc:
+            logging.getLogger("remask.profile_resolver").warning(
+                "profile_cookie_revocation_failed profile=%s kind=%s",
+                profile_id, type(exc).__name__,
+            )
+            return False
+
     async def resolve(self, profile_id: str) -> ProfileContext:
         payload = await self._fetch(
             params={"profile_id": profile_id},
@@ -427,6 +474,7 @@ class ProfileResolver:
         )
         context._loaded_cookies = dict(cookie_map)
         context._cookie_persistor = self.persist_cookie_refresh
+        context._cookie_revoker = self.persist_cookie_revocation
         return context
 
 
@@ -597,6 +645,7 @@ class MetaSession:
 
         refreshed_cookies: dict[str, str] | None = None
         initial: dict[str, str] = {}
+        auth_cookie_revoked = False
         profile_id = ""
         async with self._facebook_lock:
             if self._facebook_session is not None:
@@ -604,6 +653,7 @@ class MetaSession:
                 profile_id = self._facebook_profile_id
                 current = self._facebook_session
                 await current.close()
+                auth_cookie_revoked = bool(getattr(current, "auth_cookie_revoked", False))
                 refreshed_cookies = dict(current.profile.cookies)
                 self._facebook_session = None
                 self._facebook_cookie_baseline = None
@@ -611,6 +661,19 @@ class MetaSession:
 
         current_cookies = getattr(self.context, "cookies", None)
         actor_id = str(initial.get("c_user") or "")
+        if (auth_cookie_revoked and actor_id and str(initial.get("xs") or "")
+                and str(getattr(self.context, "profile_id", "")) == profile_id
+                and isinstance(current_cookies, dict) and current_cookies == initial):
+            revoker = getattr(self.context, "_cookie_revoker", None)
+            if callable(revoker):
+                try:
+                    await revoker(profile_id, actor_id, str(initial.get("xs") or ""))
+                except Exception as exc:
+                    logging.getLogger("remask.profile_resolver").warning(
+                        "profile_cookie_revocation_failed profile=%s kind=%s",
+                        profile_id, type(exc).__name__,
+                    )
+
         if (refreshed_cookies is not None and actor_id
                 and str(getattr(self.context, 'profile_id', '')) == profile_id
                 and isinstance(current_cookies, dict)
