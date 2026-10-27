@@ -381,7 +381,7 @@ class FacebookWebSession:
             user
             for variant in cls._match_sources(source)
             for user in re.findall(
-                r'''CurrentUserInitialData.{0,2000}?["']?USER_ID["']?\s*:\s*["']?([0-9]{5,30})''',
+                r'''CurrentUserInitialData.{0,2000}?["']?USER_ID["']?\s*:\s*["']?([0-9]{1,30})''',
                 variant,
                 flags=re.DOTALL,
             )
@@ -654,6 +654,12 @@ class FacebookWebSession:
             "https://www.facebook.com/settings",
         )
         for target in targets:
+            # Business login-page redirects can delete root-scope auth cookies
+            # before the profile identity check. Each probe starts from the
+            # exact imported profile snapshot.
+            restore_cookies = getattr(session, "restore_profile_cookies", None)
+            if callable(restore_cookies):
+                restore_cookies()
             try:
                 from app.private_http import buffered_response
                 response, body = await buffered_response(
