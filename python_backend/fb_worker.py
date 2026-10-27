@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import unquote, urlsplit
@@ -74,6 +75,7 @@ class FacebookBootstrap:
     jazoest: str = ""
     request_context: dict[str, str] = field(default_factory=dict)
     source_url: str = ""
+    profile_actor_verified: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,6 +151,7 @@ class FacebookWebSession:
         self._bootstrap_lock = asyncio.Lock()
 
         self._bootstrap: FacebookBootstrap | None = None
+        self._business_read_proofs: dict[tuple[str, str, str, str, str], float] = {}
         self._graphql_request_counter = 0
 
     # ------------------------------------------------------------------
@@ -203,6 +206,64 @@ class FacebookWebSession:
             self.session = None
 
         self._bootstrap = None
+        self._business_read_proofs.clear()
+
+    def begin_business_read_verification(
+        self, operation: str, business_id: str = "", resource_id: str = "", user_id: str = "",
+    ) -> None:
+        operation = str(operation or "").strip()
+        if operation not in {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS"}:
+            return
+        if operation == "READ_BM":
+            business_id = resource_id = user_id = ""
+        business_id = str(business_id or "").strip()
+        resource_id = str(resource_id or "").strip()
+        user_id = str(user_id or "").strip()
+        actor = str(self.profile.cookies.get("c_user") or "").strip()
+        self._business_read_proofs.pop((operation, business_id, resource_id, user_id, actor), None)
+
+    def mark_business_read_verified(
+        self, operation: str, business_id: str = "", resource_id: str = "", user_id: str = "",
+        *, complete: bool = False,
+    ) -> None:
+        operation = str(operation or "").strip()
+        if operation not in {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS"}:
+            return
+        if operation == "READ_BM":
+            business_id = resource_id = user_id = ""
+        business_id = str(business_id or "").strip()
+        resource_id = str(resource_id or "").strip()
+        user_id = str(user_id or "").strip()
+        actor = str(self.profile.cookies.get("c_user") or "").strip()
+        key = (operation, business_id, resource_id, user_id, actor)
+        self._business_read_proofs.pop(key, None)
+        valid_scope = (
+            operation == "READ_BM"
+            or (operation in {"READ_RK", "CONFIG"} and business_id.isdigit())
+            or (operation == "PAGE" and business_id.isdigit() and resource_id.isdigit())
+            or (operation == "RIGHTS" and business_id.isdigit()
+                and resource_id.isdigit() and user_id.isdigit())
+        )
+        if complete is True and actor.isdigit() and valid_scope:
+            self._business_read_proofs[key] = time.monotonic()
+
+    def has_fresh_business_read_verified(
+        self, operation: str, business_id: str = "", resource_id: str = "", user_id: str = "",
+    ) -> bool:
+        operation = str(operation or "").strip()
+        if operation not in {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS"}:
+            return False
+        if operation == "READ_BM":
+            business_id = resource_id = user_id = ""
+        business_id = str(business_id or "").strip()
+        resource_id = str(resource_id or "").strip()
+        user_id = str(user_id or "").strip()
+        actor = str(self.profile.cookies.get("c_user") or "").strip()
+        key = (operation, business_id, resource_id, user_id, actor)
+        verified_at = self._business_read_proofs.get(key)
+        bootstrap_actor = str(getattr(self._bootstrap, "actor_id", "") or "").strip()
+        return (verified_at is not None and actor.isdigit() and bootstrap_actor == actor
+                and 0 <= time.monotonic() - verified_at <= 300)
 
     # ------------------------------------------------------------------
     # Proxy
@@ -558,13 +619,127 @@ class FacebookWebSession:
 
         return output
 
+    async def _verified_profile_bootstrap(
+        self,
+        session: PrivateHttpClient,
+        expected_actor: str,
+        attempts: list[dict[str, Any]],
+    ) -> FacebookBootstrap:
+        target = "https://www.facebook.com/me"
+        try:
+            from app.private_http import buffered_response
+            response, body = await buffered_response(
+                "GET",
+                lambda: session.get(
+                    target,
+                    proxy=self.profile.proxy,
+                    headers={
+                        "Accept": (
+                            "text/html,application/xhtml+xml,"
+                            "application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+                        ),
+                        "Accept-Language": "en-US,en;q=0.9",
+                        "Cache-Control": "no-cache",
+                        "Pragma": "no-cache",
+                        "Sec-Fetch-Dest": "document",
+                        "Sec-Fetch-Mode": "navigate",
+                        "Sec-Fetch-Site": "none",
+                        "Sec-Fetch-User": "?1",
+                        "Upgrade-Insecure-Requests": "1",
+                    },
+                    allow_redirects=True,
+                    request_timeout_seconds=max(30, self.timeout_seconds),
+                ),
+                16 * 1024 * 1024 + 1,
+                retry_read=True,
+                reader=lambda response: response.text(),
+            )
+        except (asyncio.TimeoutError, aiohttp.ClientError, httpx.HTTPError) as exc:
+            attempts.append({
+                "requested_url": target, "auth_reason": "profile_probe_transport",
+                "transport_failure": type(exc).__name__,
+            })
+            raise RemoteRequestError(
+                "Facebook profile identity check failed before GraphQL submit.",
+                meta_payload={"business_precheck": attempts,
+                    "transport_failure": {"kind": type(exc).__name__}},
+                request_may_have_been_sent=False,
+                transport_stage="business_auth_precheck",
+            ) from exc
+
+        final_url = str(response.url)
+        parts = urlsplit(final_url)
+        path = parts.path.lower()
+        users = {
+            user
+            for variant in self._match_sources(body)
+            for user in re.findall(
+                r'CurrentUserInitialData.{0,2000}?"USER_ID"\s*:\s*"([0-9]{5,30})"',
+                variant,
+                flags=re.DOTALL,
+            )
+        }
+        token = self._first_match(body, list(self.FB_DTSG_PATTERNS))
+        login_form = _has_login_form(body)
+        reason = (
+            "checkpoint_redirect" if "/checkpoint" in path
+            else "login_redirect" if "/login" in path
+            else "redirected_host" if parts.hostname != "www.facebook.com"
+            else "login_form" if login_form
+            else "http_auth" if response.status in {401, 403}
+            else "actor_mismatch" if not expected_actor or users != {expected_actor}
+            else "profile_token_unavailable" if not token
+            else ""
+        )
+        attempts.append({
+            "requested_url": target,
+            "final_url": f"{parts.scheme}://{parts.hostname or ''}{parts.path}",
+            "http_status": response.status,
+            "body_bytes": len(body.encode("utf-8")),
+            "token_present": bool(token),
+            "actor_verified": bool(expected_actor and users == {expected_actor}),
+            "auth_reason": reason,
+            **self._document_failure_evidence(response.status, body),
+        })
+        if reason or response.status != 200:
+            self.invalidate_bootstrap()
+            error = AuthenticationError(
+                "Meta profile identity was not independently confirmed. No GraphQL POST was sent."
+            )
+            error.meta_payload = {"business_precheck": attempts}
+            error.request_may_have_been_sent = False
+            error.transport_stage = "business_auth_precheck"
+            raise error
+
+        bootstrap = FacebookBootstrap(
+            fb_dtsg=token,
+            actor_id=expected_actor,
+            lsd=self._first_match(body, [r'"LSD".{0,1800}?"token"\s*:\s*"([^"]+)"']),
+            jazoest=self._first_match(body, [r"""name=["']jazoest["'][^>]*value=["']([^"']+)["']"""]),
+            request_context=self._extract_request_context(body),
+            source_url=target,
+            profile_actor_verified=True,
+        )
+        self._bootstrap = bootstrap
+        log.info(
+            "[%s] Meta profile identity independently verified for scoped Business read actor=%s",
+            self.profile.name,
+            expected_actor,
+        )
+        return bootstrap
+
     async def bootstrap(
         self,
         *,
         force: bool = False,
+        allow_business_loginpage_probe: bool = False,
     ) -> FacebookBootstrap:
 
-        if self._bootstrap is not None and not force:
+        if (self._bootstrap is not None
+                and self._bootstrap.profile_actor_verified
+                and not allow_business_loginpage_probe):
+            self._bootstrap = None
+        if self._bootstrap is not None and not force and not self._bootstrap.profile_actor_verified:
             from app.contract_maintenance.module_refresh import refresh_due
             force = refresh_due(self)
         if self._bootstrap is not None and not force:
@@ -572,6 +747,9 @@ class FacebookWebSession:
 
         async with self._bootstrap_lock:
 
+            if (self._bootstrap is not None and self._bootstrap.profile_actor_verified
+                    and not allow_business_loginpage_probe):
+                self._bootstrap = None
             if self._bootstrap is not None and not force:
                 return self._bootstrap
 
@@ -653,6 +831,16 @@ class FacebookWebSession:
                         auth_attempts.append({"auth_reason": "checkpoint_redirect" if "/checkpoint" in route
                             else "login_redirect" if "/login" in route else "login_form",
                             "final_url": f"{parts.scheme}://{parts.hostname or ''}{parts.path}"})
+                        business_loginpage = (
+                            parts.hostname == "business.facebook.com"
+                            and route.rstrip("/") == "/business/loginpage"
+                        )
+                        expected_actor = str(self.profile.cookies.get("c_user") or "").strip()
+                        if (allow_business_loginpage_probe and business_loginpage
+                                and expected_actor.isdigit()):
+                            return await self._verified_profile_bootstrap(
+                                session, expected_actor, auth_attempts,
+                            )
                         error = AuthenticationError("Meta requires session restoration before bootstrap.")
                         error.meta_payload = {"business_precheck": auth_attempts}
                         error.request_may_have_been_sent = False
@@ -801,6 +989,7 @@ class FacebookWebSession:
 
     def invalidate_bootstrap(self) -> None:
         self._bootstrap = None
+        self._business_read_proofs.clear()
         self._reviewed_module_ids = {}
 
     async def refresh_reviewed_modules(self, document: str, final_url: str) -> None:
@@ -987,9 +1176,12 @@ class FacebookWebSession:
 
     async def _business_bootstrap(
         self, bootstrap: FacebookBootstrap, *, business_id: str = "",
-        business_create: bool = False,
+        business_create: bool = False, business_loginpage_probe: str = "",
     ) -> FacebookBootstrap:
         """Confirm Business auth using bounded, read-only operation surfaces."""
+        if (business_loginpage_probe in {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS", "CREATE_BM", "CREATE_RK", "CLAIM", "ASSIGN"}
+                and bootstrap.profile_actor_verified):
+            return bootstrap
         source = str(getattr(bootstrap, "source_url", "") or "").strip()
         target = (
             "https://business.facebook.com/latest/settings/ad_accounts/?business_id=" + business_id
@@ -1036,6 +1228,20 @@ class FacebookWebSession:
                 **self._document_failure_evidence(status, body),
             })
             if gated:
+                business_loginpage = (
+                    parts.hostname == "business.facebook.com"
+                    and parts.path.lower().rstrip("/") == "/business/loginpage"
+                )
+                if (business_loginpage and status < 400
+                        and business_loginpage_probe in {
+                            "READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS",
+                            "CREATE_BM", "CREATE_RK", "CLAIM", "ASSIGN",
+                        }):
+                    expected_actor = str(self.profile.cookies.get("c_user") or "").strip()
+                    if expected_actor.isdigit() and expected_actor == bootstrap.actor_id:
+                        return await self._verified_profile_bootstrap(
+                            await self._ensure_session(), expected_actor, attempts,
+                        )
                 log.warning("[%s] BUSINESS auth precheck stopped before POST attempts=%s",
                     self.profile.name, json.dumps(attempts, separators=(",", ":")))
                 self.invalidate_bootstrap()
@@ -1130,6 +1336,147 @@ class FacebookWebSession:
             request_may_have_been_sent=False, transport_stage="business_auth_precheck",
         )
 
+    def _validate_business_loginpage_probe(
+        self,
+        operation: str,
+        doc_id: str,
+        variables: dict[str, Any],
+        *,
+        friendly_name: str,
+        endpoint_url: str | None,
+        request_envelope: dict[str, Any] | None,
+        before_submit: Any | None,
+        business_context_id: str,
+        multipart_files: dict[str, Any] | None,
+        read_timeout_seconds: float | None,
+    ) -> str:
+        operation = str(operation or "").strip()
+        if not operation:
+            return ""
+        allowed = {
+            "READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS",
+            "CREATE_BM", "CREATE_RK", "CLAIM", "ASSIGN",
+        }
+
+        def reject():
+            raise RemoteRequestError(
+                "Invalid scoped Business login-page continuation; no GraphQL POST was sent.",
+                request_may_have_been_sent=False,
+                transport_stage="business_auth_precheck",
+            )
+
+        if operation not in allowed:
+            reject()
+        try:
+            from app.static_meta_contracts import command, contract_metadata
+            meta = contract_metadata(operation)
+            template = command(operation)
+        except Exception:
+            reject()
+        endpoint = str(endpoint_url or self.GRAPHQL_URL).strip()
+        if (str(doc_id or "").strip() != meta["doc_id"]
+                or friendly_name != meta["friendly_name"]
+                or endpoint != template["endpoint_url"]
+                or not isinstance(variables, dict)
+                or bool(request_envelope)):
+            reject()
+
+        if meta["operation_kind"] == "query":
+            if (before_submit is not None or multipart_files is not None
+                    or read_timeout_seconds != 30):
+                reject()
+            if operation == "READ_BM":
+                count = variables.get("fetchNumberForBusinessScopes")
+                if type(count) is not int or count not in {200, 400, 800}:
+                    reject()
+                expected = command(operation)["variables"]
+                expected["fetchNumberForBusinessScopes"] = count
+                if variables != expected or business_context_id:
+                    reject()
+            elif operation == "READ_RK":
+                business = str(business_context_id or "").strip()
+                if (not business.isdigit() or variables.get("businessID") != business
+                        or variables != command(operation, business=business)["variables"]):
+                    reject()
+            elif operation == "CONFIG":
+                business = str(business_context_id or "").strip()
+                if (not business.isdigit() or variables != command(operation, business=business)["variables"]):
+                    reject()
+            elif operation == "PAGE":
+                business = str(business_context_id or "").strip()
+                page = str(variables.get("pageID") or "").strip()
+                if (not business.isdigit() or not page.isdigit()
+                        or variables.get("businessID") != business
+                        or variables != command(operation, business=business, page=page)["variables"]):
+                    reject()
+            elif operation == "RIGHTS":
+                business = str(business_context_id or "").strip()
+                asset = str(variables.get("assetID") or "").strip()
+                user = str(variables.get("userID") or "").strip()
+                if (not business.isdigit() or not asset.isdigit() or not user.isdigit()
+                        or variables.get("businessID") != business
+                        or variables != command(operation, business=business, asset=asset, user=user)["variables"]):
+                    reject()
+        else:
+            if (not callable(before_submit) or multipart_files is not None
+                    or read_timeout_seconds is not None):
+                reject()
+            if operation == "CREATE_BM":
+                if business_context_id:
+                    reject()
+                value = variables.get("input")
+                required = {
+                    "client_mutation_id", "actor_id", "business_name",
+                    "user_first_name", "user_last_name", "user_email",
+                    "creation_source", "entry_point", "qpl_join_id",
+                }
+                if not isinstance(value, dict) or set(value) != required:
+                    reject()
+                actor = str(value.get("actor_id") or "").strip()
+                current_actor = str(self.profile.cookies.get("c_user") or "").strip()
+                if not actor.isdigit() or actor != current_actor:
+                    reject()
+                expected = command(operation, actor=actor,
+                    name=value.get("business_name"), first=value.get("user_first_name"),
+                    last=value.get("user_last_name"), email=value.get("user_email"),
+                    mutation=value.get("client_mutation_id"), join=value.get("qpl_join_id"))
+                if (variables != expected["variables"]
+                        or not self.has_fresh_business_read_verified("READ_BM")):
+                    reject()
+            elif operation == "CREATE_RK":
+                business = str(variables.get("businessID") or "").strip()
+                if (not business.isdigit() or str(business_context_id or "").strip() != business):
+                    reject()
+                expected = command(operation, business=business,
+                    name=variables.get("adAccountName"), currency=variables.get("currency"),
+                    timezone=variables.get("timezoneID"), join=variables.get("qplJoinID"))
+                if (variables != expected["variables"]
+                        or not self.has_fresh_business_read_verified("READ_RK", business)):
+                    reject()
+            elif operation == "CLAIM":
+                business = str(business_context_id or "").strip()
+                page = str(variables.get("pageID") or "").strip()
+                if (not business.isdigit() or not page.isdigit()
+                        or variables.get("businessID") != business
+                        or variables != command(operation, business=business, page=page,
+                            join=variables.get("qplJoinID"))["variables"]
+                        or not self.has_fresh_business_read_verified("CONFIG", business)
+                        or not self.has_fresh_business_read_verified("PAGE", business, page)):
+                    reject()
+            elif operation == "ASSIGN":
+                business = str(business_context_id or "").strip()
+                asset = str(variables.get("assetID") or "").strip()
+                user = str(variables.get("userID") or "").strip()
+                if (not business.isdigit() or not asset.isdigit() or not user.isdigit()
+                        or variables.get("businessID") != business
+                        or variables != command(operation, business=business, user=user,
+                            asset=asset, tasks=variables.get("taskIDs"),
+                            types=variables.get("assetTypes"))["variables"]
+                        or not self.has_fresh_business_read_verified("CONFIG", business)
+                        or not self.has_fresh_business_read_verified("RIGHTS", business, asset, user)):
+                    reject()
+        return operation
+
     async def graphql(
         self,
         doc_id: str,
@@ -1142,6 +1489,7 @@ class FacebookWebSession:
         business_context_id: str = "",
         multipart_files: dict[str, Any] | None = None,
         read_timeout_seconds: float | None = None,
+        business_loginpage_probe: str = "",
     ) -> dict[str, Any]:
 
         if read_timeout_seconds is not None and (
@@ -1167,7 +1515,24 @@ class FacebookWebSession:
             or self.GRAPHQL_URL
         )
 
-        bootstrap = await self.bootstrap()
+        scoped_probe = self._validate_business_loginpage_probe(
+            business_loginpage_probe, effective_doc_id, variables,
+            friendly_name=friendly_name, endpoint_url=endpoint_url,
+            request_envelope=request_envelope, before_submit=before_submit,
+            business_context_id=business_context_id, multipart_files=multipart_files,
+            read_timeout_seconds=read_timeout_seconds,
+        )
+        if scoped_probe:
+            bootstrap = await self.bootstrap(allow_business_loginpage_probe=True)
+            current_actor = str(self.profile.cookies.get("c_user") or "").strip()
+            if not current_actor.isdigit() or bootstrap.actor_id != current_actor:
+                raise RemoteRequestError(
+                    "Scoped Business request actor does not match the selected profile.",
+                    request_may_have_been_sent=False,
+                    transport_stage="business_auth_precheck",
+                )
+        else:
+            bootstrap = await self.bootstrap()
         if urlsplit(endpoint).hostname == "business.facebook.com":
             scoped_ids: set[str] = set()
             if business_context_id:
@@ -1192,9 +1557,11 @@ class FacebookWebSession:
             bootstrap = await self._business_bootstrap(
                 bootstrap, business_id=next(iter(scoped_ids), ""),
                 business_create=friendly_name == "useBusinessCreationMutationMutation",
+                business_loginpage_probe=scoped_probe,
             )
-        from app.contract_maintenance.module_refresh import effective_doc_id as reviewed_doc_id
-        effective_doc_id = reviewed_doc_id(self, friendly_name, effective_doc_id)
+        if not scoped_probe:
+            from app.contract_maintenance.module_refresh import effective_doc_id as reviewed_doc_id
+            effective_doc_id = reviewed_doc_id(self, friendly_name, effective_doc_id)
         session = await self._ensure_session()
 
         form: dict[str, str] = {
