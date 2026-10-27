@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from app.provisioning.models import ProvisioningError
-from app.session import ProfileContextError
+from app.session import ProfileContextError, ProfileResolver
 from app.session_auth_refresh import refresh_saved_auth_context, read_with_saved_auth_refresh
 
 
@@ -274,3 +274,73 @@ class ReadRouteAuthRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result['_cache']['refresh_failed'])
         self.assertEqual(resources.get.await_count, 2)
 
+
+
+class InternalCookieResolverTests(unittest.IsolatedAsyncioTestCase):
+    def base_payload(self, recovery):
+        return {
+            "ok": True,
+            "profile_id": "15",
+            "cookies": {"c_user": "123456789", "xs": "fixture-current"},
+            "recovery_cookies": recovery,
+            "proxy": "http://fixture-proxy:80",
+            "user_agent": "Fixture",
+        }
+
+    async def test_resolver_accepts_only_a_distinct_previous_snapshot_for_same_actor(self):
+        resolver = ProfileResolver(None, None)
+        resolver._fetch = AsyncMock(return_value=self.base_payload({
+            "c_user": "123456789", "xs": "fixture-previous", "datr": "fixture",
+        }))
+        context = await resolver.resolve("15")
+        self.assertEqual(context.recovery_cookies["c_user"], "123456789")
+        self.assertEqual(context.recovery_cookies["xs"], "fixture-previous")
+
+    async def test_resolver_discards_cross_actor_unchanged_or_malformed_snapshot(self):
+        for recovery in (
+            {"c_user": "999999999", "xs": "fixture-previous"},
+            {"c_user": "123456789", "xs": "fixture-current"},
+            {"c_user": "123456789", "xs": "fixture-previous", "bad key": "x"},
+        ):
+            with self.subTest(recovery=recovery):
+                resolver = ProfileResolver(None, None)
+                resolver._fetch = AsyncMock(return_value=self.base_payload(recovery))
+                context = await resolver.resolve("15")
+                self.assertEqual(context.recovery_cookies, {})
+
+    async def test_cookie_refresh_posts_actor_bound_cas_payload_without_logging_values(self):
+        sent = {}
+
+        class Response:
+            status = 200
+
+            async def __aenter__(self): return self
+            async def __aexit__(self, *args): return False
+            async def json(self, content_type=None): return {"ok": True, "updated": True}
+
+        class Client:
+            def __init__(self, *args, **kwargs): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self, *args): return False
+            def post(self, url, *, json):
+                sent["url"] = url
+                sent["payload"] = json
+                return Response()
+
+        resolver = ProfileResolver("http://localhost/ajax/pythonProfileContext.php", "fixture-key")
+        with patch("app.session.aiohttp.ClientSession", Client):
+            self.assertTrue(await resolver.persist_cookie_refresh(
+                "15", "123456789", "fixture-old",
+                {"c_user": "123456789", "xs": "fixture-new"},
+            ))
+        self.assertEqual(sent["payload"]["action"], "refresh_profile_cookies")
+        self.assertEqual(sent["payload"]["expected_xs"], "fixture-old")
+        self.assertEqual(sent["payload"]["cookies"]["xs"], "fixture-new")
+
+    def test_php_resolver_accepts_json_cookie_refresh_and_reads_previous_snapshot(self):
+        source = Path(__file__).resolve().parents[2].joinpath(
+            "railway-python-worker-bridge-overlay.php"
+        ).read_text()
+        self.assertIn("json_decode((string)file_get_contents('php://input'), true)", source)
+        self.assertIn("$store->compareAndSwapCookies($profile, $actor, $expectedXs, $cookies)", source)
+        self.assertIn("$store->getPreviousAccountByName($profile)", source)
