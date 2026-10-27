@@ -335,7 +335,8 @@ async def read_private_inventory_queries(web, *, business_id, document, entry_ur
                     diagnostic["query_posts"] += 1
                 result = await web.graphql(contract["doc_id"], contract["variables"],
                     friendly_name=contract["friendly_name"], endpoint_url="https://business.facebook.com/api/graphql/",
-                    business_context_id=str(business_id), before_submit=query_submit)
+                    business_context_id=str(business_id), before_submit=query_submit,
+                    business_loginpage_probe="PRIVATE_RK_INVENTORY")
                 decoded = _json_payloads(json.dumps(result))
                 diagnostic["payload_count"] = diagnostic.get("payload_count", 0) + len(decoded)
                 diagnostic["inventory_shape"] = (diagnostic.get("inventory_shape", []) + _inventory_shape(decoded))[:20]
