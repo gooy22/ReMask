@@ -240,6 +240,9 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         session._ensure_session = AsyncMock(return_value=Client())
         session._fetch_dtsg_refresh_token = AsyncMock(return_value=("", ""))
         session.refresh_reviewed_modules = AsyncMock()
+        session._bootstrap = FacebookBootstrap(
+            actor_id="123456789", fb_dtsg="stale-business-token",
+        )
 
         bootstrap = await session.bootstrap(allow_business_loginpage_probe=True)
 
