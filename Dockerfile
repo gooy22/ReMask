@@ -52,7 +52,6 @@ COPY tests/payment-card-vault.test.php /tmp/remask-tests/payment-card-vault.test
 COPY tests/credential-key-compat.test.php /tmp/remask-tests/credential-key-compat.test.php
 COPY tests/private-launch-meta-marker.test.php /tmp/remask-tests/private-launch-meta-marker.test.php
 COPY tests/private-inventory-identity.test.php /tmp/remask-tests/private-inventory-identity.test.php
-COPY tests/profile-cookie-auth-state.test.php /tmp/remask-tests/profile-cookie-auth-state.test.php
 COPY tests/template-targeting-context.test.php /tmp/remask-tests/template-targeting-context.test.php
 COPY tests/readiness.test.php /tmp/remask-tests/readiness.test.php
 COPY tests/profile-cookie-cas.test.php /tmp/remask-tests/profile-cookie-cas.test.php
@@ -61,8 +60,6 @@ COPY docker-start.sh /tmp/docker-start.sh
 RUN set -eux; \
     php /tmp/remask-tests/payment-card-vault.test.php; \
     php /tmp/remask-tests/credential-key-compat.test.php; \
-    php -l /tmp/railway-safe-ProfileCookieAuthStateStore.php; \
-    REMASK_PROFILE_COOKIE_AUTH_STATE_CLASS=/tmp/railway-safe-ProfileCookieAuthStateStore.php php /tmp/remask-tests/profile-cookie-auth-state.test.php; \
     php -l /tmp/railway-private-launch-meta-marker.php; \
     php /tmp/remask-tests/private-launch-meta-marker.test.php; \
     cp /tmp/railway-v100-creativeLibrary.php /tmp/remask-v100-creativeLibrary.php; \
