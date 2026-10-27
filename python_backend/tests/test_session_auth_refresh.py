@@ -8,10 +8,23 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from app.provisioning.models import ProvisioningError
+from app.session import ProfileContextError
 from app.session_auth_refresh import refresh_saved_auth_context, read_with_saved_auth_refresh
 
 
 class SavedAuthRefreshTests(unittest.IsolatedAsyncioTestCase):
+    def test_explicit_meta_login_gate_has_a_distinct_machine_code(self):
+        error = ProfileContextError(
+            "Saved Facebook session was explicitly invalidated by Meta.",
+            retryable=False,
+            category="business_login_gate",
+        )
+        self.assertEqual(error.code, "BUSINESS_LOGIN_GATE")
+
+    def test_other_profile_context_failures_keep_the_generic_code(self):
+        error = ProfileContextError("resolver unavailable", category="resolver_http")
+        self.assertEqual(error.code, "PROFILE_CONTEXT_ERROR")
+
     def context(self, *, uid="123456789", xs="fixture-old", profile="14"):
         return SimpleNamespace(profile_id=profile, cookies={"c_user": uid, "xs": xs},
                                proxy="http://fixture-proxy:80", user_agent="Fixture")
