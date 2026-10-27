@@ -151,6 +151,7 @@ class FacebookWebSession:
         self._bootstrap_lock = asyncio.Lock()
 
         self._bootstrap: FacebookBootstrap | None = None
+        self._profile_session_identity_verified = False
         self._business_read_proofs: dict[tuple[str, str, str, str, str], float] = {}
         self._graphql_request_counter = 0
 
@@ -197,15 +198,22 @@ class FacebookWebSession:
                 # a redirect to silently switch the profile identity.
                 snapshot = self.session.facebook_cookie_snapshot()
                 original_actor = str(self.profile.cookies.get("c_user") or "")
-                if (snapshot.get("c_user") == original_actor
+                if (self._profile_session_identity_verified
+                        and snapshot.get("c_user") == original_actor
                         and str(snapshot.get("xs") or "").strip()):
                     self.profile.cookies = snapshot
+                elif snapshot != self.profile.cookies:
+                    log.info(
+                        "[%s] Meta cookie writeback skipped identity_verified=%s",
+                        self.profile.name, self._profile_session_identity_verified,
+                    )
                 if not self.session.closed:
                     await self.session.close()
 
             self.session = None
 
         self._bootstrap = None
+        self._profile_session_identity_verified = False
         self._business_read_proofs.clear()
 
     def begin_business_read_verification(
@@ -366,6 +374,18 @@ class FacebookWebSession:
             variants.append(js_decoded)
 
         return variants
+
+    @classmethod
+    def _profile_actor_ids(cls, source: str) -> set[str]:
+        return {
+            user
+            for variant in cls._match_sources(source)
+            for user in re.findall(
+                r'''CurrentUserInitialData.{0,2000}?["']?USER_ID["']?\s*:\s*["']?([0-9]{5,30})''',
+                variant,
+                flags=re.DOTALL,
+            )
+        }
 
     @classmethod
     def _first_match(
@@ -691,15 +711,7 @@ class FacebookWebSession:
             final_url = str(response.url)
             parts = urlsplit(final_url)
             path = parts.path.lower()
-            users = {
-                user
-                for variant in self._match_sources(body)
-                for user in re.findall(
-                    r'''CurrentUserInitialData.{0,2000}?["']?USER_ID["']?\s*:\s*["']?([0-9]{5,30})''',
-                    variant,
-                    flags=re.DOTALL,
-                )
-            }
+            users = self._profile_actor_ids(body)
             actor_verified = bool(expected_actor and expected_actor in users)
             token = self._first_match(body, list(self.FB_DTSG_PATTERNS))
             login_form = _has_login_form(body)
@@ -737,6 +749,7 @@ class FacebookWebSession:
                     profile_actor_verified=True,
                 )
                 self._bootstrap = bootstrap
+                self._profile_session_identity_verified = True
                 log.info(
                     "[%s] Meta profile identity independently verified for scoped Business read actor=%s route=%s",
                     self.profile.name,
@@ -798,6 +811,7 @@ class FacebookWebSession:
             if self._bootstrap is not None and not force:
                 return self._bootstrap
 
+            self._profile_session_identity_verified = False
             session = await self._ensure_session()
 
             actor_id = str(
@@ -1006,6 +1020,13 @@ class FacebookWebSession:
 
             request_context = self._extract_request_context(body)
 
+            parts = urlsplit(final_url)
+            self._profile_session_identity_verified = bool(
+                actor_id in self._profile_actor_ids(body)
+                and parts.hostname
+                and (parts.hostname == "facebook.com" or parts.hostname.endswith(".facebook.com"))
+                and not _has_login_form(body)
+            )
             bootstrap = FacebookBootstrap(
                 fb_dtsg=fb_dtsg,
                 actor_id=actor_id,
@@ -1034,6 +1055,7 @@ class FacebookWebSession:
 
     def invalidate_bootstrap(self) -> None:
         self._bootstrap = None
+        self._profile_session_identity_verified = False
         self._business_read_proofs.clear()
         self._reviewed_module_ids = {}
 
