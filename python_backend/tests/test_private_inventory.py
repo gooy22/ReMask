@@ -70,30 +70,6 @@ class PrivateInventoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result['business_inventory_confirmed_empty'])
         self.assertEqual(web.graphql.await_count, 3)
 
-    async def test_profile_actor_mismatch_wins_over_later_business_loginpage(self):
-        from fb_worker import AuthenticationError
-        from app.private_auth import private_auth_error
-
-        error = AuthenticationError("Profile identity was not confirmed")
-        error.meta_payload = {"business_precheck": [
-            {"requested_url": "https://www.facebook.com/me",
-             "final_url": "https://www.facebook.com/", "http_status": 200,
-             "actor_verified": False, "auth_reason": "actor_mismatch"},
-            {"requested_url": "https://www.facebook.com/profile.php",
-             "final_url": "https://www.facebook.com/login/", "http_status": 200,
-             "actor_verified": False, "auth_reason": "login_redirect"},
-            {"requested_url": "https://adsmanager.facebook.com/adsmanager/manage/campaigns",
-             "final_url": "https://business.facebook.com/business/loginpage/",
-             "http_status": 200, "actor_verified": False, "auth_reason": "login_redirect"},
-        ]}
-        error.request_may_have_been_sent = False
-        error.transport_stage = "business_auth_precheck"
-
-        mapped = private_auth_error(error)
-
-        self.assertEqual(mapped.code, "SESSION_EXPIRED")
-        self.assertTrue(mapped.inventory_diagnostics[0]["post_not_sent"])
-
     async def test_selector_auth_gate_stops_other_http_probes(self):
         from fb_worker import AuthenticationError
         error = AuthenticationError('Fixture authentication required')

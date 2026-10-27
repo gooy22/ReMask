@@ -253,13 +253,10 @@ class PixelReads(unittest.IsolatedAsyncioTestCase):
             calls.append(True)
             started.set()
             await release.wait()
-        # A monotonic clock can start at 0; that is not evidence this exact
-        # scope was refreshed already. Keep the scheduler test deterministic.
-        with patch('app.private_advertising_reads.time', SimpleNamespace(monotonic=lambda: 0.0)):
-            self.assertTrue(store.schedule_refresh_once(name='interests',values=values,
-                actor_id='123456',callback=refresh))
-            self.assertFalse(store.schedule_refresh_once(name='interests',values=values,
-                actor_id='123456',callback=refresh))
+        self.assertTrue(store.schedule_refresh_once(name='interests',values=values,
+            actor_id='123456',callback=refresh))
+        self.assertFalse(store.schedule_refresh_once(name='interests',values=values,
+            actor_id='123456',callback=refresh))
         await started.wait()
         self.assertEqual(len(calls),1)
         task = next(iter(store._refresh_tasks.values()))

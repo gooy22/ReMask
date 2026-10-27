@@ -61,8 +61,9 @@ class _Action:
         self.web = await self.session.facebook_web()
         self.web.private_only = True
         current = _clean((getattr(self.context, 'cookies', {}) or {}).get('c_user'))
-        if not current.isdigit():
-            raise ProvisioningError('SESSION_EXPIRED', 'Static action actor is unavailable.', retryable=True)
+        bootstrap = await self.web.bootstrap()
+        if not current.isdigit() or _clean(getattr(bootstrap, 'actor_id', '')) != current:
+            raise ProvisioningError('SESSION_EXPIRED', 'Static action actor does not match the selected profile; no POST was sent.', retryable=True)
         return self
 
     async def checkpoint(self, patch):
@@ -207,9 +208,7 @@ async def business_handler(session, params, state, *args, **kwargs):
             user_first_name=_clean(params.get("user_first_name") or params.get("first_name") or getattr(action.context, "first_name", "")),
             user_last_name=_clean(params.get("user_last_name") or params.get("last_name") or getattr(action.context, "last_name", "")),
             profile_display_name=_clean(params.get("profile_display_name") or getattr(action.context, "display_name", "")),
-            manual_doc_id=_clean(params.get("doc_id")), profile_id=action.profile,
-            actor_id=_clean((getattr(action.context, "cookies", {}) or {}).get("c_user")),
-            before_submit=before_submit)
+            manual_doc_id=_clean(params.get("doc_id")), profile_id=action.profile, before_submit=before_submit)
         expected = _id(created.business_id)
         await action.checkpoint({"phase": "CREATE_RESULT_UNVERIFIED", "create_response_business_id": expected,
             "create_response_path": created.response_path})

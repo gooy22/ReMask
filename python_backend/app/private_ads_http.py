@@ -22,7 +22,6 @@ from .private_ads_draft import fail, flatten_params, identity
 from .private_ads_document import (_auth_gate, _json_payloads, _JSON_SCRIPT_RE,
                                    _response_only, _strict_json, _strict_json_decoder)
 from .provisioning.models import ProvisioningError
-from .meta_auth_document import has_login_form
 
 log = logging.getLogger("remask.private_ads_http")
 
@@ -116,48 +115,6 @@ def _walk(value, depth=0):
     elif isinstance(value, list):
         for child in value:
             yield from _walk(child, depth + 1)
-
-
-def _bootstrap_evidence(url, body, profile, actor_id):
-    """Read-only evidence; never emit query values, HTML or credentials.
-
-    Report the same route/form classification used by the dispatch guard.
-    Only reviewed literal routes/hosts can appear in logs.
-    """
-    final = urlsplit(url)
-    hosts = {"adsmanager.facebook.com", "business.facebook.com", "www.facebook.com",
-             "facebook.com", "m.facebook.com"}
-    routes = {"/adsmanager/manage/campaigns", "/business/loginpage/", "/business/loginpage",
-              "/login/", "/login", "/login.php", "/checkpoint/", "/checkpoint",
-              "/latest/home", "/latest/home/", "/"}
-    host = final.hostname if final.hostname in hosts else "unreviewed"
-    path = final.path if host != "unreviewed" and final.path in routes else "unreviewed"
-    # This field reports route evidence separately from actual HTML forms.
-    path_gate = _auth_gate("https://" + host + final.path, "")
-    login_form = has_login_form(body)
-    actor_state = "absent"
-    try:
-        actors = set()
-        for payload in _ads_document_payloads(body):
-            for node in _walk(payload):
-                if (isinstance(node, list) and len(node) >= 3
-                        and node[0] == "CurrentUserInitialData" and node[1] == []
-                        and isinstance(node[2], dict)):
-                    value = node[2].get("USER_ID")
-                    if isinstance(value, str) and value.isdigit():
-                        actors.add(value)
-        if actors:
-            actor_state = ("matches" if actors == {actor_id} else
-                           "logged_out" if actors == {"0"} else "mismatch")
-    except (ProvisioningError, ValueError, RecursionError):
-        actor_state = "unavailable"
-    auth = {name: str(profile.cookies.get(name) or "") for name in ("c_user", "xs")}
-    fingerprint = hashlib.sha256(json.dumps(auth, sort_keys=True,
-        separators=(",", ":")).encode()).hexdigest()
-    return {"final_host": host, "final_path": path, "path_gate": path_gate or "none",
-            "login_form": login_form, "document_actor": actor_state,
-            "profile_actor_matches": auth["c_user"] == actor_id,
-            "proxy_configured": bool(profile.proxy), "auth_cookie_fingerprint": fingerprint}
 
 
 def _unique(values, code):
@@ -262,11 +219,6 @@ class AdsManagerPrivateHttp:
         from .direct_test import direct_test_deadline
         self._direct_deadline = direct_test_deadline(self._profile_name, str(web.profile.cookies.get('c_user') or '')) if not self._profile_proxy else 0
 
-    @property
-    def draft_root_parent_id(self):
-        """The native advertising identity, usable only after exact alias proof."""
-        return self._native_account_id
-
     def _cookies(self):
         # Digest remains private memory. A renewed/changed profile document
         # requires new initialization before another advertising request.
@@ -347,21 +299,8 @@ class AdsManagerPrivateHttp:
             final.path == "/adsmanager/manage/campaigns",
             account_matches,
             parse_qs(final.query).get("business_id") == [business_id], gate or "none")
-        try:
-            evidence = json.dumps(_bootstrap_evidence(final_url, body, web.profile, actor_id),
-                sort_keys=True, separators=(",", ":"))
-        except Exception:
-            # Diagnostic parsing must never change authentication or dispatch.
-            # Do not log exception text, which may include response fragments.
-            evidence = '{"evidence_error":"unavailable"}'
-        log.info("ads_bootstrap_evidence profile=%s evidence=%s",
-            getattr(web.profile, "name", ""), evidence)
         if gate:
-            error = fail(gate, "Ads Manager requires restoration of the profile session", True)
-            # This is a rejected document GET, before Ads Manager exposes any mutation sender.
-            error.request_may_have_been_sent = False
-            error.transport_stage = "bootstrap"
-            raise error
+            raise fail(gate, "Ads Manager requires restoration of the profile session", True)
         if (status != 200 or len(body.encode()) > 5_000_000 or final.scheme != "https"
                 or final.hostname not in {"adsmanager.facebook.com", "business.facebook.com"}
                 or final.path != "/adsmanager/manage/campaigns"
@@ -565,38 +504,32 @@ class AdsManagerPrivateHttp:
         if not self._profile_matches() or session.proxy != self._profile_proxy:
             raise fail("PROFILE_CONTEXT_UNAVAILABLE", "Advertising profile changed before dispatch", True)
         try:
-            from .private_http import buffered_response
-            def validate_protocol(response):
+            async with session.request(method, url, headers=headers, allow_redirects=False,
+                                       request_timeout_seconds=300 if files else 60, **options) as response:
                 if response.http_version != "HTTP/2":
                     raise fail("PROTOCOL_UNAVAILABLE", "Advertising origin did not negotiate HTTP/2", True)
-            def open_response():
-                if not self._profile_matches() or session.proxy != self._profile_proxy:
-                    raise fail("PROFILE_CONTEXT_UNAVAILABLE", "Advertising profile changed before dispatch", True)
-                return session.request(method, url, headers=headers, allow_redirects=False,
-                    request_timeout_seconds=300 if files else 60, **options)
-            response, raw = await buffered_response(method, open_response,
-                2_000_001, retry_read=method == 'GET', validate=validate_protocol)
-            if len(raw) > 2_000_000:
-                raise fail("RESPONSE_TOO_LARGE", "Advertising response exceeds its body budget")
-            try:
-                result = _strict_response_json(raw)
-            except (ValueError, UnicodeDecodeError):
+                raw = await response.content.read(2_000_001)
+                if len(raw) > 2_000_000:
+                    raise fail("RESPONSE_TOO_LARGE", "Advertising response exceeds its body budget")
+                try:
+                    result = _strict_response_json(raw)
+                except (ValueError, UnicodeDecodeError):
+                    if response.status != 200:
+                        raise AdsManagerResponseError({"http_status": response.status}) from None
+                    raise fail("RESPONSE_INVALID", "Advertising response could not be decoded") from None
+                if isinstance(result, dict) and (
+                        result.get("hasNext") is True or
+                        (isinstance(result.get("extensions"), dict) and
+                         result["extensions"].get("is_final") is False)):
+                    raise fail("RESPONSE_INCOMPLETE", "Meta returned an unfinished advertising response", True)
+                # The presence of an error envelope is a rejection even when
+                # its inner object/list is empty or malformed.
+                if isinstance(result, dict) and ("error" in result or "errors" in result):
+                    error = result.get("error")
+                    raise AdsManagerResponseError({**(error if isinstance(error, dict) else {}),
+                                                   "http_status": response.status})
                 if response.status != 200:
-                    raise AdsManagerResponseError({"http_status": response.status}) from None
-                raise fail("RESPONSE_INVALID", "Advertising response could not be decoded") from None
-            if isinstance(result, dict) and (
-                    result.get("hasNext") is True or
-                    (isinstance(result.get("extensions"), dict) and
-                     result["extensions"].get("is_final") is False)):
-                raise fail("RESPONSE_INCOMPLETE", "Meta returned an unfinished advertising response", True)
-            # The presence of an error envelope is a rejection even when
-            # its inner object/list is empty or malformed.
-            if isinstance(result, dict) and ("error" in result or "errors" in result):
-                error = result.get("error")
-                raise AdsManagerResponseError({**(error if isinstance(error, dict) else {}),
-                                               "http_status": response.status})
-            if response.status != 200:
-                raise AdsManagerResponseError({"http_status": response.status})
+                    raise AdsManagerResponseError({"http_status": response.status})
         except Exception as exc:
             if isinstance(exc, ProvisioningError):
                 log.warning('ads_request_failed profile=%s method=%s route_kind=%s alias_edge=%s code=%s',

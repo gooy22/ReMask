@@ -4,10 +4,9 @@ from __future__ import annotations
 import copy
 from functools import lru_cache
 import json
-import logging
 import re
 
-from .private_ads_draft import FRAGMENT_FIELDS, LEVELS, fail, fragment_parent_matches, fragment_values_match, identity
+from .private_ads_draft import FRAGMENT_FIELDS, LEVELS, fail, fragment_values_match, identity
 from .private_ads_http import AdsManagerPrivateHttp
 from .private_launch import _launch_fingerprint
 
@@ -202,20 +201,13 @@ async def inspect_saved_draft(adapter, *, profile_id, context, session, payload)
         adapter_scope(row, target["ad_account_id"])
         parent = objects.get("campaign" if level == "ad_set" else "ad_set") if level != "campaign" else None
         if (row.get("id") != fragment_id or row.get("ad_draft_id") != draft_id or row.get("ad_object_type") != level
-                or not fragment_parent_matches(row.get("parent_ad_object_id"), level=level,
-                    parent_id=parent, root_account_id=getattr(client, "draft_root_parent_id", client.context.account_id))):
+                or row.get("parent_ad_object_id") not in ((None, "") if parent is None else (parent,))):
             raise fail("READ_RELATION_MISMATCH", "Fresh fragment relationships differ from the saved draft")
         if level != "campaign" and values.get("campaign_id") != objects["campaign"]:
             raise fail("READ_RELATION_MISMATCH", "Saved Ad Set or Ad has another Campaign relationship")
         if level == "ad" and values.get("adset_id") != objects["ad_set"]:
             raise fail("READ_RELATION_MISMATCH", "Saved Ad has another Ad Set relationship")
         if not fragment_values_match(row.get("values"), values, business_id=target["business_id"]):
-            # Import only on the read-failure path; this module supplies the
-            # saved-intent checks also used by the diagnostic endpoint.
-            from .private_draft_read_diagnostic import values_diagnostic
-            logging.getLogger(__name__).warning("draft_value_mismatch profile=%s level=%s diagnostic=%s",
-                profile_id, level, json.dumps(values_diagnostic(row.get("values"), values,
-                    target["business_id"]), sort_keys=True, separators=(",", ":")))
             raise fail("READ_SPEC_MISMATCH", "Fresh draft values differ from the original submitted fields")
         objects[level] = identity(row.get("ad_object_id"))
         if confirmed_object is not None and objects[level] != confirmed_object:

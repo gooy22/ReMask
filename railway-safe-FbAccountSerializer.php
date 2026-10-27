@@ -26,21 +26,6 @@ class FbAccountSerializer implements ProfileStoreInterface
         });
     }
 
-    /** Migrate plaintext once; an encrypted profile must never rotate its backup on boot. */
-    public function ensureEncrypted(): void
-    {
-        $handle = AtomicJsonFile::lock($this->filename);
-        try {
-            $rows = AtomicJsonFile::read($this->filename);
-            $accounts = $this->decodeAccounts(AtomicJsonFile::encode($rows));
-            if (getenv('REMASK_ENCRYPT_PROFILE_JSON') !== '1') return;
-            if (count($rows) === count($accounts) && count(array_filter($rows,
-                static fn($row) => is_array($row) && is_string($row['credentials_encrypted'] ?? null))) === count($rows)) return;
-            AtomicJsonFile::replace($this->filename, $this->encodeAccounts($accounts), true,
-                $this->encodeAccounts($accounts));
-        } finally { AtomicJsonFile::unlock($handle); }
-    }
-
     public function deserialize(): array
     {
         $handle = AtomicJsonFile::lock($this->filename, LOCK_SH);
@@ -65,123 +50,12 @@ class FbAccountSerializer implements ProfileStoreInterface
         });
     }
 
-    public function compareAndSwapCookies(string $name, string $actor, string $expectedXs, array $cookies): bool
-    {
-        require_once __DIR__ . '/RemaskCookieSession.php';
-        try {
-            $this->mutate(function (array $accounts) use ($name, $actor, $expectedXs, $cookies) {
-                foreach ($accounts as $index=>$account) {
-                    if ($account->name!==$name) continue;
-                    $next=RemaskCookieSession::replacement($account, $actor, $expectedXs, $cookies);
-                    if ($next===null) throw new RuntimeException('PROFILE_SESSION_CHANGED');
-                    $updated=clone $account;
-                    $updated->cookies=$next;
-                    $accounts[$index]=$updated;
-                    return $accounts;
-                }
-                throw new RuntimeException('PROFILE_SESSION_CHANGED');
-            });
-            return true;
-        } catch (RuntimeException $error) {
-            if ($error->getMessage()==='PROFILE_SESSION_CHANGED') return false;
-            throw $error;
-        }
-    }
-
     public function getAccountByName($name): ?FbAccount
     {
         foreach ($this->deserialize() as $account) {
             if ($account->name === $name) return $account;
         }
         return null;
-    }
-
-    public function getPreviousAccountByName($name): ?FbAccount
-    {
-        if (!is_string($name) || $name === '') return null;
-        $backupPath = $this->filename . '.previous';
-        if (!is_file($backupPath)) return null;
-        $handle = AtomicJsonFile::lock($this->filename, LOCK_SH);
-        try {
-            if (!is_file($backupPath)) return null;
-            $rows = AtomicJsonFile::read($backupPath);
-            foreach ($this->decodeAccounts(AtomicJsonFile::encode($rows)) as $account) {
-                if ($account->name === $name) return $account;
-            }
-            return null;
-        } finally { AtomicJsonFile::unlock($handle); }
-    }
-
-    /**
-     * Restore a verified same-actor session from the encrypted previous snapshot.
-     * The current and backup fingerprints are checked while holding the profile-store lock.
-     */
-    public function restorePreviousCookiesIfUnchanged(
-        string $name,
-        string $actor,
-        string $expectedCurrentXsSha256,
-        string $expectedPreviousXsSha256,
-        array $verifiedCookies
-    ): bool {
-        require_once __DIR__ . '/RemaskCookieSession.php';
-        if ($name === '' || $actor === ''
-            || !preg_match('/^[a-f0-9]{64}$/D', $expectedCurrentXsSha256)
-            || !preg_match('/^[a-f0-9]{64}$/D', $expectedPreviousXsSha256)) {
-            return false;
-        }
-        try {
-            $this->mutate(function (array $accounts) use (
-                $name, $actor, $expectedCurrentXsSha256, $expectedPreviousXsSha256, $verifiedCookies
-            ) {
-                $currentIndex = null;
-                foreach ($accounts as $index => $account) {
-                    if ($account->name === $name) { $currentIndex = $index; break; }
-                }
-                if ($currentIndex === null) throw new RuntimeException('PROFILE_SESSION_CHANGED');
-                $current = $accounts[$currentIndex];
-                $currentCookies = RemaskCookieSession::map((array)$current->cookies);
-                $currentXs = (string)($currentCookies['xs'] ?? '');
-                if ((string)($currentCookies['c_user'] ?? '') !== $actor || $currentXs === ''
-                    || !hash_equals($expectedCurrentXsSha256, hash('sha256', $currentXs))) {
-                    throw new RuntimeException('PROFILE_SESSION_CHANGED');
-                }
-
-                $backupPath = $this->filename . '.previous';
-                if (!is_file($backupPath)) throw new RuntimeException('PROFILE_SESSION_CHANGED');
-                $backupRows = AtomicJsonFile::read($backupPath);
-                $backupAccounts = $this->decodeAccounts(AtomicJsonFile::encode($backupRows));
-                $backup = null;
-                foreach ($backupAccounts as $account) {
-                    if ($account->name === $name) { $backup = $account; break; }
-                }
-                if (!$backup) throw new RuntimeException('PROFILE_SESSION_CHANGED');
-                $backupCookies = RemaskCookieSession::map((array)$backup->cookies);
-                $backupXs = (string)($backupCookies['xs'] ?? '');
-                if ((string)($backupCookies['c_user'] ?? '') !== $actor || $backupXs === ''
-                    || !hash_equals($expectedPreviousXsSha256, hash('sha256', $backupXs))) {
-                    throw new RuntimeException('PROFILE_SESSION_CHANGED');
-                }
-
-                $next = RemaskCookieSession::replacement(
-                    $current, $actor, $currentXs, $verifiedCookies
-                );
-                if ($next === null) throw new RuntimeException('PROFILE_SESSION_CHANGED');
-                $nextCookies = RemaskCookieSession::map($next);
-                $nextXs = (string)($nextCookies['xs'] ?? '');
-                if ($nextXs === ''
-                    || hash('sha256', $nextXs) === $expectedCurrentXsSha256) {
-                    throw new RuntimeException('PROFILE_SESSION_CHANGED');
-                }
-                $updated = clone $current;
-                $updated->cookies = $next;
-                $accounts[$currentIndex] = $updated;
-                return $accounts;
-            });
-            return true;
-        } catch (RuntimeException $error) {
-            if ($error->getMessage() === 'PROFILE_SESSION_CHANGED') return false;
-            throw $error;
-        }
     }
 
     public function deleteAccountByName($name): array

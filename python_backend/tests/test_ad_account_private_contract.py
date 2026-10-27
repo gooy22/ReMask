@@ -136,11 +136,9 @@ class PrivateTransportTests(unittest.IsolatedAsyncioTestCase):
         self.meta = FakeMeta(trace=self.trace)
         self.web = FacebookWebSession(WebProfile(name="15", cookies={"c_user": UID},
                                       proxy="http://profile-proxy:8080", user_agent="profile-UA"))
-        bootstrap = FacebookBootstrap(
+        self.web.bootstrap = AsyncMock(return_value=FacebookBootstrap(
             fb_dtsg="CURRENT", actor_id=UID,
-            source_url="https://business.facebook.com/latest/settings/ad_accounts/?business_id=" + BM)
-        self.web._bootstrap = bootstrap
-        self.web.bootstrap = AsyncMock(return_value=bootstrap)
+            source_url="https://business.facebook.com/latest/settings/ad_accounts/?business_id=" + BM))
         self.web._ensure_session = AsyncMock(return_value=self.meta)
         self.web.fetch_text = self.meta.fetch_text
         self.web.graphql_browser_native = AsyncMock(side_effect=AssertionError("Browser POST forbidden"))

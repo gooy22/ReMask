@@ -163,51 +163,6 @@ try {
         rmx_pwj_out(['ok'=>true,'csrf'=>remask_csrf_token()]);
     }
 
-    if ($action === 'private_draft_read') {
-        if (strtoupper((string)($_SERVER['REQUEST_METHOD'] ?? 'GET')) !== 'POST') {
-            rmx_pwj_out(['ok'=>false,'error'=>'METHOD_NOT_ALLOWED'], 405);
-        }
-        $profileId = $input['profile_id'] ?? null;
-        $jobId = $input['job_id'] ?? null;
-        if (!is_string($profileId) || !preg_match('/^[0-9]{1,30}$/D', $profileId)
-            || !is_string($jobId) || !preg_match('/^[a-f0-9]{32}$/D', $jobId)) {
-            rmx_pwj_out(['ok'=>false,'error'=>'PRIVATE_DRAFT_READ_INVALID_INPUT'], 400);
-        }
-        if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
-        $read = rmx_pwj_worker_request('POST',
-            '/api/v1/profiles/' . rawurlencode($profileId) . '/private-draft-read',
-            ['job_id'=>$jobId], 150);
-        rmx_pwj_out(['ok'=>true,'read'=>$read]);
-    }
-
-    if ($action === 'private_session_probe') {
-        if (strtoupper((string)($_SERVER['REQUEST_METHOD'] ?? 'GET')) !== 'POST') {
-            rmx_pwj_out(['ok'=>false,'error'=>'METHOD_NOT_ALLOWED'], 405);
-        }
-        $profileId = trim((string)($input['profile_id'] ?? ''));
-        $businessId = $input['business_id'] ?? null;
-        $accountId = $input['ad_account_id'] ?? null;
-        $cookies = $input['cookies'] ?? null;
-        if ($profileId === '' || strlen($profileId) > 160
-            || !is_string($businessId) || !preg_match('/^\d{5,30}$/D', $businessId)
-            || !is_string($accountId) || !preg_match('/^\d{5,30}$/D', $accountId)
-            || !is_array($cookies) || array_is_list($cookies) || count($cookies) < 2 || count($cookies) > 64) {
-            rmx_pwj_out(['ok'=>false,'error'=>'PRIVATE_SESSION_PROBE_INVALID_INPUT'], 400);
-        }
-        if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
-        $probePayload = ['business_id'=>$businessId,'ad_account_id'=>$accountId,'cookies'=>$cookies];
-        if (isset($input['document_kind'])) {
-            if (!is_string($input['document_kind']) || !in_array($input['document_kind'], ['adsmanager','identity','saved_identity','login_document','login_other_profile'], true)) {
-                rmx_pwj_out(['ok'=>false,'error'=>'PRIVATE_SESSION_PROBE_INVALID_DOCUMENT'], 400);
-            }
-            $probePayload['document_kind'] = $input['document_kind'];
-        }
-        $probe = rmx_pwj_worker_request('POST',
-            '/api/v1/profiles/' . rawurlencode($profileId) . '/private-session-probe',
-            $probePayload, 50);
-        rmx_pwj_out(['ok'=>true,'probe'=>$probe]);
-    }
-
     if ($action === 'health' || $action === 'ready') {
         $health = rmx_pwj_worker_request('GET', '/health');
 
@@ -622,7 +577,7 @@ try {
     $safeMessage = preg_match('/^[A-Z][A-Z0-9_]{2,100}$/D', $message)
         ? $message : 'PYTHON_WORKER_FAILED';
     error_log('[python-worker-jobs] ' . get_class($e) . ': ' . $safeMessage);
-    if (in_array(($action ?? ''), ['private_launch_review','private_draft_read'], true) && $e instanceof RmxPwjWorkerHttpError
+    if (($action ?? '') === 'private_launch_review' && $e instanceof RmxPwjWorkerHttpError
         && preg_match('/^[A-Z0-9_]{1,100}$/D', (string)($e->detail['code'] ?? ''))) {
         // Preserve the typed readiness failure across PHP. Do not make the
         // browser recover control flow from JSON embedded in an error string.

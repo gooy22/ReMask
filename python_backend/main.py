@@ -17,7 +17,7 @@ from app.mirror import MirrorError, SnapshotMirror
 from app.models import CreateJobRequest, HealthResponse, JobAccepted, RetryResponse
 from app.runner import WorkerPool
 from app.session import ProfileContextError, ProfileSession, ProxyCheckError
-from app.session_auth_refresh import refresh_saved_auth_context, read_with_saved_auth_refresh
+from app.session_auth_refresh import refresh_saved_auth_context
 from app.direct_test import direct_test_result
 from app.store import JobStore
 from app.facebook_business_browser import BROWSER_TERMINAL_ACCESS_CODES, BrowserBusinessError, FacebookBusinessBrowser
@@ -139,7 +139,7 @@ async def run_bm_browser_canary() -> None:
             except ProfileContextError as exc:
                 rejected.append({
                     'profile_id':profile_id,
-                    'code':getattr(exc,'code','PROFILE_CONTEXT_ERROR'),
+                    'code':'PROFILE_CONTEXT_ERROR',
                     'detail':str(exc)[:300],
                 })
                 continue
@@ -1214,7 +1214,7 @@ async def profile_preflight(profile_id: str, purpose: str = 'business'):
     except ProfileContextError as exc:
         raise HTTPException(
             status_code=422,
-            detail=f'{getattr(exc,"code","PROFILE_CONTEXT_ERROR")}: {exc}',
+            detail=f'PROFILE_CONTEXT_ERROR: {exc}',
         ) from exc
 
     try:
@@ -1489,7 +1489,7 @@ async def profile_page_access(profile_id: str, account_id: str):
     except ValueError as exc:
         raise HTTPException(status_code=400,detail='INVALID_PAGE_ACCESS_TARGET') from exc
     except ProfileContextError as exc:
-        result=unverified_result(profile,account_id,getattr(exc,'code','PROFILE_CONTEXT_ERROR'))
+        result=unverified_result(profile,account_id,'PROFILE_CONTEXT_ERROR')
     except asyncio.TimeoutError as exc:
         result=unverified_result(profile,account_id,'PAGE_ACCESS_INSPECTION_TIMEOUT')
     except BrowserBusinessError as exc:
@@ -1527,7 +1527,7 @@ async def profile_payment_methods(profile_id: str, account_id: str, business_id:
     except ValueError as exc:
         raise HTTPException(status_code=400,detail=str(exc)) from exc
     except ProfileContextError as exc:
-        raise HTTPException(status_code=422,detail=getattr(exc,'code','PROFILE_CONTEXT_ERROR')) from exc
+        raise HTTPException(status_code=422,detail='PROFILE_CONTEXT_ERROR') from exc
     except asyncio.TimeoutError as exc:
         raise HTTPException(status_code=504,detail='PAYMENT_INSPECTION_TIMEOUT') from exc
     except BrowserBusinessError as exc:
@@ -3779,17 +3779,12 @@ async def private_advertising_resources(profile_id: str, resource: str, account_
                         callback=refresh_targeting_suggestions)
                     cached = {**cached, '_cache': {**cache_meta, 'refresh_pending': started}}
                     return {'ok':True,'profile':profile,'resource':resource,**cached}
-        async def read_resource_once():
-            try:
+        try:
+            with measure_phase('resource_read'):
                 async with ProfileSession(context) as session:
                     web = await session.facebook_web()
                     web.private_only = True
-                    return await resources.get(name=resource,values=values,actor_id=actor,force=True,web=web)
-            except AuthenticationError as error:
-                raise private_auth_error(error) from None
-        try:
-            with measure_phase('resource_read'):
-                result = await read_with_saved_auth_refresh(pool.resolver, context, read_resource_once)
+                    result = await pool.private_launch.resources.get(name=resource,values=values,actor_id=actor,force=True,web=web)
         except (AuthenticationError, RemoteRequestError, ProxyError, ProvisioningError,
                 ProfileContextError, asyncio.TimeoutError):
             if force or not cached or not cached.get('data'):
@@ -3965,56 +3960,6 @@ async def private_launch_contract_register(step_name: str, payload: dict = Body(
         },
     }
 
-@app.post('/api/v1/profiles/{profile_id}/private-session-probe',dependencies=[Depends(require_key)])
-async def private_session_probe(profile_id: str, payload: dict = Body(...)):
-    clean_profile = str(profile_id or '').strip()
-    if not clean_profile or len(clean_profile) > 160:
-        raise HTTPException(status_code=400, detail='INVALID_PROFILE_ID')
-    from app.private_session_probe import probe_document
-    try:
-        context = await _resolve_read_profile(clean_profile)
-        return {'ok': True, **await probe_document(context, payload)}
-    except ProvisioningError as error:
-        raise HTTPException(status_code=409,
-            detail={'code':error.code, 'message':str(error), 'retryable':False}) from None
-    except (ProfileContextError, TimeoutError):
-        raise HTTPException(status_code=409, detail={'code':'PRIVATE_SESSION_PROBE_CONTEXT_UNAVAILABLE',
-            'message':'Saved profile context is unavailable.', 'retryable':False}) from None
-
-
-@app.post('/api/v1/profiles/{profile_id}/private-draft-read',dependencies=[Depends(require_key)])
-async def private_draft_read(profile_id: str, payload: dict = Body(...)):
-    import re
-    if set(payload) != {'job_id'} or not isinstance(payload.get('job_id'), str) or not re.fullmatch(r'[a-f0-9]{32}', payload['job_id']):
-        raise HTTPException(status_code=400, detail='PRIVATE_DRAFT_READ_INVALID_INPUT')
-    view = await store.job_view(payload['job_id'])
-    if not view or view.get('status') not in {'FAILED', 'SUCCESS', 'PARTIAL'}:
-        raise HTTPException(status_code=409, detail='PRIVATE_DRAFT_READ_JOB_NOT_SETTLED')
-    tasks = [task for item in view.get('items', []) if str(item.get('profile_id')) == profile_id
-             for task in item.get('tasks', []) if task.get('action') == 'private_launch']
-    if len(tasks) != 1 or not isinstance(tasks[0].get('payload'), dict):
-        raise HTTPException(status_code=409, detail='PRIVATE_DRAFT_READ_TARGET_AMBIGUOUS')
-    from app.private_draft_read_diagnostic import read_diagnostic
-    from app.private_auth import private_auth_error
-    from app.session import ProfileSession
-    from fb_worker import AuthenticationError
-    try:
-        context = await _resolve_read_profile(profile_id)
-        async def read_draft_once():
-            try:
-                async with ProfileSession(context) as session:
-                    return await read_diagnostic(pool.private_launch.ads_manager,
-                        profile_id=profile_id, context=context, session=session, payload=tasks[0]['payload'])
-            except AuthenticationError as error:
-                raise private_auth_error(error) from None
-        result = await read_with_saved_auth_refresh(pool.resolver, context, read_draft_once)
-        return {'ok': True, **result}
-    except ProvisioningError as error:
-        raise HTTPException(status_code=409, detail={'code':error.code, 'message':str(error), 'retryable':False}) from None
-    except (ProfileContextError, TimeoutError):
-        raise HTTPException(status_code=409, detail='PRIVATE_DRAFT_READ_CONTEXT_UNAVAILABLE') from None
-
-
 @app.post('/api/v1/profiles/{profile_id}/private-launch-review',dependencies=[Depends(require_key)])
 async def private_launch_review(profile_id: str, payload: dict = Body(...)):
     clean_profile=str(profile_id or '').strip()
@@ -4042,7 +3987,7 @@ async def private_launch_review(profile_id: str, payload: dict = Body(...)):
         raise HTTPException(
             status_code=409,
             detail={
-                'code':getattr(exc,'code','PROFILE_CONTEXT_ERROR'),
+                'code':str(getattr(exc,'category','PROFILE_CONTEXT_ERROR')).upper(),
                 'message':str(exc),
                 'retryable':bool(getattr(exc,'retryable',False)),
             },

@@ -30,14 +30,6 @@ def identity(value):
     return value
 
 
-def fragment_parent_matches(value, *, level, parent_id, root_account_id):
-    # A root Campaign belongs to the proven native advertising account.
-    # Child fragments belong to the exact preceding advertising object.
-    if level == "campaign" and parent_id is None:
-        return value in (None, "", identity(root_account_id))
-    return parent_id is not None and value == parent_id
-
-
 def flatten_params(params):
     """Match captured flattenObject: omit null, JSON-encode non-strings."""
     if not isinstance(params, dict):

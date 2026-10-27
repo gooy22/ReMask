@@ -93,29 +93,8 @@ class StaticContractTests(unittest.TestCase):
 
 class StaticReadTests(unittest.IsolatedAsyncioTestCase):
     def web(self, payload):
-        events = []
-        def begin(operation, *scope):
-            events.append(('begin', operation, scope, None))
-        def mark(operation, *scope, complete=False):
-            events.append(('mark', operation, scope, complete))
         return SimpleNamespace(graphql=AsyncMock(return_value=payload),profile=SimpleNamespace(name='fixture'),
-            fetch_text=AsyncMock(side_effect=AssertionError('No HTML or CDN inventory')),
-            begin_business_read_verification=begin, mark_business_read_verified=mark,
-            business_read_verification_events=events)
-
-    async def test_pinned_business_inventory_queries_receive_exact_scope_marker(self):
-        web = self.web({})
-        await execute(web, 'READ_BM')
-        await execute(web, 'READ_RK', business=BM)
-        await execute(web, 'CONFIG', business=BM)
-        self.assertEqual(
-            [call.kwargs['business_loginpage_probe'] for call in web.graphql.await_args_list],
-            ['READ_BM', 'READ_RK', 'CONFIG'],
-        )
-        self.assertEqual(
-            [call.kwargs['read_timeout_seconds'] for call in web.graphql.await_args_list],
-            [30, 30, 30],
-        )
+            fetch_text=AsyncMock(side_effect=AssertionError('No HTML or CDN inventory')))
 
     async def test_bm_inventory_posts_one_fixed_read_and_no_asset_navigation(self):
         web=self.web(scopes([(BM,'BM')]))
@@ -124,8 +103,6 @@ class StaticReadTests(unittest.IsolatedAsyncioTestCase):
         web.fetch_text.assert_not_awaited()
         self.assertEqual(web.graphql.call_args.args[0],command('READ_BM')['doc_id'])
         self.assertNotIn('asset_id',repr(web.graphql.call_args))
-        self.assertEqual(web.business_read_verification_events[-1],
-            ('mark', 'READ_BM', (), True))
 
     async def test_prefix_pagination_does_not_treat_first_page_as_complete(self):
         web=self.web(None);web.graphql.side_effect=[scopes([(BM,'BM')],next_page=True),scopes([(BM,'BM'),(RK,'Other')])]
@@ -138,22 +115,6 @@ class StaticReadTests(unittest.IsolatedAsyncioTestCase):
         web.graphql.side_effect=[scopes([(BM,'Old')],next_page=True),scopes([(RK,'Current')])]
         proof=await read_business_inventory(web)
         self.assertTrue(proof['complete']);self.assertEqual(proof['rows'],{RK:'Current'})
-
-    async def test_complete_rk_inventory_records_only_the_exact_business_scope(self):
-        web = self.web(connected_response(accounts=[RK]))
-        proof = await read_ad_account_inventory(web, BM, NAME)
-        self.assertTrue(proof['complete'])
-        self.assertEqual(web.business_read_verification_events[-1],
-            ('mark', 'READ_RK', (BM,), True))
-
-    async def test_incomplete_bm_inventory_does_not_record_mutation_proof(self):
-        payload = scopes([(BM, 'BM')])
-        del payload['data']['viewer']['meta_business_scoping']['business_scopes']['page_info']
-        web = self.web(payload)
-        proof = await read_business_inventory(web)
-        self.assertFalse(proof['complete'])
-        self.assertEqual(web.business_read_verification_events[-1],
-            ('mark', 'READ_BM', (), False))
 
     async def test_expected_bm_is_independently_verified_without_requiring_complete_list(self):
         web=self.web({'data':{'business':{'id':BM,'name':'BM','scheduledForDeletion':False}}})
@@ -201,7 +162,6 @@ class StaticReadBootstrapRetryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(web.graphql.await_args_list[0], web.graphql.await_args_list[1])
         self.assertEqual(web.graphql.call_args.kwargs['business_context_id'], BM)
         self.assertNotIn('before_submit', web.graphql.call_args.kwargs)
-        self.assertEqual(web.graphql.call_args.kwargs['read_timeout_seconds'], 30)
 
     async def test_query_retries_timeout_wrapped_by_business_auth_precheck(self):
         from tests.test_fb_worker_request_envelope import BusinessAuthenticationPrecheckTests
@@ -235,8 +195,6 @@ class StaticReadBootstrapRetryTests(unittest.IsolatedAsyncioTestCase):
             await execute(web, 'CLAIM', business=BM, page=RK, join='fixture', before_submit=intent)
         self.assertIs(caught.exception, error)
         self.assertEqual(web.graphql.await_count, 1)
-
-        self.assertNotIn('read_timeout_seconds', web.graphql.call_args.kwargs)
 
     async def test_unknown_post_and_untyped_failures_do_not_enter_bootstrap_retry(self):
         for error in (self.timeout(stage='graphql', sent=True),

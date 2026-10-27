@@ -271,50 +271,6 @@ class FacebookBrowserGraphqlExactlyOnceTests(unittest.TestCase):
 
 
 class BusinessAuthenticationPrecheckTests(unittest.IsolatedAsyncioTestCase):
-    async def test_explicit_query_budget_changes_transport_only_and_posts_once(self):
-        session, http = self.session()
-        result = await session.graphql('123456789', {},
-            endpoint_url='https://www.facebook.com/api/graphql/', read_timeout_seconds=30)
-        self.assertEqual(result, {'data':{'ok':True}})
-        self.assertEqual(len(http.posts), 1)
-        self.assertEqual(http.posts[0]['request_timeout_seconds'], 30)
-        self.assertNotIn('read_timeout_seconds', http.posts[0]['data'])
-
-    async def test_query_budget_rejects_mutation_claim_without_posting(self):
-        session, http = self.session()
-        claim = AsyncMock()
-        with self.assertRaises(RemoteRequestError) as caught:
-            await session.graphql('123456789', {}, endpoint_url='https://www.facebook.com/api/graphql/',
-                before_submit=claim, read_timeout_seconds=30)
-        self.assertEqual(http.posts, [])
-        claim.assert_not_awaited()
-        self.assertFalse(caught.exception.request_may_have_been_sent)
-
-    async def test_query_budget_is_finite_and_bounded(self):
-        for budget in (True, 0, 61, float('nan'), float('inf'), '30'):
-            session, http = self.session()
-            with self.assertRaises(RemoteRequestError):
-                await session.graphql('123456789', {}, endpoint_url='https://www.facebook.com/api/graphql/',
-                    read_timeout_seconds=budget)
-            self.assertEqual(http.posts, [])
-
-    async def test_query_timeout_never_replays_the_post(self):
-        import asyncio
-        session, http = self.session()
-        class Response:
-            async def __aenter__(self): return self
-            async def __aexit__(self, *args): return False
-            async def text(self): raise asyncio.TimeoutError('fixture')
-        def post(endpoint, **kwargs):
-            http.posts.append(kwargs)
-            return Response()
-        http.post = post
-        with self.assertRaises(RemoteRequestError) as caught:
-            await session.graphql('123456789', {}, endpoint_url='https://www.facebook.com/api/graphql/',
-                read_timeout_seconds=30)
-        self.assertEqual(len(http.posts), 1)
-        self.assertTrue(caught.exception.request_may_have_been_sent)
-
     def session(self, payload='{"data":{"ok":true}}', source="https://www.facebook.com/marketplace/"):
         class Response:
             status = 200

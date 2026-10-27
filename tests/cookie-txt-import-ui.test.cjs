@@ -43,13 +43,10 @@ vm.createContext(context);vm.runInContext(source,context);
   responses.push({ok:true,total:3,ready:2,skipped:1,errors:0,records:[
     {line:1,user_id:'123456789',profile_name:'8',status:'ready'},
     {line:2,user_id:'234567890',profile_name:'9',status:'ready'},
-    {line:3,user_id:'345678901',profile_name:'1',status:'already_exists',refreshable:true}]});
+    {line:3,user_id:'345678901',profile_name:'1',status:'already_exists'}]});
   await el('txtPreview').fire('click');
   assert.equal(requests[0].body.action,'import_preview'); assert.equal('proxy' in requests[0].body,false);
   assert.equal(dialog.querySelectorAll('input[data-txt-line]').length,2); assert.equal(el('txtCommit').disabled,false);
-  el('txtRefreshExisting').checked=true; await el('txtRefreshExisting').fire('change');
-  assert.equal(dialog.querySelectorAll('input[data-txt-line]').length,3);
-  assert.equal(dialog.querySelectorAll('input[data-txt-line]')[2].checked,false);
   assert.equal(el('txtResults').children.length,3);
   assert.equal(el('txtResults').children[0].children.some(c=>String(c.textContent).includes('fixture-session')),false);
   await el('txtCommit').fire('click'); assert.equal(requests.length,1); // Proxy required before any write.
@@ -64,7 +61,7 @@ vm.createContext(context);vm.runInContext(source,context);
   assert.equal(requests[1].body.allow_direct_test,true); assert.equal(requests[1].body.proxy,'');
   assert.equal(requests[1].body.action,'import_txt'); assert.equal(el('txtCommit').disabled,true);
   assert.equal(el('txtProxy').value,''); assert.equal(el('txtFile').value,''); assert.equal(reloads,0);
-  assert.ok(el('txtStatus').textContent.includes('Вход в Facebook не проверен'));
+  assert.ok(el('txtStatus').textContent.includes('Facebook-сессии ещё не проверены'));
   await dialog.close(); assert.equal(reloads,1); assert.equal(el('txtResults').children.length,0);
   await doc.getElementById('remaskTxtImport').fire('click');
   el('txtFile').files=[{size:text.length,arrayBuffer:async()=>new TextEncoder().encode(text).buffer}];

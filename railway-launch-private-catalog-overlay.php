@@ -343,14 +343,10 @@ final class RemaskAdvertisingAssetBridge
         if ($offset && (!in_array($resource,self::targetingTypes(),true) && !in_array($resource,['interests','behaviors'],true)
                 || $query!=='')) throw new InvalidArgumentException('INVALID_TARGETING_OFFSET');
         if (session_status()===PHP_SESSION_ACTIVE) session_write_close();
-        $executionMode=(string)($input['execution_mode'] ?? 'DRAFT');
-        // Include both bounded reads and the single saved-session refresh.
-        // Draft Page discovery has a 120s worker budget; other catalogs use 65s.
-        $readTimeout=$resource==='pages' && $executionMode==='DRAFT' ? 270 : 150;
         $params=http_build_query(['resource'=>$resource,'account_id'=>$account,'force'=>$force?'true':'false',
             'query'=>$query,'limit'=>max(1,min(500,(int)($input['limit'] ?? 100))), 'offset'=>$offset,
-            'execution_mode'=>$executionMode],'','&',PHP_QUERY_RFC3986);
-        $context=stream_context_create(['http'=>['method'=>'GET','timeout'=>$readTimeout,'ignore_errors'=>true,
+            'execution_mode'=>(string)($input['execution_mode'] ?? 'DRAFT')],'','&',PHP_QUERY_RFC3986);
+        $context=stream_context_create(['http'=>['method'=>'GET','timeout'=>85,'ignore_errors'=>true,
             'follow_location'=>0,'header'=>"Accept: application/json\r\nX-Remask-Worker-Key: ".$key."\r\n"]]);
         $raw=@file_get_contents($base.'/api/v1/profiles/'.rawurlencode($profile).'/advertising-resources?'.$params,false,$context);
         $data=is_string($raw)?json_decode($raw,true):null;
@@ -481,10 +477,8 @@ try {
     $raw = @file_get_contents($base.'/api/v1/profiles/'.rawurlencode($profile).'/page-access?account_id='.rawurlencode($account),false,$ctx);
     $proof = is_string($raw) ? json_decode($raw,true) : null;
     if (!is_array($proof) || ($proof['profile_id'] ?? '') !== $profile || ($proof['account_id'] ?? '') !== $account) {
-        $detail=is_array($proof['detail'] ?? null) ? $proof['detail'] : [];
-        $code=is_string($detail['code'] ?? null) ? $detail['code']
-            : (is_string($proof['detail'] ?? null) ? $proof['detail'] : '');
-        $known = ['CHECKPOINT_REQUIRED','SESSION_EXPIRED','TWO_FACTOR_REQUIRED','BUSINESS_LOGIN_GATE','PROFILE_CONTEXT_ERROR','PAGE_ACCESS_INSPECTION_TIMEOUT'];
+        $code = is_array($proof) ? (string)($proof['detail'] ?? '') : '';
+        $known = ['CHECKPOINT_REQUIRED','SESSION_EXPIRED','TWO_FACTOR_REQUIRED','PROFILE_CONTEXT_ERROR','PAGE_ACCESS_INSPECTION_TIMEOUT'];
         $proof = ['diagnostic'=>['code'=>in_array($code,$known,true) ? $code : 'PAGE_ACCESS_RESULT_UNAVAILABLE']];
     }
     if (!isset($proof['profile_id'])) $proof['profile_id']=$profile;
@@ -528,10 +522,8 @@ try {
             && ($decoded['account_id'] ?? '')===$account) {
             $paymentProof=$decoded;
         } else {
-            $detail=is_array($decoded['detail'] ?? null) ? $decoded['detail'] : [];
-            $code=is_string($detail['code'] ?? null) ? $detail['code']
-                : (is_string($decoded['detail'] ?? null) ? $decoded['detail'] : '');
-            $known=['CHECKPOINT_REQUIRED','SESSION_EXPIRED','TWO_FACTOR_REQUIRED','BUSINESS_LOGIN_GATE',
+            $code=is_array($decoded) ? (string)($decoded['detail'] ?? '') : '';
+            $known=['CHECKPOINT_REQUIRED','SESSION_EXPIRED','TWO_FACTOR_REQUIRED',
                 'PROFILE_CONTEXT_ERROR','PAYMENT_INSPECTION_TIMEOUT','PAYMENT_BROWSER_CRASHED',
                 'PAYMENT_UI_UNAVAILABLE'];
             $paymentProof=['diagnostic'=>['code'=>in_array($code,$known,true)
@@ -578,7 +570,6 @@ async function checkAssetsSelection(){
     const phone={REQUIRED:'Meta требует подтверждения номера телефона перед рекламой.',VERIFIED:'Номер телефона уже подтверждён в Meta.',UNKNOWN:'Требование номера телефона не установлено. Отсутствие сообщения не подтверждает возможность публикации.'}[res?.advertiser_phone?.status||'UNKNOWN'];
     const reason=diagnostic?.code==='PAGE_ACCESS_MEMORY_LIMIT'?'Проверка доступа РК остановлена: недостаточно памяти для формы Ads Manager.':
       diagnostic?.code==='PAGE_ACCESS_INSPECTION_TIMEOUT'?'Проверка доступа РК не завершилась за отведённое время.':
-      diagnostic?.code==='BUSINESS_LOGIN_GATE'?'Meta отклонила сохранённую Facebook-сессию; для чтения FP требуется повторная авторизация.':
       diagnostic?.code==='CHECKPOINT_REQUIRED'?'Meta требует проверку Facebook-аккаунта.':
       diagnostic?.code==='PAGE_ACCESS_RESULT_UNAVAILABLE'?'Не удалось получить результат проверки доступа РК.':'';
     block.innerHTML=`<b>${esc(r.name||r.id)}</b><div class="sub">${esc(r.profile)} · ${esc(r.id)}</div>`+
@@ -686,30 +677,14 @@ if (strpos($js,'REMASK_PRIVATE_LAUNCH_CATALOG_V1')===false) {
 OLD_BULK_PAGES;
     $newPages=<<<'NEW_BULK_PAGES'
         const executionMode = remaskPrivateExecutionMode();
-        status.textContent = `Загружаем страницы для ${targets.length} РК...`;
-        const pageReadErrors = [];
-        state.targetBindingAssets.pageReadErrors = state.targetBindingAssets.pageReadErrors || {};
+        status.textContent = `Loading Pages for ${targets.length} RK...`;
         await runPool(targets, 4, async (target) => {
             const profile = target.profile, accountId = remaskPrivateAccountId(target.account_id);
-            const key = `${profile}|${accountId}|${executionMode}`;
-            try {
-                const data = await apiJson('ajax/metaAssets.php', formPost({profile, resource: 'pages',
-                    account_id: accountId, execution_mode: executionMode, force: force ? '1' : '0'}));
-                state.targetBindingAssets.pages[key] = data.data || [];
-                delete state.targetBindingAssets.pageReadErrors[key];
-            } catch (error) {
-                delete state.targetBindingAssets.pages[key];
-                const detail = remaskPrivatePageReadFailure(error, profile, accountId);
-                state.targetBindingAssets.pageReadErrors[key] = detail;
-                pageReadErrors.push(detail);
-            }
+            const data = await apiJson('ajax/metaAssets.php', formPost({profile, resource: 'pages',
+                account_id: accountId, execution_mode: executionMode, force: force ? '1' : '0'}));
+            state.targetBindingAssets.pages[`${profile}|${accountId}|${executionMode}`] = data.data || [];
             renderTargetBindings();
         });
-        if (pageReadErrors.length) {
-            status.textContent = 'FP не загружены: ' + pageReadErrors.join(' | ');
-            status.classList?.add('text-warning');
-            return;
-        }
 NEW_BULK_PAGES;
     $js=str_replace($oldPages,$newPages,$js,$pageLoaderCount);
     $js=str_replace('const pages = state.targetBindingAssets.pages[target.profile] || [];',
@@ -723,9 +698,7 @@ $js=remask_patch_private_launch_meta_marker($js);
 file_put_contents($jsPath,$js);
 $phpPath=$root.'/launch.php';
 $php=file_get_contents($phpPath);
-$launchAssetPrefix='scripts/launch.js?v=20261023-private-launch-meta-marker-v1-draft-jobs-v1';
-$launchAssetVersion=substr(hash('sha256',$js),0,16);
-$php=preg_replace('#scripts/launch\\.js(?:\\?[^"\\\']*)?#',$launchAssetPrefix.'-'.$launchAssetVersion,$php,1);
+$php=preg_replace('#scripts/launch\\.js(?:\\?[^"\\\']*)?#','scripts/launch.js?v=20261023-private-launch-meta-marker-v1',$php,1);
 $php=str_replace('official API, read only','состояние оплаты, read only',$php);
 $php=str_replace('Одна настройка → много FB-профилей и RK. Каждая цель использует свой token, proxy и account-specific assets.',
     'Сохранённые РК и FP доступны без новой синхронизации. Доступ FP для рекламы и привязку карты ещё нужно проверить.',$php);

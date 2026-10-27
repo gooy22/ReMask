@@ -1,17 +1,7 @@
 """Reload saved profile authentication without changing Facebook identity."""
 from __future__ import annotations
 
-import asyncio
-import logging
-from typing import Any, Awaitable, Callable, TypeVar
-
-
-_READ_AUTH_CODES = frozenset({
-    "BUSINESS_LOGIN_GATE", "SESSION_EXPIRED",
-    "PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE", "PRIVATE_ADS_DRAFT_SESSION_EXPIRED",
-})
-_T = TypeVar("_T")
-log = logging.getLogger(__name__)
+from typing import Any
 
 
 async def refresh_saved_auth_context(resolver: Any, context: Any) -> bool:
@@ -29,44 +19,9 @@ async def refresh_saved_auth_context(resolver: Any, context: Any) -> bool:
         return False
     # A login redirect cannot be repaired by repeating requests with the same
     # expired credentials. Use a newly saved session when one is available.
-    if str(cookies.get("xs") or "") == str(old.get("xs") or ""):
+    if cookies == old:
         return False
     context.cookies = dict(cookies)
-    if hasattr(context, '_loaded_cookies'):
-        # These credentials were just read from the durable store. Future
-        # HTTP clients must compare against this saved version, not the one
-        # that caused the previous authentication failure.
-        context._loaded_cookies = dict(cookies)
     context.proxy = getattr(fresh, "proxy", None)
     context.user_agent = str(getattr(fresh, "user_agent", "") or "")
     return True
-
-
-async def read_with_saved_auth_refresh(
-    resolver: Any, context: Any, read_once: Callable[[], Awaitable[_T]],
-) -> _T:
-    """Retry a read once after loading newer authentication for the same actor.
-
-    The callback must open and close its own ProfileSession on each attempt.
-    Advertising mutations must never use this wrapper.
-    """
-    try:
-        return await read_once()
-    except Exception as error:
-        code = getattr(error, "code", "")
-        if not isinstance(code, str) or code not in _READ_AUTH_CODES:
-            raise
-        try:
-            changed = await asyncio.wait_for(
-                refresh_saved_auth_context(resolver, context), timeout=5.0)
-        except Exception as refresh_error:
-            log.info("private read auth refresh profile=%s code=%s error_type=%s",
-                getattr(context, "profile_id", ""), code, type(refresh_error).__name__)
-            raise error from None
-        log.info("private read auth refresh profile=%s code=%s changed=%s",
-            getattr(context, "profile_id", ""), code, changed)
-        if not changed:
-            raise
-    # Keep the second attempt outside the handler: a second gate cannot loop.
-    return await read_once()
-

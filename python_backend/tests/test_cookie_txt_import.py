@@ -124,44 +124,6 @@ class CookieTxtImportTests(unittest.TestCase):
         self.assertEqual(result['records'][0]['profile_name'],'7')
         self.assertEqual(self.saved(),before)
 
-    def test_explicit_refresh_replaces_only_cookies_for_the_same_actor(self):
-        self.create(name='7',token='preserved-token-fixture',dtsg='preserved-dtsg-fixture')
-        before=self.saved()[0]
-        result=self.run_import(self.row('123456789',xs='fresh-session-fixture'),
-            proxy='',selected_lines=[1],refresh_existing_sessions=True)
-        self.assertEqual(result['refreshed'],1,result)
-        self.assertEqual(result['records'][0]['status'],'session_refreshed')
-        self.assertFalse(result['session_verified'])
-        after=self.saved()[0]
-        self.assertEqual(after['name'],before['name'])
-        self.assertEqual(after['token'],before['token'])
-        self.assertEqual(after['dtsg'],before['dtsg'])
-        self.assertEqual(after['proxy'],before['proxy'])
-        self.assertIn({'domain':'.facebook.com','name':'xs','value':'fresh-session-fixture'},after['cookies'])
-        self.assertNotIn('fresh-session-fixture',json.dumps(result))
-
-    def test_explicit_refresh_skips_ambiguous_saved_actor(self):
-        self.create(name='7')
-        self.create(name='8')
-        before=self.saved()
-        result=self.run_import(self.row('123456789',xs='must-not-be-written'),
-            proxy='',selected_lines=[1],refresh_existing_sessions=True)
-        self.assertEqual(result['refreshed'],0,result)
-        self.assertEqual(result['skipped'],1)
-        self.assertEqual(result['records'][0]['status'],'already_exists')
-        self.assertFalse(result['records'][0]['refreshable'])
-        self.assertEqual(result['records'][0]['error'],'AMBIGUOUS_EXISTING_PROFILE')
-        self.assertEqual(self.saved(),before)
-
-    def test_session_update_rejects_switching_the_saved_facebook_actor(self):
-        self.create(name='7')
-        before=self.saved()
-        result=self.endpoint('metaProfileManager.php',{'action':'session_update','name':'7',
-            'cookies':[{'name':'c_user','value':'987654321'},{'name':'xs','value':'other-actor-fixture'}]})
-        self.assertFalse(result['ok'],result)
-        self.assertIn('FACEBOOK_ACTOR_MISMATCH',str(result))
-        self.assertEqual(self.saved(),before)
-
     def test_duplicate_and_conflicting_sessions(self):
         result=self.run_import(self.row()+'\n'+self.row())
         self.assertEqual((result['imported'],result['skipped']),(1,1))

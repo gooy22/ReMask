@@ -312,6 +312,9 @@ async def _ensure_private_full_control(web, *, page_id, business_id, ad_account_
     uid = _id((getattr(profile, "cookies", {}) or {}).get("c_user"))
     if not all((business, account, uid)) or (not ad_account_only and not page) or business == uid:
         raise ProvisioningError("PRIVATE_PAGE_ACCESS_TARGET_INVALID", "Exact profile, BM, Page and RK identities are required.")
+    bootstrap = await web.bootstrap()
+    if str(getattr(bootstrap, "actor_id", "")) != uid:
+        raise ProvisioningError("SESSION_EXPIRED", "The HTTP actor does not match the selected profile.", retryable=True)
     observed = StaticAssetContracts()
     await checkpoint({"activity": "RK_ACCESS_STATIC_CONTRACT_READY" if ad_account_only else "PAGE_ACCESS_STATIC_CONTRACT_READY", "transport": "private_http",
         "contract_revision": contract_metadata("CLAIM")["revision"], "browser_started": False})
@@ -320,18 +323,10 @@ async def _ensure_private_full_control(web, *, page_id, business_id, ad_account_
         command = observed.query(friendly, variables)
         if command is None:
             raise ProvisioningError("PRIVATE_ASSET_READ_CONTRACT_UNAVAILABLE", "Pinned Meta query schema is unavailable: " + friendly, retryable=True)
-        operation = next((op for op in ("CONFIG", "PAGE", "RIGHTS")
-            if contract_metadata(op)["friendly_name"] == friendly), "")
-        resource = str(variables.get("pageID") or variables.get("assetID") or "")
-        user = str(variables.get("userID") or "")
-        begin = getattr(web, "begin_business_read_verification", None)
-        if operation and callable(begin):
-            begin(operation, business, resource, user)
         log.info('[%s] static_contract operation=%s doc_id=%s revision=%s kind=query browser_started=False',
             profile_id, friendly, command['doc_id'], contract_metadata('CONFIG')['revision'])
         payload = await web.graphql(command["doc_id"], command["variables"], friendly_name=friendly,
-            endpoint_url="https://business.facebook.com/api/graphql/", business_context_id=business,
-            read_timeout_seconds=30, business_loginpage_probe=operation)
+            endpoint_url="https://business.facebook.com/api/graphql/", business_context_id=business)
         _data(payload)
         return payload
 
@@ -346,9 +341,6 @@ async def _ensure_private_full_control(web, *, page_id, business_id, ad_account_
     config = node.get("bizKitSettingsConfig")
     if not isinstance(config, dict):
         raise ProvisioningError("PRIVATE_FULL_CONTROL_CONFIG_UNCONFIRMED", "Meta did not return current asset permission tasks.", retryable=True)
-    mark = getattr(web, "mark_business_read_verified", None)
-    if callable(mark):
-        mark("CONFIG", business, complete=True)
     async def resolve_tasks(asset_type, variant=None):
         try:
             plan = full_control_plan(config, asset_type, variant=variant)
@@ -408,10 +400,8 @@ async def _ensure_private_full_control(web, *, page_id, business_id, ad_account_
         try:
             log.info('[%s] static_contract operation=%s doc_id=%s revision=%s kind=mutation browser_started=False',
                 profile_id, friendly, command['doc_id'], contract_metadata('CLAIM')['revision'])
-            operation = "CLAIM" if friendly == CLAIM else "ASSIGN" if friendly == ASSIGN else ""
             response = await web.graphql(command["doc_id"], command["variables"], friendly_name=friendly,
-                endpoint_url="https://business.facebook.com/api/graphql/", business_context_id=business,
-                before_submit=before_submit, business_loginpage_probe=operation)
+                endpoint_url="https://business.facebook.com/api/graphql/", business_context_id=business, before_submit=before_submit)
             rejected = isinstance(response, dict) and bool(response.get("errors") or response.get("error")) and not response.get("data")
             if rejected:
                 await save(key, "REJECTED")
@@ -465,15 +455,9 @@ async def _ensure_private_full_control(web, *, page_id, business_id, ad_account_
         if owner_id and owner_id != business:
             raise ProvisioningError("PAGE_OWNED_BY_ANOTHER_BUSINESS", "This Page is already owned by BM " + owner_id + ". Add existing Page cannot give a second BM ownership.")
         if owner_id == business:
-            mark = getattr(web, "mark_business_read_verified", None)
-            if callable(mark):
-                mark("PAGE", business, page, complete=True)
             return {"page_id": page, "owner_business_id": business}
         if "permission_to_claim_to_business" not in node or node.get("permission_to_claim_to_business") == "REJECTED":
             raise ProvisioningError("PRIVATE_PAGE_CLAIM_PERMISSION_UNCONFIRMED", "Meta did not confirm permission to add this existing Page.", retryable=True)
-        mark = getattr(web, "mark_business_read_verified", None)
-        if callable(mark):
-            mark("PAGE", business, page, complete=True)
         return None
 
     owned = await ownership() if not ad_account_only else None
@@ -509,9 +493,6 @@ async def _ensure_private_full_control(web, *, page_id, business_id, ad_account_
                 log.info('[%s] PAGE_ACCESS rights_read rejected=%s', profile_id,
                     json.dumps({**diagnostic, 'code': exc.code}, separators=(',', ':')))
                 raise
-            mark = getattr(web, "mark_business_read_verified", None)
-            if callable(mark):
-                mark("RIGHTS", business, asset, user, complete=True)
             proof = assignment_proof(payload, asset_id=canonical_asset, user_id=user, required_tasks=tasks,
                 business_id=business, permission_plan=plan)
             if proof and proof.get('implied_assigned_task_ids'):

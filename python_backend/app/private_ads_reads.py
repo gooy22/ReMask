@@ -111,10 +111,7 @@ class AdsManagerReadCatalog:
             raise fail("RESOURCE_CONTRACT_REQUIRED", "Reviewed account query is unavailable for " + name)
         _bounded_limit(values.get("limit", 100), maximum=20000)
         reference = name in TARGETING_TYPES | {"locations","locales"}
-        # Every catalog route is read-only. Reuse the exact profile/account
-        # context across resource reads instead of downloading Ads Manager's
-        # multi-megabyte bootstrap document for every picker request.
-        client = self.client(web, values, reference_read=True)
+        client = self.client(web, values, reference_read=reference)
         draft_pages = name == "pages" and values.get("execution_mode") == "DRAFT"
         account = await client.account_record(require_active=not reference, pages=name == 'pages' and not draft_pages, reference=reference)
         if draft_pages:
