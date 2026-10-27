@@ -342,6 +342,28 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls[0][1]['actor_id'], '123')
         self.assertEqual(calls[0][2]['X-Remask-Internal-Key'], 'fixture-internal-key')
 
+    async def test_bootstrap_cookie_deletion_restores_session_before_inventory_reads(self):
+        actor = '123456789'
+        original = {'c_user': actor, 'xs': 'imported-xs'}
+        web = FacebookWebSession(WebProfile('fixture', dict(original),
+            'http://127.0.0.1:1', 'fixture-UA'))
+        self.addAsyncCleanup(web.close)
+        client = await web._ensure_session()
+
+        def handler(request):
+            return httpx.Response(200, text=self.authenticated_document(actor), headers=[
+                ('Set-Cookie', 'xs=; Domain=.facebook.com; Path=/; Max-Age=0; Secure'),
+            ])
+
+        await self.mock(client, handler)
+        web.refresh_reviewed_modules = AsyncMock()
+        bootstrap = await web.bootstrap()
+        self.assertEqual(bootstrap.actor_id, actor)
+        self.assertTrue(web._profile_session_identity_verified)
+        self.assertEqual(client.facebook_cookie_snapshot(), original)
+        await web.close()
+        self.assertEqual(web.profile.cookies, original)
+
     async def test_business_loginpage_cookie_deletion_does_not_poison_profile_probe(self):
         actor = '123456789'
         profile = WebProfile('fixture', {'c_user': actor, 'xs': 'imported-xs'},
