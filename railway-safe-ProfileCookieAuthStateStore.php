@@ -48,8 +48,8 @@ final class ProfileCookieAuthStateStore
     /** Remove only a marker that no longer matches the profile's saved session. */
     public function clearIfStale(string $profile, string $actor, string $xs): void
     {
-        if ($profile === '') return;
-        $currentHash = $xs === '' ? '' : hash('sha256', $xs);
+        if ($profile === '' || $actor === '' || $xs === '') return;
+        $currentHash = hash('sha256', $xs);
         $lock = $this->lock(LOCK_EX);
         try {
             $all = $this->readUnlocked();
