@@ -659,16 +659,15 @@ class FacebookWebSession:
         *,
         require_actor_match: bool = True,
     ) -> FacebookBootstrap:
-        # The personal profile, home and settings documents are equivalent
-        # read-only identity surfaces. /me can be a minimal or partially
-        # hydrated document without fb_dtsg even when the same actor is signed in.
-        # Check the dedicated settings surface before the generic homepage,
-        # because /me commonly normalizes to / and that page may forward to
-        # Business Suite without confirming the selected profile.
+        # Personal profile and Ads Manager documents are read-only identity
+        # surfaces. /me can be minimal or partially hydrated; Ads Manager is the
+        # final fallback because it previously confirmed the selected actor in
+        # production when generic profile pages did not.
         targets = (
             "https://www.facebook.com/me",
             "https://www.facebook.com/settings",
             "https://www.facebook.com/",
+            "https://adsmanager.facebook.com/adsmanager/manage/campaigns",
         )
         for target in targets:
             # Business login-page redirects can delete root-scope auth cookies
@@ -736,7 +735,13 @@ class FacebookWebSession:
             reason = (
                 "checkpoint_redirect" if "/checkpoint" in path
                 else "login_redirect" if "/login" in path
-                else "redirected_host" if parts.hostname != "www.facebook.com"
+                else "redirected_host" if (
+                    parts.hostname != "www.facebook.com"
+                    and not (
+                        parts.hostname == "adsmanager.facebook.com"
+                        and path.rstrip("/") == "/adsmanager/manage/campaigns"
+                    )
+                )
                 else "login_form" if login_form
                 else "http_auth" if response.status in {401, 403}
                 else "actor_mismatch" if require_actor_match and users and not actor_verified
