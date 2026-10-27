@@ -3,6 +3,9 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
 const source = fs.readFileSync(path.join(__dirname, '..', 'railway-launch-private-catalog.js'), 'utf8');
+const completionSource = fs.readFileSync(path.join(__dirname, '..', 'railway-private-launch-completion.js'), 'utf8');
+assert.ok(completionSource.includes('status.textContent=remaskPrivatePageReadFailure(error,profile,account);'),
+  'single-RK Launch must render the safe page read failure, including an explicit Meta login gate');
 
 // Reopen the original retained Draft in a browser with empty localStorage.
 // A fresh Meta read may fail; it must not create/retry a job, drop receipts,
