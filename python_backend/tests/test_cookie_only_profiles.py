@@ -369,6 +369,9 @@ echo json_encode(['token'=>$saved->token,'cookies'=>$saved->cookies,'proxy'=>$sa
                 result=subprocess.run(['bash','-c',command],cwd=self.root,env=self.env,capture_output=True,text=True,timeout=5)
                 if result.returncode: failures.append(command+' '+result.stderr)
         self.assertEqual(failures,[],'Installed runtime contracts failed:\n'+'\n'.join(failures))
+        installed_resolver=(self.root/'ajax/pythonProfileContext.php').read_text()
+        self.assertNotIn('cookie_auth_revocation_xs_sha256',installed_resolver)
+        self.assertNotIn('ProfileCookieAuthStateStore',installed_resolver)
         # The deployed page uses type="module". A classic-script/new Function
         # check misses duplicate top-level function declarations in an ES module.
         workspace=(self.root/'scripts/workspace.js').read_text()
