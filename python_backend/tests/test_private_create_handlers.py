@@ -26,6 +26,31 @@ def modules(doc="1234567890123"):
     });''' % doc
 
 
+class SameActorRestoreResolver:
+    def __init__(self, profile_id, actor_id, current_xs):
+        self.profile_id = profile_id
+        self.actor_id = actor_id
+        self.current_xs = current_xs
+        self.resolve_calls = 0
+        self.restore_calls = 0
+
+    async def resolve(self, profile_id):
+        self.resolve_calls += 1
+        if profile_id != self.profile_id:
+            raise AssertionError("profile changed during auth recovery")
+        return SimpleNamespace(profile_id=self.profile_id,
+            cookies={"c_user": self.actor_id, "xs": self.current_xs},
+            proxy="http://same-profile-proxy", user_agent="same-profile-UA")
+
+    async def restore_previous_profile_session_after_gate(self, context):
+        self.restore_calls += 1
+        if (context.profile_id != self.profile_id
+                or context.cookies.get("c_user") != self.actor_id):
+            return False
+        context.cookies["xs"] = "verified-previous-xs"
+        return True
+
+
 def observed_create_modules():
     return (Path(__file__).parent / "fixtures/meta_create_rk_observed_20261008.js").read_text()
 
@@ -186,10 +211,14 @@ class RKActionTests(unittest.IsolatedAsyncioTestCase):
             return Response()
         self.meta.post = post
 
-    async def run_action(self, item="job-1", **overrides):
+    async def run_action(self, item="job-1", profile_resolver=None, **overrides):
+        kwargs = {"profile_id": "15", "scope_key": "bundle-1", "item_id": item,
+            "provisioning_state": self.state}
+        if profile_resolver is not None:
+            kwargs["profile_resolver"] = profile_resolver
         return await get_handler("AD_ACCOUNT")(self.session,
             {"business_id": BM, "name": NAME, "currency": "USD", "timezone_id": 137, **overrides}, {},
-            profile_id="15", scope_key="bundle-1", item_id=item, provisioning_state=self.state)
+            **kwargs)
 
     async def test_production_registry_uses_http_intent_verify_commit(self):
         result = await self.run_action()
@@ -201,6 +230,36 @@ class RKActionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(saved["result"]["phase"], "CREATE_CONFIRMED")
         self.assertEqual(saved["result"]["verification"]["id"], RK)
         self.session.facebook_business_browser.assert_not_awaited()
+
+    async def test_rk_pre_submit_auth_gate_restores_same_actor_before_one_post(self):
+        from fb_worker import AuthenticationError
+        self.context.cookies["xs"] = "same-xs"
+        original_graphql = self.web.graphql
+        gate_first = True
+
+        async def gate_first_create(doc_id, variables, **kwargs):
+            nonlocal gate_first
+            if (kwargs.get("friendly_name") == "BizKitSettingsCreateAdAccountMutation"
+                    and gate_first):
+                gate_first = False
+                error = AuthenticationError("Meta Business login required")
+                error.meta_payload = {"business_precheck": [{
+                    "auth_reason": "login_redirect",
+                    "final_url": "https://business.facebook.com/business/loginpage/",
+                }]}
+                error.request_may_have_been_sent = False
+                error.transport_stage = "business_auth_precheck"
+                raise error
+            return await original_graphql(doc_id, variables, **kwargs)
+
+        self.web.graphql = gate_first_create
+        resolver = SameActorRestoreResolver("15", UID, "same-xs")
+        result = await self.run_action(profile_resolver=resolver)
+        self.assertEqual(result["ad_account_id"], "act_" + RK)
+        self.assertEqual(len(self.meta.posts), 1)
+        self.assertEqual(resolver.resolve_calls, 1)
+        self.assertEqual(resolver.restore_calls, 1)
+        self.assertEqual(self.context.cookies["xs"], "verified-previous-xs")
 
     async def test_full_service_keeps_bm_rk_binding_without_browser(self):
         with patch("app.provisioning.service._await_profile_mutation_cooldown", new=AsyncMock()):
@@ -357,9 +416,10 @@ class BMActionTests(unittest.IsolatedAsyncioTestCase):
         self.created = True
         return {"data": {"bizkit_create_business": {"id": BM}}}
 
-    async def run_action(self, item="bm-1"):
+    async def run_action(self, item="bm-1", **handler_kwargs):
         return await get_handler("BUSINESS")(self.session, {"name": "Test Business"}, {},
-            profile_id="14", scope_key="bm-scope", item_id=item, provisioning_state=self.store)
+            profile_id="14", scope_key="bm-scope", item_id=item, provisioning_state=self.store,
+            **handler_kwargs)
 
     async def test_bm_http_post_is_independently_verified_before_commit(self):
         result = await self.run_action()
@@ -367,6 +427,36 @@ class BMActionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["verification"]["exact_business_id"], BM)
         self.assertEqual(len(self.posts), 1)
         self.session.facebook_business_browser.assert_not_awaited()
+
+    async def test_bm_pre_submit_auth_gate_restores_same_actor_before_one_post(self):
+        from fb_worker import AuthenticationError
+        self.context.cookies["xs"] = "same-xs"
+        original_graphql = self.graphql
+        gate_first = True
+
+        async def gate_first_create(*args, **kwargs):
+            nonlocal gate_first
+            if (kwargs.get("friendly_name") == "useBusinessCreationMutationMutation"
+                    and gate_first):
+                gate_first = False
+                error = AuthenticationError("Meta Business login required")
+                error.meta_payload = {"business_precheck": [{
+                    "auth_reason": "login_redirect",
+                    "final_url": "https://business.facebook.com/business/loginpage/",
+                }]}
+                error.request_may_have_been_sent = False
+                error.transport_stage = "business_auth_precheck"
+                raise error
+            return await original_graphql(*args, **kwargs)
+
+        self.web.graphql = gate_first_create
+        resolver = SameActorRestoreResolver("14", UID, "same-xs")
+        result = await self.run_action(profile_resolver=resolver)
+        self.assertEqual(result["business_id"], BM)
+        self.assertEqual(len(self.posts), 1)
+        self.assertEqual(resolver.resolve_calls, 1)
+        self.assertEqual(resolver.restore_calls, 1)
+        self.assertEqual(self.context.cookies["xs"], "verified-previous-xs")
 
     async def test_restored_submitted_phase_is_not_logged_as_a_new_submit(self):
         await self.store.set_running("bm-old", "14", "old-scope", ProvisioningStep.BUSINESS)
