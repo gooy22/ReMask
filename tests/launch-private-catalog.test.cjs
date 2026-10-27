@@ -764,6 +764,8 @@ console.log('Private Launch catalog and funding truth checks passed');
     assert.match(pageCtx.state.targetBindingAssets.pageReadErrors[targetKey],/BUSINESS_LOGIN_GATE/);
     assert.equal(pageRenderCount,1);
   }
+  assert.match(overlay,/BUSINESS_LOGIN_GATE/);
+  assert.match(overlay,/Meta отклонила сохранённую Facebook-сессию/);
   const readiness=overlay.match(/<<<'READINESS_UI'\n([\s\S]*?)\nREADINESS_UI/)[1];
   const output={}; let request;
   const ctx={selectedRows:()=>[{id:'act_333333333',profile:'7',name:'Saved RK'}],
