@@ -27,10 +27,23 @@ async def refresh_saved_auth_context(resolver: Any, context: Any) -> bool:
             or str(cookies.get("c_user") or "") != str(old.get("c_user") or "")
             or not str(cookies.get("xs") or "").strip()):
         return False
-    # A login redirect cannot be repaired by repeating requests with the same
-    # expired credentials. Use a newly saved session when one is available.
+    # First accept a newer saved session for this same actor. If none exists,
+    # try the encrypted previous snapshot once, but only after its own
+    # read-only Business Home request confirms the same Meta actor.
     if str(cookies.get("xs") or "") == str(old.get("xs") or ""):
-        return False
+        restore_previous = getattr(resolver, "restore_previous_profile_session_after_gate", None)
+        if (not callable(restore_previous)
+                or getattr(fresh, "_previous_profile_restore_attempted", False)):
+            return False
+        if not await restore_previous(fresh):
+            return False
+        cookies = getattr(fresh, "cookies", {}) or {}
+        if (str(getattr(fresh, "profile_id", "") or "") != profile
+                or not isinstance(cookies, dict)
+                or str(cookies.get("c_user") or "") != str(old.get("c_user") or "")
+                or not str(cookies.get("xs") or "")
+                or str(cookies.get("xs") or "") == str(old.get("xs") or "")):
+            return False
     context.cookies = dict(cookies)
     if hasattr(context, '_loaded_cookies'):
         # These credentials were just read from the durable store. Future
@@ -58,7 +71,7 @@ async def read_with_saved_auth_refresh(
             raise
         try:
             changed = await asyncio.wait_for(
-                refresh_saved_auth_context(resolver, context), timeout=5.0)
+                refresh_saved_auth_context(resolver, context), timeout=16.0)
         except Exception as refresh_error:
             log.info("private read auth refresh profile=%s code=%s error_type=%s",
                 getattr(context, "profile_id", ""), code, type(refresh_error).__name__)
