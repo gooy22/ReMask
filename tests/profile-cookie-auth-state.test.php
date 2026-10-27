@@ -1,7 +1,8 @@
 <?php
 declare(strict_types=1);
-require_once getenv('REMASK_PROFILE_COOKIE_AUTH_STATE_CLASS')
-    ?: (__DIR__ . '/../railway-safe-ProfileCookieAuthStateStore.php');
+$classPath = getenv('REMASK_PROFILE_COOKIE_AUTH_STATE_CLASS');
+if (!$classPath) $classPath = __DIR__ . '/../railway-safe-ProfileCookieAuthStateStore.php';
+require_once $classPath;
 
 function assertState(bool $condition, string $message): void {
     if (!$condition) throw new RuntimeException($message);
@@ -24,6 +25,8 @@ try {
     assertState(!$store->matches('profile-16', '123456789', $oldXs), 'marker must be profile-isolated');
     assertState(!$store->matches('profile-15', '987654321', $oldXs), 'marker must be actor-isolated');
 
+    $store->clearIfStale('profile-15', '123456789', '');
+    assertState($store->matches('profile-15', '123456789', $oldXs), 'missing cookies must not clear a revocation marker');
     $store->clearIfStale('profile-15', '123456789', $newXs);
     assertState(!$store->matches('profile-15', '123456789', $oldXs), 'stale marker should clear after cookie replacement');
     $store->mark('profile-15', '123456789', hash('sha256', $newXs));
