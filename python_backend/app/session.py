@@ -66,6 +66,7 @@ class ProfileContext:
     inventory_updated_at: int = 0
     inventory_source: str = ""
     direct_test_until: int = 0
+    recovery_cookies: dict[str, str] = field(default_factory=dict, repr=False, compare=False)
     _cookie_persistor: Any = field(default=None, repr=False, compare=False)
     _loaded_cookies: dict[str, str] = field(default_factory=dict, repr=False, compare=False)
 
@@ -369,6 +370,25 @@ class ProfileResolver:
             )
 
         cookie_map = {str(k): str(v) for k, v in cookies.items()}
+        recovery_cookie_map: dict[str, str] = {}
+        recovery_raw = payload.get("recovery_cookies")
+        if isinstance(recovery_raw, dict) and 0 < len(recovery_raw) <= 500:
+            candidate: dict[str, str] = {}
+            candidate_valid = True
+            for key, value in recovery_raw.items():
+                if (not isinstance(key, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,256}", key)
+                        or not isinstance(value, str) or len(value) > 8192
+                        or re.search(r"[\x00-\x1f\x7f]", value)):
+                    candidate_valid = False
+                    break
+                candidate[key] = value
+            expected_actor = str(cookie_map.get("c_user") or "").strip()
+            current_xs = str(cookie_map.get("xs") or "").strip()
+            candidate_xs = str(candidate.get("xs") or "").strip()
+            if (candidate_valid and expected_actor.isdigit()
+                    and candidate.get("c_user") == expected_actor
+                    and current_xs and candidate_xs and candidate_xs != current_xs):
+                recovery_cookie_map = candidate
         missing_auth_cookies = [
             key for key in ("c_user", "xs")
             if not str(cookie_map.get(key) or "").strip()
@@ -437,6 +457,7 @@ class ProfileResolver:
                 int(payload.get("inventory_updated_at") or 0),
             ),
             inventory_source=str(payload.get("inventory_source") or "").strip(),
+            recovery_cookies=recovery_cookie_map,
         )
         context._loaded_cookies = dict(cookie_map)
         context._cookie_persistor = self.persist_cookie_refresh
@@ -529,6 +550,7 @@ class MetaSession:
                     cookies=cookies,
                     proxy=self.context.proxy,
                     user_agent=self.context.user_agent,
+                    recovery_cookies=dict(getattr(self.context, "recovery_cookies", {}) or {}),
                 )
                 current = FacebookWebSession(
                     profile,
