@@ -25,6 +25,14 @@ class SavedAuthRefreshTests(unittest.IsolatedAsyncioTestCase):
         error = ProfileContextError("resolver unavailable", category="resolver_http")
         self.assertEqual(error.code, "PROFILE_CONTEXT_ERROR")
 
+    def test_unclassified_auth_gate_has_a_specific_machine_code(self):
+        error = ProfileContextError(
+            "Meta returned authentication gate (SOME_GATE) during read-only revalidation.",
+            category="auth_gate_unclassified",
+        )
+        self.assertEqual(error.code, "META_AUTH_GATE_UNCLASSIFIED")
+        self.assertIn("(SOME_GATE)", str(error))
+
     def context(self, *, uid="123456789", xs="fixture-old", profile="14"):
         return SimpleNamespace(profile_id=profile, cookies={"c_user": uid, "xs": xs},
                                proxy="http://fixture-proxy:80", user_agent="Fixture")
