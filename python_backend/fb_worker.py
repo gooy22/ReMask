@@ -1704,13 +1704,14 @@ class FacebookWebSession:
             read_timeout_seconds=read_timeout_seconds,
         )
         if scoped_probe:
-            # Every profile-bound query must use a token from a read-only
-            # document that independently confirms the selected c_user. If one
-            # route is minimal or hydrated for another actor, bootstrap continues
-            # through the remaining equivalent profile routes before failing.
+            # Exact read-only asset contracts stay pinned to their requested
+            # BM/RK/Page IDs. Generic profile pages can report another actor
+            # while still providing the usable token needed for these reads.
+            # Changes still require the selected c_user to be verified.
+            scoped_read_only = scoped_probe in {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS"}
             bootstrap = await self.bootstrap(
                 allow_business_loginpage_probe=True,
-                require_actor_match=True,
+                require_actor_match=not scoped_read_only,
             )
             current_actor = str(self.profile.cookies.get("c_user") or "").strip()
             if not current_actor.isdigit() or bootstrap.actor_id != current_actor:
