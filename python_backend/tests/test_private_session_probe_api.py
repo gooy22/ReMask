@@ -49,8 +49,8 @@ class SessionProbeApiTests(unittest.IsolatedAsyncioTestCase):
             retryable=False,
             category="business_login_gate",
         )
-        with patch.object(api, 'API_KEY', 'fixture-worker-key'), \\
-                patch('app.private_launch_read.inspect_profile_pages_http', new=AsyncMock(side_effect=error)), \\
+        with patch.object(api, 'API_KEY', 'fixture-worker-key'), \
+                patch('app.private_launch_read.inspect_profile_pages_http', new=AsyncMock(side_effect=error)), \
                 patch.object(api.pool.provisioning_state, 'latest_profile_fan_pages',
                              new=AsyncMock(return_value=[])):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api.app), base_url='http://fixture',
@@ -68,7 +68,7 @@ class SessionProbeApiTests(unittest.IsolatedAsyncioTestCase):
             retryable=False,
             category="business_login_gate",
         )
-        with patch.object(api, 'API_KEY', 'fixture-worker-key'), \\
+        with patch.object(api, 'API_KEY', 'fixture-worker-key'), \
                 patch('app.payment_inspection.inspect_profile_payment_methods',
                       new=AsyncMock(side_effect=error)):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api.app), base_url='http://fixture',
