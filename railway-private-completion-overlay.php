@@ -84,7 +84,7 @@ completionReplace($resolver, '    $liveInventory = rmx_py_live_inventory($profil
         $cookieAuthState->clearIfStale($profile, $profileActor, $profileXs);
     }
 PHP_CODE, 'resolver-confirmed-identities');
-completionReplace($resolver, "        'cookies' => rmx_py_cookie_map($account->cookies),", "        'cookies' => rmx_py_cookie_map($account->cookies),\n        'cookie_auth_revocation_xs_sha256' => $cookieAuthRevocationHash,", 'resolver-auth-marker-fingerprint');
+completionReplace($resolver, '        \'cookies\' => rmx_py_cookie_map($account->cookies),', "        'cookies' => rmx_py_cookie_map($account->cookies),\n        'cookie_auth_revocation_xs_sha256' => $cookieAuthRevocationHash,", 'resolver-auth-marker-fingerprint');
 file_put_contents($root.'/ajax/pythonProfileContext.php', $resolver);
 
 // REMASK_PROFILE_COOKIE_REFRESH_V1: persist only Meta-issued same-actor session updates.
