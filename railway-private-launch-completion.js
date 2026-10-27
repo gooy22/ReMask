@@ -127,17 +127,82 @@ loadPages=async function(force=false) {
     refreshInstagram(); invalidateLaunchReview(); validateReady();
     if (liveError) throw liveError;
 };
-$('adAccount')?.addEventListener('change',()=>{
-    if (targetMode() || selectedAccountIds().length!==1) {remaskPrivatePagesGeneration++;return;}
-    const profile=state.profile,account=selectedAccountIds()[0];
+/* REMASK_SINGLE_PROFILE_PER_RK_PAGES_V1 */
+let remaskSingleProfileRkBindingsTimer = null;
+let remaskSingleProfileRkBindingsSignature = '';
+
+function remaskPageStatus() {
     let status=$('remaskPageReadStatus');
-    if (!status) {status=document.createElement('p');status.id='remaskPageReadStatus';status.className='muted';status.setAttribute('role','status');$('page').after(status);}
+    if (!status) {
+        status=document.createElement('p'); status.id='remaskPageReadStatus';
+        status.className='muted'; status.setAttribute('role','status'); $('page')?.after(status);
+    }
+    return status;
+}
+
+function remaskSyncSingleProfileRkMode() {
+    const profiles=typeof selectedProfileNames==='function'
+        ? selectedProfileNames()
+        : Array.from($('profile')?.selectedOptions||[]).map(option=>String(option.value||'').trim()).filter(Boolean);
+    if (profiles.length!==1) return targetMode();
+    const ids=selectedAccountIds();
+    const page=$('page'), card=$('targetBindingsCard'), status=remaskPageStatus();
+
+    if (ids.length>1) {
+        const targets=ids.map(rawId=>{
+            const accountId=String(rawId||'').replace(/^act_/i,'');
+            const account=(state.accounts||[]).find(row=>
+                String(row?.id||row?.account_id||'').replace(/^act_/i,'')===accountId);
+            const prior=typeof targetForAccount==='function' ? targetForAccount(accountId) : null;
+            return {
+                profile:String(account?._profile||prior?.profile||profiles[0]),
+                business_id:String(account?.business_id||account?.business?.id||prior?.business_id||''),
+                account_id:accountId
+            };
+        }).filter(row=>/^\d{5,30}$/.test(row.account_id));
+
+        state.targets=targets;
+        state.targetBindings=state.targetBindings||{};
+        state.targetBindingAssets=state.targetBindingAssets||{pages:{},pixels:{},audiences:{},images:{},videos:{},creatives:{}};
+        if (page) { page.value=''; page.disabled=true; }
+        if (card) card.style.display='block';
+        status.textContent='FP загружаются отдельно для каждого РК в таблице привязок ниже.';
+        renderTargetBindings();
+        validateReady();
+
+        const signature=profiles[0]+'|'+targets.map(row=>row.account_id).sort().join(',');
+        remaskSingleProfileRkBindingsSignature=signature;
+        clearTimeout(remaskSingleProfileRkBindingsTimer);
+        remaskSingleProfileRkBindingsTimer=setTimeout(()=>{
+            if (signature!==remaskSingleProfileRkBindingsSignature || !targetMode()) return;
+            const button=$('loadTargetBindings');
+            if (button && !button.disabled) button.click();
+        },500);
+        return true;
+    }
+
+    clearTimeout(remaskSingleProfileRkBindingsTimer);
+    remaskSingleProfileRkBindingsSignature='';
+    state.targets=[];
+    if (page) { page.value=''; page.disabled=ids.length!==1; }
+    if (card) card.style.display='none';
+    status.textContent='';
+    renderTargetBindings();
+    validateReady();
+    return false;
+}
+
+$('adAccount')?.addEventListener('change',()=>{
+    const targetModeForSelection=remaskSyncSingleProfileRkMode();
+    if (targetModeForSelection || selectedAccountIds().length!==1) {remaskPrivatePagesGeneration++;return;}
+    const profile=state.profile,account=selectedAccountIds()[0];
+    const status=remaskPageStatus();
     status.textContent='Загружаем страницы выбранного РК…';
     loadPages().then(()=>{
         if(profile===state.profile && selectedAccountIds()[0]===account) status.textContent='';
-    }).catch(()=>{
+    }).catch((error)=>{
         if(profile===state.profile && selectedAccountIds()[0]===account)
-            status.textContent='Не удалось обновить страницы выбранного РК. Ранее сохранённые данные не подтверждают текущий доступ.';
+            status.textContent=remaskPrivatePageReadFailure(error,profile,account);
     });
 });
 

@@ -180,3 +180,5 @@ jobs:
           fi
       - name: Verify Details to Confirm capture and duplicate guards in Chromium
         run: PYTHONPATH=python_backend /tmp/remask-browser-regression/bin/python tests/meta-ad-account-dialogs.browser.py
+      - name: Reopen a retained private Draft and reject Meta auth without another create
+        run: PYTHONPATH=python_backend /tmp/remask-browser-regression/bin/python tests/private-launch-completion.browser.py InstalledLaunchTests.test_saved_private_draft_read_failure_preserves_receipts

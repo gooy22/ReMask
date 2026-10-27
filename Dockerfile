@@ -28,10 +28,11 @@ RUN python3 -m venv /opt/remask-venv \
 COPY python_backend /opt/remask-python
 # The early backend schema regression also checks the installed UI routing source.
 COPY railway-private-completion-overlay.php /opt/railway-private-completion-overlay.php
-RUN /opt/remask-venv/bin/python -m compileall -q /opt/remask-python \
+RUN set -eux; \
+    /opt/remask-venv/bin/python -m compileall -q /opt/remask-python \
     && cd /opt/remask-python \
     && /opt/remask-venv/bin/python -c "import fb_worker; from app.session import ProfileSession; from app.facebook_business_browser import FacebookBusinessBrowser; from app.provisioning.registry import get_handler; from app.provisioning.private_create_handlers import business_handler, ad_account_handler; assert get_handler('BUSINESS') is business_handler; assert get_handler('AD_ACCOUNT') is ad_account_handler; assert fb_worker.WebSessionManager is fb_worker.FacebookWebSession; assert callable(ProfileSession.facebook_business_browser)" \
-    && /opt/remask-venv/bin/python -m unittest -q tests.test_fb_worker_bootstrap tests.test_business_docid_discovery tests.test_v14_docid_policy tests.test_fb_worker_request_envelope tests.test_business_create_exact_envelope tests.test_meta_transport_router tests.test_private_http tests.test_direct_test tests.test_private_launch_service tests.test_private_launch_http tests.test_private_launch_verify tests.test_static_launch_contracts tests.test_private_ads_draft tests.test_private_ads_http tests.test_private_ads_launch tests.test_private_ads_carousel tests.test_media_preflight tests.test_managed_media_api tests.test_private_launch_worker_pipeline tests.test_native_field_values tests.test_private_ads_cta tests.test_native_batch_worker_pipeline tests.test_private_ads_resources tests.test_private_ads_scoped_resources tests.test_private_ads_helpers tests.test_private_ads_preview tests.test_private_form_schema tests.test_private_ads_video tests.test_private_ads_delivery tests.test_private_launch_extensions tests.test_private_launch_publication tests.test_private_advertising_lifecycle tests.test_ads_sources tests.test_business_browser_flow tests.test_business_create_observer tests.test_ad_account_create tests.test_ad_account_private_contract tests.test_fan_page_private_preflight tests.test_fan_page_private_contract tests.test_private_inventory tests.test_private_inventory_queries tests.test_private_create_handlers tests.test_private_business_preflight tests.test_private_page_ownership tests.test_docker_python_guards tests.test_fan_page_create tests.test_fan_page_reconciliation tests.test_workspace_bindings tests.test_job_store_recovery tests.test_ads_manager_scope_sync tests.test_live_sync_contract tests.test_common_advertising_page tests.test_payment_card_binding tests.test_payment_country_setup tests.test_payment_card_service tests.test_payment_card_http tests.test_payment_card_business_wallet tests.test_payment_card_sdc_http tests.test_payment_card_bank tests.test_bank_verification_ledger tests.test_payment_card_verification \
+    && /opt/remask-venv/bin/python -m unittest -v tests.test_fb_worker_bootstrap tests.test_business_docid_discovery tests.test_v14_docid_policy tests.test_fb_worker_request_envelope tests.test_business_create_exact_envelope tests.test_meta_transport_router tests.test_private_http tests.test_cookie_revocation_state tests.test_private_http_stages tests.test_private_draft_read tests.test_session_auth_refresh tests.test_direct_test tests.test_private_launch_service tests.test_private_launch_http tests.test_private_launch_verify tests.test_static_launch_contracts tests.test_private_ads_draft tests.test_private_ads_http tests.test_draft_bootstrap_evidence tests.test_private_session_probe tests.test_private_session_probe_api tests.test_private_ads_launch tests.test_private_ads_carousel tests.test_media_preflight tests.test_managed_media_api tests.test_private_launch_worker_pipeline tests.test_native_field_values tests.test_private_ads_cta tests.test_native_batch_worker_pipeline tests.test_private_ads_resources tests.test_private_ads_scoped_resources tests.test_private_ads_helpers tests.test_private_ads_preview tests.test_private_form_schema tests.test_private_ads_video tests.test_private_ads_delivery tests.test_private_launch_extensions tests.test_private_launch_publication tests.test_private_advertising_lifecycle tests.test_ads_sources tests.test_business_browser_flow tests.test_business_create_observer tests.test_ad_account_create tests.test_ad_account_private_contract tests.test_fan_page_private_preflight tests.test_fan_page_private_contract tests.test_private_inventory tests.test_private_inventory_queries tests.test_private_create_handlers tests.test_private_business_preflight tests.test_private_page_ownership tests.test_docker_python_guards tests.test_fan_page_create tests.test_fan_page_reconciliation tests.test_workspace_bindings tests.test_job_store_recovery tests.test_ads_manager_scope_sync tests.test_live_sync_contract tests.test_common_advertising_page tests.test_payment_card_binding tests.test_payment_country_setup tests.test_payment_card_service tests.test_payment_card_http tests.test_payment_card_business_wallet tests.test_payment_card_sdc_http tests.test_payment_card_bank tests.test_bank_verification_ledger tests.test_payment_card_verification \
     && grep -q 'class FacebookBusinessBrowser' /opt/remask-python/app/facebook_business_browser.py \
     && grep -q 'DIRECT_CREATE_URL = "https://business.facebook.com/create"' /opt/remask-python/app/facebook_business_browser.py \
     && grep -q 'business_guarded=' /opt/remask-python/app/runner.py \
@@ -53,6 +54,7 @@ COPY tests/private-launch-meta-marker.test.php /tmp/remask-tests/private-launch-
 COPY tests/private-inventory-identity.test.php /tmp/remask-tests/private-inventory-identity.test.php
 COPY tests/template-targeting-context.test.php /tmp/remask-tests/template-targeting-context.test.php
 COPY tests/readiness.test.php /tmp/remask-tests/readiness.test.php
+COPY tests/profile-cookie-cas.test.php /tmp/remask-tests/profile-cookie-cas.test.php
 COPY docker-start.sh /tmp/docker-start.sh
 
 RUN set -eux; \
@@ -308,6 +310,8 @@ RUN set -eux; \
     grep -q 'REMASK_FULL_META_LAUNCH_V1' /var/www/html/scripts/launch.js; \
     grep -q 'launchMetaSdkFields' /var/www/html/launch.php; \
     grep -q 'remaskCurrentMetaBuilderForJob' /var/www/html/scripts/launch.js; \
+    grep -q 'function remaskPrivateRenderJob' /var/www/html/scripts/launch.js; \
+    grep -q 'draft-jobs-v1' /var/www/html/launch.php; \
     grep -q '20261023-private-launch-meta-marker-v1' /var/www/html/launch.php; \
     grep -q 'REMASK_META_VISUAL_EDITORS_V1' /var/www/html/scripts/launch.js; \
     grep -q 'REMASK_LANGUAGE_SEARCH_V1' /var/www/html/classes/MetaAdsService.php; \
@@ -586,6 +590,10 @@ RUN set -eux; \
     php /tmp/remask-tests/private-inventory-identity.test.php; \
     php /tmp/remask-tests/template-targeting-context.test.php; \
     php /tmp/remask-tests/readiness.test.php; \
+    php -l /var/www/html/ajax/pythonProfileContext.php; \
+    grep -q 'refresh_profile_cookies' /var/www/html/ajax/pythonProfileContext.php; \
+    php -l /var/www/html/classes/PostgresProfileStore.php; \
+    php /tmp/remask-tests/profile-cookie-cas.test.php; \
     chown -R www-data:www-data /var/lib/remask /var/www/html; \
     chmod 700 /var/lib/remask; \
     chmod +x /var/www/html/docker-start.sh; \

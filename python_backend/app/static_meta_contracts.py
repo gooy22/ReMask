@@ -80,6 +80,12 @@ async def execute(web, operation, *, before_submit=None, business='', variables=
     log.info('[%s] static_contract operation=%s doc_id=%s revision=%s kind=%s browser_started=False',
         getattr(getattr(web, 'profile', None), 'name', ''), operation, row['doc_id'], _manifest()['revision'], row['operation_kind'])
     kwargs = {'friendly_name': row['friendly_name'], 'endpoint_url': row['endpoint_url'], 'business_context_id': business}
+    if operation in {'READ_BM', 'READ_RK', 'CONFIG', 'PAGE', 'RIGHTS', 'CREATE_BM', 'CREATE_RK', 'CLAIM', 'ASSIGN'}:
+        kwargs['business_loginpage_probe'] = operation
+    if row['operation_kind'] == 'query' and before_submit is None:
+        # A reviewed read is still one POST. It must not inherit the generic
+        # 15s profile budget while HTML and native renewal already allow 30s.
+        kwargs['read_timeout_seconds'] = 30
     if before_submit is not None:
         kwargs['before_submit'] = before_submit
     submit = getattr(web, 'graphql', None)
@@ -149,15 +155,21 @@ def rk_create_contract(*, business_id, account_name, currency, timezone_id, acto
 
 
 async def create_business_static(web, *, business_name, user_email, user_first_name='', user_last_name='',
-                                 profile_display_name='', profile_id='', before_submit=None, manual_doc_id='', **kwargs):
+                                 profile_display_name='', profile_id='', actor_id='', before_submit=None,
+                                 manual_doc_id='', **kwargs):
     from .facebook_business_create import _derive_name_parts, CreateBusinessResult, BusinessMutationError
     from .facebook_docids import DocIdCandidate
     row = contract_metadata('CREATE_BM')
     if manual_doc_id and manual_doc_id != row['doc_id']:
         raise ProvisioningError('PRIVATE_STATIC_CONTRACT_OVERRIDE_REJECTED', 'Change the reviewed contract manifest before changing CREATE BM doc_id.')
-    bootstrap = await web.bootstrap()
+    actor = str(actor_id or (getattr(getattr(web, 'profile', None), 'cookies', {}) or {}).get('c_user') or '').strip()
+    if not actor.isdigit():
+        bootstrap = await web.bootstrap()
+        actor = str(getattr(bootstrap, 'actor_id', '') or '').strip()
+    if not actor.isdigit():
+        raise ProvisioningError('SESSION_EXPIRED', 'Current profile actor is unavailable for BM creation.')
     first, last = _derive_name_parts(display_name=profile_display_name, first_name=user_first_name, last_name=user_last_name)
-    result = await execute(web, 'CREATE_BM', actor=str(bootstrap.actor_id), name=business_name,
+    result = await execute(web, 'CREATE_BM', actor=actor, name=business_name,
         first=first, last=last, email=user_email, mutation=uuid.uuid4().hex[:16], join=str(uuid.uuid4()), before_submit=before_submit)
     data = result.get('data') if isinstance(result, dict) else None
     node = data.get('bizkit_create_business') if isinstance(data, dict) else None

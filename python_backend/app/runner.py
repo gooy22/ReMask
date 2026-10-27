@@ -504,22 +504,53 @@ class WorkerPool:
                                 except (TypeError,ValueError):
                                     launch_timeout=300.0
                                 launch_timeout=max(120.0,min(launch_timeout,1800.0))
-                                result=await _await_with_hard_watchdog(
-                                    (self.private_launch.run if action=='private_launch' else self.private_launch.run_delivery)(
-                                        item_id=item_id,
-                                        profile_id=profile_id,
-                                        context=context,
-                                        session=session,
-                                        payload=payload,
-                                        task_idempotency_key=task.get('idempotency_key'),
-                                    ),
-                                    timeout_seconds=launch_timeout,
-                                    code='PRIVATE_LAUNCH_HARD_TIMEOUT',
-                                    message=(
-                                        'Private Launch exact preflight/mutation pipeline '
-                                        f'exceeded {int(launch_timeout)}s total runtime.'
-                                    ),
-                                )
+                                launch_runner = self.private_launch.run if action=='private_launch' else self.private_launch.run_delivery
+                                launch_args = {
+                                    'item_id':item_id,
+                                    'profile_id':profile_id,
+                                    'context':context,
+                                    'session':session,
+                                    'payload':payload,
+                                    'task_idempotency_key':task.get('idempotency_key'),
+                                }
+                                try:
+                                    result=await _await_with_hard_watchdog(
+                                        launch_runner(**launch_args),
+                                        timeout_seconds=launch_timeout,
+                                        code='PRIVATE_LAUNCH_HARD_TIMEOUT',
+                                        message=(
+                                            'Private Launch exact preflight/mutation pipeline '
+                                            f'exceeded {int(launch_timeout)}s total runtime.'
+                                        ),
+                                    )
+                                except ProvisioningError as auth_error:
+                                    if (action != 'private_launch'
+                                            or auth_error.code != 'PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE'
+                                            or getattr(auth_error, 'request_may_have_been_sent', None) is not False):
+                                        raise
+                                    from app.session_auth_refresh import refresh_saved_auth_context
+                                    try:
+                                        saved_session_changed=await asyncio.wait_for(
+                                            refresh_saved_auth_context(self.resolver, context), timeout=5.0)
+                                    except Exception as refresh_exc:
+                                        log.info('private Launch auth refresh profile=%s outcome=unavailable error_type=%s',
+                                            profile_id, type(refresh_exc).__name__)
+                                        raise auth_error from refresh_exc
+                                    log.info('private Launch auth refresh profile=%s changed=%s',
+                                        profile_id, saved_session_changed)
+                                    if not saved_session_changed:
+                                        raise
+                                    async with ProfileSession(context) as retry_session:
+                                        retry_args={**launch_args, 'session':retry_session}
+                                        result=await _await_with_hard_watchdog(
+                                            launch_runner(**retry_args),
+                                            timeout_seconds=launch_timeout,
+                                            code='PRIVATE_LAUNCH_HARD_TIMEOUT',
+                                            message=(
+                                                'Private Launch exact preflight/mutation pipeline '
+                                                f'exceeded {int(launch_timeout)}s total runtime.'
+                                            ),
+                                        )
                             elif action=='prepare':
                                 payload=task['payload']
                                 desired=(payload.get('desired') or {}) if isinstance(payload,dict) else {}

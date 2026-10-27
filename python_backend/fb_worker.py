@@ -3,11 +3,11 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import html
-from html.parser import HTMLParser
 import json
 import logging
 import os
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import unquote, urlsplit
@@ -16,31 +16,10 @@ import aiohttp
 import httpx
 
 from app.private_http import PrivateHttpClient
+from app.meta_auth_document import has_login_form as _has_login_form
 
 
 log = logging.getLogger("remask_worker")
-
-
-class _LoginFormParser(HTMLParser):
-    """Recognize actual login forms, ignoring script text and comments."""
-    def __init__(self):
-        super().__init__(convert_charrefs=True)
-        self.found = False
-
-    def handle_starttag(self, tag, attrs):
-        if tag.lower() != "form":
-            return
-        values = dict(attrs)
-        action = urlsplit(values.get("action") or "").path.lower()
-        self.found |= (str(values.get("id") or "").lower() == "login_form"
-                       or action == "/login.php" or action == "/login"
-                       or action.startswith("/login/"))
-
-
-def _has_login_form(body: str) -> bool:
-    parser = _LoginFormParser()
-    parser.feed(body)
-    return parser.found
 
 
 # ---------------------------------------------------------------------------
@@ -96,6 +75,7 @@ class FacebookBootstrap:
     jazoest: str = ""
     request_context: dict[str, str] = field(default_factory=dict)
     source_url: str = ""
+    profile_actor_verified: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,6 +151,8 @@ class FacebookWebSession:
         self._bootstrap_lock = asyncio.Lock()
 
         self._bootstrap: FacebookBootstrap | None = None
+        self._profile_session_identity_verified = False
+        self._business_read_proofs: dict[tuple[str, str, str, str, str], float] = {}
         self._graphql_request_counter = 0
 
     # ------------------------------------------------------------------
@@ -210,12 +192,86 @@ class FacebookWebSession:
 
     async def close(self) -> None:
         async with self._session_lock:
-            if self.session is not None and not self.session.closed:
-                await self.session.close()
+            if self.session is not None:
+                # HTTPX applies Meta Set-Cookie headers to this profile-bound
+                # jar. Preserve only a snapshot for the same actor; never allow
+                # a redirect to silently switch the profile identity.
+                snapshot = self.session.facebook_cookie_snapshot()
+                original_actor = str(self.profile.cookies.get("c_user") or "")
+                if (self._profile_session_identity_verified
+                        and snapshot.get("c_user") == original_actor
+                        and str(snapshot.get("xs") or "").strip()):
+                    self.profile.cookies = snapshot
+                elif snapshot != self.profile.cookies:
+                    log.info(
+                        "[%s] Meta cookie writeback skipped identity_verified=%s",
+                        self.profile.name, self._profile_session_identity_verified,
+                    )
+                if not self.session.closed:
+                    await self.session.close()
 
             self.session = None
 
         self._bootstrap = None
+        self._profile_session_identity_verified = False
+        self._business_read_proofs.clear()
+
+    def begin_business_read_verification(
+        self, operation: str, business_id: str = "", resource_id: str = "", user_id: str = "",
+    ) -> None:
+        operation = str(operation or "").strip()
+        if operation not in {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS"}:
+            return
+        if operation == "READ_BM":
+            business_id = resource_id = user_id = ""
+        business_id = str(business_id or "").strip()
+        resource_id = str(resource_id or "").strip()
+        user_id = str(user_id or "").strip()
+        actor = str(self.profile.cookies.get("c_user") or "").strip()
+        self._business_read_proofs.pop((operation, business_id, resource_id, user_id, actor), None)
+
+    def mark_business_read_verified(
+        self, operation: str, business_id: str = "", resource_id: str = "", user_id: str = "",
+        *, complete: bool = False,
+    ) -> None:
+        operation = str(operation or "").strip()
+        if operation not in {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS"}:
+            return
+        if operation == "READ_BM":
+            business_id = resource_id = user_id = ""
+        business_id = str(business_id or "").strip()
+        resource_id = str(resource_id or "").strip()
+        user_id = str(user_id or "").strip()
+        actor = str(self.profile.cookies.get("c_user") or "").strip()
+        key = (operation, business_id, resource_id, user_id, actor)
+        self._business_read_proofs.pop(key, None)
+        valid_scope = (
+            operation == "READ_BM"
+            or (operation in {"READ_RK", "CONFIG"} and business_id.isdigit())
+            or (operation == "PAGE" and business_id.isdigit() and resource_id.isdigit())
+            or (operation == "RIGHTS" and business_id.isdigit()
+                and resource_id.isdigit() and user_id.isdigit())
+        )
+        if complete is True and actor.isdigit() and valid_scope:
+            self._business_read_proofs[key] = time.monotonic()
+
+    def has_fresh_business_read_verified(
+        self, operation: str, business_id: str = "", resource_id: str = "", user_id: str = "",
+    ) -> bool:
+        operation = str(operation or "").strip()
+        if operation not in {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS"}:
+            return False
+        if operation == "READ_BM":
+            business_id = resource_id = user_id = ""
+        business_id = str(business_id or "").strip()
+        resource_id = str(resource_id or "").strip()
+        user_id = str(user_id or "").strip()
+        actor = str(self.profile.cookies.get("c_user") or "").strip()
+        key = (operation, business_id, resource_id, user_id, actor)
+        verified_at = self._business_read_proofs.get(key)
+        bootstrap_actor = str(getattr(self._bootstrap, "actor_id", "") or "").strip()
+        return (verified_at is not None and actor.isdigit() and bootstrap_actor == actor
+                and 0 <= time.monotonic() - verified_at <= 300)
 
     # ------------------------------------------------------------------
     # Proxy
@@ -318,6 +374,30 @@ class FacebookWebSession:
             variants.append(js_decoded)
 
         return variants
+
+    @classmethod
+    def _profile_actor_ids(cls, source: str) -> set[str]:
+        return {
+            user
+            for variant in cls._match_sources(source)
+            for user in re.findall(
+                r'''CurrentUserInitialData.{0,2000}?["']?USER_ID["']?\s*:\s*["']?([0-9]{1,30})''',
+                variant,
+                flags=re.DOTALL,
+            )
+        }
+
+    @staticmethod
+    def _restore_invalid_profile_cookie_snapshot(session: Any, expected_actor: str) -> None:
+        snapshot_fn = getattr(session, "facebook_cookie_snapshot", None)
+        restore_fn = getattr(session, "restore_profile_cookies", None)
+        if not callable(snapshot_fn) or not callable(restore_fn):
+            return
+        snapshot = snapshot_fn()
+        actor = str(snapshot.get("c_user") or snapshot.get("i_user") or "").strip()
+        if (actor != str(expected_actor).strip()
+                or not str(snapshot.get("xs") or "").strip()):
+            restore_fn()
 
     @classmethod
     def _first_match(
@@ -571,13 +651,225 @@ class FacebookWebSession:
 
         return output
 
+    async def _verified_profile_bootstrap(
+        self,
+        session: PrivateHttpClient,
+        expected_actor: str,
+        attempts: list[dict[str, Any]],
+        *,
+        require_actor_match: bool = True,
+    ) -> FacebookBootstrap:
+        # Personal profile and Ads Manager documents are read-only identity
+        # surfaces. /me can be minimal or partially hydrated; Ads Manager is the
+        # final fallback because it previously confirmed the selected actor in
+        # production when generic profile pages did not.
+        targets = (
+            "https://www.facebook.com/me",
+            "https://www.facebook.com/settings",
+            "https://www.facebook.com/",
+            # The legacy own-profile surface can still expose the selected actor
+            # when /me, settings, and the homepage normalize or misreport it.
+            "https://www.facebook.com/profile.php",
+            "https://adsmanager.facebook.com/adsmanager/manage/campaigns",
+            "https://m.facebook.com/",
+            "https://mbasic.facebook.com/",
+            "https://mbasic.facebook.com/profile.php",
+        )
+        for target in targets:
+            # Business login-page redirects can delete root-scope auth cookies
+            # before the profile identity check. Each probe starts from the
+            # exact imported profile snapshot.
+            restore_cookies = getattr(session, "restore_profile_cookies", None)
+            if callable(restore_cookies):
+                restore_cookies()
+            try:
+                from app.private_http import buffered_response
+                probe_timeout_seconds = 15.0 if target.startswith("https://adsmanager.facebook.com/") else 8.0
+                response, body = await asyncio.wait_for(
+                    buffered_response(
+                        "GET",
+                        lambda: session.get(
+                            target,
+                            proxy=self.profile.proxy,
+                            headers={
+                                "Accept": (
+                                    "text/html,application/xhtml+xml,"
+                                    "application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+                                ),
+                                "Accept-Language": "en-US,en;q=0.9",
+                                "Cache-Control": "no-cache",
+                                "Pragma": "no-cache",
+                                "Sec-Fetch-Dest": "document",
+                                "Sec-Fetch-Mode": "navigate",
+                                "Sec-Fetch-Site": "none",
+                                "Sec-Fetch-User": "?1",
+                                "Upgrade-Insecure-Requests": "1",
+                            },
+                            allow_redirects=True,
+                            request_timeout_seconds=probe_timeout_seconds,
+                        ),
+                        16 * 1024 * 1024 + 1,
+                        retry_read=True,
+                        reader=lambda response: response.text(),
+                    ),
+                    timeout=probe_timeout_seconds,
+                )
+            except (asyncio.TimeoutError, aiohttp.ClientError, httpx.HTTPError) as exc:
+                attempts.append({
+                    "requested_url": target, "auth_reason": "profile_probe_transport",
+                    "transport_failure": type(exc).__name__,
+                })
+                # One Facebook profile document can stall or fail at the
+                # assigned proxy while another equivalent read-only surface
+                # still confirms the same imported actor.
+                log.info(
+                    "[%s] scoped profile bootstrap route unavailable route=%s kind=%s",
+                    self.profile.name,
+                    urlsplit(target).path or "/",
+                    type(exc).__name__,
+                )
+                continue
+
+            self._restore_invalid_profile_cookie_snapshot(session, expected_actor)
+            final_url = str(response.url)
+            parts = urlsplit(final_url)
+            path = parts.path.lower()
+            users = self._profile_actor_ids(body)
+            actor_verified = bool(expected_actor and expected_actor in users)
+            token = self._first_match(body, list(self.FB_DTSG_PATTERNS))
+            login_form = _has_login_form(body)
+            mobile_profile_route = (
+                parts.hostname in {"m.facebook.com", "mbasic.facebook.com"}
+                and path.rstrip("/") in {"", "/profile.php"}
+            )
+            reason = (
+                "checkpoint_redirect" if "/checkpoint" in path
+                else "login_redirect" if "/login" in path
+                else "redirected_host" if (
+                    parts.hostname != "www.facebook.com"
+                    and not mobile_profile_route
+                    and not (
+                        parts.hostname == "adsmanager.facebook.com"
+                        and path.rstrip("/") == "/adsmanager/manage/campaigns"
+                    )
+                )
+                else "login_form" if login_form
+                else "http_auth" if response.status in {401, 403}
+                else "actor_mismatch" if require_actor_match and users and not actor_verified
+                else "actor_unobserved" if require_actor_match and not users
+                else "profile_token_unavailable" if not token
+                else "http_status" if response.status != 200
+                else ""
+            )
+            attempts.append({
+                "requested_url": target,
+                "final_url": f"{parts.scheme}://{parts.hostname or ''}{parts.path}",
+                "http_status": response.status,
+                "body_bytes": len(body.encode("utf-8")),
+                "token_present": bool(token),
+                "actor_verified": actor_verified,
+                "actor_candidate_count": len(users),
+                "auth_reason": reason,
+                **self._document_failure_evidence(response.status, body),
+            })
+            if not reason and response.status == 200:
+                bootstrap = FacebookBootstrap(
+                    fb_dtsg=token,
+                    actor_id=expected_actor,
+                    lsd=self._first_match(body, [r'"LSD".{0,1800}?"token"\s*:\s*"([^"]+)"']),
+                    jazoest=self._first_match(body, [r"""name=["']jazoest["'][^>]*value=["']([^"']+)["']"""]),
+                    request_context=self._extract_request_context(body),
+                    source_url=target,
+                    profile_actor_verified=actor_verified,
+                )
+                self._bootstrap = bootstrap
+                self._profile_session_identity_verified = actor_verified
+                log.info(
+                    "[%s] Meta profile document supplied scoped bootstrap identity_verified=%s route=%s",
+                    self.profile.name,
+                    actor_verified,
+                    urlsplit(target).path or "/",
+                )
+                return bootstrap
+
+            # Business Suite can gate its own surface while an independent
+            # read-only profile route still confirms the imported actor. Keep
+            # trying only for this known Business-only login page; checkpoints,
+            # generic login pages and HTTP auth failures remain terminal.
+            if (reason == "login_redirect"
+                    and parts.hostname == "business.facebook.com"
+                    and path.rstrip("/") == "/business/loginpage"):
+                log.info(
+                    "[%s] Business loginpage on profile probe; trying next read-only identity route",
+                    self.profile.name,
+                )
+                continue
+
+            # Strict bootstrap callers require a read-only page to expose the
+            # selected actor before sending the pinned asset query.
+            if reason not in {
+                "actor_unobserved",
+                "profile_token_unavailable",
+                "actor_mismatch",
+            }:
+                break
+
+        safe_attempts = [
+            {key: row.get(key) for key in (
+                "requested_url", "final_url", "http_status", "auth_reason",
+                "token_present", "actor_verified", "actor_candidate_count",
+                "transport_failure",
+            ) if key in row}
+            for row in attempts
+        ]
+        log.warning(
+            "[%s] scoped profile bootstrap not verified attempts=%s",
+            self.profile.name,
+            json.dumps(safe_attempts, separators=(",", ":")),
+        )
+        self.invalidate_bootstrap()
+        explicit_profile_challenge = any(
+            row.get("auth_reason") in {
+                "checkpoint_redirect", "login_redirect", "login_form",
+                "http_auth", "actor_mismatch",
+            }
+            for row in attempts if isinstance(row, dict)
+        )
+        if not explicit_profile_challenge:
+            raise RemoteRequestError(
+                "Facebook profile identity could not be confirmed on the available read-only routes. No GraphQL POST was sent.",
+                meta_payload={
+                    "business_precheck": attempts,
+                    "transport_failure": {"kind": "profile_identity_unconfirmed"},
+                },
+                request_may_have_been_sent=False,
+                transport_stage="business_auth_precheck",
+            )
+        error = AuthenticationError(
+            "Meta profile identity was not independently confirmed. No GraphQL POST was sent."
+        )
+        error.meta_payload = {"business_precheck": attempts}
+        error.request_may_have_been_sent = False
+        error.transport_stage = "business_auth_precheck"
+        raise error
+
     async def bootstrap(
         self,
         *,
         force: bool = False,
+        allow_business_loginpage_probe: bool = False,
+        require_actor_match: bool = True,
     ) -> FacebookBootstrap:
 
-        if self._bootstrap is not None and not force:
+        if (allow_business_loginpage_probe and self._bootstrap is not None
+                and not self._bootstrap.profile_actor_verified):
+            self._bootstrap = None
+            self._profile_session_identity_verified = False
+        if (self._bootstrap is not None
+                and self._bootstrap.profile_actor_verified
+                and not allow_business_loginpage_probe):
+            self._bootstrap = None
+        if self._bootstrap is not None and not force and not self._bootstrap.profile_actor_verified:
             from app.contract_maintenance.module_refresh import refresh_due
             force = refresh_due(self)
         if self._bootstrap is not None and not force:
@@ -585,9 +877,17 @@ class FacebookWebSession:
 
         async with self._bootstrap_lock:
 
+            if (allow_business_loginpage_probe and self._bootstrap is not None
+                    and not self._bootstrap.profile_actor_verified):
+                self._bootstrap = None
+                self._profile_session_identity_verified = False
+            if (self._bootstrap is not None and self._bootstrap.profile_actor_verified
+                    and not allow_business_loginpage_probe):
+                self._bootstrap = None
             if self._bootstrap is not None and not force:
                 return self._bootstrap
 
+            self._profile_session_identity_verified = False
             session = await self._ensure_session()
 
             actor_id = str(
@@ -599,6 +899,20 @@ class FacebookWebSession:
             if not actor_id:
                 raise AuthenticationError(
                     "Facebook actor_id is missing from c_user/i_user cookies"
+                )
+
+            if allow_business_loginpage_probe:
+                expected_actor = str(self.profile.cookies.get("c_user") or "").strip()
+                if not expected_actor.isdigit() or expected_actor != actor_id:
+                    raise AuthenticationError(
+                        "A profile-bound Business operation requires the selected c_user actor."
+                    )
+                # Exact reviewed BM/RK/Page contracts use the imported profile
+                # identity directly. Visiting Business Suite first can redirect
+                # to business/loginpage, mutate its in-memory cookies, and spend
+                # the Sync deadline before the same profile is checked.
+                return await self._verified_profile_bootstrap(
+                    session, expected_actor, [], require_actor_match=require_actor_match,
                 )
 
             token_patterns = list(self.FB_DTSG_PATTERNS)
@@ -628,7 +942,8 @@ class FacebookWebSession:
 
             for bootstrap_url in bootstrap_urls:
                 try:
-                    async with session.get(
+                    from app.private_http import buffered_response
+                    response, candidate_body = await buffered_response('GET', lambda: session.get(
                         bootstrap_url,
                         proxy=self.profile.proxy,
                         headers={
@@ -645,76 +960,86 @@ class FacebookWebSession:
                             "Sec-Fetch-User": "?1",
                             "Upgrade-Insecure-Requests": "1",
                         },
-                        allow_redirects=True,
-                    ) as response:
-                        candidate_body = await response.text()
-                        candidate_url = str(response.url)
+                        allow_redirects=True, request_timeout_seconds=max(30, self.timeout_seconds),
+                    ), 16 * 1024 * 1024 + 1, retry_read=True, reader=lambda response: response.text())
+                    candidate_url = str(response.url)
+                    self._restore_invalid_profile_cookie_snapshot(session, actor_id)
 
-                        if response.status >= 500:
-                            attempts.append(
-                                f"{bootstrap_url}: HTTP {response.status}"
-                            )
-                            continue
-
-                        parts = urlsplit(candidate_url)
-                        route = parts.path.lower()
-                        if (
-                            "/login" in route
-                            or "/checkpoint" in route
-                            or _has_login_form(candidate_body)
-                        ):
-                            auth_attempts.append({"auth_reason": "checkpoint_redirect" if "/checkpoint" in route
-                                else "login_redirect" if "/login" in route else "login_form",
-                                "final_url": f"{parts.scheme}://{parts.hostname or ''}{parts.path}"})
-                            error = AuthenticationError("Meta requires session restoration before bootstrap.")
-                            error.meta_payload = {"business_precheck": auth_attempts}
-                            error.request_may_have_been_sent = False
-                            error.transport_stage = "bootstrap"
-                            raise error
-
-                        if len(candidate_body) > len(best_authenticated_body):
-                            best_authenticated_body = candidate_body
-                            best_authenticated_url = candidate_url
-
-                        candidate_dtsg = self._first_match(
-                            candidate_body,
-                            token_patterns,
+                    if response.status >= 500:
+                        attempts.append(
+                            f"{bootstrap_url}: HTTP {response.status}"
                         )
-                        if not candidate_dtsg:
-                            normalized_sources = self._match_sources(candidate_body)
-                            marker_names = [
-                                marker
-                                for marker in (
-                                    "DTSGInitialData",
-                                    "DTSGInitData",
-                                    '"fb_dtsg"',
-                                    'name="fb_dtsg"',
-                                    "name='fb_dtsg'",
-                                    "CurrentUserInitialData",
-                                )
-                                if any(marker in source for source in normalized_sources)
-                            ]
-                            surface = (
-                                f"HTTP {response.status} final={candidate_url} "
-                                f"bytes={len(candidate_body)}"
-                            )
-                            if marker_names:
-                                attempts.append(
-                                    f"{bootstrap_url}: {surface} markers="
-                                    + ",".join(marker_names)
-                                    + " but no usable fb_dtsg was parsed"
-                                )
-                            else:
-                                attempts.append(
-                                    f"{bootstrap_url}: {surface} no DTSG marker"
-                                )
-                            continue
+                        continue
 
-                        body = candidate_body
-                        final_url = candidate_url
-                        bootstrap_source = bootstrap_url
-                        fb_dtsg = candidate_dtsg
-                        break
+                    parts = urlsplit(candidate_url)
+                    route = parts.path.lower()
+                    if (
+                        "/login" in route
+                        or "/checkpoint" in route
+                        or _has_login_form(candidate_body)
+                    ):
+                        auth_attempts.append({"auth_reason": "checkpoint_redirect" if "/checkpoint" in route
+                            else "login_redirect" if "/login" in route else "login_form",
+                            "final_url": f"{parts.scheme}://{parts.hostname or ''}{parts.path}"})
+                        business_loginpage = (
+                            parts.hostname == "business.facebook.com"
+                            and route.rstrip("/") == "/business/loginpage"
+                        )
+                        expected_actor = str(self.profile.cookies.get("c_user") or "").strip()
+                        if (allow_business_loginpage_probe and business_loginpage
+                                and expected_actor.isdigit()):
+                            return await self._verified_profile_bootstrap(
+                                session, expected_actor, auth_attempts,
+                            )
+                        error = AuthenticationError("Meta requires session restoration before bootstrap.")
+                        error.meta_payload = {"business_precheck": auth_attempts}
+                        error.request_may_have_been_sent = False
+                        error.transport_stage = "bootstrap"
+                        raise error
+
+                    if len(candidate_body) > len(best_authenticated_body):
+                        best_authenticated_body = candidate_body
+                        best_authenticated_url = candidate_url
+
+                    candidate_dtsg = self._first_match(
+                        candidate_body,
+                        token_patterns,
+                    )
+                    if not candidate_dtsg:
+                        normalized_sources = self._match_sources(candidate_body)
+                        marker_names = [
+                            marker
+                            for marker in (
+                                "DTSGInitialData",
+                                "DTSGInitData",
+                                '"fb_dtsg"',
+                                'name="fb_dtsg"',
+                                "name='fb_dtsg'",
+                                "CurrentUserInitialData",
+                            )
+                            if any(marker in source for source in normalized_sources)
+                        ]
+                        surface = (
+                            f"HTTP {response.status} final={candidate_url} "
+                            f"bytes={len(candidate_body)}"
+                        )
+                        if marker_names:
+                            attempts.append(
+                                f"{bootstrap_url}: {surface} markers="
+                                + ",".join(marker_names)
+                                + " but no usable fb_dtsg was parsed"
+                            )
+                        else:
+                            attempts.append(
+                                f"{bootstrap_url}: {surface} no DTSG marker"
+                            )
+                        continue
+
+                    body = candidate_body
+                    final_url = candidate_url
+                    bootstrap_source = bootstrap_url
+                    fb_dtsg = candidate_dtsg
+                    break
 
                 except (asyncio.TimeoutError, aiohttp.ClientError, httpx.HTTPError) as exc:
                     # The failed profile route cannot establish cookie expiry.
@@ -736,6 +1061,7 @@ class FacebookWebSession:
                     actor_id,
                     attempts,
                 )
+                self._restore_invalid_profile_cookie_snapshot(session, actor_id)
                 if refresh_token:
                     fb_dtsg = refresh_token
                     bootstrap_source = refresh_source
@@ -786,6 +1112,13 @@ class FacebookWebSession:
 
             request_context = self._extract_request_context(body)
 
+            parts = urlsplit(final_url)
+            self._profile_session_identity_verified = bool(
+                actor_id in self._profile_actor_ids(body)
+                and parts.hostname
+                and (parts.hostname == "facebook.com" or parts.hostname.endswith(".facebook.com"))
+                and not _has_login_form(body)
+            )
             bootstrap = FacebookBootstrap(
                 fb_dtsg=fb_dtsg,
                 actor_id=actor_id,
@@ -814,6 +1147,8 @@ class FacebookWebSession:
 
     def invalidate_bootstrap(self) -> None:
         self._bootstrap = None
+        self._profile_session_identity_verified = False
+        self._business_read_proofs.clear()
         self._reviewed_module_ids = {}
 
     async def refresh_reviewed_modules(self, document: str, final_url: str) -> None:
@@ -872,10 +1207,11 @@ class FacebookWebSession:
         # Recovery pages are document navigations too. Opt in at the caller
         # rather than changing generic bundle/API/CDN reads across the app.
         facebook_host = hostname == "facebook.com" or hostname.endswith(".facebook.com")
-        if facebook_host and (hostname == "business.facebook.com" or document_navigation) and not (
+        document_request = facebook_host and (hostname == "business.facebook.com" or document_navigation) and not (
             parts.path.lower().endswith((".js", ".css", ".json"))
             or "/api/" in parts.path.lower()
-        ):
+        )
+        if document_request:
             request_headers.update({
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Accept-Language": "en-US,en;q=0.9",
@@ -887,33 +1223,32 @@ class FacebookWebSession:
             request_headers["Referer"] = referer
 
         try:
-            async with session.get(
-                target,
-                proxy=self.profile.proxy,
-                headers=request_headers,
-                allow_redirects=True,
-            ) as response:
-                raw = await response.content.read(max(1, int(max_bytes)) + 1)
-                if len(raw) > max_bytes:
-                    raw = raw[:max_bytes]
+            from app.private_http import buffered_response
+            response, raw = await buffered_response('GET', lambda: session.get(
+                target, proxy=self.profile.proxy, headers=request_headers,
+                allow_redirects=True, **({'request_timeout_seconds':max(30, self.timeout_seconds)}
+                    if document_request else {})), max(1, int(max_bytes)) + 1,
+                retry_read=document_request)
+            if len(raw) > max_bytes:
+                raw = raw[:max_bytes]
 
-                charset = response.charset or "utf-8"
-                try:
-                    body = raw.decode(charset, errors="replace")
-                except LookupError:
-                    body = raw.decode("utf-8", errors="replace")
+            charset = response.charset or "utf-8"
+            try:
+                body = raw.decode(charset, errors="replace")
+            except LookupError:
+                body = raw.decode("utf-8", errors="replace")
 
-                response_headers = {
-                    str(key): str(value)
-                    for key, value in response.headers.items()
-                }
+            response_headers = {
+                str(key): str(value)
+                for key, value in response.headers.items()
+            }
 
-                return (
-                    response.status,
-                    body,
-                    str(response.url),
-                    response_headers,
-                )
+            return (
+                response.status,
+                body,
+                str(response.url),
+                response_headers,
+            )
 
         except asyncio.TimeoutError as exc:
             raise RemoteRequestError(
@@ -1000,9 +1335,12 @@ class FacebookWebSession:
 
     async def _business_bootstrap(
         self, bootstrap: FacebookBootstrap, *, business_id: str = "",
-        business_create: bool = False,
+        business_create: bool = False, business_loginpage_probe: str = "",
     ) -> FacebookBootstrap:
         """Confirm Business auth using bounded, read-only operation surfaces."""
+        if (business_loginpage_probe in {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS", "CREATE_BM", "CREATE_RK", "CLAIM", "ASSIGN"}
+                and bootstrap.profile_actor_verified):
+            return bootstrap
         source = str(getattr(bootstrap, "source_url", "") or "").strip()
         target = (
             "https://business.facebook.com/latest/settings/ad_accounts/?business_id=" + business_id
@@ -1049,6 +1387,28 @@ class FacebookWebSession:
                 **self._document_failure_evidence(status, body),
             })
             if gated:
+                business_loginpage = (
+                    parts.hostname == "business.facebook.com"
+                    and parts.path.lower().rstrip("/") == "/business/loginpage"
+                )
+                if (business_loginpage and status < 400
+                        and business_loginpage_probe in {
+                            "READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS",
+                            "CREATE_BM", "CREATE_RK", "CLAIM", "ASSIGN",
+                        }):
+                    expected_actor = str(self.profile.cookies.get("c_user") or "").strip()
+                    if expected_actor.isdigit() and expected_actor == bootstrap.actor_id:
+                        # Business loginpage can clear auth cookies before
+                        # returning a generic gate. Restore the imported
+                        # profile snapshot if c_user/xs were removed or changed,
+                        # then let the exact GraphQL response decide access.
+                        self._restore_invalid_profile_cookie_snapshot(
+                            await self._ensure_session(), expected_actor,
+                        )
+                        # This operation has already passed the pinned static
+                        # contract and actor-binding checks; do not let a generic
+                        # landing-page route veto that exact operation.
+                        return bootstrap
                 log.warning("[%s] BUSINESS auth precheck stopped before POST attempts=%s",
                     self.profile.name, json.dumps(attempts, separators=(",", ":")))
                 self.invalidate_bootstrap()
@@ -1143,6 +1503,161 @@ class FacebookWebSession:
             request_may_have_been_sent=False, transport_stage="business_auth_precheck",
         )
 
+    def _validate_business_loginpage_probe(
+        self,
+        operation: str,
+        doc_id: str,
+        variables: dict[str, Any],
+        *,
+        friendly_name: str,
+        endpoint_url: str | None,
+        request_envelope: dict[str, Any] | None,
+        before_submit: Any | None,
+        business_context_id: str,
+        multipart_files: dict[str, Any] | None,
+        read_timeout_seconds: float | None,
+    ) -> str:
+        operation = str(operation or "").strip()
+        if not operation:
+            return ""
+        allowed = {
+            "READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS",
+            "CREATE_BM", "CREATE_RK", "CLAIM", "ASSIGN", "LIST_PAGES",
+        }
+
+        def reject():
+            raise RemoteRequestError(
+                "Invalid scoped Business login-page continuation; no GraphQL POST was sent.",
+                request_may_have_been_sent=False,
+                transport_stage="business_auth_precheck",
+            )
+
+        if operation not in allowed:
+            reject()
+        if operation == "LIST_PAGES":
+            actor = str(self.profile.cookies.get("c_user") or "").strip()
+            endpoint = str(endpoint_url or "").strip()
+            if (not re.fullmatch(r"\d{5,40}", str(doc_id or "").strip())
+                    or friendly_name != "AccountQualityUserPagesWrapper_UserPageQuery"
+                    or endpoint != "https://www.facebook.com/api/graphql/"
+                    or not actor.isdigit()
+                    or variables != {"assetOwnerId": actor}
+                    or request_envelope
+                    or before_submit is not None
+                    or multipart_files is not None
+                    or read_timeout_seconds != 30
+                    or str(business_context_id or "").strip()):
+                reject()
+            return operation
+        try:
+            from app.static_meta_contracts import ENDPOINT, command, contract_metadata
+            meta = contract_metadata(operation)
+        except Exception:
+            reject()
+        endpoint = str(endpoint_url or self.GRAPHQL_URL).strip()
+        if (str(doc_id or "").strip() != meta["doc_id"]
+                or friendly_name != meta["friendly_name"]
+                or endpoint != ENDPOINT
+                or not isinstance(variables, dict)
+                or bool(request_envelope)):
+            reject()
+
+        if meta["operation_kind"] == "query":
+            if (before_submit is not None or multipart_files is not None
+                    or read_timeout_seconds != 30):
+                reject()
+            if operation == "READ_BM":
+                count = variables.get("fetchNumberForBusinessScopes")
+                if type(count) is not int or count not in {200, 400, 800}:
+                    reject()
+                expected = command(operation)["variables"]
+                expected["fetchNumberForBusinessScopes"] = count
+                if variables != expected or business_context_id:
+                    reject()
+            elif operation == "READ_RK":
+                business = str(business_context_id or "").strip()
+                if (not business.isdigit() or variables.get("businessID") != business
+                        or variables != command(operation, business=business)["variables"]):
+                    reject()
+            elif operation == "CONFIG":
+                business = str(business_context_id or "").strip()
+                if (not business.isdigit() or variables != command(operation, business=business)["variables"]):
+                    reject()
+            elif operation == "PAGE":
+                business = str(business_context_id or "").strip()
+                page = str(variables.get("pageID") or "").strip()
+                if (not business.isdigit() or not page.isdigit()
+                        or variables.get("businessID") != business
+                        or variables != command(operation, business=business, page=page)["variables"]):
+                    reject()
+            elif operation == "RIGHTS":
+                business = str(business_context_id or "").strip()
+                asset = str(variables.get("assetID") or "").strip()
+                user = str(variables.get("userID") or "").strip()
+                if (not business.isdigit() or not asset.isdigit() or not user.isdigit()
+                        or variables.get("businessID") != business
+                        or variables != command(operation, business=business, asset=asset, user=user)["variables"]):
+                    reject()
+        else:
+            if (not callable(before_submit) or multipart_files is not None
+                    or read_timeout_seconds is not None):
+                reject()
+            if operation == "CREATE_BM":
+                if business_context_id:
+                    reject()
+                value = variables.get("input")
+                required = {
+                    "client_mutation_id", "actor_id", "business_name",
+                    "user_first_name", "user_last_name", "user_email",
+                    "creation_source", "entry_point", "qpl_join_id",
+                }
+                if not isinstance(value, dict) or set(value) != required:
+                    reject()
+                actor = str(value.get("actor_id") or "").strip()
+                current_actor = str(self.profile.cookies.get("c_user") or "").strip()
+                if not actor.isdigit() or actor != current_actor:
+                    reject()
+                expected = command(operation, actor=actor,
+                    name=value.get("business_name"), first=value.get("user_first_name"),
+                    last=value.get("user_last_name"), email=value.get("user_email"),
+                    mutation=value.get("client_mutation_id"), join=value.get("qpl_join_id"))
+                if (variables != expected["variables"]
+                        or not self.has_fresh_business_read_verified("READ_BM")):
+                    reject()
+            elif operation == "CREATE_RK":
+                business = str(variables.get("businessID") or "").strip()
+                if (not business.isdigit() or str(business_context_id or "").strip() != business):
+                    reject()
+                expected = command(operation, business=business,
+                    name=variables.get("adAccountName"), currency=variables.get("currency"),
+                    timezone=variables.get("timezoneID"), join=variables.get("qplJoinID"))
+                if (variables != expected["variables"]
+                        or not self.has_fresh_business_read_verified("READ_RK", business)):
+                    reject()
+            elif operation == "CLAIM":
+                business = str(business_context_id or "").strip()
+                page = str(variables.get("pageID") or "").strip()
+                if (not business.isdigit() or not page.isdigit()
+                        or variables.get("businessID") != business
+                        or variables != command(operation, business=business, page=page,
+                            join=variables.get("qplJoinID"))["variables"]
+                        or not self.has_fresh_business_read_verified("CONFIG", business)
+                        or not self.has_fresh_business_read_verified("PAGE", business, page)):
+                    reject()
+            elif operation == "ASSIGN":
+                business = str(business_context_id or "").strip()
+                asset = str(variables.get("assetID") or "").strip()
+                user = str(variables.get("userID") or "").strip()
+                if (not business.isdigit() or not asset.isdigit() or not user.isdigit()
+                        or variables.get("businessID") != business
+                        or variables != command(operation, business=business, user=user,
+                            asset=asset, tasks=variables.get("taskIDs"),
+                            types=variables.get("assetTypes"))["variables"]
+                        or not self.has_fresh_business_read_verified("CONFIG", business)
+                        or not self.has_fresh_business_read_verified("RIGHTS", business, asset, user)):
+                    reject()
+        return operation
+
     async def graphql(
         self,
         doc_id: str,
@@ -1154,8 +1669,16 @@ class FacebookWebSession:
         before_submit: Any | None = None,
         business_context_id: str = "",
         multipart_files: dict[str, Any] | None = None,
+        read_timeout_seconds: float | None = None,
+        business_loginpage_probe: str = "",
     ) -> dict[str, Any]:
 
+        if read_timeout_seconds is not None and (
+                before_submit is not None or multipart_files is not None
+                or type(read_timeout_seconds) not in (int, float)
+                or not 1 <= read_timeout_seconds <= 60):
+            raise RemoteRequestError('Invalid private query read budget.',
+                request_may_have_been_sent=False, transport_stage='before_graphql_submit')
         effective_doc_id = str(doc_id or "").strip()
 
         if not effective_doc_id:
@@ -1173,7 +1696,32 @@ class FacebookWebSession:
             or self.GRAPHQL_URL
         )
 
-        bootstrap = await self.bootstrap()
+        scoped_probe = self._validate_business_loginpage_probe(
+            business_loginpage_probe, effective_doc_id, variables,
+            friendly_name=friendly_name, endpoint_url=endpoint_url,
+            request_envelope=request_envelope, before_submit=before_submit,
+            business_context_id=business_context_id, multipart_files=multipart_files,
+            read_timeout_seconds=read_timeout_seconds,
+        )
+        if scoped_probe:
+            # Exact read-only asset contracts remain pinned to one BM/RK/Page
+            # and the selected c_user. Generic profile pages can report another
+            # actor even when they still provide a usable session token. Keep
+            # actor verification mandatory for every mutation.
+            scoped_read_only = scoped_probe in {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS"}
+            bootstrap = await self.bootstrap(
+                allow_business_loginpage_probe=True,
+                require_actor_match=not scoped_read_only,
+            )
+            current_actor = str(self.profile.cookies.get("c_user") or "").strip()
+            if not current_actor.isdigit() or bootstrap.actor_id != current_actor:
+                raise RemoteRequestError(
+                    "Scoped Business request actor does not match the selected profile.",
+                    request_may_have_been_sent=False,
+                    transport_stage="business_auth_precheck",
+                )
+        else:
+            bootstrap = await self.bootstrap()
         if urlsplit(endpoint).hostname == "business.facebook.com":
             scoped_ids: set[str] = set()
             if business_context_id:
@@ -1198,9 +1746,11 @@ class FacebookWebSession:
             bootstrap = await self._business_bootstrap(
                 bootstrap, business_id=next(iter(scoped_ids), ""),
                 business_create=friendly_name == "useBusinessCreationMutationMutation",
+                business_loginpage_probe=scoped_probe,
             )
-        from app.contract_maintenance.module_refresh import effective_doc_id as reviewed_doc_id
-        effective_doc_id = reviewed_doc_id(self, friendly_name, effective_doc_id)
+        if not scoped_probe:
+            from app.contract_maintenance.module_refresh import effective_doc_id as reviewed_doc_id
+            effective_doc_id = reviewed_doc_id(self, friendly_name, effective_doc_id)
         session = await self._ensure_session()
 
         form: dict[str, str] = {
@@ -1333,6 +1883,8 @@ class FacebookWebSession:
             headers["X-FB-Friendly-Name"] = friendly_name
 
         post_options: dict[str, Any] = {}
+        if read_timeout_seconds is not None:
+            post_options['request_timeout_seconds'] = read_timeout_seconds
         if multipart_files is not None:
             if (not isinstance(multipart_files, dict) or not multipart_files
                     or any(not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,79}", key)

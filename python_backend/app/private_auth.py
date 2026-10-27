@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from .provisioning.models import ProvisioningError
+from .meta_auth_document import auth_route_gate
 
 
 def private_auth_error(exc):
@@ -10,12 +11,22 @@ def private_auth_error(exc):
         return None
     payload = getattr(exc, "meta_payload", {}) or {}
     attempts = payload.get("business_precheck", []) if isinstance(payload, dict) else []
-    reasons = {row.get("auth_reason") for row in attempts if isinstance(row, dict)}
+    rows = [row for row in attempts if isinstance(row, dict)]
+    reasons = {row.get("auth_reason") for row in rows}
+    route_gates = {auth_route_gate(row.get("final_url")) for row in rows}
+    selected_actor_confirmed = any(row.get("actor_verified") is True for row in rows)
+    identity_unconfirmed = (
+        not selected_actor_confirmed
+        and any(reason in {"actor_mismatch", "actor_unobserved"} for reason in reasons)
+    )
     # Generic transport messages say "login/checkpoint" for either route.
-    # Only structured evidence of the actual redirect proves a checkpoint.
-    if "checkpoint_redirect" in reasons:
+    # A Facebook login redirect or an unconfirmed selected actor takes
+    # precedence over a Business-only gate from a later fallback route.
+    if "CHECKPOINT_REQUIRED" in route_gates or "checkpoint_redirect" in reasons:
         code = "CHECKPOINT_REQUIRED"
-    elif any(isinstance(row, dict) and "/business/loginpage" in str(row.get("final_url", "")) for row in attempts):
+    elif "SESSION_EXPIRED" in route_gates or identity_unconfirmed:
+        code = "SESSION_EXPIRED"
+    elif "BUSINESS_LOGIN_GATE" in route_gates:
         code = "BUSINESS_LOGIN_GATE"
     elif not reasons and getattr(exc, 'transport_stage', '') == 'bootstrap':
         code = 'META_AUTH_TOKEN_UNAVAILABLE'

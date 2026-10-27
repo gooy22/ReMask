@@ -215,19 +215,9 @@ function rmx_pm_txt_import(array $input, mixed $store, bool $preview): array {
     $sourceProfile = rmx_pm_find_scalar($input, ['source_profile']);
     $rawProxy = rmx_pm_find_scalar($input, ['proxy']);
     $enableDirect = !$preview && rmx_pm_find_bool($input, ['allow_direct_test'], false);
+    $refreshExisting = !$preview && rmx_pm_find_bool($input, ['refresh_existing_sessions'], false);
     if (!$preview && $sourceProfile !== '' && ($rawProxy !== '' || $enableDirect)) {
         throw new InvalidArgumentException('TXT_PROXY_SOURCE_CONFLICT: выберите один способ назначения прокси.');
-    }
-    if ($enableDirect && (count($records) !== 1 || $rawProxy !== '' || $sourceProfile !== '')) {
-        throw new InvalidArgumentException('TXT_DIRECT_SINGLE_ACCOUNT_REQUIRED: выберите один аккаунт без прокси.');
-    }
-    if (!$preview && !$enableDirect && $sourceProfile === '' && count(array_filter($records, fn($r)=>$r['status'] === 'ready'))) {
-        try {
-            $raw = rmx_pm_find_scalar($input, ['proxy']);
-            if ($raw === '') throw new InvalidArgumentException();
-            $proxy = RemaskProxy::fromSemicolonString($raw);
-            if ($proxy === null) throw new InvalidArgumentException();
-        } catch (Throwable $e) { throw new InvalidArgumentException('TXT_PROXY_INVALID: укажите корректный прокси.'); }
     }
     // Recheck UID duplicates and allocate names within the same lock as manual create.
     [$lock, $sequencePath] = rmx_pm_sequence_open($preview ? LOCK_SH : LOCK_EX);
@@ -242,14 +232,73 @@ function rmx_pm_txt_import(array $input, mixed $store, bool $preview): array {
         $known = [];
         foreach ($profiles as $profile) {
             $uid = RemaskCookieTxt::userId((array)$profile->cookies);
-            if ($uid !== '') $known[$uid] = (string)$profile->name;
+            if ($uid !== '') $known[$uid][] = (string)$profile->name;
+        }
+        foreach ($records as &$record) {
+            if ($record['status'] !== 'ready' || !isset($known[$record['user_id']])) continue;
+            $matches = array_values(array_unique($known[$record['user_id']]));
+            $record['status'] = 'already_exists';
+            $record['refreshable'] = count($matches) === 1;
+            $record['profile_name'] = count($matches) === 1
+                ? $matches[0] : 'Несколько профилей (' . count($matches) . ')';
+            if (count($matches) !== 1) $record['error'] = 'AMBIGUOUS_EXISTING_PROFILE';
+        }
+        unset($record);
+        if ($enableDirect && (count($records) !== 1 || $records[0]['status'] !== 'ready'
+            || $rawProxy !== '' || $sourceProfile !== '')) {
+            throw new InvalidArgumentException('TXT_DIRECT_SINGLE_ACCOUNT_REQUIRED: выберите один новый аккаунт без прокси.');
+        }
+        $hasNewProfiles = count(array_filter($records, fn($r)=>$r['status'] === 'ready')) > 0;
+        if (!$preview && $hasNewProfiles && !$enableDirect && $sourceProfile === '' && $proxy === null) {
+            try {
+                $raw = rmx_pm_find_scalar($input, ['proxy']);
+                if ($raw === '') throw new InvalidArgumentException();
+                $proxy = RemaskProxy::fromSemicolonString($raw);
+                if ($proxy === null) throw new InvalidArgumentException();
+            } catch (Throwable $e) { throw new InvalidArgumentException('TXT_PROXY_INVALID: укажите корректный прокси.'); }
         }
         $next = rmx_pm_sequence_last($profiles, $sequencePath) + 1;
-        $result = []; $imported = 0; $errors = 0; $skipped = 0; $ready = 0;
+        $result = []; $imported = 0; $refreshed = 0; $errors = 0; $skipped = 0; $ready = 0;
         foreach ($records as $record) {
-            if ($record['status'] === 'ready' && isset($known[$record['user_id']])) {
-                $record['status'] = 'already_exists';
-                $record['profile_name'] = $known[$record['user_id']];
+            $refreshWriteFailed = false;
+            if (!$preview && $refreshExisting && $record['status'] === 'already_exists'
+                && !empty($record['refreshable'])) {
+                $profileName = (string)$record['profile_name'];
+                $existing = $store->getAccountByName($profileName);
+                if (!$existing instanceof FbAccount
+                    || RemaskCookieTxt::userId((array)$existing->cookies) !== (string)$record['user_id']) {
+                    $record['status'] = 'error';
+                    $record['error'] = 'EXISTING_PROFILE_CHANGED';
+                } else {
+                    try {
+                        // Replace only browser cookies after an explicit user choice
+                        // and exact actor match. Keep name, token, dtsg, and proxy.
+                        $cookies = RemaskCookieProfile::validate($record['cookies'], $existing->proxy, false, $profileName);
+                        if (RemaskCookieTxt::userId($cookies) !== (string)$record['user_id']) {
+                            throw new InvalidArgumentException('FACEBOOK_ACTOR_MISMATCH');
+                        }
+                        $updated = new FbAccount(
+                            (string)$existing->name,
+                            (string)$existing->token,
+                            json_encode($cookies, JSON_THROW_ON_ERROR),
+                            $existing->dtsg,
+                            $existing->proxy
+                        );
+                        $store->addOrUpdateAccount($updated);
+                        $saved = $store->getAccountByName($profileName);
+                        if (!$saved instanceof FbAccount
+                            || RemaskCookieTxt::userId((array)$saved->cookies) !== (string)$record['user_id']) {
+                            throw new RuntimeException('SESSION_REFRESH_SAVE_FAILED');
+                        }
+                        $record['status'] = 'session_refreshed';
+                        $record['session_verified'] = false;
+                        $refreshed++;
+                    } catch (Throwable $e) {
+                        $record['status'] = 'error';
+                        $record['error'] = 'SESSION_REFRESH_SAVE_FAILED';
+                        $refreshWriteFailed = true;
+                    }
+                }
             }
             if ($record['status'] === 'ready') {
                 if ($preview) {
@@ -267,7 +316,7 @@ function rmx_pm_txt_import(array $input, mixed $store, bool $preview): array {
                         rmx_pm_sequence_save($store->deserialize(), $sequencePath);
                         $record['status'] = 'imported';
                         $record['profile_name'] = $name;
-                        $known[$record['user_id']] = $name;
+                        $known[$record['user_id']][] = $name;
                         $imported++; $next++;
                     } catch (Throwable $e) {
                         // Never echo storage/proxy exception text which may contain credentials.
@@ -279,12 +328,15 @@ function rmx_pm_txt_import(array $input, mixed $store, bool $preview): array {
                         break;
                     }
                 }
+            } elseif ($record['status'] === 'session_refreshed') {
+                // The explicit refresh was saved; profile metadata stayed intact.
             } elseif ($record['status'] === 'error') $errors++;
             else $skipped++;
             $result[] = RemaskCookieTxt::safe($record);
+            if ($refreshWriteFailed) break;
         }
         return ['ok'=>true,'success'=>true,'preview'=>$preview,'records'=>$result,'total'=>count($records),
-            'ready'=>$ready,'imported'=>$imported,'skipped'=>$skipped,'errors'=>$errors,
+            'ready'=>$ready,'imported'=>$imported,'refreshed'=>$refreshed,'skipped'=>$skipped,'errors'=>$errors,
             'processed'=>count($result),'session_verified'=>false,'next_number'=>$next,
             'count'=>count($store->deserialize()),
             'proxy_choices'=>$preview ? rmx_pm_proxy_choices($profiles) : []];
@@ -341,6 +393,11 @@ try {
         }
 
         $incomingCookies = RemaskCookieProfile::validate($incomingCookies, $existing->proxy, true, $name);
+        $existingUserId = RemaskCookieTxt::userId((array)$existing->cookies);
+        $incomingUserId = RemaskCookieTxt::userId($incomingCookies);
+        if ($existingUserId !== '' && $incomingUserId !== $existingUserId) {
+            throw new InvalidArgumentException('FACEBOOK_ACTOR_MISMATCH: session update must keep the same Facebook account.');
+        }
 
         $hasCUser = false;
         $hasXs = false;

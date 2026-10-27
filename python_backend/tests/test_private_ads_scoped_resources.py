@@ -161,6 +161,13 @@ class ResourceCases(unittest.IsolatedAsyncioTestCase):
         self.account['business']['id']='foreign'
         with self.assertRaises(ProvisioningError):await self.catalog.read(self.web,'interests',self.values)
 
+    async def test_every_catalog_read_uses_the_bounded_readonly_context_cache(self):
+        self.responses['/act_111111/customaudiences'] = {'data':[]}
+        with patch('app.private_ads_reads.AdsManagerPrivateHttp.open',
+                   new=AsyncMock(return_value=self.client)) as open_client:
+            await self.catalog.read(self.web, 'custom_audiences', self.values)
+        self.assertTrue(open_client.await_args.kwargs['reference_read'])
+
     async def test_unrelated_resources_do_not_request_promotable_page_permissions(self):
         self.responses['/act_111111/customaudiences'] = {'data':[]}
         await self.catalog.read(self.web, 'custom_audiences', self.values)
