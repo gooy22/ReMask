@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import logging
 import os
@@ -438,6 +439,212 @@ class ProfileResolver:
             )
             return False
 
+    async def load_previous_profile_cookies(
+        self, profile_id: str, actor_id: str, expected_current_xs_sha256: str,
+    ) -> tuple[dict[str, str], str] | None:
+        """Load an older same-actor cookie snapshot over the internal resolver channel."""
+        profile_id = str(profile_id or "").strip()
+        actor_id = str(actor_id or "").strip()
+        expected_hash = str(expected_current_xs_sha256 or "").strip().lower()
+        if (not self.url or not self.key or not profile_id or not actor_id
+                or len(expected_hash) != 64
+                or any(char not in "0123456789abcdef" for char in expected_hash)):
+            return None
+        payload = {
+            "action": "load_previous_profile_cookies",
+            "profile_id": profile_id,
+            "actor_id": actor_id,
+            "expected_current_xs_sha256": expected_hash,
+        }
+        headers = {
+            "Accept": "application/json",
+            "X-Remask-Internal-Key": str(self.key),
+        }
+        try:
+            async with aiohttp.ClientSession(timeout=self.timeout, headers=headers) as client:
+                async with client.post(self.url, json=payload) as response:
+                    if response.status >= 400:
+                        return None
+                    result = await response.json(content_type=None)
+        except Exception as exc:
+            logging.getLogger("remask.profile_resolver").info(
+                "previous_profile_session_load_failed profile=%s kind=%s",
+                profile_id, type(exc).__name__,
+            )
+            return None
+        if not isinstance(result, dict) or result.get("ok") is not True:
+            return None
+        raw_cookies = result.get("cookies")
+        if not isinstance(raw_cookies, dict) or not 2 <= len(raw_cookies) <= 128:
+            return None
+        cookies: dict[str, str] = {}
+        total = 0
+        for raw_name, raw_value in raw_cookies.items():
+            if not isinstance(raw_name, str) or not isinstance(raw_value, str):
+                return None
+            name, value = raw_name, raw_value
+            if (not re.fullmatch(r"[A-Za-z0-9_.-]{1,256}", name)
+                    or not value or len(value) > 8192
+                    or any(ord(char) < 32 or ord(char) > 126 for char in value)):
+                return None
+            total += len(name) + len(value)
+            if total > 65536:
+                return None
+            cookies[name] = value
+        xs = str(cookies.get("xs") or "")
+        if (str(cookies.get("c_user") or "") != actor_id or not xs
+                or hashlib.sha256(xs.encode("utf-8")).hexdigest() == expected_hash):
+            return None
+        previous_hash = hashlib.sha256(xs.encode("utf-8")).hexdigest()
+        reported_hash = str(result.get("previous_xs_sha256") or "").strip().lower()
+        if reported_hash != previous_hash:
+            return None
+        return cookies, previous_hash
+
+    async def persist_verified_previous_profile_cookies(
+        self,
+        profile_id: str,
+        actor_id: str,
+        expected_current_xs_sha256: str,
+        expected_previous_xs_sha256: str,
+        cookies: dict[str, str],
+    ) -> bool:
+        """Commit a prior snapshot only after the same actor passed a read-only Meta check."""
+        profile_id = str(profile_id or "").strip()
+        actor_id = str(actor_id or "").strip()
+        current_hash = str(expected_current_xs_sha256 or "").strip().lower()
+        previous_hash = str(expected_previous_xs_sha256 or "").strip().lower()
+        next_xs = str((cookies or {}).get("xs") or "")
+        if (not self.url or not self.key or not profile_id or not actor_id
+                or len(current_hash) != 64 or len(previous_hash) != 64 or not next_xs
+                or str((cookies or {}).get("c_user") or "") != actor_id
+                or hashlib.sha256(next_xs.encode("utf-8")).hexdigest() == current_hash):
+            return False
+        payload = {
+            "action": "restore_previous_profile_cookies_verified",
+            "profile_id": profile_id,
+            "actor_id": actor_id,
+            "expected_current_xs_sha256": current_hash,
+            "expected_previous_xs_sha256": previous_hash,
+            "cookies": cookies,
+        }
+        headers = {
+            "Accept": "application/json",
+            "X-Remask-Internal-Key": str(self.key),
+        }
+        try:
+            async with aiohttp.ClientSession(timeout=self.timeout, headers=headers) as client:
+                async with client.post(self.url, json=payload) as response:
+                    if response.status >= 400:
+                        return False
+                    result = await response.json(content_type=None)
+                    return (isinstance(result, dict) and result.get("ok") is True
+                            and result.get("updated") is True)
+        except Exception as exc:
+            logging.getLogger("remask.profile_resolver").info(
+                "previous_profile_session_restore_failed profile=%s kind=%s",
+                profile_id, type(exc).__name__,
+            )
+            return False
+
+    async def _restore_verified_previous_profile_cookies(
+        self, context: "ProfileContext", expected_current_xs_sha256: str,
+    ) -> bool:
+        profile_id = str(getattr(context, "profile_id", "") or "").strip()
+        actor_id = str(getattr(context, "cookies", {}).get("c_user") or "").strip()
+        expected_hash = str(expected_current_xs_sha256 or "").strip().lower()
+        if not profile_id or not actor_id or not expected_hash:
+            return False
+        current_cookies = getattr(context, "cookies", {})
+        current_xs = str(current_cookies.get("xs") or "") if isinstance(current_cookies, dict) else ""
+        if (not current_xs
+                or hashlib.sha256(current_xs.encode("utf-8")).hexdigest() != expected_hash):
+            return False
+
+        previous = await self.load_previous_profile_cookies(
+            profile_id, actor_id, expected_hash,
+        )
+        if not previous:
+            return False
+        previous_cookies, previous_hash = previous
+        if (str(previous_cookies.get("c_user") or "") != actor_id
+                or not str(previous_cookies.get("xs") or "")
+                or hashlib.sha256(
+                    str(previous_cookies.get("xs") or "").encode("utf-8")
+                ).hexdigest() != previous_hash):
+            return False
+
+        candidate = copy.copy(context)
+        candidate.cookies = dict(previous_cookies)
+        candidate._loaded_cookies = dict(previous_cookies)
+        candidate._cookie_persistor = None
+        candidate._cookie_revoker = None
+        session = MetaSession(candidate)
+        web = None
+        status = 0
+        body = ""
+        final_url = ""
+        gate_code = ""
+        evidence: dict[str, Any] = {}
+        failure: Exception | None = None
+        try:
+            async with asyncio.timeout(7.0):
+                web = await session.facebook_web()
+                status, body, final_url = await web.fetch_text(
+                    "https://business.facebook.com/latest/home/",
+                    max_bytes=5_000_000,
+                    document_navigation=True,
+                )
+                from .meta_auth_document import auth_gate
+                gate_code = auth_gate(final_url, body)
+                if not gate_code:
+                    from .private_ads_http import _bootstrap_evidence
+                    evidence = _bootstrap_evidence(final_url, body, web.profile, actor_id)
+        except Exception as exc:
+            failure = exc
+        finally:
+            try:
+                await session.close()
+            except Exception as exc:
+                if failure is None:
+                    failure = exc
+        if failure is not None:
+            logging.getLogger("remask.profile_resolver").info(
+                "previous_profile_session_probe_failed profile=%s kind=%s",
+                profile_id, type(failure).__name__,
+            )
+            return False
+
+        verified_cookies = getattr(candidate, "cookies", {})
+        verified_xs = str(verified_cookies.get("xs") or "") if isinstance(verified_cookies, dict) else ""
+        if (gate_code or status != 200
+                or evidence.get("final_host") != "business.facebook.com"
+                or evidence.get("document_actor") != "matches"
+                or bool(getattr(web, "auth_cookie_revoked", False))
+                or str(verified_cookies.get("c_user") or "") != actor_id
+                or not verified_xs
+                or hashlib.sha256(verified_xs.encode("utf-8")).hexdigest() == expected_hash):
+            return False
+
+        current_cookies = getattr(context, "cookies", {})
+        current_xs = str(current_cookies.get("xs") or "") if isinstance(current_cookies, dict) else ""
+        if (str(current_cookies.get("c_user") or "") != actor_id or not current_xs
+                or hashlib.sha256(current_xs.encode("utf-8")).hexdigest() != expected_hash):
+            return False
+        verified_cookies = {str(name): str(value) for name, value in verified_cookies.items()}
+        if not await self.persist_verified_previous_profile_cookies(
+            profile_id, actor_id, expected_hash, previous_hash, verified_cookies,
+        ):
+            return False
+        context.cookies = dict(verified_cookies)
+        if hasattr(context, "_loaded_cookies"):
+            context._loaded_cookies = dict(verified_cookies)
+        logging.getLogger("remask.profile_resolver").info(
+            "previous_profile_session_restored profile=%s same_actor=true",
+            profile_id,
+        )
+        return True
+
     async def _revalidate_marked_cookie_auth(
         self, context: "ProfileContext", expected_xs_sha256: str,
     ) -> None:
@@ -486,6 +693,10 @@ class ProfileResolver:
             ) from failure
 
         if auth_gate_code == "BUSINESS_LOGIN_GATE":
+            # First check the encrypted previous snapshot. Only persist it after
+            # Meta confirms the same actor on a read-only Business Home GET.
+            if await self._restore_verified_previous_profile_cookies(context, expected_hash):
+                return
             # Business Home is only a generic session probe. Its login gate
             # cannot establish that every requested Meta resource is logged
             # out. Let the caller perform its exact read and enforce its own
