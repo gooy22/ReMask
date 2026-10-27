@@ -660,10 +660,13 @@ class FacebookWebSession:
         # The personal profile, home and settings documents are equivalent
         # read-only identity surfaces. /me can be a minimal or partially
         # hydrated document without fb_dtsg even when the same actor is signed in.
+        # Check the dedicated settings surface before the generic homepage,
+        # because /me commonly normalizes to / and that page may forward to
+        # Business Suite without confirming the selected profile.
         targets = (
             "https://www.facebook.com/me",
-            "https://www.facebook.com/",
             "https://www.facebook.com/settings",
+            "https://www.facebook.com/",
         )
         for target in targets:
             # Business login-page redirects can delete root-scope auth cookies
@@ -774,7 +777,17 @@ class FacebookWebSession:
             # Keep explicit auth challenges and a different observed actor
             # terminal. Only try another profile document when this route lacks
             # identity markup or a usable token.
-            if reason not in {"actor_unobserved", "profile_token_unavailable"}:
+            # /me can normalize to the generic home document, whose embedded
+            # CurrentUserInitialData is not always the profile identity surface
+            # we need. A conflicting candidate on that route is not enough to
+            # stop before the dedicated settings document is checked. We still
+            # require an exact expected-actor match before any GraphQL request;
+            # if no route confirms it, the mismatch remains terminal below.
+            if reason not in {
+                "actor_unobserved",
+                "profile_token_unavailable",
+                "actor_mismatch",
+            }:
                 break
 
         safe_attempts = [
