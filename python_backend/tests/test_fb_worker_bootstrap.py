@@ -543,6 +543,15 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
             "business_context_id": "987654321",
             "multipart_files": None,
             "read_timeout_seconds": None,
+            "private_inventory_query_contract": {
+                "operation_kind": "query",
+                "business_id": "987654321",
+                "doc_id": "26033539376343649",
+                "friendly_name": "ObservedBusinessAdAccounts",
+                "variables": {"businessID": "987654321", "assetFilters": None},
+                "asset_scope": True,
+                "response_collection": "connected_objects",
+            },
         }
         self.assertEqual(session._validate_business_loginpage_probe(**values), "PRIVATE_RK_INVENTORY")
         for change in (
@@ -552,6 +561,9 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
             {"doc_id": "not-a-doc-id"},
             {"request_envelope": {"__user": "123456789"}},
             {"read_timeout_seconds": 30},
+            {"private_inventory_query_contract": {**values["private_inventory_query_contract"], "operation_kind": "mutation"}},
+            {"private_inventory_query_contract": {**values["private_inventory_query_contract"], "business_id": "555555555"}},
+            {"private_inventory_query_contract": {**values["private_inventory_query_contract"], "doc_id": "123456789012345"}},
         ):
             with self.subTest(change=change), self.assertRaises(RemoteRequestError):
                 session._validate_business_loginpage_probe(**{**values, **change})
@@ -773,6 +785,12 @@ class PreviousSessionReadRecoveryTests(unittest.IsolatedAsyncioTestCase):
             before_submit=callback,
             business_context_id="987654321",
             business_loginpage_probe="PRIVATE_RK_INVENTORY",
+            private_inventory_query_contract={
+                "operation_kind": "query", "business_id": "987654321",
+                "doc_id": "26033539376343649", "friendly_name": "ObservedBusinessAdAccounts",
+                "variables": {"businessID": "987654321"}, "asset_scope": True,
+                "response_collection": "",
+            },
         )
 
         self.assertEqual(result, {"data": {"business": {"id": "987654321"}}})
@@ -877,6 +895,12 @@ class PreviousSessionReadRecoveryTests(unittest.IsolatedAsyncioTestCase):
             before_submit=callback,
             business_context_id="987654321",
             business_loginpage_probe="PRIVATE_RK_INVENTORY",
+            private_inventory_query_contract={
+                "operation_kind": "query", "business_id": "987654321",
+                "doc_id": "26033539376343649", "friendly_name": "ObservedBusinessAdAccounts",
+                "variables": {"businessID": "987654321"}, "asset_scope": True,
+                "response_collection": "",
+            },
         )
 
         self.assertEqual(result, {"data": {"business": {"id": "987654321"}}})
