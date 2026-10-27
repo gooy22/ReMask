@@ -34,7 +34,9 @@ class SavedAuthRefreshTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("(SOME_GATE)", str(error))
 
     def context(self, *, uid="123456789", xs="fixture-old", profile="14"):
-        return SimpleNamespace(profile_id=profile, cookies={"c_user": uid, "xs": xs},
+        cookies = {"c_user": uid, "xs": xs}
+        return SimpleNamespace(profile_id=profile, cookies=cookies,
+                               _loaded_cookies=dict(cookies),
                                proxy="http://fixture-proxy:80", user_agent="Fixture")
 
     async def test_reloads_a_new_saved_session_for_the_same_facebook_identity(self):
