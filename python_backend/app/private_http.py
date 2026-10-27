@@ -98,6 +98,9 @@ class PrivateHttpClient:
         self.proxy = proxy
         self.profile_name = profile_name
         self._actor_id = str(cookies.get('c_user') or '')
+        # Keep the imported profile snapshot so a failed Business login-page
+        # redirect cannot poison the subsequent read-only identity probe.
+        self._profile_cookies = dict(cookies)
         self.direct_test_until = direct_test_deadline(profile_name, self._actor_id) if not proxy else 0
         self.timeout_seconds = timeout_seconds
         limits = httpx.Limits(max_connections=pool_size,
@@ -150,6 +153,25 @@ class PrivateHttpClient:
                 return {}  # Ambiguous cookies must never overwrite a profile.
             result[name] = value
         return result
+
+    def restore_profile_cookies(self) -> None:
+        """Reset Facebook cookies to the imported profile for an identity probe."""
+        jar = self._client.cookies.jar
+        for cookie in list(jar):
+            domain = str(cookie.domain or "").lstrip(".").casefold()
+            if domain == "facebook.com" or domain.endswith(".facebook.com"):
+                try:
+                    jar.clear(cookie.domain, cookie.path, cookie.name)
+                except KeyError:
+                    pass
+        for name, value in self._profile_cookies.items():
+            jar.set_cookie(Cookie(
+                version=0, name=name, value=value, port=None,
+                port_specified=False, domain=".facebook.com",
+                domain_specified=True, domain_initial_dot=True, path="/",
+                path_specified=True, secure=True, expires=None, discard=True,
+                comment=None, comment_url=None, rest={}, rfc2109=False,
+            ))
 
     async def close(self) -> None:
         await self._client.aclose()
