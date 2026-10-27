@@ -3914,16 +3914,18 @@ async def private_template_reference(profile_id: str, operation: str, payload: d
     if operation not in REFERENCE_TYPES | {'audience_estimate', 'placements'}:
         raise HTTPException(status_code=400, detail={'code':'TEMPLATE_HELPER_UNAVAILABLE'})
     try:
+        context = await _resolve_read_profile(profile)
         async def read():
-            with measure_phase('resolver'):
-                context = await _resolve_read_profile(profile)
             with measure_phase('profile_session'):
-                async with ProfileSession(context) as session:
-                    web = await session.facebook_web()
-                    web.private_only = True
-                    result = await read_template_reference(
-                        web, adapter.catalog, context, operation, payload,
-                        resource_store=pool.private_launch.resources)
+                try:
+                    async with ProfileSession(context) as session:
+                        web = await session.facebook_web()
+                        web.private_only = True
+                        result = await read_template_reference(
+                            web, adapter.catalog, context, operation, payload,
+                            resource_store=pool.private_launch.resources)
+                except AuthenticationError as error:
+                    raise private_auth_error(error) from None
             resources = pool.private_launch.resources
             cache_meta = result.get('_cache', {}) if isinstance(result, dict) else {}
             if (operation in getattr(resources, 'TARGETING_OPTION_TYPES', ())
@@ -3954,7 +3956,8 @@ async def private_template_reference(profile_id: str, operation: str, payload: d
                     callback=refresh_targeting_suggestions)
                 result = {**result, '_cache':{**cache_meta, 'refresh_pending':started}}
             return result
-        result = await asyncio.wait_for(read(), timeout=32)
+        result = await asyncio.wait_for(
+            read_with_saved_auth_refresh(pool.resolver, context, read), timeout=32)
         return {'ok': True, **result}
     except AuthenticationError as error:
         normalized = private_auth_error(error)
@@ -3992,12 +3995,17 @@ async def private_advertising_helper(profile_id: str, helper: str, payload: dict
         if len(businesses) != 1:
             raise ProvisioningError('PRIVATE_LAUNCH_RK_NOT_IN_CONFIRMED_INVENTORY',
                 'Exact advertising account context is unavailable', retryable=False)
-        async with ProfileSession(context) as session:
-            web = await session.facebook_web()
-            web.private_only = True
-            result = await read_form_helper(web, adapter.catalog,
-                {'profile_id':profile,'ad_account_id':account,'business_id':next(iter(businesses))},
-                helper, payload)
+        async def read_helper_once():
+            try:
+                async with ProfileSession(context) as session:
+                    web = await session.facebook_web()
+                    web.private_only = True
+                    return await read_form_helper(web, adapter.catalog,
+                        {'profile_id':profile,'ad_account_id':account,'business_id':next(iter(businesses))},
+                        helper, payload)
+            except AuthenticationError as error:
+                raise private_auth_error(error) from None
+        result = await read_with_saved_auth_refresh(pool.resolver, context, read_helper_once)
         return {'ok': True, **result}
     except AuthenticationError as error:
         normalized = private_auth_error(error)
@@ -4062,7 +4070,10 @@ async def private_session_probe(profile_id: str, payload: dict = Body(...)):
     from app.private_session_probe import probe_document
     try:
         context = await _resolve_read_profile(clean_profile)
-        return {'ok': True, **await probe_document(context, payload)}
+        async def probe_once():
+            return await probe_document(context, payload)
+        result = await read_with_saved_auth_refresh(pool.resolver, context, probe_once)
+        return {'ok': True, **result}
     except ProvisioningError as error:
         raise HTTPException(status_code=409,
             detail={'code':error.code, 'message':str(error), 'retryable':False}) from None
