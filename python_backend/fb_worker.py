@@ -858,6 +858,7 @@ class FacebookWebSession:
         *,
         force: bool = False,
         allow_business_loginpage_probe: bool = False,
+        require_actor_match: bool = True,
     ) -> FacebookBootstrap:
 
         if (allow_business_loginpage_probe and self._bootstrap is not None
@@ -911,7 +912,7 @@ class FacebookWebSession:
                 # to business/loginpage, mutate its in-memory cookies, and spend
                 # the Sync deadline before the same profile is checked.
                 return await self._verified_profile_bootstrap(
-                    session, expected_actor, [], require_actor_match=True,
+                    session, expected_actor, [], require_actor_match=require_actor_match,
                 )
 
             token_patterns = list(self.FB_DTSG_PATTERNS)
@@ -1703,7 +1704,15 @@ class FacebookWebSession:
             read_timeout_seconds=read_timeout_seconds,
         )
         if scoped_probe:
-            bootstrap = await self.bootstrap(allow_business_loginpage_probe=True)
+            # Exact read-only asset contracts remain pinned to one BM/RK/Page
+            # and the selected c_user. Generic profile pages can report another
+            # actor even when they still provide a usable session token. Keep
+            # actor verification mandatory for every mutation.
+            scoped_read_only = scoped_probe in {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS"}
+            bootstrap = await self.bootstrap(
+                allow_business_loginpage_probe=True,
+                require_actor_match=not scoped_read_only,
+            )
             current_actor = str(self.profile.cookies.get("c_user") or "").strip()
             if not current_actor.isdigit() or bootstrap.actor_id != current_actor:
                 raise RemoteRequestError(
