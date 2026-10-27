@@ -216,12 +216,8 @@ function rmx_pm_txt_import(array $input, mixed $store, bool $preview): array {
     $rawProxy = rmx_pm_find_scalar($input, ['proxy']);
     $enableDirect = !$preview && rmx_pm_find_bool($input, ['allow_direct_test'], false);
     $refreshExisting = !$preview && rmx_pm_find_bool($input, ['refresh_existing_sessions'], false);
-    if ($enableDirect && $refreshExisting) throw new InvalidArgumentException('TXT_REFRESH_DIRECT_CONFLICT: обновление существующих сессий нельзя объединять с тестом без прокси.');
     if (!$preview && $sourceProfile !== '' && ($rawProxy !== '' || $enableDirect)) {
         throw new InvalidArgumentException('TXT_PROXY_SOURCE_CONFLICT: выберите один способ назначения прокси.');
-    }
-    if ($enableDirect && (count($records) !== 1 || $rawProxy !== '' || $sourceProfile !== '')) {
-        throw new InvalidArgumentException('TXT_DIRECT_SINGLE_ACCOUNT_REQUIRED: выберите один аккаунт без прокси.');
     }
     // Recheck UID duplicates and allocate names within the same lock as manual create.
     [$lock, $sequencePath] = rmx_pm_sequence_open($preview ? LOCK_SH : LOCK_EX);
@@ -248,6 +244,9 @@ function rmx_pm_txt_import(array $input, mixed $store, bool $preview): array {
             if (count($matches) !== 1) $record['error'] = 'AMBIGUOUS_EXISTING_PROFILE';
         }
         unset($record);
+        if ($enableDirect && (count($records) !== 1 || $records[0]['status'] !== 'ready')) {
+            throw new InvalidArgumentException('TXT_DIRECT_SINGLE_ACCOUNT_REQUIRED: выберите один новый аккаунт без прокси.');
+        }
         $hasNewProfiles = count(array_filter($records, fn($r)=>$r['status'] === 'ready')) > 0;
         if (!$preview && $hasNewProfiles && !$enableDirect && $sourceProfile === '' && $proxy === null) {
             try {
@@ -316,7 +315,7 @@ function rmx_pm_txt_import(array $input, mixed $store, bool $preview): array {
                         rmx_pm_sequence_save($store->deserialize(), $sequencePath);
                         $record['status'] = 'imported';
                         $record['profile_name'] = $name;
-                        $known[$record['user_id']] = $name;
+                        $known[$record['user_id']][] = $name;
                         $imported++; $next++;
                     } catch (Throwable $e) {
                         // Never echo storage/proxy exception text which may contain credentials.
