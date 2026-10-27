@@ -70,6 +70,7 @@ class ProfileContext:
     _cookie_persistor: Any = field(default=None, repr=False, compare=False)
     _cookie_revoker: Any = field(default=None, repr=False, compare=False)
     _loaded_cookies: dict[str, str] = field(default_factory=dict, repr=False, compare=False)
+    _previous_profile_restore_attempted: bool = field(default=False, repr=False, compare=False)
 
 
 
@@ -555,6 +556,9 @@ class ProfileResolver:
         expected_hash = str(expected_current_xs_sha256 or "").strip().lower()
         if not profile_id or not actor_id or not expected_hash:
             return False
+        if getattr(context, "_previous_profile_restore_attempted", False):
+            return False
+        context._previous_profile_restore_attempted = True
         current_cookies = getattr(context, "cookies", {})
         current_xs = str(current_cookies.get("xs") or "") if isinstance(current_cookies, dict) else ""
         if (not current_xs
@@ -644,6 +648,20 @@ class ProfileResolver:
             profile_id,
         )
         return True
+
+    async def restore_previous_profile_session_after_gate(
+        self, context: "ProfileContext",
+    ) -> bool:
+        """Try the encrypted same-actor backup after an exact Meta read hits an auth gate."""
+        cookies = getattr(context, "cookies", {})
+        if not isinstance(cookies, dict):
+            return False
+        actor_id = str(cookies.get("c_user") or "").strip()
+        xs = str(cookies.get("xs") or "")
+        if not actor_id or not xs:
+            return False
+        expected_hash = hashlib.sha256(xs.encode("utf-8")).hexdigest()
+        return await self._restore_verified_previous_profile_cookies(context, expected_hash)
 
     async def _revalidate_marked_cookie_auth(
         self, context: "ProfileContext", expected_xs_sha256: str,
