@@ -302,6 +302,7 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
             '["DTSGInitialData",[],{"token":"adsmanager-token"}]'
         )
         calls = []
+        timeouts = {}
         ads_manager_url = "https://adsmanager.facebook.com/adsmanager/manage/campaigns"
         class Response:
             status = 200
@@ -312,6 +313,7 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         class Client:
             def get(self, url, **kwargs):
                 calls.append(url)
+                timeouts[url] = kwargs.get("request_timeout_seconds")
                 if url == ads_manager_url:
                     return Response(url, verified_ads_manager)
                 return Response(url, mismatched)
@@ -334,6 +336,8 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
             "https://www.facebook.com/",
             ads_manager_url,
         ])
+        self.assertEqual(timeouts["https://www.facebook.com/me"], 8.0)
+        self.assertEqual(timeouts[ads_manager_url], 15.0)
         session._fetch_dtsg_refresh_token.assert_not_awaited()
 
     async def test_scoped_bootstrap_uses_mobile_profile_after_business_loginpage(self):
