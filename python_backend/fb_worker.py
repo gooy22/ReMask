@@ -1368,7 +1368,7 @@ class FacebookWebSession:
         if operation not in allowed:
             reject()
         try:
-            from app.static_meta_contracts import ENDPOINT, contract_metadata
+            from app.static_meta_contracts import ENDPOINT, command, contract_metadata
             meta = contract_metadata(operation)
         except Exception:
             reject()
