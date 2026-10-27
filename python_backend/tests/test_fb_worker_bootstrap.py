@@ -174,6 +174,86 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         session._fetch_dtsg_refresh_token.assert_not_awaited()
         session.refresh_reviewed_modules.assert_not_awaited()
 
+    async def test_scoped_read_bootstraps_business_home_before_profile_routes(self):
+        expected_actor = "123456789"
+        business_html = (
+            '<script>CurrentUserInitialData = {"USER_ID":"123456789"};</script>'
+            '["DTSGInitialData",[],{"token":"business-token"}]'
+        )
+        calls = []
+
+        class Response:
+            status = 200
+            def __init__(self, url, body):
+                self.url, self.body = url, body
+            async def text(self): return self.body
+            async def __aenter__(self): return self
+            async def __aexit__(self, *args): return False
+
+        class Client:
+            def get(self, url, **kwargs):
+                calls.append(url)
+                return Response(url, business_html)
+
+        session = FacebookWebSession(WebProfile(name="15",
+            cookies={"c_user": expected_actor}, proxy=None, user_agent="fixture"))
+        session._ensure_session = AsyncMock(return_value=Client())
+        session._fetch_dtsg_refresh_token = AsyncMock(return_value=("", ""))
+        session.refresh_reviewed_modules = AsyncMock()
+
+        bootstrap = await session.bootstrap(
+            allow_business_loginpage_probe=True, require_actor_match=False,
+        )
+
+        self.assertEqual(bootstrap.fb_dtsg, "business-token")
+        self.assertEqual(bootstrap.actor_id, expected_actor)
+        self.assertTrue(bootstrap.profile_actor_verified)
+        self.assertEqual(calls, [FacebookWebSession.ADS_MANAGER_URL])
+        session._fetch_dtsg_refresh_token.assert_not_awaited()
+
+    async def test_business_loginpage_fallback_preserves_scoped_read_policy(self):
+        expected_actor = "123456789"
+        calls = []
+
+        class Response:
+            status = 200
+            def __init__(self, url, body):
+                self.url, self.body = url, body
+            async def text(self): return self.body
+            async def __aenter__(self): return self
+            async def __aexit__(self, *args): return False
+
+        class Client:
+            def get(self, url, **kwargs):
+                calls.append(url)
+                if url == FacebookWebSession.ADS_MANAGER_URL:
+                    return Response(
+                        "https://business.facebook.com/business/loginpage/",
+                        '<form id="login_form">',
+                    )
+                if url == "https://www.facebook.com/me":
+                    return Response(url, '["DTSGInitialData",[],{"token":"profile-token"}]')
+                return Response(url, "")
+
+        session = FacebookWebSession(WebProfile(name="15",
+            cookies={"c_user": expected_actor}, proxy=None, user_agent="fixture"))
+        session._ensure_session = AsyncMock(return_value=Client())
+        session._fetch_dtsg_refresh_token = AsyncMock(return_value=("", ""))
+        session.refresh_reviewed_modules = AsyncMock()
+
+        bootstrap = await session.bootstrap(
+            allow_business_loginpage_probe=True, require_actor_match=False,
+        )
+
+        self.assertEqual(bootstrap.actor_id, expected_actor)
+        self.assertEqual(bootstrap.fb_dtsg, "profile-token")
+        self.assertFalse(bootstrap.profile_actor_verified)
+        self.assertEqual(calls, [
+            FacebookWebSession.ADS_MANAGER_URL,
+            "https://www.facebook.com/me",
+        ])
+        session._fetch_dtsg_refresh_token.assert_not_awaited()
+
     async def test_business_loginpage_probe_uses_same_actor_profile_route_with_dtsg(self):
         expected_actor = "123456789"
         calls = []
