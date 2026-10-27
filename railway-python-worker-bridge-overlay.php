@@ -301,7 +301,12 @@ try {
     }
 
     $store = AccountStoreFactory::create(ACCOUNTSFILENAME);
-    $action = strtolower(trim((string)($_GET['action'] ?? $_POST['action'] ?? 'resolve')));
+    $input = $_POST;
+    if (!$input && str_starts_with(strtolower(trim((string)($_SERVER['CONTENT_TYPE'] ?? ''))), 'application/json')) {
+        $decoded = json_decode((string)file_get_contents('php://input'), true);
+        if (is_array($decoded)) $input = $decoded;
+    }
+    $action = strtolower(trim((string)($_GET['action'] ?? $input['action'] ?? 'resolve')));
 
     if ($action === 'list') {
         $profiles = [];
@@ -317,11 +322,24 @@ try {
         rmx_py_out(['ok'=>true,'profiles'=>$profiles,'count'=>count($profiles)]);
     }
 
-    $profile = trim((string)($_GET['profile_id'] ?? $_POST['profile_id'] ?? ''));
+    $profile = trim((string)($_GET['profile_id'] ?? $input['profile_id'] ?? ''));
     if ($profile === '') rmx_py_out(['ok'=>false,'error'=>'PROFILE_REQUIRED'], 400);
 
     $account = $store->getAccountByName($profile);
     if (!$account instanceof FbAccount) rmx_py_out(['ok'=>false,'error'=>'PROFILE_NOT_FOUND'], 404);
+
+    if ($action === 'refresh_profile_cookies') {
+        $actor = trim((string)($input['actor_id'] ?? ''));
+        $expectedXs = (string)($input['expected_xs'] ?? '');
+        $cookies = $input['cookies'] ?? null;
+        if (!ctype_digit($actor) || $expectedXs === '' || !is_array($cookies)) {
+            rmx_py_out(['ok'=>false,'error'=>'INVALID_COOKIE_REFRESH'], 400);
+        }
+        if (!$store->compareAndSwapCookies($profile, $actor, $expectedXs, $cookies)) {
+            rmx_py_out(['ok'=>false,'error'=>'PROFILE_SESSION_CHANGED'], 409);
+        }
+        rmx_py_out(['ok'=>true,'updated'=>true]);
+    }
 
     $ua = '';
     $accountVars = get_object_vars($account);
@@ -343,11 +361,29 @@ try {
 
     $identity = rmx_py_public_identity($account, $profile);
     $liveInventory = rmx_py_live_inventory($profile);
+    $cookieMap = rmx_py_cookie_map($account->cookies);
+    $recoveryCookies = [];
+    if (method_exists($store, 'getPreviousAccountByName')) {
+        $previousAccount = $store->getPreviousAccountByName($profile);
+        if ($previousAccount instanceof FbAccount) {
+            $candidateCookies = rmx_py_cookie_map($previousAccount->cookies);
+            $actor = trim((string)($cookieMap['c_user'] ?? ''));
+            $currentXs = trim((string)($cookieMap['xs'] ?? ''));
+            $candidateActor = trim((string)($candidateCookies['c_user'] ?? ''));
+            $candidateXs = trim((string)($candidateCookies['xs'] ?? ''));
+            if (ctype_digit($actor) && $candidateActor === $actor
+                && $currentXs !== '' && $candidateXs !== ''
+                && !hash_equals($currentXs, $candidateXs)) {
+                $recoveryCookies = $candidateCookies;
+            }
+        }
+    }
 
     rmx_py_out([
         'ok' => true,
         'profile_id' => $profile,
-        'cookies' => rmx_py_cookie_map($account->cookies),
+        'cookies' => $cookieMap,
+        'recovery_cookies' => $recoveryCookies,
         'access_token' => '',
         'auth_mode' => 'cookies',
         'proxy' => rmx_py_proxy_url($account->proxy),
