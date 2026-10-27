@@ -470,7 +470,12 @@ class AdvertisingResourceStore:
                     "account_id": values["ad_account_id"], "_cache": {"hit": False, "cached_only": True}}
         if web is None:
             raise fail("HTTP_SESSION_REQUIRED", "Refreshing advertising resources requires the profile HTTP session")
-        result = await asyncio.wait_for(self.catalog.read(web, name, values), timeout=65)
+                # Exact-Business DRAFT Page inventory is serialized across Meta's
+        # paginated Business connection (up to 20 reads), after the separate
+        # account and actor proofs. Give this bounded read enough time to
+        # finish instead of cancelling it mid-pagination.
+        timeout = 120 if name == "pages" and values.get("execution_mode") == "DRAFT" else 65
+        result = await asyncio.wait_for(self.catalog.read(web, name, values), timeout=timeout)
         if (not isinstance(result, dict) or type(result.get("checked_at")) is not int
                 or not 0 < result["checked_at"] <= int(time.time()) + 300):
             raise fail("RESOURCE_READ_INCOMPLETE", "Resource refresh has no valid collection time")
