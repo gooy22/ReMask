@@ -29,6 +29,38 @@ try {
     assertStartup(file_get_contents($path) === $current, 'encrypted profile rewritten at startup');
     assertStartup(file_get_contents($path.'.previous') === $previous, 'prior session overwritten at startup');
 
+    require_once $runtime.'/classes/RemaskCookieSession.php';
+    $previousAccount = $store->getPreviousAccountByName('4');
+    $currentAccount = $store->getAccountByName('4');
+    assertStartup($previousAccount instanceof FbAccount && $currentAccount instanceof FbAccount,
+        'same-profile snapshot lookup failed');
+    $previousCookies = RemaskCookieSession::map((array)$previousAccount->cookies);
+    $currentCookies = RemaskCookieSession::map((array)$currentAccount->cookies);
+    assertStartup(($previousCookies['xs'] ?? '') === 'old-xs', 'previous session was not read');
+    assertStartup(($currentCookies['xs'] ?? '') === 'new-xs', 'current session changed before restore');
+    $currentHash = hash('sha256', $currentCookies['xs']);
+    $previousHash = hash('sha256', $previousCookies['xs']);
+    $currentBeforeRestore = file_get_contents($path);
+    $backupBeforeRestore = file_get_contents($path.'.previous');
+    assertStartup(!$store->restorePreviousCookiesIfUnchanged(
+        '4', '99999', $currentHash, $previousHash, $previousCookies
+    ), 'different actor was allowed to restore a profile session');
+    assertStartup(file_get_contents($path) === $currentBeforeRestore
+        && file_get_contents($path.'.previous') === $backupBeforeRestore,
+        'rejected restore changed profile storage');
+    assertStartup($store->restorePreviousCookiesIfUnchanged(
+        '4', '12345', $currentHash, $previousHash, $previousCookies
+    ), 'verified same-actor restore failed');
+    $restored = $store->getAccountByName('4');
+    $rollback = $store->getPreviousAccountByName('4');
+    $restoredCookies = RemaskCookieSession::map((array)$restored->cookies);
+    $rollbackCookies = RemaskCookieSession::map((array)$rollback->cookies);
+    assertStartup(($restoredCookies['xs'] ?? '') === 'old-xs',
+        'verified previous session was not restored');
+    assertStartup(($rollbackCookies['xs'] ?? '') === 'new-xs',
+        'the pre-restore session was not retained as rollback');
+    assertStartup($restored->token === 'fixture-token', 'restore changed the profile token');
+
     // Legacy plaintext migration still encrypts both the current profile and its backup.
     putenv('REMASK_ENCRYPT_PROFILE_JSON=0');
     putenv('REMASK_CREDENTIALS_KEY');
