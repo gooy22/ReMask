@@ -1,13 +1,14 @@
+import hashlib
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 from datetime import datetime, timezone
 from email.utils import format_datetime
 
 import httpx
 
 from app.private_http import PrivateHttpClient, deleted_auth_cookie_names
-from app.session import MetaSession
+from app.session import MetaSession, ProfileContextError, ProfileResolver
 
 
 class DeletedAuthCookieNamesTests(unittest.TestCase):
@@ -68,8 +69,21 @@ class RevocationEventHookTests(unittest.IsolatedAsyncioTestCase):
             request=httpx.Request("GET", "https://business.facebook.com/latest/home"),
         )
         hook = client._client.event_hooks["response"][0]
+        client._client.cookies.extract_cookies(response)
         await hook(response)
         self.assertTrue(client.facebook_auth_cookie_revoked)
+        self.assertNotIn("xs", client.facebook_cookie_snapshot())
+
+        restored = httpx.Response(
+            200,
+            headers={"Set-Cookie": "xs=fixture-session-renewed; Domain=.facebook.com; Path=/; Secure"},
+            request=httpx.Request("GET", "https://business.facebook.com/latest/home"),
+        )
+        client._client.cookies.extract_cookies(restored)
+        await hook(restored)
+        self.assertEqual(client.facebook_cookie_snapshot().get("c_user"), "123456789")
+        self.assertEqual(client.facebook_cookie_snapshot().get("xs"), "fixture-session-renewed")
+        self.assertFalse(client.facebook_auth_cookie_revoked)
 
 
 class MetaSessionRevocationPersistenceTests(unittest.IsolatedAsyncioTestCase):
@@ -86,7 +100,7 @@ class MetaSessionRevocationPersistenceTests(unittest.IsolatedAsyncioTestCase):
 
         class FakeFacebookSession:
             def __init__(self):
-                self.profile = SimpleNamespace(cookies=dict(cookies))
+                self.profile = SimpleNamespace(cookies={"c_user": cookies["c_user"]})
                 self.auth_cookie_revoked = False
 
             async def close(self):
@@ -101,6 +115,172 @@ class MetaSessionRevocationPersistenceTests(unittest.IsolatedAsyncioTestCase):
         context._cookie_revoker.assert_awaited_once_with(
             "fixture-profile", "123456789", "fixture-session"
         )
+
+
+
+    async def test_restored_same_actor_cookie_session_is_refreshed_without_revocation(self):
+        old = {"c_user": "123456789", "xs": "fixture-session"}
+        refreshed = {"c_user": "123456789", "xs": "fixture-session-renewed"}
+        persistor = AsyncMock(return_value=True)
+        revoker = AsyncMock(return_value=True)
+        context = SimpleNamespace(
+            profile_id="fixture-profile",
+            cookies=dict(old),
+            _loaded_cookies=dict(old),
+            _cookie_persistor=persistor,
+            _cookie_revoker=revoker,
+            proxy="http://127.0.0.1:1",
+            user_agent="fixture-UA",
+        )
+
+        class FakeFacebookSession:
+            def __init__(self):
+                self.profile = SimpleNamespace(cookies=dict(refreshed))
+                self.auth_cookie_revoked = False
+
+            async def close(self):
+                return None
+
+        session = MetaSession(context)
+        session._facebook_session = FakeFacebookSession()
+        session._facebook_cookie_baseline = dict(old)
+        session._facebook_profile_id = "fixture-profile"
+        await session.close()
+
+        revoker.assert_not_awaited()
+        persistor.assert_awaited_once_with(
+            "fixture-profile", "123456789", "fixture-session", refreshed
+        )
+        self.assertEqual(context.cookies, refreshed)
+
+
+class ProfileResolverCookieRevalidationTests(unittest.IsolatedAsyncioTestCase):
+    def _context(self):
+        cookies = {"c_user": "123456789", "xs": "fixture-session"}
+        return SimpleNamespace(
+            profile_id="fixture-profile",
+            cookies=dict(cookies),
+            _loaded_cookies=dict(cookies),
+            proxy="http://127.0.0.1:1",
+            user_agent="fixture-UA",
+            _cookie_persistor=AsyncMock(return_value=True),
+            _cookie_revoker=AsyncMock(return_value=True),
+        )
+
+    async def test_resolve_revalidates_a_matching_marker_before_returning_context(self):
+        context_cookies = {"c_user": "123456789", "xs": "fixture-session"}
+        marker_hash = hashlib.sha256(
+            context_cookies["xs"].encode("utf-8")
+        ).hexdigest()
+        resolver = ProfileResolver("https://resolver.invalid/profile", "fixture-key")
+        resolver._fetch = AsyncMock(return_value={
+            "cookies": context_cookies,
+            "user_agent": "fixture-UA",
+            "proxy": "http://127.0.0.1:1",
+            "cookie_auth_revocation_xs_sha256": marker_hash,
+        })
+        resolver._revalidate_marked_cookie_auth = AsyncMock(return_value=None)
+
+        resolved = await resolver.resolve("fixture-profile")
+
+        resolver._revalidate_marked_cookie_auth.assert_awaited_once_with(
+            resolved, marker_hash
+        )
+
+    async def test_positive_same_actor_read_only_probe_clears_exact_marker(self):
+        context = self._context()
+        marker_hash = hashlib.sha256(
+            context.cookies["xs"].encode("utf-8")
+        ).hexdigest()
+        web = SimpleNamespace(
+            profile=SimpleNamespace(name="fixture-profile"),
+            fetch_text=AsyncMock(return_value=(
+                200, "<fixture-document>", "https://business.facebook.com/latest/home/"
+            )),
+        )
+        meta_session = SimpleNamespace(
+            facebook_web=AsyncMock(return_value=web),
+            close=AsyncMock(),
+        )
+        resolver = ProfileResolver("https://resolver.invalid/profile", "fixture-key")
+        resolver.persist_cookie_auth_verification = AsyncMock(return_value=True)
+
+        with patch("app.session.MetaSession", return_value=meta_session), patch(
+            "app.private_ads_http._bootstrap_evidence",
+            return_value={"final_host": "business.facebook.com", "document_actor": "matches"},
+        ):
+            await resolver._revalidate_marked_cookie_auth(context, marker_hash)
+
+        web.fetch_text.assert_awaited_once_with(
+            "https://business.facebook.com/latest/home/",
+            max_bytes=5_000_000,
+            document_navigation=True,
+        )
+        resolver.persist_cookie_auth_verification.assert_awaited_once_with(
+            "fixture-profile", "123456789", marker_hash
+        )
+
+
+
+    async def test_positive_document_does_not_clear_marker_if_meta_removed_final_auth_cookie(self):
+        context = self._context()
+        marker_hash = hashlib.sha256(
+            context.cookies["xs"].encode("utf-8")
+        ).hexdigest()
+        web = SimpleNamespace(
+            profile=SimpleNamespace(name="fixture-profile"),
+            auth_cookie_revoked=False,
+            fetch_text=AsyncMock(return_value=(
+                200, "<fixture-document>", "https://business.facebook.com/latest/home/"
+            )),
+        )
+
+        class FakeMetaSession:
+            async def facebook_web(self):
+                return web
+
+            async def close(self):
+                web.auth_cookie_revoked = True
+
+        resolver = ProfileResolver("https://resolver.invalid/profile", "fixture-key")
+        resolver.persist_cookie_auth_verification = AsyncMock(return_value=True)
+
+        with patch("app.session.MetaSession", return_value=FakeMetaSession()), patch(
+            "app.private_ads_http._bootstrap_evidence",
+            return_value={"final_host": "business.facebook.com", "document_actor": "matches"},
+        ):
+            with self.assertRaises(ProfileContextError) as raised:
+                await resolver._revalidate_marked_cookie_auth(context, marker_hash)
+
+        self.assertEqual(raised.exception.code, "SESSION_EXPIRED")
+        resolver.persist_cookie_auth_verification.assert_not_awaited()
+
+    async def test_actual_business_login_gate_keeps_marker_and_returns_typed_error(self):
+        context = self._context()
+        marker_hash = hashlib.sha256(
+            context.cookies["xs"].encode("utf-8")
+        ).hexdigest()
+        web = SimpleNamespace(
+            profile=SimpleNamespace(name="fixture-profile"),
+            fetch_text=AsyncMock(return_value=(
+                200, "<fixture-login-page>",
+                "https://business.facebook.com/business/loginpage/"
+            )),
+        )
+        meta_session = SimpleNamespace(
+            facebook_web=AsyncMock(return_value=web),
+            close=AsyncMock(),
+        )
+        resolver = ProfileResolver("https://resolver.invalid/profile", "fixture-key")
+        resolver.persist_cookie_auth_verification = AsyncMock(return_value=True)
+
+        with patch("app.session.MetaSession", return_value=meta_session):
+            with self.assertRaises(ProfileContextError) as raised:
+                await resolver._revalidate_marked_cookie_auth(context, marker_hash)
+
+        self.assertEqual(raised.exception.code, "BUSINESS_LOGIN_GATE")
+        self.assertFalse(raised.exception.retryable)
+        resolver.persist_cookie_auth_verification.assert_not_awaited()
 
 if __name__ == "__main__":
     unittest.main()

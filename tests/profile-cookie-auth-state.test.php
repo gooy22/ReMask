@@ -19,6 +19,12 @@ try {
     $store->mark('profile-15', '123456789', $oldHash);
 
     assertState($store->matches('profile-15', '123456789', $oldXs), 'same actor/session should be blocked');
+    assertState(!$store->clearIfVerified('profile-15', '123456789', hash('sha256', $newXs)), 'a different session hash must not clear the marker');
+    assertState(!$store->clearIfVerified('profile-15', '987654321', $oldHash), 'a different actor must not clear the marker');
+    assertState($store->matches('profile-15', '123456789', $oldXs), 'failed verification must preserve the marker');
+    assertState($store->clearIfVerified('profile-15', '123456789', $oldHash), 'verified exact session should clear the marker');
+    assertState(!$store->matches('profile-15', '123456789', $oldXs), 'verified marker should be removed');
+    $store->mark('profile-15', '123456789', $oldHash);
     $savedState = (string)file_get_contents($path);
     assertState(!str_contains($savedState, $oldXs) && !str_contains($savedState, $newXs), 'raw auth cookies must not be persisted');
     assertState(!$store->matches('profile-15', '123456789', $newXs), 'new session must not inherit stale block');

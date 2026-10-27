@@ -195,7 +195,15 @@ class PrivateHttpClient:
 
     @property
     def facebook_auth_cookie_revoked(self) -> bool:
-        return bool(self._auth_cookie_revocations)
+        # A deletion header is only a candidate revocation. Redirect chains can
+        # delete and then restore a root auth cookie; classify the final jar.
+        if not self._auth_cookie_revocations:
+            return False
+        final_cookies = self.facebook_cookie_snapshot()
+        return (
+            final_cookies.get("c_user") != self._actor_id
+            or not str(final_cookies.get("xs") or "").strip()
+        )
 
     def facebook_cookie_snapshot(self) -> dict[str, str]:
         """Return the current Facebook cookie jar without exposing it to logs."""
