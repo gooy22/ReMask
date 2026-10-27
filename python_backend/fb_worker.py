@@ -1519,6 +1519,7 @@ class FacebookWebSession:
         business_context_id: str,
         multipart_files: dict[str, Any] | None,
         read_timeout_seconds: float | None,
+        private_inventory_query_contract: dict[str, Any] | None = None,
     ) -> str:
         operation = str(operation or "").strip()
         if not operation:
@@ -1540,11 +1541,20 @@ class FacebookWebSession:
         if operation == "PRIVATE_RK_INVENTORY":
             business = str(business_context_id or "").strip()
             bound_business = variables.get("businessID") if isinstance(variables, dict) else None
+            query_contract = private_inventory_query_contract
             if (not re.fullmatch(r"\d{5,40}", str(doc_id or "").strip())
                     or not friendly_name or len(str(friendly_name)) > 200
                     or str(endpoint_url or "").strip() != "https://business.facebook.com/api/graphql/"
                     or not business.isdigit() or str(bound_business or "").strip() != business
                     or isinstance(bound_business, bool)
+                    or not isinstance(query_contract, dict)
+                    or query_contract.get("operation_kind") != "query"
+                    or str(query_contract.get("business_id") or "").strip() != business
+                    or str(query_contract.get("doc_id") or "").strip() != str(doc_id or "").strip()
+                    or query_contract.get("friendly_name") != friendly_name
+                    or query_contract.get("variables") != variables
+                    or type(query_contract.get("asset_scope")) is not bool
+                    or query_contract.get("response_collection") not in {"", "connected_objects"}
                     or request_envelope or not isinstance(variables, dict)
                     or multipart_files is not None or read_timeout_seconds is not None
                     or (before_submit is not None and not callable(before_submit))):
@@ -1686,6 +1696,7 @@ class FacebookWebSession:
         business_loginpage_probe: str,
         read_timeout_seconds: float | None,
         before_submit: Any | None = None,
+        private_inventory_query_contract: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         """Retry one exact inventory read with a verified same-actor prior snapshot."""
         allowed_reads = {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS", "PRIVATE_RK_INVENTORY"}
@@ -1740,6 +1751,7 @@ class FacebookWebSession:
                 business_context_id=business_context_id,
                 read_timeout_seconds=read_timeout_seconds,
                 business_loginpage_probe=business_loginpage_probe,
+                private_inventory_query_contract=private_inventory_query_contract,
             )
             client = previous.session
             if (not previous._profile_session_identity_verified
@@ -1797,6 +1809,7 @@ class FacebookWebSession:
         multipart_files: dict[str, Any] | None = None,
         read_timeout_seconds: float | None = None,
         business_loginpage_probe: str = "",
+        private_inventory_query_contract: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
 
         if read_timeout_seconds is not None and (
@@ -1828,6 +1841,7 @@ class FacebookWebSession:
             request_envelope=request_envelope, before_submit=before_submit,
             business_context_id=business_context_id, multipart_files=multipart_files,
             read_timeout_seconds=read_timeout_seconds,
+            private_inventory_query_contract=private_inventory_query_contract,
         )
         try:
             if scoped_probe:
@@ -1891,6 +1905,7 @@ class FacebookWebSession:
                     business_loginpage_probe=business_loginpage_probe,
                     read_timeout_seconds=read_timeout_seconds,
                     before_submit=before_submit,
+                    private_inventory_query_contract=private_inventory_query_contract,
                 )
                 if recovered is not None:
                     return recovered
@@ -2165,6 +2180,7 @@ class FacebookWebSession:
                     business_loginpage_probe=business_loginpage_probe,
                     read_timeout_seconds=read_timeout_seconds,
                     before_submit=before_submit,
+                    private_inventory_query_contract=private_inventory_query_contract,
                 )
                 if recovered is not None:
                     return recovered
