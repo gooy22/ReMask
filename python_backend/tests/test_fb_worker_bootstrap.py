@@ -209,7 +209,7 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         session.invalidate_bootstrap()
         with self.assertRaises(AuthenticationError):
             await session.bootstrap(allow_business_loginpage_probe=True)
-        self.assertEqual(calls, ["https://business.facebook.com/latest/home"])
+        self.assertEqual(calls, ["https://business.facebook.com/latest/home", "https://www.facebook.com/me"])
 
     async def test_business_loginpage_bypass_is_limited_to_exact_pinned_contract_and_verified_reads(self):
         from app.static_meta_contracts import command
