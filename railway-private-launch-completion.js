@@ -200,9 +200,9 @@ $('adAccount')?.addEventListener('change',()=>{
     status.textContent='Загружаем страницы выбранного РК…';
     loadPages().then(()=>{
         if(profile===state.profile && selectedAccountIds()[0]===account) status.textContent='';
-    }).catch(()=>{
+    }).catch((error)=>{
         if(profile===state.profile && selectedAccountIds()[0]===account)
-            status.textContent='Не удалось обновить страницы выбранного РК. Ранее сохранённые данные не подтверждают текущий доступ.';
+            status.textContent=remaskPrivatePageReadFailure(error,profile,account);
     });
 });
 
