@@ -545,14 +545,29 @@ async def list_pages_via_private_graphql(
             + " || ".join(diagnostics[-6:])
         )
 
-    # Bootstrap only once we actually have a query worth sending.
-    bootstrap = await session.bootstrap()
-    actor_id = _clean(getattr(bootstrap, "actor_id", ""))
-
-    if not actor_id:
-        raise PageDiscoveryError("Facebook actor_id is missing")
-
+    # LIST_PAGES is a profile-owned read. If the exact observed account-quality
+    # operation is available, bind its sole variable to c_user and let graphql()
+    # perform the same actor check before using the scoped login-page continuation.
     for candidate in candidates:
+        scoped_probe = ""
+        cookie_actor = _clean(
+            (getattr(getattr(session, "profile", None), "cookies", {}) or {}).get("c_user")
+        )
+        if (candidate.friendly_name == "AccountQualityUserPagesWrapper_UserPageQuery"
+                and candidate.endpoint_url == "https://www.facebook.com/api/graphql/"
+                and candidate.variables_mode == "account_quality_user_pages_v1"
+                and re.fullmatch(r"\\d{5,40}", candidate.doc_id)
+                and cookie_actor.isdigit()):
+            actor_id = cookie_actor
+            scoped_probe = "LIST_PAGES"
+        else:
+            bootstrap = await session.bootstrap()
+            actor_id = _clean(getattr(bootstrap, "actor_id", ""))
+
+        if not actor_id:
+            diagnostics.append(f"{candidate.doc_id}: Facebook actor_id is missing")
+            continue
+
         try:
             variables = _variables_for(
                 candidate,
@@ -570,6 +585,8 @@ async def list_pages_via_private_graphql(
                 variables,
                 friendly_name=candidate.friendly_name,
                 endpoint_url=candidate.endpoint_url,
+                read_timeout_seconds=30 if scoped_probe else None,
+                business_loginpage_probe=scoped_probe,
             )
         except Exception as exc:
             payload = getattr(exc, "meta_payload", None)
