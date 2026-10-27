@@ -34,10 +34,13 @@ class ProfileContextError(RuntimeError):
 
     @property
     def code(self) -> str:
-        """Keep Meta's explicit session revocation distinct from resolver errors."""
-        if self.category == "business_login_gate":
-            return "BUSINESS_LOGIN_GATE"
-        return "PROFILE_CONTEXT_ERROR"
+        """Preserve typed Meta auth gates while keeping resolver failures distinct."""
+        return {
+            "business_login_gate": "BUSINESS_LOGIN_GATE",
+            "session_expired": "SESSION_EXPIRED",
+            "checkpoint_required": "CHECKPOINT_REQUIRED",
+            "two_factor_required": "TWO_FACTOR_REQUIRED",
+        }.get(self.category, "PROFILE_CONTEXT_ERROR")
 
 
 class ProxyCheckError(RuntimeError):
@@ -394,6 +397,143 @@ class ProfileResolver:
             )
             return False
 
+    async def persist_cookie_auth_verification(
+        self, profile_id: str, actor_id: str, expected_xs_sha256: str,
+    ) -> bool:
+        """Clear a revocation marker only after a read-only Meta identity check."""
+        profile_id = str(profile_id or "").strip()
+        actor_id = str(actor_id or "").strip()
+        expected_hash = str(expected_xs_sha256 or "").strip().lower()
+        if (not self.url or not self.key or not profile_id or not actor_id
+                or len(expected_hash) != 64
+                or any(char not in "0123456789abcdef" for char in expected_hash)):
+            return False
+        payload = {
+            "action": "clear_profile_cookie_auth_verified",
+            "profile_id": profile_id,
+            "actor_id": actor_id,
+            "expected_xs_sha256": expected_hash,
+        }
+        headers = {
+            "Accept": "application/json",
+            "X-Remask-Internal-Key": str(self.key),
+        }
+        try:
+            async with aiohttp.ClientSession(timeout=self.timeout, headers=headers) as client:
+                async with client.post(self.url, json=payload) as response:
+                    if response.status >= 400:
+                        logging.getLogger("remask.profile_resolver").warning(
+                            "profile_cookie_auth_verification_rejected profile=%s status=%d",
+                            profile_id, response.status,
+                        )
+                        return False
+                    result = await response.json(content_type=None)
+                    return isinstance(result, dict) and result.get("ok") is True
+        except Exception as exc:
+            logging.getLogger("remask.profile_resolver").warning(
+                "profile_cookie_auth_verification_failed profile=%s kind=%s",
+                profile_id, type(exc).__name__,
+            )
+            return False
+
+    async def _revalidate_marked_cookie_auth(
+        self, context: "ProfileContext", expected_xs_sha256: str,
+    ) -> None:
+        """Recheck a marked profile with one read-only Business page GET."""
+        actor_id = str(context.cookies.get("c_user") or "").strip()
+        original_xs = str(context.cookies.get("xs") or "")
+        expected_hash = str(expected_xs_sha256 or "").strip().lower()
+        if (not actor_id or not original_xs
+                or hashlib.sha256(original_xs.encode("utf-8")).hexdigest() != expected_hash):
+            raise ProfileContextError(
+                "Saved profile session changed before Meta revalidation.",
+                retryable=True, category="profile_session_changed",
+            )
+
+        session = MetaSession(context)
+        web = None
+        auth_gate_code = ""
+        evidence: dict[str, Any] = {}
+        status = 0
+        failure: Exception | None = None
+        try:
+            web = await session.facebook_web()
+            status, body, final_url = await web.fetch_text(
+                "https://business.facebook.com/latest/home/",
+                max_bytes=5_000_000,
+                document_navigation=True,
+            )
+            from .meta_auth_document import auth_gate
+            auth_gate_code = auth_gate(final_url, body)
+            if not auth_gate_code:
+                from .private_ads_http import _bootstrap_evidence
+                evidence = _bootstrap_evidence(final_url, body, web.profile, actor_id)
+        except Exception as exc:
+            failure = exc
+        finally:
+            try:
+                await session.close()
+            except Exception as exc:
+                if failure is None:
+                    failure = exc
+
+        if failure is not None:
+            raise ProfileContextError(
+                "Meta session revalidation could not complete.",
+                retryable=True, category="auth_revalidation_transport",
+            ) from failure
+
+        if auth_gate_code:
+            category = {
+                "BUSINESS_LOGIN_GATE": "business_login_gate",
+                "SESSION_EXPIRED": "session_expired",
+                "CHECKPOINT_REQUIRED": "checkpoint_required",
+                "TWO_FACTOR_REQUIRED": "two_factor_required",
+            }.get(auth_gate_code, "auth_revalidation_unconfirmed")
+            raise ProfileContextError(
+                "Meta returned an authentication gate during read-only revalidation.",
+                retryable=False, category=category,
+            )
+        if bool(getattr(web, "auth_cookie_revoked", False)):
+            raise ProfileContextError(
+                "Meta removed an authentication cookie during read-only revalidation.",
+                retryable=False, category="session_expired",
+            )
+
+        if (status != 200
+                or evidence.get("final_host") != "business.facebook.com"
+                or evidence.get("document_actor") != "matches"):
+            if evidence.get("document_actor") in {"logged_out", "mismatch"}:
+                raise ProfileContextError(
+                    "Meta returned a logged-out or different actor for this profile.",
+                    retryable=False, category="session_expired",
+                )
+            raise ProfileContextError(
+                "Meta did not provide enough read-only identity evidence to clear the marker.",
+                retryable=True, category="auth_revalidation_unconfirmed",
+            )
+
+        current_cookies = getattr(context, "cookies", {})
+        current_actor = str(current_cookies.get("c_user") or "") if isinstance(current_cookies, dict) else ""
+        current_xs = str(current_cookies.get("xs") or "") if isinstance(current_cookies, dict) else ""
+        if current_actor != actor_id or not current_xs:
+            raise ProfileContextError(
+                "Meta session identity changed during revalidation.",
+                retryable=True, category="profile_session_changed",
+            )
+        current_hash = hashlib.sha256(current_xs.encode("utf-8")).hexdigest()
+        if current_hash != expected_hash:
+            # Meta rotated cookies and the existing compare-and-swap refresh
+            # already cleared the stale marker for the newly saved session.
+            return
+        if not await self.persist_cookie_auth_verification(
+            str(context.profile_id), actor_id, expected_hash,
+        ):
+            raise ProfileContextError(
+                "Saved profile changed during Meta revalidation.",
+                retryable=True, category="profile_session_changed",
+            )
+
     async def resolve(self, profile_id: str) -> ProfileContext:
         payload = await self._fetch(
             params={"profile_id": profile_id},
@@ -482,6 +622,15 @@ class ProfileResolver:
         context._loaded_cookies = dict(cookie_map)
         context._cookie_persistor = self.persist_cookie_refresh
         context._cookie_revoker = self.persist_cookie_revocation
+        marker_hash = str(payload.get("cookie_auth_revocation_xs_sha256") or "").strip().lower()
+        if marker_hash:
+            if (len(marker_hash) != 64
+                    or any(char not in "0123456789abcdef" for char in marker_hash)):
+                raise ProfileContextError(
+                    "profile resolver returned an invalid auth-state marker",
+                    retryable=False, category="invalid_profile_context",
+                )
+            await self._revalidate_marked_cookie_auth(context, marker_hash)
         return context
 
 
