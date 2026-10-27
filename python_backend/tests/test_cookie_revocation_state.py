@@ -305,6 +305,7 @@ class ProfileResolverCookieRevalidationTests(unittest.IsolatedAsyncioTestCase):
             "proxy": "http://127.0.0.1:1",
             "cookie_auth_revocation_xs_sha256": marker_hash,
         })
+        resolver.persist_cookie_auth_verification = AsyncMock(return_value=True)
 
         with patch("app.session.MetaSession", return_value=meta_session):
             with self.assertRaises(ProfileContextError) as raised:
