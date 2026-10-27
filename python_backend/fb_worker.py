@@ -625,108 +625,153 @@ class FacebookWebSession:
         expected_actor: str,
         attempts: list[dict[str, Any]],
     ) -> FacebookBootstrap:
-        target = "https://www.facebook.com/me"
-        try:
-            from app.private_http import buffered_response
-            response, body = await buffered_response(
-                "GET",
-                lambda: session.get(
-                    target,
-                    proxy=self.profile.proxy,
-                    headers={
-                        "Accept": (
-                            "text/html,application/xhtml+xml,"
-                            "application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
-                        ),
-                        "Accept-Language": "en-US,en;q=0.9",
-                        "Cache-Control": "no-cache",
-                        "Pragma": "no-cache",
-                        "Sec-Fetch-Dest": "document",
-                        "Sec-Fetch-Mode": "navigate",
-                        "Sec-Fetch-Site": "none",
-                        "Sec-Fetch-User": "?1",
-                        "Upgrade-Insecure-Requests": "1",
-                    },
-                    allow_redirects=True,
-                    request_timeout_seconds=max(30, self.timeout_seconds),
-                ),
-                16 * 1024 * 1024 + 1,
-                retry_read=True,
-                reader=lambda response: response.text(),
+        # The personal profile, home and settings documents are equivalent
+        # read-only identity surfaces. /me can be a minimal or partially
+        # hydrated document without fb_dtsg even when the same actor is signed in.
+        targets = (
+            "https://www.facebook.com/me",
+            "https://www.facebook.com/",
+            "https://www.facebook.com/settings",
+        )
+        for target in targets:
+            try:
+                from app.private_http import buffered_response
+                response, body = await buffered_response(
+                    "GET",
+                    lambda: session.get(
+                        target,
+                        proxy=self.profile.proxy,
+                        headers={
+                            "Accept": (
+                                "text/html,application/xhtml+xml,"
+                                "application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+                            ),
+                            "Accept-Language": "en-US,en;q=0.9",
+                            "Cache-Control": "no-cache",
+                            "Pragma": "no-cache",
+                            "Sec-Fetch-Dest": "document",
+                            "Sec-Fetch-Mode": "navigate",
+                            "Sec-Fetch-Site": "none",
+                            "Sec-Fetch-User": "?1",
+                            "Upgrade-Insecure-Requests": "1",
+                        },
+                        allow_redirects=True,
+                        request_timeout_seconds=max(30, self.timeout_seconds),
+                    ),
+                    16 * 1024 * 1024 + 1,
+                    retry_read=True,
+                    reader=lambda response: response.text(),
+                )
+            except (asyncio.TimeoutError, aiohttp.ClientError, httpx.HTTPError) as exc:
+                attempts.append({
+                    "requested_url": target, "auth_reason": "profile_probe_transport",
+                    "transport_failure": type(exc).__name__,
+                })
+                safe_attempts = [
+                    {key: row.get(key) for key in (
+                        "requested_url", "final_url", "http_status", "auth_reason",
+                        "token_present", "actor_verified", "actor_candidate_count",
+                        "transport_failure",
+                    ) if key in row}
+                    for row in attempts
+                ]
+                log.warning(
+                    "[%s] scoped profile bootstrap transport failure attempts=%s",
+                    self.profile.name,
+                    json.dumps(safe_attempts, separators=(",", ":")),
+                )
+                raise RemoteRequestError(
+                    "Facebook profile identity check failed before GraphQL submit.",
+                    meta_payload={"business_precheck": attempts,
+                        "transport_failure": {"kind": type(exc).__name__}},
+                    request_may_have_been_sent=False,
+                    transport_stage="business_auth_precheck",
+                ) from exc
+
+            final_url = str(response.url)
+            parts = urlsplit(final_url)
+            path = parts.path.lower()
+            users = {
+                user
+                for variant in self._match_sources(body)
+                for user in re.findall(
+                    r'''CurrentUserInitialData.{0,2000}?["']?USER_ID["']?\s*:\s*["']?([0-9]{5,30})''',
+                    variant,
+                    flags=re.DOTALL,
+                )
+            }
+            actor_verified = bool(expected_actor and expected_actor in users)
+            token = self._first_match(body, list(self.FB_DTSG_PATTERNS))
+            login_form = _has_login_form(body)
+            reason = (
+                "checkpoint_redirect" if "/checkpoint" in path
+                else "login_redirect" if "/login" in path
+                else "redirected_host" if parts.hostname != "www.facebook.com"
+                else "login_form" if login_form
+                else "http_auth" if response.status in {401, 403}
+                else "actor_mismatch" if users and not actor_verified
+                else "actor_unobserved" if not users
+                else "profile_token_unavailable" if not token
+                else "http_status" if response.status != 200
+                else ""
             )
-        except (asyncio.TimeoutError, aiohttp.ClientError, httpx.HTTPError) as exc:
             attempts.append({
-                "requested_url": target, "auth_reason": "profile_probe_transport",
-                "transport_failure": type(exc).__name__,
+                "requested_url": target,
+                "final_url": f"{parts.scheme}://{parts.hostname or ''}{parts.path}",
+                "http_status": response.status,
+                "body_bytes": len(body.encode("utf-8")),
+                "token_present": bool(token),
+                "actor_verified": actor_verified,
+                "actor_candidate_count": len(users),
+                "auth_reason": reason,
+                **self._document_failure_evidence(response.status, body),
             })
-            raise RemoteRequestError(
-                "Facebook profile identity check failed before GraphQL submit.",
-                meta_payload={"business_precheck": attempts,
-                    "transport_failure": {"kind": type(exc).__name__}},
-                request_may_have_been_sent=False,
-                transport_stage="business_auth_precheck",
-            ) from exc
+            if not reason and response.status == 200:
+                bootstrap = FacebookBootstrap(
+                    fb_dtsg=token,
+                    actor_id=expected_actor,
+                    lsd=self._first_match(body, [r'"LSD".{0,1800}?"token"\s*:\s*"([^"]+)"']),
+                    jazoest=self._first_match(body, [r"""name=["']jazoest["'][^>]*value=["']([^"']+)["']"""]),
+                    request_context=self._extract_request_context(body),
+                    source_url=target,
+                    profile_actor_verified=True,
+                )
+                self._bootstrap = bootstrap
+                log.info(
+                    "[%s] Meta profile identity independently verified for scoped Business read actor=%s route=%s",
+                    self.profile.name,
+                    expected_actor,
+                    urlsplit(target).path or "/",
+                )
+                return bootstrap
 
-        final_url = str(response.url)
-        parts = urlsplit(final_url)
-        path = parts.path.lower()
-        users = {
-            user
-            for variant in self._match_sources(body)
-            for user in re.findall(
-                r'CurrentUserInitialData.{0,2000}?"USER_ID"\s*:\s*"([0-9]{5,30})"',
-                variant,
-                flags=re.DOTALL,
-            )
-        }
-        token = self._first_match(body, list(self.FB_DTSG_PATTERNS))
-        login_form = _has_login_form(body)
-        reason = (
-            "checkpoint_redirect" if "/checkpoint" in path
-            else "login_redirect" if "/login" in path
-            else "redirected_host" if parts.hostname != "www.facebook.com"
-            else "login_form" if login_form
-            else "http_auth" if response.status in {401, 403}
-            else "actor_mismatch" if not expected_actor or users != {expected_actor}
-            else "profile_token_unavailable" if not token
-            else ""
-        )
-        attempts.append({
-            "requested_url": target,
-            "final_url": f"{parts.scheme}://{parts.hostname or ''}{parts.path}",
-            "http_status": response.status,
-            "body_bytes": len(body.encode("utf-8")),
-            "token_present": bool(token),
-            "actor_verified": bool(expected_actor and users == {expected_actor}),
-            "auth_reason": reason,
-            **self._document_failure_evidence(response.status, body),
-        })
-        if reason or response.status != 200:
-            self.invalidate_bootstrap()
-            error = AuthenticationError(
-                "Meta profile identity was not independently confirmed. No GraphQL POST was sent."
-            )
-            error.meta_payload = {"business_precheck": attempts}
-            error.request_may_have_been_sent = False
-            error.transport_stage = "business_auth_precheck"
-            raise error
+            # Keep explicit auth challenges and a different observed actor
+            # terminal. Only try another profile document when this route lacks
+            # identity markup or a usable token.
+            if reason not in {"actor_unobserved", "profile_token_unavailable"}:
+                break
 
-        bootstrap = FacebookBootstrap(
-            fb_dtsg=token,
-            actor_id=expected_actor,
-            lsd=self._first_match(body, [r'"LSD".{0,1800}?"token"\s*:\s*"([^"]+)"']),
-            jazoest=self._first_match(body, [r"""name=["']jazoest["'][^>]*value=["']([^"']+)["']"""]),
-            request_context=self._extract_request_context(body),
-            source_url=target,
-            profile_actor_verified=True,
-        )
-        self._bootstrap = bootstrap
-        log.info(
-            "[%s] Meta profile identity independently verified for scoped Business read actor=%s",
+        safe_attempts = [
+            {key: row.get(key) for key in (
+                "requested_url", "final_url", "http_status", "auth_reason",
+                "token_present", "actor_verified", "actor_candidate_count",
+                "transport_failure",
+            ) if key in row}
+            for row in attempts
+        ]
+        log.warning(
+            "[%s] scoped profile bootstrap not verified attempts=%s",
             self.profile.name,
-            expected_actor,
+            json.dumps(safe_attempts, separators=(",", ":")),
         )
-        return bootstrap
+        self.invalidate_bootstrap()
+        error = AuthenticationError(
+            "Meta profile identity was not independently confirmed. No GraphQL POST was sent."
+        )
+        error.meta_payload = {"business_precheck": attempts}
+        error.request_may_have_been_sent = False
+        error.transport_stage = "business_auth_precheck"
+        raise error
 
     async def bootstrap(
         self,
