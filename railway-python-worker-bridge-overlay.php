@@ -306,7 +306,7 @@ try {
         $decoded = json_decode((string)file_get_contents('php://input'), true);
         if (is_array($decoded)) $input = $decoded;
     }
-    $action = strtolower(trim((string)($_GET['action'] ?? $input['action'] ?? 'resolve')));
+    $action = strtolower(trim((string)($input['action'] ?? $_GET['action'] ?? 'resolve')));
 
     if ($action === 'list') {
         $profiles = [];
