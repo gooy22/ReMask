@@ -93,7 +93,14 @@
     field('txtClose').addEventListener('click', () => dialog.close());
     field('txtFile').addEventListener('change', clear);
     field('txtRefreshExisting').addEventListener('change', () => {
-      if (preview) render(preview, true);
+      const selected = new Set([...dialog.querySelectorAll('input[data-txt-line]:checked')]
+        .map(box => Number(box.dataset.txtLine)));
+      if (preview) {
+        render(preview, true);
+        dialog.querySelectorAll('input[data-txt-line]').forEach(box => {
+          box.checked = selected.has(Number(box.dataset.txtLine));
+        });
+      }
       setBusy(false);
     });
     field('txtSelectAll').addEventListener('change', () => {
