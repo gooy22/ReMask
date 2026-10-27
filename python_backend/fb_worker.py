@@ -667,6 +667,9 @@ class FacebookWebSession:
             "https://www.facebook.com/me",
             "https://www.facebook.com/settings",
             "https://www.facebook.com/",
+            # The legacy own-profile surface can still expose the selected actor
+            # when /me, settings, and the homepage normalize or misreport it.
+            "https://www.facebook.com/profile.php",
             "https://adsmanager.facebook.com/adsmanager/manage/campaigns",
             "https://m.facebook.com/",
             "https://mbasic.facebook.com/",

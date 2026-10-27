@@ -334,6 +334,7 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
             "https://www.facebook.com/me",
             "https://www.facebook.com/settings",
             "https://www.facebook.com/",
+            "https://www.facebook.com/profile.php",
             ads_manager_url,
         ])
         self.assertEqual(timeouts["https://www.facebook.com/me"], 8.0)
@@ -381,8 +382,49 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
             "https://www.facebook.com/me",
             "https://www.facebook.com/settings",
             "https://www.facebook.com/",
+            "https://www.facebook.com/profile.php",
             ads_manager_url,
             mobile_url,
+        ])
+        session._fetch_dtsg_refresh_token.assert_not_awaited()
+
+    async def test_scoped_bootstrap_uses_legacy_profile_php_after_generic_routes_mismatch(self):
+        expected_actor = "123456789"
+        mismatched = '<script>CurrentUserInitialData = {"USER_ID":"987654321"};</script>'
+        verified_profile = (
+            '<script>CurrentUserInitialData = {"USER_ID":"123456789"};</script>'
+            '["DTSGInitialData",[],{"token":"legacy-profile-token"}]'
+        )
+        calls = []
+        legacy_profile_url = "https://www.facebook.com/profile.php"
+        class Response:
+            status = 200
+            def __init__(self, url, body): self.url, self.body = url, body
+            async def text(self): return self.body
+            async def __aenter__(self): return self
+            async def __aexit__(self, *args): return False
+        class Client:
+            def get(self, url, **kwargs):
+                calls.append(url)
+                return Response(url, verified_profile if url == legacy_profile_url else mismatched)
+
+        session = FacebookWebSession(WebProfile(name="15",
+            cookies={"c_user": expected_actor}, proxy=None, user_agent="fixture"))
+        session._ensure_session = AsyncMock(return_value=Client())
+        session._fetch_dtsg_refresh_token = AsyncMock(return_value=("", ""))
+        session.refresh_reviewed_modules = AsyncMock()
+
+        bootstrap = await session.bootstrap(allow_business_loginpage_probe=True)
+
+        self.assertTrue(bootstrap.profile_actor_verified)
+        self.assertEqual(bootstrap.actor_id, expected_actor)
+        self.assertEqual(bootstrap.fb_dtsg, "legacy-profile-token")
+        self.assertEqual(bootstrap.source_url, legacy_profile_url)
+        self.assertEqual(calls, [
+            "https://www.facebook.com/me",
+            "https://www.facebook.com/settings",
+            "https://www.facebook.com/",
+            legacy_profile_url,
         ])
         session._fetch_dtsg_refresh_token.assert_not_awaited()
 
@@ -417,6 +459,7 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
             "https://www.facebook.com/me",
             "https://www.facebook.com/settings",
             "https://www.facebook.com/",
+            "https://www.facebook.com/profile.php",
             "https://adsmanager.facebook.com/adsmanager/manage/campaigns",
             "https://m.facebook.com/",
             "https://mbasic.facebook.com/",
