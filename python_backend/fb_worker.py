@@ -674,57 +674,51 @@ class FacebookWebSession:
                 restore_cookies()
             try:
                 from app.private_http import buffered_response
-                response, body = await buffered_response(
-                    "GET",
-                    lambda: session.get(
-                        target,
-                        proxy=self.profile.proxy,
-                        headers={
-                            "Accept": (
-                                "text/html,application/xhtml+xml,"
-                                "application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
-                            ),
-                            "Accept-Language": "en-US,en;q=0.9",
-                            "Cache-Control": "no-cache",
-                            "Pragma": "no-cache",
-                            "Sec-Fetch-Dest": "document",
-                            "Sec-Fetch-Mode": "navigate",
-                            "Sec-Fetch-Site": "none",
-                            "Sec-Fetch-User": "?1",
-                            "Upgrade-Insecure-Requests": "1",
-                        },
-                        allow_redirects=True,
-                        request_timeout_seconds=max(30, self.timeout_seconds),
+                probe_timeout_seconds=8.0
+                response, body = await asyncio.wait_for(
+                    buffered_response(
+                        "GET",
+                        lambda: session.get(
+                            target,
+                            proxy=self.profile.proxy,
+                            headers={
+                                "Accept": (
+                                    "text/html,application/xhtml+xml,"
+                                    "application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+                                ),
+                                "Accept-Language": "en-US,en;q=0.9",
+                                "Cache-Control": "no-cache",
+                                "Pragma": "no-cache",
+                                "Sec-Fetch-Dest": "document",
+                                "Sec-Fetch-Mode": "navigate",
+                                "Sec-Fetch-Site": "none",
+                                "Sec-Fetch-User": "?1",
+                                "Upgrade-Insecure-Requests": "1",
+                            },
+                            allow_redirects=True,
+                            request_timeout_seconds=probe_timeout_seconds,
+                        ),
+                        16 * 1024 * 1024 + 1,
+                        retry_read=True,
+                        reader=lambda response: response.text(),
                     ),
-                    16 * 1024 * 1024 + 1,
-                    retry_read=True,
-                    reader=lambda response: response.text(),
+                    timeout=probe_timeout_seconds,
                 )
             except (asyncio.TimeoutError, aiohttp.ClientError, httpx.HTTPError) as exc:
                 attempts.append({
                     "requested_url": target, "auth_reason": "profile_probe_transport",
                     "transport_failure": type(exc).__name__,
                 })
-                safe_attempts = [
-                    {key: row.get(key) for key in (
-                        "requested_url", "final_url", "http_status", "auth_reason",
-                        "token_present", "actor_verified", "actor_candidate_count",
-                        "transport_failure",
-                    ) if key in row}
-                    for row in attempts
-                ]
-                log.warning(
-                    "[%s] scoped profile bootstrap transport failure attempts=%s",
+                # One Facebook profile document can stall or fail at the
+                # assigned proxy while another equivalent read-only surface
+                # still confirms the same imported actor.
+                log.info(
+                    "[%s] scoped profile bootstrap route unavailable route=%s kind=%s",
                     self.profile.name,
-                    json.dumps(safe_attempts, separators=(",", ":")),
+                    urlsplit(target).path or "/",
+                    type(exc).__name__,
                 )
-                raise RemoteRequestError(
-                    "Facebook profile identity check failed before GraphQL submit.",
-                    meta_payload={"business_precheck": attempts,
-                        "transport_failure": {"kind": type(exc).__name__}},
-                    request_may_have_been_sent=False,
-                    transport_stage="business_auth_precheck",
-                ) from exc
+                continue
 
             self._restore_invalid_profile_cookie_snapshot(session, expected_actor)
             final_url = str(response.url)
@@ -797,6 +791,23 @@ class FacebookWebSession:
             json.dumps(safe_attempts, separators=(",", ":")),
         )
         self.invalidate_bootstrap()
+        explicit_profile_challenge = any(
+            row.get("auth_reason") in {
+                "checkpoint_redirect", "login_redirect", "login_form",
+                "http_auth", "actor_mismatch",
+            }
+            for row in attempts if isinstance(row, dict)
+        )
+        if not explicit_profile_challenge:
+            raise RemoteRequestError(
+                "Facebook profile identity could not be confirmed on the available read-only routes. No GraphQL POST was sent.",
+                meta_payload={
+                    "business_precheck": attempts,
+                    "transport_failure": {"kind": "profile_identity_unconfirmed"},
+                },
+                request_may_have_been_sent=False,
+                transport_stage="business_auth_precheck",
+            )
         error = AuthenticationError(
             "Meta profile identity was not independently confirmed. No GraphQL POST was sent."
         )
@@ -842,6 +853,20 @@ class FacebookWebSession:
             if not actor_id:
                 raise AuthenticationError(
                     "Facebook actor_id is missing from c_user/i_user cookies"
+                )
+
+            if allow_business_loginpage_probe:
+                expected_actor = str(self.profile.cookies.get("c_user") or "").strip()
+                if not expected_actor.isdigit() or expected_actor != actor_id:
+                    raise AuthenticationError(
+                        "A profile-bound Business operation requires the selected c_user actor."
+                    )
+                # Exact reviewed BM/RK/Page contracts use the imported profile
+                # identity directly. Visiting Business Suite first can redirect
+                # to business/loginpage, mutate its in-memory cookies, and spend
+                # the Sync deadline before the same profile is checked.
+                return await self._verified_profile_bootstrap(
+                    session, expected_actor, [],
                 )
 
             token_patterns = list(self.FB_DTSG_PATTERNS)
