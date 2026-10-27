@@ -357,7 +357,11 @@ class AdsManagerPrivateHttp:
         log.info("ads_bootstrap_evidence profile=%s evidence=%s",
             getattr(web.profile, "name", ""), evidence)
         if gate:
-            raise fail(gate, "Ads Manager requires restoration of the profile session", True)
+            error = fail(gate, "Ads Manager requires restoration of the profile session", True)
+            # This is a rejected document GET, before Ads Manager exposes any mutation sender.
+            error.request_may_have_been_sent = False
+            error.transport_stage = "bootstrap"
+            raise error
         if (status != 200 or len(body.encode()) > 5_000_000 or final.scheme != "https"
                 or final.hostname not in {"adsmanager.facebook.com", "business.facebook.com"}
                 or final.path != "/adsmanager/manage/campaigns"
