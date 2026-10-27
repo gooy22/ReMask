@@ -342,6 +342,43 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls[0][1]['actor_id'], '123')
         self.assertEqual(calls[0][2]['X-Remask-Internal-Key'], 'fixture-internal-key')
 
+    async def test_business_loginpage_cookie_deletion_does_not_poison_profile_probe(self):
+        actor = '123456789'
+        profile = WebProfile('fixture', {'c_user': actor, 'xs': 'imported-xs'},
+            'http://127.0.0.1:1', 'fixture-UA')
+        web = FacebookWebSession(profile)
+        self.addAsyncCleanup(web.close)
+        web.ADS_MANAGER_URL = 'https://business.facebook.com/latest/home'
+        client = await web._ensure_session()
+        requests = []
+
+        async def handler(request):
+            cookie = request.headers.get('cookie', '')
+            requests.append((request.url.host, request.url.path, cookie))
+            if request.url.path == '/latest/home':
+                return httpx.Response(302, headers=[
+                    ('Location', 'https://business.facebook.com/business/loginpage/'),
+                    ('Set-Cookie', 'xs=; Domain=.facebook.com; Path=/; Max-Age=0; Secure'),
+                ])
+            if request.url.path == '/business/loginpage/':
+                return httpx.Response(200, text='<form id="login_form">')
+            if request.url.host == 'www.facebook.com' and request.url.path == '/me':
+                if f'c_user={actor}' in cookie and 'xs=imported-xs' in cookie:
+                    return httpx.Response(200, text=self.authenticated_document(actor))
+                return httpx.Response(200, text='<form id="login_form">')
+            raise AssertionError(f'unexpected profile probe {request.url.host}{request.url.path}')
+
+        await self.mock(client, handler)
+        bootstrap = await web.bootstrap(allow_business_loginpage_probe=True)
+        self.assertTrue(bootstrap.profile_actor_verified)
+        self.assertEqual(bootstrap.actor_id, actor)
+        self.assertEqual(bootstrap.fb_dtsg, 'fixture-token')
+        profile_probe = next(row for row in requests if row[0] == 'www.facebook.com')
+        self.assertIn(f'c_user={actor}', profile_probe[2])
+        self.assertIn('xs=imported-xs', profile_probe[2])
+        self.assertEqual(client.facebook_cookie_snapshot(),
+            {'c_user': actor, 'xs': 'imported-xs'})
+
     async def test_meta_cookie_refresh_is_saved_to_same_profile(self):
         context = ProfileContext(
             profile_id='fixture',
