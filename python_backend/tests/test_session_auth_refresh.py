@@ -44,6 +44,34 @@ class SavedAuthRefreshTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(context.cookies["xs"],"fixture-fresh")
         resolver.resolve.assert_awaited_once_with("14")
 
+    async def test_same_expired_session_restores_verified_previous_session(self):
+        context = self.context()
+        fresh = self.context()
+        resolver = SimpleNamespace(
+            resolve=AsyncMock(return_value=fresh),
+            restore_previous_profile_session_after_gate=AsyncMock(),
+        )
+        async def restore(candidate):
+            candidate.cookies = {"c_user": "123456789", "xs": "fixture-previous"}
+            candidate._loaded_cookies = dict(candidate.cookies)
+            return True
+        resolver.restore_previous_profile_session_after_gate.side_effect = restore
+        self.assertTrue(await refresh_saved_auth_context(resolver, context))
+        self.assertEqual(context.cookies["xs"], "fixture-previous")
+        self.assertEqual(context._loaded_cookies, context.cookies)
+        resolver.restore_previous_profile_session_after_gate.assert_awaited_once_with(fresh)
+
+    async def test_resolver_that_already_probed_backup_is_not_probed_twice(self):
+        context = self.context()
+        fresh = self.context()
+        fresh._previous_profile_restore_attempted = True
+        resolver = SimpleNamespace(
+            resolve=AsyncMock(return_value=fresh),
+            restore_previous_profile_session_after_gate=AsyncMock(return_value=True),
+        )
+        self.assertFalse(await refresh_saved_auth_context(resolver, context))
+        resolver.restore_previous_profile_session_after_gate.assert_not_awaited()
+
     async def test_same_expired_session_is_not_reported_restored(self):
         context=self.context()
         resolver=SimpleNamespace(resolve=AsyncMock(return_value=self.context()))
@@ -100,6 +128,38 @@ class SavedAuthReadRetryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(read.await_count, 2)
         resolver.resolve.assert_awaited_once_with('14')
         self.assertEqual(context.cookies['xs'], 'fixture-fresh')
+
+    async def test_exact_auth_gate_recovers_from_previous_session_and_retries_once(self):
+        context = self.context()
+        fresh = self.context()
+        gate = ProvisioningError('PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE', 'fixture gate')
+        async def restore(candidate):
+            candidate.cookies = {"c_user": "123456789", "xs": "fixture-previous"}
+            return True
+        resolver = SimpleNamespace(
+            resolve=AsyncMock(return_value=fresh),
+            restore_previous_profile_session_after_gate=AsyncMock(side_effect=restore),
+        )
+        read = AsyncMock(side_effect=[gate, {'draft_id': '123456'}])
+        result = await read_with_saved_auth_refresh(resolver, context, read)
+        self.assertEqual(result, {'draft_id': '123456'})
+        self.assertEqual(read.await_count, 2)
+        self.assertEqual(context.cookies['xs'], 'fixture-previous')
+        resolver.restore_previous_profile_session_after_gate.assert_awaited_once_with(fresh)
+
+    async def test_failed_previous_session_recovery_preserves_original_gate(self):
+        context = self.context()
+        gate = ProvisioningError('BUSINESS_LOGIN_GATE', 'fixture gate')
+        resolver = SimpleNamespace(
+            resolve=AsyncMock(return_value=self.context()),
+            restore_previous_profile_session_after_gate=AsyncMock(return_value=False),
+        )
+        read = AsyncMock(side_effect=gate)
+        with self.assertRaises(ProvisioningError) as caught:
+            await read_with_saved_auth_refresh(resolver, context, read)
+        self.assertIs(caught.exception, gate)
+        read.assert_awaited_once_with()
+        resolver.restore_previous_profile_session_after_gate.assert_awaited_once()
 
     async def test_missing_fresh_authentication_preserves_the_original_gate(self):
         for fresh in (self.context(), self.context(uid='999999999', xs='fixture-fresh')):
