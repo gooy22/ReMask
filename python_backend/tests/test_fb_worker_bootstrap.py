@@ -175,6 +175,46 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         session._fetch_dtsg_refresh_token.assert_not_awaited()
         session.refresh_reviewed_modules.assert_not_awaited()
 
+    async def test_business_loginpage_probe_uses_same_actor_profile_route_with_dtsg(self):
+        expected_actor = "123456789"
+        calls = []
+        class Response:
+            status = 200
+            def __init__(self, url, body):
+                self.url, self.body = url, body
+            async def text(self): return self.body
+            async def __aenter__(self): return self
+            async def __aexit__(self, *args): return False
+        class Client:
+            def get(self, url, **kwargs):
+                calls.append(url)
+                if url == "https://www.facebook.com/me":
+                    # /me may verify identity while omitting the app token.
+                    return Response(url, '<script>CurrentUserInitialData = {"USER_ID":"123456789"};</script>')
+                if url == "https://www.facebook.com/":
+                    # Facebook pages can embed additional user data. The
+                    # selected actor must still be present in CurrentUserInitialData.
+                    return Response(url, '<script>CurrentUserInitialData = {"USER_ID":"123456789"};</script>'
+                        '<script>CurrentUserInitialData = {"USER_ID":"987654321"};</script>'
+                        '["DTSGInitialData",[],{"token":"profile-token"}]')
+                return Response("https://business.facebook.com/business/loginpage/", '<form id="login_form">')
+        session = FacebookWebSession(WebProfile(name="15",
+            cookies={"c_user": expected_actor}, proxy=None, user_agent="fixture"))
+        session._ensure_session = AsyncMock(return_value=Client())
+        session._fetch_dtsg_refresh_token = AsyncMock(return_value=("", ""))
+        session.refresh_reviewed_modules = AsyncMock()
+        bootstrap = await session.bootstrap(allow_business_loginpage_probe=True)
+        self.assertTrue(bootstrap.profile_actor_verified)
+        self.assertEqual(bootstrap.actor_id, expected_actor)
+        self.assertEqual(bootstrap.fb_dtsg, "profile-token")
+        self.assertEqual(calls, [
+            "https://business.facebook.com/latest/home",
+            "https://www.facebook.com/me",
+            "https://www.facebook.com/",
+        ])
+        session._fetch_dtsg_refresh_token.assert_not_awaited()
+        session.refresh_reviewed_modules.assert_not_awaited()
+
     async def test_business_loginpage_probe_rejects_actor_mismatch_and_other_login_routes(self):
         calls = []
         class Response:
