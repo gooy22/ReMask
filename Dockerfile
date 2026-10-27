@@ -28,6 +28,7 @@ RUN python3 -m venv /opt/remask-venv \
 COPY python_backend /opt/remask-python
 # The early backend schema regression also checks the installed UI routing source.
 COPY railway-private-completion-overlay.php /opt/railway-private-completion-overlay.php
+COPY railway-python-worker-bridge-overlay.php /opt/railway-python-worker-bridge-overlay.php
 RUN set -eux; \
     /opt/remask-venv/bin/python -m compileall -q /opt/remask-python \
     && cd /opt/remask-python \
