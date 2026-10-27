@@ -1,7 +1,7 @@
 import hashlib
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 from datetime import datetime, timezone
 from email.utils import format_datetime
 
@@ -255,6 +255,123 @@ class ProfileResolverCookieRevalidationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(raised.exception.code, "SESSION_EXPIRED")
         resolver.persist_cookie_auth_verification.assert_not_awaited()
 
+    async def test_verified_previous_same_actor_session_is_restored(self):
+        context = self._context()
+        current_hash = hashlib.sha256(context.cookies["xs"].encode("utf-8")).hexdigest()
+        previous_cookies = {"c_user": "123456789", "xs": "previous-session"}
+        previous_hash = hashlib.sha256(previous_cookies["xs"].encode("utf-8")).hexdigest()
+        resolver = ProfileResolver(None, None)
+        resolver.load_previous_profile_cookies = AsyncMock(
+            return_value=(previous_cookies, previous_hash)
+        )
+        resolver.persist_verified_previous_profile_cookies = AsyncMock(return_value=True)
+        probe_webs = []
+
+        class FakeMetaSession:
+            def __init__(self, candidate):
+                self.candidate = candidate
+
+            async def facebook_web(self):
+                web = SimpleNamespace(
+                    profile=SimpleNamespace(
+                        name=self.candidate.profile_id,
+                        cookies=dict(self.candidate.cookies),
+                    ),
+                    auth_cookie_revoked=False,
+                    fetch_text=AsyncMock(return_value=(
+                        200, "<verified-business-home>",
+                        "https://business.facebook.com/latest/home/",
+                    )),
+                )
+                probe_webs.append(web)
+                return web
+
+            async def close(self):
+                return None
+
+        with patch("app.session.MetaSession", FakeMetaSession), patch(
+            "app.private_ads_http._bootstrap_evidence",
+            return_value={"final_host": "business.facebook.com", "document_actor": "matches"},
+        ):
+            restored = await resolver._restore_verified_previous_profile_cookies(
+                context, current_hash
+            )
+
+        self.assertTrue(restored)
+        resolver.load_previous_profile_cookies.assert_awaited_once_with(
+            "fixture-profile", "123456789", current_hash
+        )
+        resolver.persist_verified_previous_profile_cookies.assert_awaited_once_with(
+            "fixture-profile", "123456789", current_hash, previous_hash, previous_cookies
+        )
+        probe_webs[0].fetch_text.assert_awaited_once_with(
+            "https://business.facebook.com/latest/home/",
+            max_bytes=5_000_000,
+            document_navigation=True,
+        )
+        self.assertEqual(context.cookies, previous_cookies)
+        self.assertEqual(context._loaded_cookies, previous_cookies)
+
+    async def test_previous_session_requiring_login_is_never_persisted(self):
+        context = self._context()
+        current_hash = hashlib.sha256(context.cookies["xs"].encode("utf-8")).hexdigest()
+        previous_cookies = {"c_user": "123456789", "xs": "previous-session"}
+        previous_hash = hashlib.sha256(previous_cookies["xs"].encode("utf-8")).hexdigest()
+        resolver = ProfileResolver(None, None)
+        resolver.load_previous_profile_cookies = AsyncMock(
+            return_value=(previous_cookies, previous_hash)
+        )
+        resolver.persist_verified_previous_profile_cookies = AsyncMock(return_value=True)
+
+        class FakeMetaSession:
+            def __init__(self, candidate):
+                self.candidate = candidate
+
+            async def facebook_web(self):
+                return SimpleNamespace(
+                    profile=SimpleNamespace(
+                        name=self.candidate.profile_id,
+                        cookies=dict(self.candidate.cookies),
+                    ),
+                    auth_cookie_revoked=False,
+                    fetch_text=AsyncMock(return_value=(
+                        200, "<login-page>",
+                        "https://business.facebook.com/business/loginpage/",
+                    )),
+                )
+
+            async def close(self):
+                return None
+
+        with patch("app.session.MetaSession", FakeMetaSession):
+            restored = await resolver._restore_verified_previous_profile_cookies(
+                context, current_hash
+            )
+
+        self.assertFalse(restored)
+        resolver.persist_verified_previous_profile_cookies.assert_not_awaited()
+        self.assertEqual(context.cookies["xs"], "fixture-session")
+
+    async def test_previous_session_with_different_actor_is_never_probed_or_persisted(self):
+        context = self._context()
+        current_hash = hashlib.sha256(context.cookies["xs"].encode("utf-8")).hexdigest()
+        resolver = ProfileResolver(None, None)
+        resolver.load_previous_profile_cookies = AsyncMock(return_value=(
+            {"c_user": "999999999", "xs": "other-actor-session"},
+            hashlib.sha256(b"other-actor-session").hexdigest(),
+        ))
+        resolver.persist_verified_previous_profile_cookies = AsyncMock(return_value=True)
+        meta_session_factory = Mock(return_value=SimpleNamespace())
+
+        with patch("app.session.MetaSession", meta_session_factory):
+            restored = await resolver._restore_verified_previous_profile_cookies(
+                context, current_hash
+            )
+
+        self.assertFalse(restored)
+        meta_session_factory.assert_not_called()
+        resolver.persist_verified_previous_profile_cookies.assert_not_awaited()
+
     async def test_business_home_gate_does_not_globally_block_profile(self):
         cookies = {"c_user": "123456789", "xs": "fixture-session"}
         marker_hash = hashlib.sha256(cookies["xs"].encode("utf-8")).hexdigest()
@@ -277,12 +394,16 @@ class ProfileResolverCookieRevalidationTests(unittest.IsolatedAsyncioTestCase):
             "cookie_auth_revocation_xs_sha256": marker_hash,
         })
         resolver.persist_cookie_auth_verification = AsyncMock(return_value=True)
+        resolver._restore_verified_previous_profile_cookies = AsyncMock(return_value=False)
 
         with patch("app.session.MetaSession", return_value=meta_session):
             resolved = await resolver.resolve("fixture-profile")
 
         self.assertEqual(resolved.cookies, cookies)
         web.fetch_text.assert_awaited_once()
+        resolver._restore_verified_previous_profile_cookies.assert_awaited_once_with(
+            resolved, marker_hash
+        )
         resolver.persist_cookie_auth_verification.assert_not_awaited()
 
     async def test_facebook_login_page_still_blocks_marked_profile(self):

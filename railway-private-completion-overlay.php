@@ -118,7 +118,7 @@ if (strtoupper((string)($_SERVER['REQUEST_METHOD'] ?? 'GET')) === 'POST') {
             exit;
         }
         $action = (string)($input['action'] ?? '');
-        if (!in_array($action, ['refresh_profile_cookies','mark_profile_cookie_auth_revoked','clear_profile_cookie_auth_verified'], true)) {
+        if (!in_array($action, ['refresh_profile_cookies','mark_profile_cookie_auth_revoked','clear_profile_cookie_auth_verified','load_previous_profile_cookies','restore_previous_profile_cookies_verified'], true)) {
             http_response_code(400);
             echo json_encode(['ok'=>false,'error'=>'INVALID_ACTION']);
             exit;
@@ -179,6 +179,65 @@ if (strtoupper((string)($_SERVER['REQUEST_METHOD'] ?? 'GET')) === 'POST') {
                 $profile, $actor, $expectedHash
             );
             echo json_encode(['ok'=>true,'updated'=>$cleared]);
+            exit;
+        }
+
+        if ($action === 'load_previous_profile_cookies') {
+            $expectedCurrentHash = strtolower(trim((string)($input['expected_current_xs_sha256'] ?? '')));
+            if (!preg_match('/^[a-f0-9]{64}$/D', $expectedCurrentHash)
+                || !method_exists($store, 'getAccountByName')
+                || !method_exists($store, 'getPreviousAccountByName')) {
+                http_response_code(409);
+                echo json_encode(['ok'=>false,'error'=>'PROFILE_BACKUP_UNAVAILABLE']);
+                exit;
+            }
+            $current = $store->getAccountByName($profile);
+            $previous = $store->getPreviousAccountByName($profile);
+            $currentCookies = $current ? RemaskCookieSession::map((array)$current->cookies) : [];
+            $previousCookies = $previous ? RemaskCookieSession::map((array)$previous->cookies) : [];
+            $currentXs = (string)($currentCookies['xs'] ?? '');
+            $previousXs = (string)($previousCookies['xs'] ?? '');
+            if (!$current || !$previous
+                || (string)($currentCookies['c_user'] ?? '') !== $actor
+                || (string)($previousCookies['c_user'] ?? '') !== $actor
+                || $currentXs === '' || $previousXs === ''
+                || !hash_equals($expectedCurrentHash, hash('sha256', $currentXs))
+                || hash('sha256', $previousXs) === $expectedCurrentHash) {
+                http_response_code(409);
+                echo json_encode(['ok'=>false,'error'=>'PROFILE_SESSION_CHANGED']);
+                exit;
+            }
+            echo json_encode([
+                'ok'=>true,
+                'cookies'=>$previousCookies,
+                'previous_xs_sha256'=>hash('sha256', $previousXs),
+            ], JSON_UNESCAPED_SLASHES);
+            exit;
+        }
+
+        if ($action === 'restore_previous_profile_cookies_verified') {
+            $expectedCurrentHash = strtolower(trim((string)($input['expected_current_xs_sha256'] ?? '')));
+            $expectedPreviousHash = strtolower(trim((string)($input['expected_previous_xs_sha256'] ?? '')));
+            $cookieInput = $input['cookies'] ?? null;
+            if (!preg_match('/^[a-f0-9]{64}$/D', $expectedCurrentHash)
+                || !preg_match('/^[a-f0-9]{64}$/D', $expectedPreviousHash)
+                || !is_array($cookieInput) || array_is_list($cookieInput)
+                || !method_exists($store, 'restorePreviousCookiesIfUnchanged')) {
+                http_response_code(409);
+                echo json_encode(['ok'=>false,'error'=>'PROFILE_BACKUP_RESTORE_UNAVAILABLE']);
+                exit;
+            }
+            if (!$store->restorePreviousCookiesIfUnchanged(
+                $profile, $actor, $expectedCurrentHash, $expectedPreviousHash, $cookieInput
+            )) {
+                http_response_code(409);
+                echo json_encode(['ok'=>false,'error'=>'PROFILE_SESSION_CHANGED']);
+                exit;
+            }
+            (new ProfileCookieAuthStateStore())->clearIfStale(
+                $profile, $actor, (string)($cookieInput['xs'] ?? '')
+            );
+            echo json_encode(['ok'=>true,'updated'=>true]);
             exit;
         }
 
