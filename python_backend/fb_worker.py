@@ -150,6 +150,7 @@ class FacebookWebSession:
 
         self._bootstrap: FacebookBootstrap | None = None
         self._graphql_request_counter = 0
+        self.auth_cookie_revoked = False
 
     # ------------------------------------------------------------------
     # Profile HTTP/2 lifecycle
@@ -189,6 +190,7 @@ class FacebookWebSession:
     async def close(self) -> None:
         async with self._session_lock:
             if self.session is not None:
+                self.auth_cookie_revoked = self.session.facebook_auth_cookie_revoked
                 # HTTPX applies Meta Set-Cookie headers to this profile-bound
                 # jar. Preserve only a snapshot for the same actor; never allow
                 # a redirect to silently switch the profile identity.
