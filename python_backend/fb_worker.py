@@ -776,15 +776,12 @@ class FacebookWebSession:
                 )
                 return bootstrap
 
-            # Keep explicit auth challenges and a different observed actor
-            # terminal. Only try another profile document when this route lacks
-            # identity markup or a usable token.
-            # /me can normalize to the generic home document, whose embedded
-            # CurrentUserInitialData is not always the profile identity surface
-            # we need. A conflicting candidate on that route is not enough to
-            # stop before the dedicated settings document is checked. We still
-            # require an exact expected-actor match before any GraphQL request;
-            # if no route confirms it, the mismatch remains terminal below.
+            # Login forms, redirects, and HTTP auth failures remain terminal.
+            # Strict bootstrap callers also require this generic page to expose
+            # the selected actor. Exact profile-scoped operations may accept a
+            # token from this page while treating its identity markup as
+            # unverified; their pinned operation and the exact Meta response
+            # determine access, while cookie writeback stays disabled.
             if reason not in {
                 "actor_unobserved",
                 "profile_token_unavailable",
@@ -1375,11 +1372,16 @@ class FacebookWebSession:
                         }):
                     expected_actor = str(self.profile.cookies.get("c_user") or "").strip()
                     if expected_actor.isdigit() and expected_actor == bootstrap.actor_id:
+                        # Business loginpage can clear auth cookies before
+                        # returning a generic gate. Restore the imported
+                        # profile snapshot if c_user/xs were removed or changed,
+                        # then let the exact GraphQL response decide access.
+                        self._restore_invalid_profile_cookie_snapshot(
+                            await self._ensure_session(), expected_actor,
+                        )
                         # This operation has already passed the pinned static
-                        # contract and actor-binding checks. A generic Business
-                        # landing route can send valid sessions to loginpage;
-                        # let the exact GraphQL response decide whether this
-                        # selected profile may perform the requested operation.
+                        # contract and actor-binding checks; do not let a generic
+                        # landing-page route veto that exact operation.
                         return bootstrap
                 log.warning("[%s] BUSINESS auth precheck stopped before POST attempts=%s",
                     self.profile.name, json.dumps(attempts, separators=(",", ":")))
