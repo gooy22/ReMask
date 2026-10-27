@@ -32,6 +32,13 @@ class ProfileContextError(RuntimeError):
         self.retryable = bool(retryable)
         self.category = str(category or "profile_context").strip()
 
+    @property
+    def code(self) -> str:
+        """Keep Meta's explicit session revocation distinct from resolver errors."""
+        if self.category == "business_login_gate":
+            return "BUSINESS_LOGIN_GATE"
+        return "PROFILE_CONTEXT_ERROR"
+
 
 class ProxyCheckError(RuntimeError):
     pass
