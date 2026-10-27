@@ -1370,7 +1370,7 @@ class FacebookWebSession:
         if operation == "LIST_PAGES":
             actor = str(self.profile.cookies.get("c_user") or "").strip()
             endpoint = str(endpoint_url or "").strip()
-            if (not re.fullmatch(r"\\d{5,40}", str(doc_id or "").strip())
+            if (not re.fullmatch(r"\d{5,40}", str(doc_id or "").strip())
                     or friendly_name != "AccountQualityUserPagesWrapper_UserPageQuery"
                     or endpoint != "https://www.facebook.com/api/graphql/"
                     or not actor.isdigit()
