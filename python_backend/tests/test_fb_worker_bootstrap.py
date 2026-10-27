@@ -249,6 +249,33 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
             multipart_files=None, read_timeout_seconds=None), "CREATE_BM")
         self.assertFalse(session.has_fresh_business_read_verified("READ_RK", "555555555"))
 
+    async def test_list_pages_probe_requires_exact_profile_scoped_read_contract(self):
+        session = FacebookWebSession(WebProfile(name="15",
+            cookies={"c_user": "123456789"}, proxy=None, user_agent="fixture"))
+        values = {
+            "operation": "LIST_PAGES",
+            "doc_id": "123456789012345",
+            "variables": {"assetOwnerId": "123456789"},
+            "friendly_name": "AccountQualityUserPagesWrapper_UserPageQuery",
+            "endpoint_url": "https://www.facebook.com/api/graphql/",
+            "request_envelope": None,
+            "before_submit": None,
+            "business_context_id": "",
+            "multipart_files": None,
+            "read_timeout_seconds": 30,
+        }
+        self.assertEqual(session._validate_business_loginpage_probe(**values), "LIST_PAGES")
+        for change in (
+            {"variables": {"assetOwnerId": "987654321"}},
+            {"endpoint_url": "https://business.facebook.com/api/graphql/"},
+            {"friendly_name": "UnexpectedMutation"},
+            {"read_timeout_seconds": None},
+            {"request_envelope": {"__user": "123456789"}},
+            {"business_context_id": "555555555"},
+        ):
+            with self.subTest(change=change), self.assertRaises(RemoteRequestError):
+                session._validate_business_loginpage_probe(**{**values, **change})
+
     async def test_authenticated_document_with_login_module_name_keeps_usable_session(self):
         session, client = self.session('<script>var login_form=true;</script>'
             '["DTSGInitialData",[],{"token":"fixture-token"}]',
