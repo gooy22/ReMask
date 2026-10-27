@@ -1231,7 +1231,7 @@ async def profile_preflight(profile_id: str, purpose: str = 'business'):
                 restore_previous = getattr(pool.resolver, 'restore_previous_profile_session_after_gate', None)
                 if callable(restore_previous):
                     try:
-                        restored = await asyncio.wait_for(restore_previous(context), timeout=9.0)
+                        restored = await asyncio.wait_for(restore_previous(context), timeout=16.0)
                     except Exception as recovery_error:
                         restored = False
                         log.info('business preflight profile=%s recovery failed type=%s',
@@ -1253,7 +1253,7 @@ async def profile_preflight(profile_id: str, purpose: str = 'business'):
                 restore_previous = getattr(pool.resolver, 'restore_previous_profile_session_after_gate', None)
                 if callable(restore_previous):
                     try:
-                        restored = await asyncio.wait_for(restore_previous(context), timeout=9.0)
+                        restored = await asyncio.wait_for(restore_previous(context), timeout=16.0)
                     except Exception as recovery_error:
                         restored = False
                         log.info('fan page preflight profile=%s recovery failed type=%s',
@@ -2232,7 +2232,7 @@ async def profile_live_inventory(
                 if callable(restore_previous):
                     try:
                         restored=await asyncio.wait_for(
-                            restore_previous(context), timeout=9.0,
+                            restore_previous(context), timeout=16.0,
                         )
                     except Exception as recovery_error:
                         log.info('live inventory profile=%s previous-session recovery failed type=%s',
