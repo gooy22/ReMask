@@ -155,6 +155,7 @@ class ReadInventoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(web.posts[0][1]["businessID"], BM)
         self.assertEqual(web.posts[0][2]["business_context_id"], BM)
         self.assertEqual(web.posts[0][2]["business_loginpage_probe"], "PRIVATE_RK_INVENTORY")
+        self.assertEqual(web.posts[0][2]["private_inventory_query_contract"]["operation_kind"], "query")
         self.assertNotIn("_document", repr(result))
         self.assertEqual(inventory_diagnostic_summary(result)[-1]["query_posts"], 1)
 
