@@ -294,7 +294,8 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         ])
         session._fetch_dtsg_refresh_token.assert_not_awaited()
 
-    async def test_business_loginpage_probe_rejects_actor_mismatch_and_other_login_routes(self):
+    async def test_scoped_bootstrap_uses_selected_cookie_actor_when_generic_identity_candidate_differs(self):
+        expected_actor = "123456789"
         calls = []
         class Response:
             status = 200
@@ -303,35 +304,62 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
             async def __aenter__(self): return self
             async def __aexit__(self, *args): return False
         class Client:
-            def __init__(self, profile_url, body):
-                self.profile_url, self.body = profile_url, body
             def get(self, url, **kwargs):
                 calls.append(url)
-                return Response(self.profile_url, self.body)
+                return Response(url,
+                    '<script>CurrentUserInitialData = {"USER_ID":"987654321"};</script>'
+                    '["DTSGInitialData",[],{"token":"profile-token"}]')
 
         session = FacebookWebSession(WebProfile(name="15",
-            cookies={"c_user": "123456789"}, proxy=None, user_agent="fixture"))
-        bad = Client("https://www.facebook.com/me",
-            '<script>CurrentUserInitialData = {"USER_ID":"987654321"};</script>'
-            '["DTSGInitialData",[],{"token":"profile-token"}]')
-        session._ensure_session = AsyncMock(return_value=bad)
-        with self.assertRaises(AuthenticationError) as caught:
-            await session.bootstrap(allow_business_loginpage_probe=True)
-        self.assertFalse(caught.exception.request_may_have_been_sent)
-        self.assertFalse(caught.exception.meta_payload["business_precheck"][-1]["actor_verified"])
-        self.assertEqual(calls, [
-            "https://www.facebook.com/me",
-            "https://www.facebook.com/settings",
-            "https://www.facebook.com/",
-        ])
+            cookies={"c_user": expected_actor}, proxy=None, user_agent="fixture"))
+        client = Client()
+        session._ensure_session = AsyncMock(return_value=client)
+
+        bootstrap = await session.bootstrap(allow_business_loginpage_probe=True)
+        self.assertFalse(bootstrap.profile_actor_verified)
+        self.assertEqual(bootstrap.actor_id, expected_actor)
+        self.assertEqual(bootstrap.fb_dtsg, "profile-token")
+        self.assertFalse(session._profile_session_identity_verified)
+        self.assertEqual(calls, ["https://www.facebook.com/me"])
+
+        with self.assertRaises(AuthenticationError):
+            await session._verified_profile_bootstrap(client, expected_actor, [],
+                require_actor_match=True)
 
         calls.clear()
-        other = Client("https://www.facebook.com/login.php", '<form id="login_form">')
+        other = Client()
+        other.get = lambda url, **kwargs: (
+            calls.append(url) or Response("https://www.facebook.com/login.php", '<form id="login_form">')
+        )
         session._ensure_session = AsyncMock(return_value=other)
         session.invalidate_bootstrap()
         with self.assertRaises(AuthenticationError):
             await session.bootstrap(allow_business_loginpage_probe=True)
         self.assertEqual(calls, ["https://www.facebook.com/me"])
+
+    async def test_exact_scoped_business_operation_continues_after_generic_business_loginpage(self):
+        actor = "123456789"
+        session = FacebookWebSession(WebProfile(name="15",
+            cookies={"c_user": actor}, proxy=None, user_agent="fixture"))
+        bootstrap = FacebookBootstrap(actor_id=actor, fb_dtsg="profile-token",
+            source_url="https://www.facebook.com/me", profile_actor_verified=False)
+        class CookieSession:
+            restored = False
+            def facebook_cookie_snapshot(self): return {"xs": ""}
+            def restore_profile_cookies(self): self.restored = True
+        cookie_session = CookieSession()
+        session._ensure_session = AsyncMock(return_value=cookie_session)
+        session.fetch_text = AsyncMock(return_value=(
+            200, '<form id="login_form">', "https://business.facebook.com/business/loginpage/"
+        ))
+
+        result = await session._business_bootstrap(
+            bootstrap, business_loginpage_probe="READ_BM",
+        )
+
+        self.assertIs(result, bootstrap)
+        self.assertTrue(cookie_session.restored)
+        session.fetch_text.assert_awaited_once()
 
     async def test_business_loginpage_bypass_is_limited_to_exact_pinned_contract_and_verified_reads(self):
         from app.static_meta_contracts import command
