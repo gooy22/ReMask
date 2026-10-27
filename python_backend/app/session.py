@@ -66,9 +66,9 @@ class ProfileContext:
     inventory_updated_at: int = 0
     inventory_source: str = ""
     direct_test_until: int = 0
-    recovery_cookies: dict[str, str] = field(default_factory=dict, repr=False, compare=False)
     _cookie_persistor: Any = field(default=None, repr=False, compare=False)
     _loaded_cookies: dict[str, str] = field(default_factory=dict, repr=False, compare=False)
+    recovery_cookies: dict[str, str] = field(default_factory=dict, repr=False, compare=False)
 
 
 
