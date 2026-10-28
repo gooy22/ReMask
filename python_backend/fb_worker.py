@@ -1043,11 +1043,12 @@ class FacebookWebSession:
                                 session, expected_actor, auth_attempts,
                                 require_actor_match=require_actor_match,
                             )
-                        error = AuthenticationError("Meta requires session restoration before bootstrap.")
-                        error.meta_payload = {"business_precheck": auth_attempts}
-                        error.request_may_have_been_sent = False
-                        error.transport_stage = "bootstrap"
-                        raise error
+                        # A Business login page is not proof that the whole
+                        # Facebook session is unusable. Match the prior bundle
+                        # flow: try the remaining profile surfaces and use the
+                        # normal session-expired result only if none yields DTSG.
+                        attempts.append(f"{bootstrap_url}: login/checkpoint")
+                        continue
 
                     if len(candidate_body) > len(best_authenticated_body):
                         best_authenticated_body = candidate_body
