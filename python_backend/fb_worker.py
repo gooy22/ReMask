@@ -1342,7 +1342,7 @@ class FacebookWebSession:
         self, bootstrap: FacebookBootstrap, *, business_id: str = "",
         business_create: bool = False, business_loginpage_probe: str = "",
     ) -> FacebookBootstrap:
-        """Confirm Business auth using bounded, read-only operation surfaces."""
+        """Confirm Business auth using bounded, operation-scoped surfaces."""
         if (business_loginpage_probe in {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS", "PRIVATE_RK_INVENTORY",
                 "CREATE_BM", "CREATE_RK", "CLAIM", "ASSIGN",
                 "READ_FP", "FP_CATEGORY", "FP_PRECHECK", "CREATE_FP"}
