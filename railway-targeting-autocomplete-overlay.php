@@ -41,6 +41,7 @@ $js = <<<'JS'
   }
 
   function isLaunchTargetingInput(input) {
+    /* REMASK_SKIP_NATIVE_LIVE_TARGETING_V1 */
     return /^(geoQuery|interestQuery|behaviorQuery|languageQuery)$/.test(String(input?.id || ''))
       || input?.dataset?.remaskLaunchTargetingPicker === 'true';
   }
