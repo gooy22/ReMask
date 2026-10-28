@@ -13,6 +13,20 @@ from app.provisioning.service import ProvisioningService
 from app.provisioning.advertising_page import AdvertisingPageStore
 from app.provisioning.private_create_handlers import _business_collection_complete
 from app.facebook_business_browser import _extract_business_inventory_rows
+from app.provisioning.page_access_handler import _browser_full_control_requested, _private_http_page_access
+
+class PageAccessTransportRoutingTests(unittest.TestCase):
+    def test_prepare_full_control_uses_business_suite_route_in_private_worker(self):
+        session = SimpleNamespace(private_only=True)
+        prepare_params = {'access_mode': 'existing_page_full_control'}
+
+        self.assertTrue(_browser_full_control_requested(prepare_params))
+        self.assertFalse(_private_http_page_access(session, prepare_params))
+        self.assertTrue(_private_http_page_access(session, {'access_mode': 'shared_ads_access'}))
+        self.assertFalse(_private_http_page_access(
+            SimpleNamespace(private_only=False), prepare_params))
+
+
 
 BM, FP, RK, USER, UID = '1428816905866955', '1348798761652037', '222222222222222', '333333333333333', '61594946647826'
 P, R, PARTIAL = '444444444444444', '555555555555555', '666666666666666'
