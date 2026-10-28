@@ -13,16 +13,25 @@ from app.provisioning.service import ProvisioningService
 from app.provisioning.advertising_page import AdvertisingPageStore
 from app.provisioning.private_create_handlers import _business_collection_complete
 from app.facebook_business_browser import _extract_business_inventory_rows
-from app.provisioning.page_access_handler import _browser_full_control_requested, _private_http_page_access
+from app.provisioning.page_access_handler import _browser_full_control_requested, _private_http_page_access, _browser_auth_fallback_allowed
 
 class PageAccessTransportRoutingTests(unittest.TestCase):
-    def test_prepare_full_control_uses_business_suite_route_in_private_worker(self):
+    def test_private_http_remains_primary_and_browser_fallback_is_auth_only(self):
         session = SimpleNamespace(private_only=True)
         prepare_params = {'access_mode': 'existing_page_full_control'}
 
         self.assertTrue(_browser_full_control_requested(prepare_params))
-        self.assertFalse(_private_http_page_access(session, prepare_params))
-        self.assertTrue(_private_http_page_access(session, {'access_mode': 'shared_ads_access'}))
+        self.assertTrue(_private_http_page_access(session, prepare_params))
+        self.assertFalse(_browser_auth_fallback_allowed(
+            prepare_params, ProvisioningError('PRIVATE_ASSET_READ_INCONCLUSIVE', 'read failed'), {}))
+        self.assertTrue(_browser_auth_fallback_allowed(
+            prepare_params, ProvisioningError('SESSION_EXPIRED', 'expired'), {}))
+        self.assertFalse(_browser_auth_fallback_allowed(
+            {'access_mode': 'shared_ads_access'},
+            ProvisioningError('SESSION_EXPIRED', 'expired'), {}))
+        self.assertFalse(_browser_auth_fallback_allowed(
+            prepare_params, ProvisioningError('SESSION_EXPIRED', 'expired'),
+            {'private_operations': {'claim_page': {'status': 'SUBMIT_INTENT'}}}))
         self.assertFalse(_private_http_page_access(
             SimpleNamespace(private_only=False), prepare_params))
 
