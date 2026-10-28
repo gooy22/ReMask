@@ -772,7 +772,62 @@ class PrivateLaunchStateStore:
         return launch_key
 
     @staticmethod
+    def _ads_manager_delivery_intent_complete(steps):
+        """A verified status-only operation is complete, not an unfinished draft."""
+        prefix = "ADS_MANAGER:"
+        levels = {"DELIVERY_AD", "DELIVERY_ADSET", "DELIVERY_CAMPAIGN"}
+        grouped = {}
+        for row in steps:
+            name = str(row.get("step") or "")
+            if not name.startswith(prefix):
+                return False
+            operation = name[len(prefix):]
+            if operation.endswith("_FRAGMENT"):
+                level, kind = operation[:-len("_FRAGMENT")], "FRAGMENT"
+            elif operation.endswith("_PUBLISH"):
+                level, kind = operation[:-len("_PUBLISH")], "PUBLISH"
+            else:
+                return False
+            if level not in levels:
+                return False
+            pair = grouped.setdefault(level, {})
+            if kind in pair:
+                return False
+            pair[kind] = row
+
+        if not grouped or any(set(pair) != {"FRAGMENT", "PUBLISH"} for pair in grouped.values()):
+            return False
+
+        for pair in grouped.values():
+            fragment, publication = pair["FRAGMENT"], pair["PUBLISH"]
+            if fragment.get("status") != "SUCCESS" or publication.get("status") != "SUCCESS":
+                return False
+            fragment_evidence = (fragment.get("result") or {}).get("evidence", {})
+            publication_evidence = (publication.get("result") or {}).get("evidence", {})
+            fragment_receipt = fragment_evidence.get("receipt")
+            publication_receipt = publication_evidence.get("receipt")
+            fragment_proof = fragment_evidence.get("verification")
+            publication_proof = publication_evidence.get("verification")
+            if (not isinstance(fragment_receipt, dict) or not isinstance(publication_receipt, dict)
+                    or not isinstance(fragment_proof, dict) or not isinstance(publication_proof, dict)
+                    or not fragment_receipt.get("fragment_id")
+                    or fragment_proof.get("fragment_id") != fragment_receipt.get("fragment_id")
+                    or fragment_proof.get("meta_validation_status") != "VALIDATED"
+                    or not publication_receipt.get("operation_id")
+                    or not publication_proof.get("entity_id")
+                    or publication_proof.get("status") not in {"ACTIVE", "PAUSED"}):
+                return False
+            for proof in (fragment_proof, publication_proof):
+                if (proof.get("verified") is not True
+                        or proof.get("source") != "independent_private_ads_http"):
+                    return False
+        return True
+
+    @staticmethod
     def _ads_manager_intent_complete(steps):
+        if steps and all(str(row.get("step") or "").startswith("ADS_MANAGER:DELIVERY_")
+                         for row in steps):
+            return PrivateLaunchStateStore._ads_manager_delivery_intent_complete(steps)
         required = (
             "ADS_MANAGER:DRAFT",
             "ADS_MANAGER:FRAGMENT_CAMPAIGN",

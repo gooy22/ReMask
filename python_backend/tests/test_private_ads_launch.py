@@ -140,6 +140,28 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(resumed, "completed-launch")
 
+    async def test_partial_delivery_fragment_remains_an_unfinished_account_intent(self):
+        from app.private_launch_extensions import OperationKey
+
+        state = self.owner.state
+        await state.init()
+        values = {"profile_id":"19","business_id":"222222","ad_account_id":"111111"}
+        await state.claim_launch_plan("pending-delivery", values, "delivery-fingerprint", "same-contract")
+        await state.save(
+            launch_key="pending-delivery", profile_id="19", business_id="222222",
+            ad_account_id="111111", step=OperationKey("ADS_MANAGER:DELIVERY_AD_FRAGMENT"),
+            status="SUCCESS", entity_id="900001",
+            result={"status":"SUCCESS","verified":True,"entity_id":"900001",
+                "evidence":{"receipt":{"fragment_id":"900001","old_status":"PAUSED"},
+                    "verification":{"verified":True,"source":"independent_private_ads_http",
+                        "fragment_id":"900001","meta_validation_status":"VALIDATED"}}},
+            error_code="", submitted=True,
+        )
+
+        with self.assertRaises(ProvisioningError) as caught:
+            await state.claim_launch_plan("new-launch", values, "new-fingerprint", "same-contract")
+        self.assertEqual(caught.exception.code, "PRIVATE_LAUNCH_EXISTING_INTENT")
+
     async def test_reviewed_parent_read_fix_resumes_same_draft_without_replaying_prefix(self):
         from app.private_ads_launch import DRAFT_PARENT_READ_PREDECESSOR
         self.payload['launch']['execution_mode'] = 'DRAFT'
