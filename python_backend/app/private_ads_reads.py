@@ -116,11 +116,13 @@ class AdsManagerReadCatalog:
         # multi-megabyte bootstrap document for every picker request.
         client = self.client(web, values, reference_read=True)
         draft_pages = name == "pages" and values.get("execution_mode") == "DRAFT"
-        account = await client.account_record(require_active=not reference, pages=name == 'pages' and not draft_pages, reference=reference)
         if draft_pages:
+            # Draft picker rows come from the exact selected Business. They are
+            # metadata only; publish still needs the live ad-account permission read.
             from .private_draft_pages import read_draft_pages
             return await read_draft_pages(web, account=client.account, business=client.business,
                 query=values.get("query", ""))
+        account = await client.account_record(require_active=not reference, pages=name == 'pages', reference=reference)
         if not reference and str(account.get("account_status")) != "1":
             raise fail("ACCOUNT_INACTIVE", "The selected advertising account is not active")
         if name in TARGETING_TYPES and not str(values.get("query") or "").strip():
