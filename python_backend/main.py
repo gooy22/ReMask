@@ -3625,6 +3625,13 @@ async def profile_live_inventory(
             detail=f'LIVE_INVENTORY_FAILED: {exc}',
         ) from exc
 
+@app.get('/api/v1/profile-statuses',dependencies=[Depends(require_key)])
+async def profile_session_statuses():
+    return {
+        'ok': True,
+        'profiles': await store.latest_profile_session_statuses(),
+    }
+
 @app.get('/api/v1/profiles/{profile_id}/provisioning-state',dependencies=[Depends(require_key)])
 async def profile_provisioning_state(profile_id: str):
     clean_profile=str(profile_id or '').strip()
