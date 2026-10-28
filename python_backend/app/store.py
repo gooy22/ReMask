@@ -1151,8 +1151,18 @@ class JobStore:
         with self._connect() as con:
             rows = con.execute(
                 """
-                SELECT i.profile_id,i.status,i.error_code,i.error_message,i.updated_at,
-                       j.created_at AS job_created_at
+                SELECT i.id AS item_id,i.profile_id,i.status,i.error_code,i.error_message,i.updated_at,
+                       j.created_at AS job_created_at,
+                       COALESCE((
+                           SELECT group_concat(
+                               COALESCE(t.error_code,'') || ' ' || COALESCE(t.error_message,''),
+                               ' '
+                           )
+                           FROM job_tasks t
+                           WHERE t.item_id=i.id
+                             AND upper(t.status)='FAILED'
+                             AND (COALESCE(t.error_code,'')<>'' OR COALESCE(t.error_message,'')<>'')
+                       ), '') AS task_errors
                 FROM job_items i
                 JOIN jobs j ON j.id=i.job_id
                 ORDER BY i.updated_at DESC,j.created_at DESC,i.created_at DESC,i.job_id DESC
@@ -1170,33 +1180,47 @@ class JobStore:
             item_status = str(row["status"] or "").strip().upper()
             error_code = str(row["error_code"] or "").strip().upper()
             error_message = str(row["error_message"] or "").strip()
-            search_text = (error_code + " " + error_message).casefold()
+            task_errors = str(row["task_errors"] or "").strip()
+            search_text = (error_code + " " + error_message + " " + task_errors).casefold()
 
             if item_status in {"QUEUED", "RUNNING"}:
                 state = "IN_PROGRESS"
                 message = "Подготовка выполняется."
-            elif error_code == "CHECKPOINT_REQUIRED" or "checkpoint_redirect" in search_text or "/checkpoint/" in search_text:
+            elif item_status == "SUCCESS":
+                state = "ACTIVE"
+                message = "Meta ответила на последнюю задачу."
+            elif (
+                error_code == "CHECKPOINT_REQUIRED"
+                or "checkpoint_required" in search_text
+                or "checkpoint_redirect" in search_text
+                or "/checkpoint/" in search_text
+            ):
                 state = "CHECKPOINT"
                 message = "Meta запросила проверку безопасности."
             elif error_code == "TWO_FACTOR_REQUIRED" or "two_factor_required" in search_text:
                 state = "TWO_FACTOR"
                 message = "Meta запросила двухфакторную проверку."
-            elif error_code in {"SESSION_EXPIRED", "BUSINESS_LOGIN_GATE"} or "loginpage" in search_text:
+            elif (
+                error_code in {"SESSION_EXPIRED", "BUSINESS_LOGIN_GATE"}
+                or "session_expired" in search_text
+                or "business_login_gate" in search_text
+                or "loginpage" in search_text
+            ):
                 state = "LOGIN_REQUIRED"
                 message = "Meta не подтвердила вход."
-            elif error_code == "FACEBOOK_TEMPORARILY_BLOCKED":
+            elif error_code == "FACEBOOK_TEMPORARILY_BLOCKED" or "facebook_temporarily_blocked" in search_text:
                 state = "LIMITED"
                 message = "Meta временно ограничила действия."
-            elif item_status == "SUCCESS" or re.search(
+            elif re.search(
                 r"1373107|2455031|field_exception|too many attempts",
                 search_text,
                 re.IGNORECASE,
             ):
                 state = "ACTIVE"
                 message = (
-                    "Meta ответила, но ограничила последнее действие."
-                    if item_status != "SUCCESS"
-                    else "Meta ответила на последнюю задачу."
+                    "Meta ограничила последнее действие."
+                    if re.search(r"1373107|too many attempts", search_text, re.IGNORECASE)
+                    else "Meta ответила, но последний шаг не выполнен."
                 )
             else:
                 state = "UNVERIFIED"
