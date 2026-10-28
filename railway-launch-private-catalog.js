@@ -1239,8 +1239,19 @@ if(typeof document!=='undefined'&&document.addEventListener){
             currentKey = '';
             loadedKey = '';
             const ids = selectedAccountIds();
-            setButton(ids.length > 1 ? 'Выберите один РК' : 'Загрузить аудитории', true);
-            return originalLoad();
+            const prompt = ids.length > 1 ? 'Выберите один РК' : 'Выберите РК';
+            state.customAudiences = [];
+            state.launchReview = null;
+            for (const id of ['customAudiences', 'excludedCustomAudiences']) {
+                const select = $(id);
+                if (!select) continue;
+                select.innerHTML = '<option value="">' + prompt + '</option>';
+                select.disabled = true;
+            }
+            const status = $('customAudienceStatus');
+            if (status) status.textContent = prompt + ', чтобы загрузить аудитории.';
+            setButton(prompt, true);
+            return;
         }
 
         const changed = currentKey !== key;
