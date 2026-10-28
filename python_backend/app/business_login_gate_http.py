@@ -249,7 +249,8 @@ def _extract_business_login_continuation(
     except Exception:
         return None, "malformed_gate_markup"
     visible_text = re.sub(r"\s+", " ", " ".join(parser.visible_text)).casefold()
-    if any(marker in visible_text for marker in _CHALLENGE_MARKERS):
+    if (any(marker in visible_text for marker in _CHALLENGE_MARKERS)
+            or re.search(r"\bby (?:continuing|clicking continue|logging in),?\s+you agree\b", visible_text)):
         return None, "authentication_challenge"
     if parser.has_credentials:
         return None, "credential_input_present"

@@ -54,6 +54,8 @@ class GateContinuationParserTests(unittest.TestCase):
     def test_refuses_new_consent_and_human_verification(self):
         for notice in ("By continuing, you agree to new terms.",
                        "By clicking continue, you agree to the terms.",
+                       "By continuing you agree to new terms.",
+                       "By logging in, you agree to the new terms.",
                        "Accept the terms to continue.", "Verify you are human.",
                        "Complete the security check.", "CAPTCHA"):
             body = notice + '<a href="/business/loginrequest/fb/">Continue with Facebook</a>'
