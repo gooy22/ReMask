@@ -100,16 +100,40 @@ rm -rf "$ROOT/health"
 printf '%s\n' '{"ok":true,"service":"remask"}' > "$ROOT/health"
 chmod 644 "$ROOT/health"
 
-chown -R www-data:www-data "$DATA_DIR" 2>/dev/null || true
-find "$DATA_DIR" -type d -exec chmod 700 {} +
-find "$DATA_DIR" -type f -exec chmod 600 {} +
-# Remove only abandoned atomic temp files, never profiles, jobs, backups or media.
-find "$DATA_DIR" -type f -name '*.tmp-*' -mmin +1440 -delete
-# Migrate legacy credentials before opening the service. An invalid key/data aborts startup.
-php -r 'require $argv[1]."/settings.php";require $argv[1]."/classes/AccountStoreFactory.php";$store=AccountStoreFactory::create(ACCOUNTSFILENAME);$profiles=$store->deserialize();if ($store instanceof FbAccountSerializer) $store->ensureEncrypted();echo "[profile-storage] ready count=".count($store->deserialize())." encrypted=1 key_encoding=".CredentialVault::environmentEncoding()."\n";' "$ROOT"
-chown -R www-data:www-data "$DATA_DIR"
-chmod 700 "$REMASK_PHP_SESSION_DIR" 2>/dev/null || true
-chown www-data:www-data "$REMASK_PHP_SESSION_DIR" 2>/dev/null || true
+# Persistent files were normalized by the previous live runtime. On each start,
+# hand only active storage roots and top-level state files to www-data. A recursive
+# chown/chmod of the whole volume here delays Apache and every health check.
+STORAGE_OWNERSHIP_PATHS=(
+  "$DATA_DIR"
+  "$REMASK_JOB_STORAGE_DIR"
+  "$REMASK_BUNDLE_STORAGE_DIR"
+  "$REMASK_META_CACHE_DIR"
+  "$REMASK_JOB_MEDIA_DIR"
+  "$REMASK_MEDIA_LIBRARY_DIR"
+  "$REMASK_CREATIVE_PRESET_DIR"
+  "$REMASK_PYTHON_STATE_DIR"
+  "$(dirname "$REMASK_JOB_DB")"
+  "$REMASK_PHP_SESSION_DIR"
+  "$REMASK_ACCOUNTS_FILE"
+  "$REMASK_META_USAGE_FILE"
+  "$DATA_DIR/bundles.json"
+  "$REMASK_JOB_DB"
+)
+for path in "${STORAGE_OWNERSHIP_PATHS[@]}"; do
+  [ -e "$path" ] || continue
+  chown www-data:www-data -- "$path"
+  if [ -d "$path" ]; then
+    chmod 700 -- "$path"
+  else
+    chmod 600 -- "$path"
+  fi
+done
+
+# Run the one-time account-store migration as its storage owner. This keeps
+# atomic replacements owned by www-data and removes the second volume-wide scan.
+runuser -u www-data -- php -r 'require $argv[1]."/settings.php";require $argv[1]."/classes/AccountStoreFactory.php";$store=AccountStoreFactory::create(ACCOUNTSFILENAME);$profiles=$store->deserialize();if ($store instanceof FbAccountSerializer) $store->ensureEncrypted();echo "[profile-storage] ready count=".count($store->deserialize())." encrypted=1 key_encoding=".CredentialVault::environmentEncoding()."\n";' "$ROOT"
+chmod 700 "$REMASK_PHP_SESSION_DIR"
+chown www-data:www-data "$REMASK_PHP_SESSION_DIR"
 
 # Persist PHP login sessions across Railway container replacements. Without
 # this, an open Workspace page keeps its browser cookie but the server-side
@@ -253,6 +277,10 @@ a2enconf remask-servername 2>/dev/null || true
 sed -ri "s#DocumentRoot .*#DocumentRoot ${ROOT}#" /etc/apache2/sites-available/000-default.conf
 sed -ri "s/<VirtualHost \*:[0-9]+>/<VirtualHost *:80>/" /etc/apache2/sites-available/000-default.conf
 
+
+# Remove abandoned atomic temp files outside the readiness path. A slow volume
+# scan must never keep the web server from opening its port after deployment.
+(find "$DATA_DIR" -xdev -type f -name '*.tmp-*' -mmin +1440 -delete) >/dev/null 2>&1 &
 
 exec apache2-foreground 2> >(
   while IFS= read -r line; do

@@ -123,6 +123,31 @@ class DraftPageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['execution_mode'], 'DRAFT')
         self.web.graphql.assert_not_awaited()
 
+    async def test_picker_skips_cdn_module_refresh_and_restores_flag(self):
+        observed = []
+
+        async def read_pages(web, business):
+            observed.append(web.defer_module_refresh)
+            return ([{'id':'555555','name':'Page','business_id':'222222'}], True)
+
+        with patch('app.private_business_fan_page_create.read_pages',
+                new=AsyncMock(side_effect=read_pages)):
+            await read_draft_pages(self.web,account='111111',business='222222')
+        self.assertEqual(observed, [True])
+        self.assertFalse(hasattr(self.web, 'defer_module_refresh'))
+
+        self.web.defer_module_refresh = False
+
+        async def fail_read(web, business):
+            self.assertTrue(web.defer_module_refresh)
+            raise RuntimeError('read failed')
+
+        with patch('app.private_business_fan_page_create.read_pages',
+                new=AsyncMock(side_effect=fail_read)):
+            with self.assertRaisesRegex(RuntimeError, 'read failed'):
+                await read_draft_pages(self.web,account='111111',business='222222')
+        self.assertFalse(self.web.defer_module_refresh)
+
     async def test_incomplete_picker_never_uses_partial_or_cached_business_pages(self):
         with patch('app.private_business_fan_page_create.read_pages',
                 new=AsyncMock(return_value=([{'id':'555555'}],False))):
