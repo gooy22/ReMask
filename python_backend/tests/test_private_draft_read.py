@@ -82,12 +82,14 @@ class DraftReadDiagnosticTests(unittest.IsolatedAsyncioTestCase):
 
 
 class DraftReadApiTests(unittest.IsolatedAsyncioTestCase):
-    async def test_route_uses_only_original_task_payload_and_saved_profile(self):
+    async def test_route_uses_exact_original_task_payload_and_saved_profile(self):
         import httpx
         import main as api
         original = {'launch_key':'original-key','business_id':'222222'}
+        other = {'launch_key':'different-rk'}
         view = {'status':'FAILED','items':[{'profile_id':'4','tasks':[
-            {'action':'private_launch','payload':original}]}]}
+            {'id':'b'*32,'action':'private_launch','payload':original},
+            {'id':'c'*32,'action':'private_launch','payload':other}]}]}
         context, session = object(), object()
         session_scope = SimpleNamespace(__aenter__=AsyncMock(return_value=session), __aexit__=AsyncMock(return_value=False))
         class Scope:
@@ -103,12 +105,30 @@ class DraftReadApiTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(api.store,'create_job',new=AsyncMock()) as create:
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api.app),base_url='http://fixture',
                     headers={'X-Remask-Worker-Key':'fixture-key'}) as client:
-                response=await client.post('/api/v1/profiles/4/private-draft-read',json={'job_id':'a'*32})
+                response=await client.post('/api/v1/profiles/4/private-draft-read',
+                    json={'job_id':'a'*32,'task_id':'b'*32})
         self.assertEqual(response.status_code,200)
         resolve.assert_awaited_once_with('4')
         profile_session.assert_called_once_with(context)
         self.assertIs(read.await_args.kwargs['payload'], original)
         self.assertIs(read.await_args.kwargs['session'], session)
+        create.assert_not_awaited()
+
+    async def test_multiple_profile_launch_tasks_require_an_exact_task_id(self):
+        import httpx
+        import main as api
+        view = {'status':'FAILED','items':[{'profile_id':'4','tasks':[
+            {'id':'b'*32,'action':'private_launch','payload':{}},
+            {'id':'c'*32,'action':'private_launch','payload':{}}]}]}
+        with patch.object(api,'API_KEY','fixture-key'), \
+                patch.object(api.store,'job_view',new=AsyncMock(return_value=view)), \
+                patch.object(api,'_resolve_read_profile',new=AsyncMock()) as resolve, \
+                patch.object(api.store,'create_job',new=AsyncMock()) as create:
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api.app),base_url='http://fixture',
+                    headers={'X-Remask-Worker-Key':'fixture-key'}) as client:
+                response=await client.post('/api/v1/profiles/4/private-draft-read',json={'job_id':'a'*32})
+        self.assertEqual(response.status_code,409)
+        resolve.assert_not_awaited()
         create.assert_not_awaited()
 
     async def test_api_key_required_before_job_or_context_lookup(self):
