@@ -4259,7 +4259,10 @@ async def retry_failed(job_id: str, consent: dict | None = Body(default=None)) -
     status_blocked_profiles=_view_failed_profiles_with_known_session_blocks(
         current_view, profile_statuses
     )
-    _auth_ready,auth_blocked=await _partition_auth_retry_profiles(auth_retry_profiles)
+    if auth_retry_profiles:
+        _auth_ready,auth_blocked=await _partition_auth_retry_profiles(auth_retry_profiles)
+    else:
+        auth_blocked={}
     excluded_profiles=set(auth_blocked) | status_blocked_profiles | checkpoint_profiles
 
     fp_profiles=_view_fan_page_retry_profile_ids(current_view)
