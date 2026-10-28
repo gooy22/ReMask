@@ -5,24 +5,29 @@ const source = fs.readFileSync('railway-advertising-tools.js', 'utf8');
 const estimate = source.slice(source.indexOf('    async function estimate('), source.indexOf('    function changed('));
 function fixture(targets, failure) {
   const scheduled = [];
+  const renderedErrors=[];
   let reads = 0;
   const current = {fingerprint:'fixture',targets,spec:{targeting:{geo_locations:{countries:['UA']}}}};
   const c = {document:{hidden:false,createElement:()=>({})},creative:false,
     snapshot:()=>current,blockedTargets:new Set(),lastFingerprint:'',generation:0,
     controller:null,needsRefresh:true,lastReadAt:0,timer:null,AbortController,Date,JSON,
-    requestSpec:()=>({}),status:{},results:{querySelector:()=>null,appendChild:()=>{}},render:()=>{},
+    requestSpec:()=>({}),status:{},results:{querySelector:()=>null,appendChild:node=>renderedErrors.push(node)},render:()=>{},
     read:async()=>{reads++;if(failure)throw typeof failure==='string'?new Error(failure):failure;return {estimate_ready:false};},
     setTimeout:fn=>{const task={fn};scheduled.push(task);return task;},
     clearTimeout:()=>{},invalidate:()=>{c.generation++;c.lastFingerprint='';},};
   vm.createContext(c);vm.runInContext(estimate,c);
-  return {c,scheduled,reads:()=>reads};
+  return {c,scheduled,reads:()=>reads,renderedErrors};
 }
 (async()=>{
   const target={profile:'28',account_id:'123456789'};
-  for(const code of ['CHECKPOINT_REQUIRED','SESSION_EXPIRED','BUSINESS_LOGIN_GATE','PRIVATE_ADS_DRAFT_BOOTSTRAP_SCOPE_UNVERIFIED']) {
+  for(const code of ['CHECKPOINT_REQUIRED','SESSION_EXPIRED','BUSINESS_LOGIN_GATE','TWO_FACTOR_REQUIRED','PRIVATE_ADS_DRAFT_BOOTSTRAP_SCOPE_UNVERIFIED']) {
     const f=fixture([target],code);await f.c.estimate();
     assert.equal(f.reads(),1);assert.equal(f.scheduled.length,0);assert.equal(f.c.needsRefresh,false);
-    if(code==='BUSINESS_LOGIN_GATE')assert.match(f.c.status.textContent,/требует входа/);
+    assert.doesNotMatch(f.c.status.textContent,new RegExp(code),'the status must not expose Meta error codes');
+    assert.doesNotMatch(f.renderedErrors[0].textContent,new RegExp(code),'the per-RK message must not expose Meta error codes');
+    if(code==='CHECKPOINT_REQUIRED')assert.match(f.c.status.textContent,/Чекпоинт Meta.*Новые проверки запрещены/);
+    if(code==='BUSINESS_LOGIN_GATE'||code==='SESSION_EXPIRED')assert.match(f.c.status.textContent,/Meta не подтвердила вход/);
+    if(code==='TWO_FACTOR_REQUIRED')assert.match(f.c.status.textContent,/Meta запросила подтверждение входа/);
     await f.c.estimate(true);assert.equal(f.reads(),1); // focus/change cannot reopen the gated scope
   }
   for(const failure of ['HTTP_UNAVAILABLE',null]) {
