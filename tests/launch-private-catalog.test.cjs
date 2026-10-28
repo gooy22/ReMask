@@ -59,7 +59,7 @@ assert.ok(completionSource.includes('status.textContent=remaskPrivatePageReadFai
   const errorCell=controls.jobItems.children[0].children[10];
   assert.match(errorCell.textContent,/Не удалось завершить шаг/);
   assert.doesNotMatch(errorCell.textContent,/^READ_RELATION_MISMATCH/);
-  const errorDetails=errorCell.children.find(child=>child.tag==='details');
+  const errorDetails=errorCell.children.find(child=>child.className==='remask-private-technical');
   assert.ok(errorDetails,'machine details are available on demand');
   assert.equal(Boolean(errorDetails.open),false,'machine details stay collapsed');
   assert.equal(controls.jobItems.children[1].children[5].children.some(child=>
