@@ -2696,12 +2696,15 @@ async function pythonWorkerPoll() {
           return item && String(item.status || '').toUpperCase() === 'FAILED';
         })
         .map(function(item) {
-          const retryLabel = item.retryable === true
-            ? 'RETRYABLE'
-            : 'NO AUTO-RETRY';
-          return [item.profile_id, item.error_code, retryLabel, item.error_message]
-            .filter(Boolean)
-            .join(': ');
+          const profileId = String(item.profile_id || '').trim();
+          const retryLabel = pythonWorkerItemCanRetry(item)
+            ? 'Повтор доступен.'
+            : 'Повтор недоступен.';
+          return [
+            profileId ? 'Профиль ' + profileId + ':' : '',
+            pythonWorkerUserFailureText(item),
+            retryLabel
+          ].filter(Boolean).join(' ');
         });
 
       pythonWorkerSetText(
