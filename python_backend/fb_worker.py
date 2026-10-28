@@ -861,6 +861,7 @@ class FacebookWebSession:
         force: bool = False,
         allow_business_loginpage_probe: bool = False,
         require_actor_match: bool = True,
+        prefer_business_home: bool = False,
     ) -> FacebookBootstrap:
 
         if (allow_business_loginpage_probe and self._bootstrap is not None
@@ -910,10 +911,14 @@ class FacebookWebSession:
                         "A profile-bound Business operation requires the selected c_user actor."
                     )
 
-            # Prefer the Business home bootstrap used by the working private
-            # asset-read path. Only a confirmed Business loginpage below falls
-            # back to independent profile documents; exact asset queries still
-            # bind their actor and IDs to this selected profile.
+                if not prefer_business_home:
+                    return await self._verified_profile_bootstrap(
+                        session, expected_actor, [], require_actor_match=require_actor_match,
+                    )
+
+            # Prefer Business home only for the exact READ_RK route whose
+            # successful production path starts there. Other scoped operations
+            # retain their independent profile-page identity bootstrap.
             token_patterns = list(self.FB_DTSG_PATTERNS)
 
             bootstrap_urls = (
@@ -1848,9 +1853,12 @@ class FacebookWebSession:
                 # while still providing the usable token needed for these reads.
                 # Changes still require the selected c_user to be verified.
                 scoped_read_only = scoped_probe in {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS", "PRIVATE_RK_INVENTORY"}
+                prefer_business_home = scoped_probe == "READ_RK"
                 bootstrap = await self.bootstrap(
+                    force=prefer_business_home,
                     allow_business_loginpage_probe=True,
                     require_actor_match=not scoped_read_only,
+                    prefer_business_home=prefer_business_home,
                 )
                 current_actor = str(self.profile.cookies.get("c_user") or "").strip()
                 if not current_actor.isdigit() or bootstrap.actor_id != current_actor:
