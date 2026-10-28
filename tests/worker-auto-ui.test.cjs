@@ -15,6 +15,12 @@ const source = fs.readFileSync('railway-python-worker-ui.js', 'utf8');
   vm.createContext(scope);
   const helper=source.indexOf('function pythonWorkerDraftValidationMessages(');
   vm.runInContext(source.slice(helper,source.indexOf('\nfunction pythonWorkerEl',helper)),scope);
+  const auth=source.indexOf('function pythonWorkerIsProfileAuthBlockedCode(');
+  vm.runInContext(source.slice(auth,source.indexOf('\nasync function pythonWorkerProfilePreflight',auth)),scope);
+  const retry=source.indexOf('function pythonWorkerItemCanRetry(');
+  vm.runInContext(source.slice(retry,source.indexOf('\nfunction pythonWorkerFailureDetails',retry)),scope);
+  const failures=source.indexOf('function pythonWorkerItemErrorCode(');
+  vm.runInContext(source.slice(failures,source.indexOf('\nfunction pythonWorkerPrepareStatusLabel',failures)),scope);
   const summary=source.indexOf('function pythonWorkerAdvertisingSummary(');
   const begin=summary<0?source.indexOf('async function pythonWorkerPoll()'):summary;
   vm.runInContext(source.slice(begin,source.indexOf('\nwindow.pythonWorkerStartBusiness',begin)),scope);
@@ -29,19 +35,19 @@ const source = fs.readFileSync('railway-python-worker-ui.js', 'utf8');
     assert.doesNotMatch(texts.pythonPwStatus,/BM|Business Manager|Часть RK создана/);
     if(status==='SUCCESS'){
       assert.match(texts.pythonPwStatus,/Чтение сохранённого черновика завершено/);
-      assert.match(texts.pythonPwStatus,/1359188/);
+      assert.match(texts.pythonPwStatus,/Объявление: Meta нашла ошибки проверки/);
       assert.match(texts.pythonPwStatus,/Публикация и редактор Meta не подтверждены/);
       assert.equal(scope.pythonWorkerUiState.jobId,'');
     }else{
       assert.match(texts.pythonPwStatus,/Рекламн|рекламн/);
-      assert.match(texts.pythonPwStatus,/PRIVATE_ADS_DRAFT_VALIDATION_ERRORS/);
+      assert.match(texts.pythonPwStatus,/Meta нашла ошибки в рекламном черновике/);
       assert.equal(storage.remask_python_worker_job_v1,'retained-job');
     }
   }
   const task=result=>[{tasks:[{action:'private_launch',result}]}];
   assert.match(scope.pythonWorkerAdvertisingSummary(task({execution_mode:'DRAFT_OBJECTIVE_REPAIR',
     campaign_correction_verified:true,all_fragments_validated:false,
-    fragment_reads:[{level:'ad',validation_status:'HAS_ERRORS',active_error_diagnostic:{codes:[{value:1359188}]}}]}),'SUCCESS'),/1359188/);
+    fragment_reads:[{level:'ad',validation_status:'HAS_ERRORS',active_error_diagnostic:{codes:[{value:1359188}]}}]}),'SUCCESS'),/Объявление: Meta нашла ошибки проверки/);
   assert.match(scope.pythonWorkerAdvertisingSummary(task({draft_verified:true,published:false}),'SUCCESS'),/не опубликована/);
   assert.match(scope.pythonWorkerAdvertisingSummary(task({verified:true}),'SUCCESS'),/независимо подтверждены/);
   assert.match(scope.pythonWorkerAdvertisingSummary(task({}),'SUCCESS'),/Полное подтверждение рекламы отсутствует/);
@@ -59,11 +65,11 @@ const source = fs.readFileSync('railway-python-worker-ui.js', 'utf8');
     object_reads:[{level:'campaign',available:false,diagnostic:{code:10}}]};
   const messages=scope.pythonWorkerDraftValidationMessages(result);
   assert.equal(messages.length,3);
-  assert.match(messages[0],/Группа объявлений.*1815857.*bid_amount/);
-  assert.match(messages[1],/Объявление.*1815857.*bid_amount/);
-  assert.match(messages[2],/не доказывает их отсутствие или публикацию/);
-  assert.equal(messages.join('').includes('SECRET'),false);
-  assert.equal(messages[0].split('1815857').length,2);
+  assert.match(messages[0],/Группа объявлений: Meta нашла ошибки проверки/);
+  assert.match(messages[1],/Объявление: Meta нашла ошибки проверки/);
+  assert.match(messages[2],/Наличие и публикация не подтверждены/);
+  assert.equal(/1815857|bid_amount|SECRET/.test(messages.join(' ')),false);
+  assert.equal(messages[0].includes('1815857'),false);
   assert.equal(scope.pythonWorkerDraftValidationMessages({}).length,0);
   assert.equal(scope.pythonWorkerDraftValidationMessages({fragment_reads:[
     {level:'__proto__',validation_status:'HAS_ERRORS'}]}).length,0);
@@ -667,6 +673,12 @@ vm.createContext(sandbox); vm.runInContext(source.slice(start,end), sandbox);
     pythonWorkerSelectionRefresh(){},pythonWorkerSchedulePoll(){throw Error('Terminal job cannot repoll');},
     async pythonWorkerRefreshSuccessfulProfiles(){return [];},async pythonWorkerBridge(){return {job};}};
   vm.createContext(scope);
+  const auth=source.indexOf('function pythonWorkerIsProfileAuthBlockedCode(');
+  vm.runInContext(source.slice(auth,source.indexOf('\nasync function pythonWorkerProfilePreflight',auth)),scope);
+  const retry=source.indexOf('function pythonWorkerItemCanRetry(');
+  vm.runInContext(source.slice(retry,source.indexOf('\nfunction pythonWorkerFailureDetails',retry)),scope);
+  const failures=source.indexOf('function pythonWorkerItemErrorCode(');
+  vm.runInContext(source.slice(failures,source.indexOf('\nfunction pythonWorkerPrepareStatusLabel',failures)),scope);
   const summary=source.indexOf('function pythonWorkerAdvertisingSummary(');
   vm.runInContext(source.slice(summary,source.indexOf('\nwindow.pythonWorkerStartBusiness',summary)),scope);
   for(const status of ['FAILED','PARTIAL','SUCCESS']){

@@ -281,17 +281,10 @@ function pythonWorkerDraftValidationMessages(result) {
   for(const row of Array.isArray(result?.fragment_reads)?result.fragment_reads:[]){
     if(!row||!Object.prototype.hasOwnProperty.call(labels,row.level))continue;
     if(row.validation_status!=='HAS_ERRORS'&&row.active_errors_present!==true)continue;
-    const diagnostic=row.active_error_diagnostic||{};
-    const codes=(Array.isArray(diagnostic.codes)?diagnostic.codes:[])
-      .map(code=>code?.value).filter(value=>Number.isSafeInteger(value)&&value>=0&&value<=2147483647);
-    const fields=(Array.isArray(diagnostic.field_names)?diagnostic.field_names:[])
-      .filter(value=>typeof value==='string'&&/^[a-z][a-z0-9_]{0,100}$/.test(value));
-    messages.push(labels[row.level]+': Meta вернула ошибки валидации.'+
-      (codes.length?' Коды: '+Array.from(new Set(codes)).join(', ')+'.':'')+
-      (fields.length?' Поля: '+Array.from(new Set(fields)).join(', ')+'.':''));
+    messages.push(labels[row.level]+': Meta нашла ошибки проверки.');
   }
   if(Array.isArray(result?.object_reads)&&result.object_reads.some(row=>row?.available===false)){
-    messages.push('Независимое чтение объектов недоступно. Это не доказывает их отсутствие или публикацию.');
+    messages.push('Не удалось отдельно проверить рекламные объекты. Наличие и публикация не подтверждены.');
   }
   return messages;
 }
@@ -982,6 +975,9 @@ function pythonWorkerUserFailureText(item) {
   const combined = (code + ' ' + message).toLowerCase();
   if (code === 'CHECKPOINT_REQUIRED' || /checkpoint_redirect|facebook\.com\/checkpoint\//i.test(message)) {
     return 'Facebook запросил проверку безопасности. Подготовка остановлена.';
+  }
+  if (code === 'PRIVATE_ADS_DRAFT_VALIDATION_ERRORS') {
+    return 'Meta нашла ошибки в рекламном черновике. Проверьте кампанию, группу и объявление.';
   }
   if (code === 'TWO_FACTOR_REQUIRED') {
     return 'Meta запросила двухфакторную проверку. Подготовка остановлена.';
@@ -2696,12 +2692,15 @@ async function pythonWorkerPoll() {
           return item && String(item.status || '').toUpperCase() === 'FAILED';
         })
         .map(function(item) {
-          const retryLabel = item.retryable === true
-            ? 'RETRYABLE'
-            : 'NO AUTO-RETRY';
-          return [item.profile_id, item.error_code, retryLabel, item.error_message]
-            .filter(Boolean)
-            .join(': ');
+          const profileId = String(item.profile_id || '').trim();
+          const retryLabel = pythonWorkerItemCanRetry(item)
+            ? 'Повтор доступен.'
+            : 'Повтор недоступен.';
+          return [
+            profileId ? 'Профиль ' + profileId + ':' : '',
+            pythonWorkerUserFailureText(item),
+            retryLabel
+          ].filter(Boolean).join(' ');
         });
 
       pythonWorkerSetText(
