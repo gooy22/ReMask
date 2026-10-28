@@ -2773,7 +2773,7 @@ window.pythonWorkerStartBusiness = pythonWorkerStartBusiness;
 
 async function pythonWorkerRetryFailed(options) {
   // Refresh the read-only local status map before deciding whether retries are safe.
-  await pythonWorkerLoadProfileStatuses();
+  if (typeof pythonWorkerLoadProfileStatuses === 'function') await pythonWorkerLoadProfileStatuses();
   const batchIds = Array.isArray(pythonWorkerUiState.batchJobIds)
     ? pythonWorkerUiState.batchJobIds.slice()
     : [];
