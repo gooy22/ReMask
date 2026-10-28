@@ -194,7 +194,11 @@ class ReadRouteAuthRecoveryTests(unittest.IsolatedAsyncioTestCase):
         namespace = {'asyncio':asyncio, 'HTTPException':_RouteHTTPError,
             'ProvisioningError':ProvisioningError, 'ProfileContextError':type('ProfileContextError',(Exception,),{}),
             'read_with_saved_auth_refresh':read_with_saved_auth_refresh, 'pool':pool,
-            'store':SimpleNamespace(job_view=AsyncMock(return_value=view)),
+            'store':SimpleNamespace(
+                job_view=AsyncMock(return_value=view),
+                record_terminal_profile_status=AsyncMock(return_value=True),
+                record_terminal_checkpoint=AsyncMock(return_value=True),
+            ),
             '_resolve_read_profile':AsyncMock(return_value=context), 'ProfileSession':Scope,
             'measure_phase':lambda _name: nullcontext(), 'Body':lambda value: value}
         read = AsyncMock()
@@ -243,6 +247,9 @@ class ReadRouteAuthRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(caught.exception.status_code, 409)
         self.assertEqual(caught.exception.detail['code'], 'PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE')
         self.assertEqual(read.await_count, 1)
+        ns['store'].record_terminal_profile_status.assert_awaited_once_with(
+            '4', 'BUSINESS_LOGIN_GATE'
+        )
 
     async def test_pages_read_recovers_raw_auth_error_with_same_account_scope(self):
         _, _, events, _, _, resources, ns, modules = self.fixture()
