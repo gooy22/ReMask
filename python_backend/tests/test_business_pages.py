@@ -38,7 +38,20 @@ class TwoBundleMeta:
         self.lose_page = False
         self.page_read_available = True
         self.calls = []
+        self._business_page_create_prechecks = set()
         self.fetch_text = AsyncMock(side_effect=AssertionError('WWW/HTML discovery must not run'))
+
+    def mark_business_page_create_precheck_verified(self, business, actor, name, bio, categories):
+        key = (business, actor, name, bio, tuple(categories or []))
+        if (business != BM2 or actor != UID or not name or bio != ''
+                or list(categories or []) != ['242822000000000']):
+            return False
+        self._business_page_create_prechecks.add(key)
+        return True
+
+    def has_fresh_business_page_create_precheck(self, business, actor, name, bio, categories):
+        key = (business, actor, name, bio, tuple(categories or []))
+        return key in self._business_page_create_prechecks
 
     async def graphql(self, doc, variables, *, friendly_name, before_submit=None, **kwargs):
         self.calls.append((friendly_name, copy.deepcopy(variables)))

@@ -155,6 +155,7 @@ class FacebookWebSession:
         self._bootstrap: FacebookBootstrap | None = None
         self._profile_session_identity_verified = False
         self._business_read_proofs: dict[tuple[str, str, str, str, str], float] = {}
+        self._business_page_create_prechecks: dict[tuple[str, str, str, str, str], float] = {}
         self._graphql_request_counter = 0
         self._previous_recovery_attempted = False
 
@@ -218,6 +219,7 @@ class FacebookWebSession:
         self._bootstrap = None
         self._profile_session_identity_verified = False
         self._business_read_proofs.clear()
+        self._business_page_create_prechecks.clear()
 
     def begin_business_read_verification(
         self, operation: str, business_id: str = "", resource_id: str = "", user_id: str = "",
@@ -275,6 +277,50 @@ class FacebookWebSession:
         bootstrap_actor = str(getattr(self._bootstrap, "actor_id", "") or "").strip()
         return (verified_at is not None and actor.isdigit() and bootstrap_actor == actor
                 and 0 <= time.monotonic() - verified_at <= 300)
+
+    def _business_page_create_precheck_key(
+        self, business_id: str, actor_id: str, page_name: str, bio: str,
+        category_ids: Any,
+    ) -> tuple[str, str, str, str, str] | None:
+        business = str(business_id or "").strip()
+        actor = str(actor_id or "").strip()
+        name = str(page_name or "").strip()
+        description = str(bio or "")
+        if (not business.isdigit() or not actor.isdigit() or not name or len(name) > 120
+                or len(description) > 255 or not isinstance(category_ids, list)
+                or not category_ids):
+            return None
+        categories = [str(value or "").strip() for value in category_ids]
+        if (any(not re.fullmatch(r"\d{5,30}", value) for value in categories)
+                or len(set(categories)) != len(categories)):
+            return None
+        return business, actor, name, description, ",".join(sorted(categories))
+
+    def mark_business_page_create_precheck_verified(
+        self, business_id: str, actor_id: str, page_name: str, bio: str, category_ids: Any,
+    ) -> bool:
+        """Record fresh exact-Business reads bound to this Page request."""
+        key = self._business_page_create_precheck_key(
+            business_id, actor_id, page_name, bio, category_ids,
+        )
+        selected_actor = str(self.profile.cookies.get("c_user") or "").strip()
+        bootstrap_actor = str(getattr(self._bootstrap, "actor_id", "") or "").strip()
+        if key is None or key[1] != selected_actor or bootstrap_actor != key[1]:
+            return False
+        self._business_page_create_prechecks[key] = time.monotonic()
+        return True
+
+    def has_fresh_business_page_create_precheck(
+        self, business_id: str, actor_id: str, page_name: str, bio: str, category_ids: Any,
+    ) -> bool:
+        key = self._business_page_create_precheck_key(
+            business_id, actor_id, page_name, bio, category_ids,
+        )
+        selected_actor = str(self.profile.cookies.get("c_user") or "").strip()
+        bootstrap_actor = str(getattr(self._bootstrap, "actor_id", "") or "").strip()
+        verified_at = self._business_page_create_prechecks.get(key) if key is not None else None
+        return (key is not None and key[1] == selected_actor and bootstrap_actor == key[1]
+                and verified_at is not None and 0 <= time.monotonic() - verified_at <= 90)
 
     # ------------------------------------------------------------------
     # Proxy
@@ -1155,6 +1201,7 @@ class FacebookWebSession:
         self._bootstrap = None
         self._profile_session_identity_verified = False
         self._business_read_proofs.clear()
+        self._business_page_create_prechecks.clear()
         self._reviewed_module_ids = {}
 
     async def refresh_reviewed_modules(self, document: str, final_url: str) -> None:
@@ -1342,6 +1389,7 @@ class FacebookWebSession:
     async def _business_bootstrap(
         self, bootstrap: FacebookBootstrap, *, business_id: str = "",
         business_create: bool = False, business_loginpage_probe: str = "",
+        business_page_create_prechecked: bool = False,
     ) -> FacebookBootstrap:
         """Confirm Business auth using bounded, operation-scoped surfaces."""
         if (business_loginpage_probe in {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS", "PRIVATE_RK_INVENTORY",
@@ -1399,11 +1447,16 @@ class FacebookWebSession:
                     parts.hostname == "business.facebook.com"
                     and parts.path.lower().rstrip("/") == "/business/loginpage"
                 )
+                page_read_probe = business_loginpage_probe in {"READ_FP", "FP_CATEGORY", "FP_PRECHECK"}
+                page_create_probe = (
+                    business_loginpage_probe == "CREATE_FP"
+                    and business_page_create_prechecked
+                )
                 if (business_loginpage and status < 400
-                        and business_loginpage_probe in {
+                        and (business_loginpage_probe in {
                             "READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS", "PRIVATE_RK_INVENTORY",
                             "CREATE_BM", "CREATE_RK", "CLAIM", "ASSIGN",
-                        }):
+                        } or page_read_probe or page_create_probe)):
                     expected_actor = str(self.profile.cookies.get("c_user") or "").strip()
                     if expected_actor.isdigit() and expected_actor == bootstrap.actor_id:
                         # Business loginpage can clear auth cookies before
@@ -1919,7 +1972,7 @@ class FacebookWebSession:
         private_inventory_query_contract: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         """Retry only allowlisted inventory reads using verified same-actor snapshots."""
-        allowed_reads = {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS", "PRIVATE_RK_INVENTORY"}
+        allowed_reads = {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS", "PRIVATE_RK_INVENTORY", "READ_FP", "FP_CATEGORY", "FP_PRECHECK"}
         if business_loginpage_probe not in allowed_reads:
             return None
         if self._previous_recovery_attempted:
@@ -2076,18 +2129,33 @@ class FacebookWebSession:
             read_timeout_seconds=read_timeout_seconds,
             private_inventory_query_contract=private_inventory_query_contract,
         )
+        page_create_prechecked = False
         try:
             if scoped_probe:
-                # Exact read-only asset contracts stay pinned to their requested
-                # BM/RK/Page IDs. Generic profile pages can report another actor
-                # while still providing the usable token needed for these reads.
-                # Changes still require the selected c_user to be verified.
-                scoped_read_only = scoped_probe in {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS", "PRIVATE_RK_INVENTORY"}
+                # Exact asset queries stay pinned to their requested BM/RK/Page IDs.
+                # Generic profile markup can misreport the actor while the exact
+                # Business response still decides access. Page CREATE additionally
+                # needs a fresh same-session proof from its exact read prechecks.
+                scoped_read_only = scoped_probe in {
+                    "READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS",
+                    "PRIVATE_RK_INVENTORY", "READ_FP", "FP_CATEGORY", "FP_PRECHECK",
+                }
+                page_input = variables.get("input") if scoped_probe == "CREATE_FP" else None
+                page_create_prechecked = (
+                    isinstance(page_input, dict)
+                    and self.has_fresh_business_page_create_precheck(
+                        business_context_id,
+                        str(self.profile.cookies.get("c_user") or ""),
+                        page_input.get("name"),
+                        page_input.get("bio"),
+                        page_input.get("categories"),
+                    )
+                )
                 prefer_business_home = scoped_probe == "READ_RK"
                 bootstrap = await self.bootstrap(
                     force=prefer_business_home,
                     allow_business_loginpage_probe=True,
-                    require_actor_match=not scoped_read_only,
+                    require_actor_match=not (scoped_read_only or page_create_prechecked),
                     prefer_business_home=prefer_business_home,
                 )
                 current_actor = str(self.profile.cookies.get("c_user") or "").strip()
@@ -2124,9 +2192,11 @@ class FacebookWebSession:
                     bootstrap, business_id=next(iter(scoped_ids), ""),
                     business_create=friendly_name == "useBusinessCreationMutationMutation",
                     business_loginpage_probe=scoped_probe,
+                    business_page_create_prechecked=page_create_prechecked,
                 )
         except AuthenticationError as exc:
-            if ((scoped_probe in {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS"}
+            if ((scoped_probe in {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS",
+                    "READ_FP", "FP_CATEGORY", "FP_PRECHECK"}
                     and before_submit is None and multipart_files is None)
                     or (scoped_probe == "PRIVATE_RK_INVENTORY" and callable(before_submit)
                         and multipart_files is None)) and (
@@ -2399,7 +2469,8 @@ class FacebookWebSession:
                 exc.request_may_have_been_sent = request_may_have_been_sent
             if not hasattr(exc, "transport_stage"):
                 exc.transport_stage = transport_stage
-            if ((scoped_probe in {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS"}
+            if ((scoped_probe in {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS",
+                    "READ_FP", "FP_CATEGORY", "FP_PRECHECK"}
                     and before_submit is None and multipart_files is None)
                     or (scoped_probe == "PRIVATE_RK_INVENTORY" and callable(before_submit)
                         and multipart_files is None)) and (

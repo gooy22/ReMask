@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from app.business_fan_page_contracts import command, execute
-from fb_worker import FacebookBootstrap, FacebookWebSession, RemoteRequestError, WebProfile
+from fb_worker import AuthenticationError, FacebookBootstrap, FacebookWebSession, RemoteRequestError, WebProfile
 
 BUSINESS = "1451903470239662"
 ACTOR = "61594946647826"
@@ -83,6 +83,64 @@ class BusinessPageLoginpageProbeTests(unittest.TestCase):
                 business_context_id=BUSINESS, multipart_files=None,
                 read_timeout_seconds=30,
             )
+
+
+class BusinessPageBootstrapProofTests(unittest.IsolatedAsyncioTestCase):
+    def make_web(self):
+        web = FacebookWebSession(WebProfile(
+            "15", {"c_user": ACTOR, "xs": "fixture-xs"}, None, "fixture-UA",
+        ))
+        bootstrap = FacebookBootstrap(
+            fb_dtsg="fixture-token", actor_id=ACTOR,
+            source_url="https://www.facebook.com/me", profile_actor_verified=False,
+        )
+        web._bootstrap = bootstrap
+
+        class CookieSession:
+            def facebook_cookie_snapshot(self):
+                return {"c_user": ACTOR, "xs": "fixture-xs"}
+            def restore_profile_cookies(self):
+                return None
+
+        web._ensure_session = AsyncMock(return_value=CookieSession())
+        web.fetch_text = AsyncMock(return_value=(
+            200, '<form id="login_form"></form>',
+            "https://business.facebook.com/business/loginpage/",
+        ))
+        return web, bootstrap
+
+    async def test_exact_page_read_can_continue_after_business_loginpage(self):
+        web, bootstrap = self.make_web()
+        result = await web._business_bootstrap(
+            bootstrap, business_id=BUSINESS, business_loginpage_probe="READ_FP",
+        )
+        self.assertIs(result, bootstrap)
+        self.assertFalse(bootstrap.profile_actor_verified)
+
+    async def test_page_create_requires_fresh_exact_business_prechecks(self):
+        web, bootstrap = self.make_web()
+        with self.assertRaises(AuthenticationError):
+            await web._business_bootstrap(
+                bootstrap, business_id=BUSINESS, business_loginpage_probe="CREATE_FP",
+            )
+
+        web, bootstrap = self.make_web()
+        self.assertTrue(web.mark_business_page_create_precheck_verified(
+            BUSINESS, ACTOR, "PrgssTeam", "", [CATEGORY_ID]))
+        self.assertTrue(web.has_fresh_business_page_create_precheck(
+            BUSINESS, ACTOR, "PrgssTeam", "", [CATEGORY_ID]))
+        self.assertFalse(web.has_fresh_business_page_create_precheck(
+            "1428816905866955", ACTOR, "PrgssTeam", "", [CATEGORY_ID]))
+        self.assertFalse(web.has_fresh_business_page_create_precheck(
+            BUSINESS, ACTOR, "Different page", "", [CATEGORY_ID]))
+        result = await web._business_bootstrap(
+            bootstrap, business_id=BUSINESS, business_loginpage_probe="CREATE_FP",
+            business_page_create_prechecked=True,
+        )
+        self.assertIs(result, bootstrap)
+        web.invalidate_bootstrap()
+        self.assertFalse(web.has_fresh_business_page_create_precheck(
+            BUSINESS, ACTOR, "PrgssTeam", "", [CATEGORY_ID]))
 
 
 class BusinessPageSessionRecoveryTests(unittest.IsolatedAsyncioTestCase):
