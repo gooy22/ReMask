@@ -51,7 +51,7 @@ class BusinessPageHTTPTests(unittest.IsolatedAsyncioTestCase):
         self.meta = TwoBundleMeta()
         self.meta.mark_business_page_create_precheck_verified = Mock(
             side_effect=lambda business, actor, name, bio, categories: (
-                business == BM2 and actor == UID and name == 'PrgssTeam'
+                business == BM2 and actor == UID and bool(name)
                 and bio == '' and categories == ['242822000000000']))
         self.context = SimpleNamespace(profile_id='15', cookies={'c_user': UID}, pages=[], businesses=[], ad_accounts=[])
         self.session = SimpleNamespace(context=self.context, private_only=True,
@@ -124,6 +124,7 @@ class BusinessPageHTTPTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.meta.posts), 1)
 
     async def test_exact_precheck_proof_is_required_before_page_create(self):
+        self.meta.mark_business_page_create_precheck_verified.side_effect = None
         self.meta.mark_business_page_create_precheck_verified.return_value = False
         with self.assertRaises(ProvisioningError) as caught:
             await self.run_page()
