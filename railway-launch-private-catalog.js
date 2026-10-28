@@ -967,7 +967,7 @@ async function remaskPrivatePollJob(jobId) {
             const advertising=(job.items||[]).flatMap(item=>item.advertising_steps||[]);
             const publishing=advertising.some(step=>step.publication?.code==='PUBLISH_PENDING');
             remaskPrivateShow(
-                'Задача '+jobId+' · '+String(job.status||'RUNNING')+
+                'Задача '+jobId+' · '+remaskPrivateJobStatusLabel(job.status)+
                 (total?' · '+done+'/'+total:'')+
                 (publishing?' · Meta обрабатывает публикацию. Retry Failed продолжит ожидание результата.':'')
             );
