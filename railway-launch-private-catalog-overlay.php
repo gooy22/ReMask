@@ -440,7 +440,8 @@ try {
     $result=RemaskAdvertisingAssetBridge::read($input,RemaskPrivateLaunchCatalog::load($profile),$type,($input['force'] ?? '')==='1');
     // Only successful, exact-account Meta reads may seed the shared suggestion
     // cache. The cache stores IDs and labels only, and never proves permission.
-    if (($result['checked_live'] ?? null)===true && ($result['account_scope_verified'] ?? null)===true) {
+    if (in_array($type,['interests','behaviors'],true)
+        && ($result['checked_live'] ?? null)===true && ($result['account_scope_verified'] ?? null)===true) {
         try {
             $reference=new RemaskTemplateTargetingReference(dirname(ACCOUNTSFILENAME).'/template-targeting-'.hash('sha256',ACCOUNTSFILENAME).'.json');
             $reference->put($type,trim((string)($input['q'] ?? '')),$result,time());
