@@ -38,7 +38,8 @@
     }
     emptyMetrics();
     let timer=null, generation=0, controller=null, lastFingerprint='', needsRefresh=true, lastReadAt=0;
-    const blockedTargets=new Set();
+    const blockedTargets=globalThis.remaskMetaStoppedScopes instanceof Set
+        ?globalThis.remaskMetaStoppedScopes:(globalThis.remaskMetaStoppedScopes=new Set());
     const valid=n=>typeof n==='number'&&Number.isFinite(n)&&n>=0;
     const fmt=n=>new Intl.NumberFormat('ru-RU',{maximumFractionDigits:0}).format(n);
     function range(low,high,value) {
@@ -164,7 +165,7 @@
                 twoFactorRequired ||= /TWO_FACTOR_REQUIRED/.test(failureText);
                 if(/TEMPLATE_LOOKUP_SOURCE_UNAVAILABLE|PRIVATE_HTTP_(?:PROXY|CONNECTION|PROTOCOL|READ)_UNAVAILABLE|PRIVATE_HTTP_PROTOCOL_ERROR/.test(failureText)){
                     sourceUnavailable=true;blocked=true;
-                }else if(/CHECKPOINT_REQUIRED|SESSION_EXPIRED|TWO_FACTOR_REQUIRED|LOGIN_REQUIRED|BUSINESS_LOGIN_GATE|BOOTSTRAP_SCOPE_UNVERIFIED|ACTOR_MISMATCH|RESOURCE_SCOPE_MISMATCH/.test(failureText)){
+                }else if(/CHECKPOINT_REQUIRED|SESSION_EXPIRED|TWO_FACTOR_REQUIRED|LOGIN_REQUIRED|BUSINESS_LOGIN_GATE|PROFILE_META_BLOCKED|BOOTSTRAP_SCOPE_UNVERIFIED|ACTOR_MISMATCH|RESOURCE_SCOPE_MISMATCH/.test(failureText)){
                     loginRequired ||= /SESSION_EXPIRED|LOGIN_REQUIRED|BUSINESS_LOGIN_GATE|TWO_FACTOR_REQUIRED/.test(failureText);
                     blockedTargets.add(targetKey);blocked=true;
                 }

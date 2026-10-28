@@ -20,6 +20,10 @@ function targetingFixture(){
       if(ctx.pending)await ctx.pending;
       if(url==='ajax/metaTemplateTargetingSearch.php'&&body.module_only==='1')
         return {data:[],checked_live:false,source:'private_meta_module_reference',template_account_bound:false};
+      if(url==='ajax/metaTemplateTargetingSearch.php'&&body.cache_only==='1'&&ctx.cacheHit)
+        return {data:[{id:'6003277229371'}],checked_live:false,account_scope_verified:false,
+          availability:'AVAILABLE',source:'private_meta_template_reference',template_account_bound:false,
+          reference_checked_at:1,_cache:{hit:true,cached_only:true}};
       return {...{data:[{id:'6003277229371'}],profile:body.profile,account_id:body.account_id,resource:body.type,
         checked_live:true,account_scope_verified:true},...ctx.response};
     }};
@@ -88,12 +92,18 @@ test('unreviewed types never call an unsupported account read contract',async()=
   assert.equal(calls[0].url,'ajax/metaTemplateTargetingSearch.php');
   assert.equal(calls[0].body.profile,undefined);
 });
-test('failed scoped read never falls back to cached or another profile reference',async()=>{
+test('a Meta auth gate stops repeated private reads while shared suggestions remain usable',async()=>{
   const {ctx,calls,search}=targetingFixture();
   ctx.failure='SESSION_EXPIRED';await assert.rejects(search,/SESSION_EXPIRED/);
-  assert.equal(calls.length,2);
-  assert.equal(calls[0].url,'ajax/metaTemplateTargetingSearch.php');assert.equal(calls[0].body.cache_only,'1');
-  assert.equal(calls[1].url,'ajax/metaTargetingSearch.php');
+  ctx.failure='';
+  await assert.rejects(search,/TARGETING_META_ACCESS_STOPPED/);
+  const exact=()=>calls.filter(call=>call.url==='ajax/metaTargetingSearch.php');
+  assert.equal(exact().length,1);
+  ctx.cacheHit=true;
+  const cached=await search();
+  assert.equal(cached.checked_live,false);
+  assert.equal(cached._cache.shared_reference,true);
+  assert.equal(exact().length,1);
 });
 test('fresh exact-scope Meta results and explicitly cached suggestions are selectable',async()=>{
   const {ctx,search}=targetingFixture();

@@ -78,9 +78,22 @@ apiJson = async function(url, options = {}) {
                     // Cache failure must not change the established exact-account fallback.
                 }
             }
+            const scopeKey=JSON.stringify([scope.profile,scope.account_id]);
+            const blockedScopes=globalThis.remaskMetaStoppedScopes instanceof Set
+                ? globalThis.remaskMetaStoppedScopes : (globalThis.remaskMetaStoppedScopes=new Set());
+            if(blockedScopes.has(scopeKey))throw new Error('TARGETING_META_ACCESS_STOPPED');
             for(const [key,value] of Object.entries(scope))body.set(key,value);
             body.set('type',resource);
-            const result=await remaskPrivateOriginalTargetingApiJson('ajax/metaTargetingSearch.php',{...options,body:body.toString()});
+            let result;
+            try {
+                result=await remaskPrivateOriginalTargetingApiJson('ajax/metaTargetingSearch.php',{...options,body:body.toString()});
+            } catch(error) {
+                const failure=String(error?.meta?.code||error?.code||error?.payload?.error?.code||
+                    error?.payload?.code||error?.message||'').toUpperCase();
+                if(/CHECKPOINT|TWO_FACTOR_REQUIRED|SESSION_EXPIRED|BUSINESS_LOGIN_GATE|LOGIN_REQUIRED|PROFILE_META_BLOCKED/.test(failure))
+                    blockedScopes.add(scopeKey);
+                throw error;
+            }
             const current=remaskPrivateTargetingScope();
             if(JSON.stringify(current)!==JSON.stringify(scope))throw new Error('TARGETING_SELECTION_CHANGED');
             const liveRead=result?.checked_live===true && result?.account_scope_verified===true;
