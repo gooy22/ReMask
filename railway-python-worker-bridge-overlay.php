@@ -459,7 +459,10 @@ try {
             try {
                 $backupStore = AccountStoreFactory::create($backupFile);
                 if (!is_object($backupStore) || !method_exists($backupStore, 'getAccountByName')) continue;
-                $appendRecoveryCandidate($backupStore->getAccountByName($profile), 'archive');
+                $archiveAccount = method_exists($backupStore, 'getAccountByNameFromSnapshot')
+                    ? $backupStore->getAccountByNameFromSnapshot($profile)
+                    : $backupStore->getAccountByName($profile);
+                $appendRecoveryCandidate($archiveAccount, 'archive');
             } catch (Throwable $ignored) {
                 $recoverySnapshotDiagnostics['archive_read_errors']++;
                 // Ignore malformed, stale, or incompatible archive snapshots.
