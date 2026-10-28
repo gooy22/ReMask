@@ -47,10 +47,39 @@ def _browser_full_control_requested(params: Any) -> bool:
 
 
 def _private_http_page_access(session: Any, params: Any) -> bool:
-    """Keep the established browser route for Prepare's full-control workflow."""
+    """Keep private HTTP as the normal production page-access transport."""
+    return getattr(session, "private_only", False) is True
+
+
+_PRIVATE_AUTH_FALLBACK_CODES = {"SESSION_EXPIRED", "BUSINESS_LOGIN_GATE"}
+_PRIVATE_PENDING_SUBMIT_STATUSES = {"SUBMIT_INTENT", "RESULT_UNKNOWN", "RESULT_UNVERIFIED"}
+
+
+def _private_page_access_has_pending_submit(prior: Any) -> bool:
+    if not isinstance(prior, dict):
+        return False
+    phase = str(prior.get("phase") or "").upper()
+    if phase in PAGE_ACCESS_PENDING_PHASES or any(marker in phase for marker in (
+        "CLICK_INTENT", "SUBMIT_INTENT", "SUBMITTED", "RESULT_UNKNOWN", "RESULT_UNVERIFIED"
+    )):
+        return True
+    for key in ("private_operations", "private_rk_operations"):
+        operations = prior.get(key)
+        if not isinstance(operations, dict):
+            continue
+        for operation in operations.values():
+            if (isinstance(operation, dict)
+                    and str(operation.get("status") or "").upper() in _PRIVATE_PENDING_SUBMIT_STATUSES):
+                return True
+    return False
+
+
+def _browser_auth_fallback_allowed(params: Any, error: Any, prior: Any) -> bool:
+    """Use Business Suite only after a pre-mutation auth failure with no retained submit."""
     return (
-        getattr(session, "private_only", False) is True
-        and not _browser_full_control_requested(params)
+        _browser_full_control_requested(params)
+        and str(getattr(error, "code", "") or "").upper() in _PRIVATE_AUTH_FALLBACK_CODES
+        and not _private_page_access_has_pending_submit(prior)
     )
 
 
@@ -1183,6 +1212,8 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
     business=str(snapshot.get('business_id') or '')
     account=_normalize_ad_account_id(snapshot.get('ad_account_id')).removeprefix('act_')
     existing=params.get('existing_target') is True
+    prior=((await state.step(item,ProvisioningStep.PAGE_ACCESS)) or {}).get('result') or {}
+    browser_full_control_fallback = False
     rk_state=await state.step(item,ProvisioningStep.AD_ACCOUNT)
     rk_result=(rk_state or {}).get('result') or {}
     rk_name=str(params.get('ad_account_name') or rk_result.get('account_name') or rk_result.get('name') or '')
@@ -1217,20 +1248,25 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
         elif context_binding:
             verified=True
             evidence=[context_binding]
-        elif _browser_full_control_requested(params):
-            # Defer this exact BM/RK proof to the Business Suite helpers below.
-            # They read the selected portfolio/account and actor before assigning rights.
-            verified = True
-            evidence = [{
-                'source': 'business_suite_exact_asset_check_deferred',
-                'business_id': business,
-                'ad_account_id': account,
-            }]
         elif _private_http_page_access(session, params):
             from .private_create_handlers import _rk_inventory
-            proof = await _rk_inventory(await session.facebook_web(), business, rk_name, account)
-            verified = proof.get('id') == account
-            evidence = proof.get('diagnostics') or []
+            try:
+                proof = await _rk_inventory(await session.facebook_web(), business, rk_name, account)
+            except ProvisioningError as exc:
+                if not _browser_auth_fallback_allowed(params, exc, prior):
+                    raise
+                browser_full_control_fallback = True
+                verified = True
+                evidence = [{
+                    'source': 'business_suite_exact_asset_check_required',
+                    'business_id': business,
+                    'ad_account_id': account,
+                    'private_auth_error': exc.code,
+                }]
+                log.info('PAGE_ACCESS read-only auth precheck fallback=business_suite code=%s', exc.code)
+            else:
+                verified = proof.get('id') == account
+                evidence = proof.get('diagnostics') or []
         else:
             verified,evidence=await _verify_expected_ad_account_in_business(
                 session,
@@ -1286,10 +1322,18 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
         if str(result.get('business_id') or '')!=business or _normalize_ad_account_id(result.get('ad_account_id')).removeprefix('act_')!=account:
             raise ProvisioningError('CREATED_BUSINESS_RK_REQUIRED','RK creation result does not match this portfolio')
     business_page = params.get('page_topology') == 'ONE_PAGE_PER_BUSINESS'
-    if getattr(session, 'private_only', False) is True:
+    if getattr(session, 'private_only', False) is True and not browser_full_control_fallback:
         from .rk_access import ensure_existing_rk_full_control
-        await ensure_existing_rk_full_control(session, state=state, profile=profile, item=item,
-            scope=scope, business=business, account=account, account_name=rk_name)
+        try:
+            await ensure_existing_rk_full_control(session, state=state, profile=profile, item=item,
+                scope=scope, business=business, account=account, account_name=rk_name)
+        except ProvisioningError as exc:
+            retained = ((await state.step(item, ProvisioningStep.PAGE_ACCESS)) or {}).get('result') or {}
+            safe_prior = {**prior, **retained}
+            if not _browser_auth_fallback_allowed(params, exc, safe_prior):
+                raise
+            browser_full_control_fallback = True
+            log.info('PAGE_ACCESS RK precheck fallback=business_suite code=%s', exc.code)
     if business_page:
         from .business_pages import BusinessPageStore, ensure_business_page
         retained = ((await state.step(item, ProvisioningStep.PAGE_ACCESS)) or {}).get('result') or {}
@@ -1332,7 +1376,6 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
         str(config.get('ownership_phase') or ''),
         context_pages,
     )
-    prior=((await state.step(item,ProvisioningStep.PAGE_ACCESS)) or {}).get('result') or {}
     async def checkpoint(patch):
         phase=str(patch.get('phase') or '')
         if (phase.startswith('TARGET_PAGE_ACCESS_') or phase.startswith('TARGET_PAGE_OPERATOR_')
@@ -1342,7 +1385,7 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
         await state.checkpoint(item,profile,scope,ProvisioningStep.PAGE_ACCESS,
             {'page_id':config['page_id'],'business_id':business,'ad_account_id':account,**patch})
     browser_full_control = _browser_full_control_requested(params)
-    private_http = _private_http_page_access(session, params)
+    private_http = _private_http_page_access(session, params) and not browser_full_control_fallback
     await checkpoint({'diagnostic':{'stage':'target_page_access_start','business_id':business,
         'ad_account_id':account,'owner_bm_required':private_http or browser_full_control,
         'access_mode':EXISTING_PAGE_FULL_CONTROL_MODE if private_http or browser_full_control
@@ -1361,24 +1404,38 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
             web = await session.facebook_web()
             web.private_only = True
             from .private_create_handlers import _rk_inventory
-            rk_inventory = await _rk_inventory(web, business, rk_name, account)
-            if rk_inventory.get('id') != account:
-                raise ProvisioningError('BUSINESS_RK_RELATION_INCONCLUSIVE',
-                    'Fresh HTTP inventory did not confirm the exact BM/RK relation for asset assignment.', retryable=True)
-            result = await ensure_private_page_full_control(web, page_id=config['page_id'],
-                business_id=business, ad_account_id=account, profile_id=profile,
-                checkpoint=checkpoint, prior=resume_state, rk_asset_id=rk_inventory.get('asset_ui_id', ''))
-            await store.patch(owner_business_id=business, owner_business_confirmed=True,
-                ownership_phase='PAGE_OWNERSHIP_CONFIRMED')
-            if business_page:
-                common = AdvertisingPageStore.for_context(state, session.context, profile)
-                legacy = await common.get()
-                if legacy.get('page_id') == config['page_id']:
-                    await common.patch(owner_business_id=business, owner_business_confirmed=True,
-                        ownership_phase='PAGE_OWNERSHIP_CONFIRMED', grants=(await store.get()).get('grants') or {})
-        return {**result, 'page_name': config['name'], 'identity_verification': 'not_requested',
-            'ad_account_page_access_verified': False,
-            'page_topology': 'ONE_PAGE_PER_BUSINESS' if business_page else 'PROFILE_COMMON_PAGE'}
+            try:
+                rk_inventory = await _rk_inventory(web, business, rk_name, account)
+            except ProvisioningError as exc:
+                if not _browser_auth_fallback_allowed(params, exc, resume_state):
+                    raise
+                browser_full_control_fallback = True
+                private_http = False
+                log.info('PAGE_ACCESS asset read fallback=business_suite code=%s', exc.code)
+                await checkpoint({'diagnostic': {
+                    'stage': 'private_rk_read_auth_fallback',
+                    'code': exc.code,
+                    'transport': 'business_suite',
+                }})
+            if private_http:
+                if rk_inventory.get('id') != account:
+                    raise ProvisioningError('BUSINESS_RK_RELATION_INCONCLUSIVE',
+                        'Fresh HTTP inventory did not confirm the exact BM/RK relation for asset assignment.', retryable=True)
+                result = await ensure_private_page_full_control(web, page_id=config['page_id'],
+                    business_id=business, ad_account_id=account, profile_id=profile,
+                    checkpoint=checkpoint, prior=resume_state, rk_asset_id=rk_inventory.get('asset_ui_id', ''))
+                await store.patch(owner_business_id=business, owner_business_confirmed=True,
+                    ownership_phase='PAGE_OWNERSHIP_CONFIRMED')
+                if business_page:
+                    common = AdvertisingPageStore.for_context(state, session.context, profile)
+                    legacy = await common.get()
+                    if legacy.get('page_id') == config['page_id']:
+                        await common.patch(owner_business_id=business, owner_business_confirmed=True,
+                            ownership_phase='PAGE_OWNERSHIP_CONFIRMED', grants=(await store.get()).get('grants') or {})
+        if private_http:
+            return {**result, 'page_name': config['name'], 'identity_verification': 'not_requested',
+                'ad_account_page_access_verified': False,
+                'page_topology': 'ONE_PAGE_PER_BUSINESS'}
     try:
         legacy_full_control=params.get('access_mode')=='existing_page_full_control'
         if legacy_full_control:
