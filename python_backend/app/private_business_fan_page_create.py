@@ -183,7 +183,17 @@ async def create_business_page(session, params, *, state, item_id, profile_id, s
     actor = _id((getattr(session.context, 'cookies', {}) or {}).get('c_user'))
     web = await session.facebook_web()
     web.private_only = True
-    bootstrap = await web.bootstrap(allow_business_loginpage_probe=True, require_actor_match=True)
+    try:
+        bootstrap = await web.bootstrap(allow_business_loginpage_probe=True, require_actor_match=True)
+    except Exception as exc:
+        if (getattr(exc, 'request_may_have_been_sent', None) is not False
+                or getattr(exc, 'transport_stage', '') not in {'bootstrap', 'business_auth_precheck'}):
+            raise
+        log.info('FP bootstrap retrying previous same-actor session after pre-submit auth failure kind=%s',
+            type(exc).__name__)
+        bootstrap = await web.bootstrap_from_previous_session()
+        if bootstrap is None:
+            raise
     if not actor or str(getattr(bootstrap, 'actor_id', '')) != actor:
         raise ProvisioningError('SESSION_EXPIRED', 'Page HTTP actor differs from the selected profile.', retryable=True)
     if ((checkpoint.get('business_id') and checkpoint['business_id'] != business)
