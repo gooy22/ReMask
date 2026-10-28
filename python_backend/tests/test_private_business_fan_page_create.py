@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from app.business_fan_page_contracts import MANIFEST, command, execute
 from app.business_page_response import inspect_create_response
@@ -49,6 +49,10 @@ class BusinessPageHTTPTests(unittest.IsolatedAsyncioTestCase):
         self.state = ProvisioningStateStore(str(Path(self.tmp.name) / 'state.sqlite'))
         await self.state.init()
         self.meta = TwoBundleMeta()
+        self.meta.mark_business_page_create_precheck_verified = Mock(
+            side_effect=lambda business, actor, name, bio, categories: (
+                business == BM2 and actor == UID and name == 'PrgssTeam'
+                and bio == '' and categories == ['242822000000000']))
         self.context = SimpleNamespace(profile_id='15', cookies={'c_user': UID}, pages=[], businesses=[], ad_accounts=[])
         self.session = SimpleNamespace(context=self.context, private_only=True,
             facebook_web=AsyncMock(return_value=self.meta), close_business_browser=AsyncMock(),
@@ -83,7 +87,7 @@ class BusinessPageHTTPTests(unittest.IsolatedAsyncioTestCase):
         result = await self.run_page()
         self.assertEqual(result['page_ids'], [FP2])
         self.meta.bootstrap.assert_awaited_once_with(
-            allow_business_loginpage_probe=True, require_actor_match=True)
+            allow_business_loginpage_probe=True, require_actor_match=False)
         self.meta.bootstrap_from_previous_session.assert_awaited_once_with()
         self.assertEqual(len(self.meta.posts), 1)
 
@@ -110,12 +114,22 @@ class BusinessPageHTTPTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('actor_id', body['input'])
         self.assertNotEqual(result['page_ids'], ['61500012345678'])
         self.assertEqual(self.meta.owners[FP1], BM1)
+        self.meta.mark_business_page_create_precheck_verified.assert_called_once_with(
+            BM2, UID, 'PrgssTeam', '', ['242822000000000'])
         self.meta.bootstrap.assert_awaited_once_with(
-            allow_business_loginpage_probe=True, require_actor_match=True)
+            allow_business_loginpage_probe=True, require_actor_match=False)
         self.meta.fetch_text.assert_not_awaited()
         self.session.facebook_business_browser.assert_not_awaited()
         await self.run_page()
         self.assertEqual(len(self.meta.posts), 1)
+
+    async def test_exact_precheck_proof_is_required_before_page_create(self):
+        self.meta.mark_business_page_create_precheck_verified.return_value = False
+        with self.assertRaises(ProvisioningError) as caught:
+            await self.run_page()
+        self.assertEqual(caught.exception.code, 'PRIVATE_FAN_PAGE_PRECHECK_INCONCLUSIVE')
+        self.assertEqual(self.meta.posts, [])
+        self.assertFalse(any(name == OPS['CREATE_FP'] for name, _ in self.meta.calls))
 
     async def test_lost_response_reconciles_exact_business_without_second_create(self):
         self.meta.lose_page = True
