@@ -184,7 +184,7 @@ async def create_business_page(session, params, *, state, item_id, profile_id, s
     web = await session.facebook_web()
     web.private_only = True
     try:
-        bootstrap = await web.bootstrap(allow_business_loginpage_probe=True, require_actor_match=True)
+        bootstrap = await web.bootstrap(allow_business_loginpage_probe=True, require_actor_match=False)
     except Exception as exc:
         if (getattr(exc, 'request_may_have_been_sent', None) is not False
                 or getattr(exc, 'transport_stage', '') not in {'bootstrap', 'business_auth_precheck'}):
@@ -285,6 +285,12 @@ async def create_business_page(session, params, *, state, item_id, profile_id, s
                 matched = {_id(row.get('category_id')) for row in nodes or [] if isinstance(row, dict) and row.get('category_name') == category}
                 if len(matched) != 1 or '' in matched:
                     raise ProvisioningError('PRIVATE_FAN_PAGE_CATEGORY_UNCONFIRMED', 'Meta category search did not return one exact numeric category; no CREATE was sent.', retryable=True)
+                authorize_page_create = getattr(web, 'mark_business_page_create_precheck_verified', None)
+                page_bio = str(params.get('bio') or '')[:255]
+                if (not callable(authorize_page_create)
+                        or authorize_page_create(business, actor, name, page_bio, sorted(matched)) is not True):
+                    raise ProvisioningError('PRIVATE_FAN_PAGE_PRECHECK_INCONCLUSIVE',
+                        'Exact Business Page prechecks did not authorize CREATE; no CREATE was sent.', retryable=True)
                 before = reserved | {row['id'] for row in rows}
                 submitted = False
                 attempt_id = str(uuid.uuid4())
