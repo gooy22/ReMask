@@ -4055,13 +4055,19 @@ async def private_session_probe(profile_id: str, payload: dict = Body(...)):
 @app.post('/api/v1/profiles/{profile_id}/private-draft-read',dependencies=[Depends(require_key),Depends(_require_profile_not_checkpoint)])
 async def private_draft_read(profile_id: str, payload: dict = Body(...)):
     import re
-    if set(payload) != {'job_id'} or not isinstance(payload.get('job_id'), str) or not re.fullmatch(r'[a-f0-9]{32}', payload['job_id']):
+    job_id = payload.get('job_id')
+    task_id = payload.get('task_id')
+    if (set(payload) - {'job_id', 'task_id'} or not isinstance(job_id, str)
+            or not re.fullmatch(r'[a-f0-9]{32}', job_id)
+            or ('task_id' in payload and (not isinstance(task_id, str)
+                or not re.fullmatch(r'[a-f0-9]{32}', task_id)))):
         raise HTTPException(status_code=400, detail='PRIVATE_DRAFT_READ_INVALID_INPUT')
-    view = await store.job_view(payload['job_id'])
+    view = await store.job_view(job_id)
     if not view or view.get('status') not in {'FAILED', 'SUCCESS', 'PARTIAL'}:
         raise HTTPException(status_code=409, detail='PRIVATE_DRAFT_READ_JOB_NOT_SETTLED')
-    tasks = [task for item in view.get('items', []) if str(item.get('profile_id')) == profile_id
-             for task in item.get('tasks', []) if task.get('action') == 'private_launch']
+    candidates = [task for item in view.get('items', []) if str(item.get('profile_id')) == profile_id
+                 for task in item.get('tasks', []) if task.get('action') == 'private_launch']
+    tasks = candidates if task_id is None else [task for task in candidates if str(task.get('id') or '') == task_id]
     if len(tasks) != 1 or not isinstance(tasks[0].get('payload'), dict):
         raise HTTPException(status_code=409, detail='PRIVATE_DRAFT_READ_TARGET_AMBIGUOUS')
     from app.private_draft_read_diagnostic import read_diagnostic
