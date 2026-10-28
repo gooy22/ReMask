@@ -51,6 +51,7 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
 
         values = {"profile_id":"19","business_id":"222222","ad_account_id":"111111"}
         original_manager = self.owner.ads_manager
+        await self.owner.state.init()
         actor = identity(self.context.cookies["c_user"])
         digest = hashlib.sha256((original_manager.source_digest + actor).encode()).hexdigest()
         await self.owner.state.claim_launch_plan(
