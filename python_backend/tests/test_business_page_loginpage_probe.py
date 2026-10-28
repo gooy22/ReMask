@@ -1,4 +1,5 @@
 import unittest
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -108,6 +109,38 @@ class BusinessPageBootstrapProofTests(unittest.IsolatedAsyncioTestCase):
             "https://business.facebook.com/business/loginpage/",
         ))
         return web, bootstrap
+
+    async def test_exact_page_read_keeps_the_authenticated_business_token(self):
+        web = FacebookWebSession(WebProfile(
+            "15", {"c_user": ACTOR, "xs": "fixture-xs"}, None, "fixture-UA",
+        ))
+        business_token = FacebookBootstrap(
+            fb_dtsg="business-token", actor_id=ACTOR,
+            source_url="https://business.facebook.com/latest/settings/ad_accounts/?business_id=" + BUSINESS,
+        )
+        web._bootstrap = business_token
+        posts = []
+
+        class Client:
+            @asynccontextmanager
+            async def post(self, endpoint, **kwargs):
+                posts.append((endpoint, kwargs))
+                yield SimpleNamespace(status=200, headers={},
+                    text=AsyncMock(return_value='{"data":{"node":{"id":"' + BUSINESS + '"}}}'))
+
+        web._ensure_session = AsyncMock(return_value=Client())
+        web._verified_profile_bootstrap = AsyncMock(
+            side_effect=AssertionError("An exact Page read must not replace an authenticated Business token with /me."))
+
+        with patch("app.contract_maintenance.module_refresh.refresh_due", return_value=False):
+            result = await execute(web, "READ_FP", business=BUSINESS, cursor=None)
+
+        self.assertEqual(result["data"]["node"]["id"], BUSINESS)
+        self.assertEqual(len(posts), 1)
+        self.assertEqual(posts[0][0], "https://business.facebook.com/api/graphql/")
+        self.assertEqual(posts[0][1]["data"]["fb_dtsg"], "business-token")
+        web._verified_profile_bootstrap.assert_not_awaited()
+        self.assertIs(web._bootstrap, business_token)
 
     async def test_exact_page_read_can_continue_after_business_loginpage(self):
         web, bootstrap = self.make_web()

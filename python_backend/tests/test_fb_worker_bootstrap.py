@@ -177,6 +177,7 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls[-1][0], "https://www.facebook.com/me")
 
         generic_call_count = len(calls)
+        session.refresh_reviewed_modules.reset_mock()
         bootstrap = await session.bootstrap(allow_business_loginpage_probe=True)
         self.assertTrue(bootstrap.profile_actor_verified)
         self.assertEqual(bootstrap.actor_id, expected_actor)
@@ -1008,10 +1009,7 @@ class PreviousSessionReadRecoveryTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(result, {"data": {"business": {"id": "987654321"}}})
-        session.bootstrap.assert_awaited_once_with(
-            force=True, allow_business_loginpage_probe=True,
-            require_actor_match=False, prefer_business_home=True,
-        )
+        session.bootstrap.assert_awaited_once_with()
         session._retry_scoped_read_with_previous_session.assert_awaited_once()
         self.assertIsNone(session._retry_scoped_read_with_previous_session.await_args.kwargs["read_timeout_seconds"])
         session._ensure_session.assert_awaited_once()
