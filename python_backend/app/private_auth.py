@@ -26,7 +26,11 @@ def private_auth_error(exc):
         code = "CHECKPOINT_REQUIRED"
     elif "SESSION_EXPIRED" in route_gates or identity_unconfirmed:
         code = "SESSION_EXPIRED"
-    elif "BUSINESS_LOGIN_GATE" in route_gates:
+    elif (getattr(exc, "transport_stage", "") == "business_auth_precheck"
+            and "BUSINESS_LOGIN_GATE" in route_gates):
+        # Report this only when the exact Business authorization precheck
+        # itself failed. A redirect encountered while gathering a generic
+        # profile token is recoverable through the remaining profile routes.
         code = "BUSINESS_LOGIN_GATE"
     elif not reasons and getattr(exc, 'transport_stage', '') == 'bootstrap':
         code = 'META_AUTH_TOKEN_UNAVAILABLE'
