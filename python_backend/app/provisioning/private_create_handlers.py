@@ -260,11 +260,21 @@ async def ad_account_handler(session, params, state, *args, **kwargs):
     if action.saved.get("business_id") and _id(action.saved["business_id"]) != business:
         raise ProvisioningError("AD_ACCOUNT_CHECKPOINT_MISMATCH", "Saved CREATE belongs to another BM.")
     saved_name = _clean(action.saved.get("account_name") or action.saved.get("name"))
-    if saved_name and saved_name.casefold() != name.casefold():
+    historical_single_rk_recovery = (
+        bool(action.saved.get("recovered_from_item_id"))
+        and params.get("allow_multiple_in_business") is not True
+    )
+    saved_name_mismatch = bool(saved_name and saved_name.casefold() != name.casefold())
+    if saved_name_mismatch and not historical_single_rk_recovery:
         raise ProvisioningError("AD_ACCOUNT_CHECKPOINT_MISMATCH", "An existing or pending RK operation in this BM belongs to another name; verify that operation first.")
     expected = _id(action.saved.get("ad_account_id") or action.saved.get("create_response_ad_account_id") or state.get("ad_account_id"))
+    # A historical operation may have been created under an earlier generated
+    # slot name. Reconcile that exact identity inside this exact BM before
+    # refusing the current slot. This remains read-only; an unconfirmed
+    # historical CREATE is never re-submitted.
+    inventory_name = saved_name if saved_name_mismatch and historical_single_rk_recovery else name
     try:
-        before = await _rk_inventory(action.web, business, name, expected)
+        before = await _rk_inventory(action.web, business, inventory_name, expected)
     except ProvisioningError as exc:
         if getattr(exc, "inventory_diagnostics", None):
             await action.checkpoint({"inventory_verification": exc.inventory_diagnostics,
@@ -274,8 +284,32 @@ async def ad_account_handler(session, params, state, *args, **kwargs):
         "inventory_verification": before.get("diagnostics", []), "inventory_complete": before["complete"]})
     pending = _clean(action.saved.get("phase")).upper() in _PENDING
     if before["id"]:
+        confirmed_row = next(
+            (
+                row for row in before.get("account_rows", [])
+                if _id(row.get("id")) == before["id"]
+            ),
+            {},
+        )
+        resolved_name = _clean(confirmed_row.get("name")) or (
+            saved_name if saved_name_mismatch else name
+        )
+        resolved_currency = (
+            _clean(confirmed_row.get("currency")).upper()
+            or _clean(action.saved.get("currency")).upper()
+            or currency
+        )
+        try:
+            resolved_timezone = int(
+                action.saved.get("timezone_id")
+                if action.saved.get("timezone_id") not in (None, "")
+                else timezone
+            )
+        except (TypeError, ValueError):
+            resolved_timezone = timezone
         return await action.commit({"business_id": business, "ad_account_id": "act_" + before["id"],
-            "name": name, "currency": currency, "timezone_id": timezone, "verification": before, "recovered": True})
+            "name": resolved_name, "currency": resolved_currency, "timezone_id": resolved_timezone,
+            "verification": before, "recovered": True})
     if expected or pending:
         await action.checkpoint({"phase": "CREATE_RESULT_UNKNOWN", "business_id": business})
         raise ProvisioningError("CREATE_AD_ACCOUNT_RESULT_UNKNOWN", "Previous RK CREATE is retained; exact-BM HTTP inventory is inconclusive. No duplicate POST was sent.", retryable=True)
