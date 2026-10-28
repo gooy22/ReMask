@@ -673,6 +673,12 @@ vm.createContext(sandbox); vm.runInContext(source.slice(start,end), sandbox);
     pythonWorkerSelectionRefresh(){},pythonWorkerSchedulePoll(){throw Error('Terminal job cannot repoll');},
     async pythonWorkerRefreshSuccessfulProfiles(){return [];},async pythonWorkerBridge(){return {job};}};
   vm.createContext(scope);
+  const auth=source.indexOf('function pythonWorkerIsProfileAuthBlockedCode(');
+  vm.runInContext(source.slice(auth,source.indexOf('\nasync function pythonWorkerProfilePreflight',auth)),scope);
+  const retry=source.indexOf('function pythonWorkerItemCanRetry(');
+  vm.runInContext(source.slice(retry,source.indexOf('\nfunction pythonWorkerFailureDetails',retry)),scope);
+  const failures=source.indexOf('function pythonWorkerItemErrorCode(');
+  vm.runInContext(source.slice(failures,source.indexOf('\nfunction pythonWorkerPrepareStatusLabel',failures)),scope);
   const summary=source.indexOf('function pythonWorkerAdvertisingSummary(');
   vm.runInContext(source.slice(summary,source.indexOf('\nwindow.pythonWorkerStartBusiness',summary)),scope);
   for(const status of ['FAILED','PARTIAL','SUCCESS']){
