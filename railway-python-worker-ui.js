@@ -468,8 +468,8 @@ function pythonWorkerSelectionRefresh() {
     retry.disabled = pythonWorkerUiState.busy || !hasRetryableFailed ||
       (!hasTerminalBatchFailure && !pythonWorkerUiState.jobId);
     retry.textContent = hasTerminalBatchFailure
-      ? 'Retry Failed batch'
-      : 'Retry Failed';
+      ? 'Повторить доступные'
+      : 'Повторить доступные';
   }
 
   pythonWorkerEnsureRkFanPageActions();
@@ -487,10 +487,10 @@ function pythonWorkerSelectionRefresh() {
       profiles.length
         ? (
             pythonWorkerUiState.workerOnline === true
-              ? 'Worker UI v181 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
-              : 'Worker UI v181 · Выбрано FB-профилей: ' + profiles.length + '. Жду READY от worker.'
+              ? 'Выбрано профилей: ' + profiles.length + '. Готово к подготовке комплектов.'
+              : 'Выбрано профилей: ' + profiles.length + '. Сервис подготовки недоступен.'
           )
-        : 'Worker UI v181 · Выберите FB-профили в Workspace.'
+        : 'Выберите FB-профили для подготовки комплектов.'
     );
   }
 }
@@ -646,13 +646,7 @@ async function pythonWorkerHealthCheckOnce() {
     if (isReady) {
       el.dataset.state = 'online';
       el.textContent =
-        'Worker: READY' +
-        (revision ? ' · rev ' + revision : '') +
-        (bmPayloadVersion ? ' · BM ' + bmPayloadVersion : '') +
-        ' · профили ' + profilesVisible +
-        ' · volume ' + (volumeMounted ? 'YES' : 'NO') +
-        ' · очередь ' + queued +
-        ' · concurrency ' + concurrency;
+        'Сервис подготовки работает · профилей ' + profilesVisible + ' · очередь ' + queued;
       if (readiness && readiness.network_test && readiness.network_test.mode === 'DIRECT_TEST') {
         const test = readiness.network_test;
         el.textContent += ' · БЕЗ ПРОКСИ: FB ' + String(test.profile_id) +
@@ -661,11 +655,7 @@ async function pythonWorkerHealthCheckOnce() {
     } else {
       el.dataset.state = 'offline';
       el.textContent =
-        'Worker: ONLINE · resolver ERROR · ' +
-        pythonWorkerErrorText(
-          data && data.readiness_error,
-          'profile resolver is not ready'
-        );
+        'Сервис подготовки доступен, но профили сейчас проверить не удалось.';
     }
 
     pythonWorkerSelectionRefresh();
@@ -674,11 +664,7 @@ async function pythonWorkerHealthCheckOnce() {
     pythonWorkerUiState.workerOnline = false;
     el.dataset.state = 'offline';
     el.textContent =
-      'Worker: OFFLINE · ' +
-      pythonWorkerErrorText(
-        error && error.message != null ? error.message : error,
-        'health request failed'
-      );
+      'Сервис подготовки временно недоступен.';
     pythonWorkerSelectionRefresh();
     return false;
   }
@@ -756,43 +742,44 @@ async function pythonWorkerProfilePreflight(profileId) {
   return preflight;
 }
 
-function pythonWorkerCurrentStep(item) {
-  const steps = Array.isArray(item && item.provisioning_steps)
-    ? item.provisioning_steps
-    : [];
+function pythonWorkerStepLabel(value) {
+  const key = String(value || '').trim().toUpperCase();
+  const labels = {
+    PREPARE:'Подготовка комплекта',
+    PROVISIONING:'Подготовка комплекта',
+    PROXY_CHECK:'Проверка прокси',
+    FAN_PAGES:'Страница Facebook',
+    BUSINESS:'Business Manager',
+    AD_ACCOUNT:'Рекламный кабинет',
+    PAGE_ACCESS:'Доступ к странице',
+    FUNDING:'Оплата',
+    PRIVATE_LAUNCH:'Создание черновика',
+    CREATE:'Создание объекта'
+  };
+  return labels[key] || 'Подготовка';
+}
 
+function pythonWorkerCurrentStep(item) {
+  const steps = Array.isArray(item && item.provisioning_steps) ? item.provisioning_steps : [];
   const runningStep = steps.find(function(step) {
     return step && String(step.status || '').toUpperCase() === 'RUNNING';
   });
-  if (runningStep) {
-    const result = runningStep.result && typeof runningStep.result === 'object'
-      ? runningStep.result
-      : {};
-    const detail = String(
-      result.activity || result.phase || ''
-    ).trim();
-    return String(runningStep.step || 'RUNNING') + (detail ? ' · ' + detail : '');
-  }
-
+  if (runningStep) return pythonWorkerStepLabel(runningStep.step);
   const failedStep = steps.find(function(step) {
     return step && String(step.status || '').toUpperCase() === 'FAILED';
   });
-  if (failedStep) return String(failedStep.step || 'FAILED');
-
-  if (steps.length) {
-    const lastStep = steps[steps.length - 1];
-    if (lastStep && lastStep.step) return String(lastStep.step);
+  if (failedStep) return pythonWorkerStepLabel(failedStep.step);
+  if (steps.length && steps[steps.length - 1] && steps[steps.length - 1].step) {
+    return pythonWorkerStepLabel(steps[steps.length - 1].step);
   }
-
   const tasks = Array.isArray(item && item.tasks) ? item.tasks : [];
-  const running = tasks.find(function(t){ return t && t.status === 'RUNNING'; });
-  if (running) return String(running.action || 'RUNNING');
-  const failed = tasks.find(function(t){ return t && t.status === 'FAILED'; });
-  if (failed) return String(failed.action || 'FAILED');
-  const queued = tasks.find(function(t){ return t && t.status === 'QUEUED'; });
-  if (queued) return String(queued.action || 'QUEUED');
-  const success = tasks.slice().reverse().find(function(t){ return t && t.status === 'SUCCESS'; });
-  return success ? String(success.action || 'SUCCESS') : '—';
+  const active = tasks.find(function(task) {
+    return task && ['RUNNING','FAILED','QUEUED'].includes(String(task.status || '').toUpperCase());
+  });
+  const last = active || tasks.slice().reverse().find(function(task) {
+    return task && String(task.status || '').toUpperCase() === 'SUCCESS';
+  });
+  return last ? pythonWorkerStepLabel(last.action) : '—';
 }
 
 function pythonWorkerBusinessResult(item) {
@@ -919,6 +906,269 @@ function pythonWorkerPrepareResult(item) {
   return task ? task.result : null;
 }
 
+const pythonWorkerProfileSessionStatuses = new Map();
+let pythonWorkerProfileStatusRequest = null;
+let pythonWorkerProfileStatusJobId = '';
+
+function pythonWorkerItemErrorCode(item) {
+  const failedTask = (Array.isArray(item && item.tasks) ? item.tasks : []).find(function(task) {
+    return task && String(task.status || '').toUpperCase() === 'FAILED';
+  });
+  const failedStep = (Array.isArray(item && item.provisioning_steps) ? item.provisioning_steps : []).find(function(step) {
+    return step && String(step.status || '').toUpperCase() === 'FAILED';
+  });
+  const candidates = [
+    item && item.error_code,
+    failedTask && failedTask.error_code,
+    failedStep && failedStep.error_code
+  ].map(function(value) { return String(value || '').trim().toUpperCase(); }).filter(Boolean);
+  const authPriority = [
+    'CHECKPOINT_REQUIRED',
+    'TWO_FACTOR_REQUIRED',
+    'FACEBOOK_TEMPORARILY_BLOCKED',
+    'BUSINESS_LOGIN_GATE',
+    'SESSION_EXPIRED'
+  ];
+  return authPriority.find(function(code) { return candidates.includes(code); }) ||
+    candidates.find(pythonWorkerIsProfileAuthBlockedCode) || candidates[0] || '';
+}
+
+function pythonWorkerItemErrorMessage(item) {
+  const failedTask = (Array.isArray(item && item.tasks) ? item.tasks : []).find(function(task) {
+    return task && String(task.status || '').toUpperCase() === 'FAILED';
+  });
+  const failedStep = (Array.isArray(item && item.provisioning_steps) ? item.provisioning_steps : []).find(function(step) {
+    return step && String(step.status || '').toUpperCase() === 'FAILED';
+  });
+  const messages = [
+    item && item.error_message,
+    failedTask && failedTask.error_message,
+    failedStep && failedStep.error_message
+  ].map(function(value) { return String(value || '').trim(); }).filter(Boolean);
+  return messages.find(function(value) {
+    return /checkpoint_required|checkpoint_redirect|facebook[.]com[/]checkpoint[/]/i.test(value);
+  }) || messages[0] || '';
+}
+
+function pythonWorkerJobStatusView(item) {
+  const status = String(item && item.status || 'QUEUED').toUpperCase();
+  const code = pythonWorkerItemErrorCode(item);
+  const message = pythonWorkerItemErrorMessage(item).toLowerCase();
+  if (code === 'CHECKPOINT_REQUIRED' || /checkpoint_redirect|facebook\.com\/checkpoint\//i.test(message)) {
+    return {label:'ЧЕКПОИНТ', key:'CHECKPOINT', message:'Meta запросила проверку безопасности. Действия по профилю остановлены.'};
+  }
+  if (code === 'TWO_FACTOR_REQUIRED') {
+    return {label:'2FA', key:'TWO_FACTOR', message:'Meta запросила двухфакторную проверку. Действия остановлены.'};
+  }
+  if (code === 'SESSION_EXPIRED' || code === 'BUSINESS_LOGIN_GATE') {
+    return {label:'НУЖЕН ВХОД', key:'LOGIN_REQUIRED', message:'Meta не подтвердила вход. Действия по профилю остановлены.'};
+  }
+  if (code === 'FACEBOOK_TEMPORARILY_BLOCKED') {
+    return {label:'ОГРАНИЧЕНИЕ META', key:'LIMITED', message:'Meta временно ограничила действия по профилю.'};
+  }
+  if (/1373107|too many attempts/i.test(code + ' ' + message)) {
+    return {label:'ЛИМИТ META', key:'LIMITED', message:'Meta временно ограничила создание страниц. Повтор сейчас не запускается.'};
+  }
+  if (status === 'SUCCESS') return {label:'ГОТОВО', key:'SUCCESS', message:''};
+  if (status === 'RUNNING') return {label:'В РАБОТЕ', key:'RUNNING', message:''};
+  if (status === 'QUEUED') return {label:'В ОЧЕРЕДИ', key:'QUEUED', message:''};
+  if (status === 'FAILED') return {label:'ОШИБКА', key:'FAILED', message:''};
+  return {label:status || 'НЕИЗВЕСТНО', key:'FAILED', message:''};
+}
+
+function pythonWorkerUserFailureText(item) {
+  const code = pythonWorkerItemErrorCode(item);
+  const message = pythonWorkerItemErrorMessage(item);
+  const combined = (code + ' ' + message).toLowerCase();
+  if (code === 'CHECKPOINT_REQUIRED' || /checkpoint_redirect|facebook\.com\/checkpoint\//i.test(message)) {
+    return 'Facebook запросил проверку безопасности. Подготовка остановлена.';
+  }
+  if (code === 'TWO_FACTOR_REQUIRED') {
+    return 'Meta запросила двухфакторную проверку. Подготовка остановлена.';
+  }
+  if (code === 'SESSION_EXPIRED' || code === 'BUSINESS_LOGIN_GATE') {
+    return 'Не удалось подтвердить вход в Facebook. Подготовка остановлена.';
+  }
+  if (code === 'FACEBOOK_TEMPORARILY_BLOCKED') {
+    return 'Meta временно ограничила действия по профилю.';
+  }
+  if (/1373107|too many attempts/i.test(combined)) {
+    return 'Meta временно ограничила создание страниц. Повторять сейчас не нужно.';
+  }
+  if (/2455031|field_exception/i.test(combined)) {
+    return 'Meta не подтвердила создание страницы. Перед повтором проверь список страниц.';
+  }
+  if (/CREATE_AD_ACCOUNT_RESULT_UNKNOWN|AD_ACCOUNT_CREATE_RESULT_UNKNOWN/.test(code)) {
+    return 'Meta не подтвердила создание рекламного кабинета. Повтор отключён, чтобы не создать дубль.';
+  }
+  if (/CREATE_PAGE_RESULT_UNKNOWN|FAN_PAGE_CREATE_RESULT_UNKNOWN/.test(code)) {
+    return 'Meta не подтвердила создание страницы. Повтор отключён до сверки результата.';
+  }
+  if (/CREATE_BUSINESS_RESULT_UNKNOWN|BUSINESS_CREATE_RESULT_UNKNOWN/.test(code)) {
+    return 'Meta не подтвердила создание Business Manager. Повтор отключён, чтобы не создать дубль.';
+  }
+  if (/timeout|timed out|_TIMEOUT/.test(combined)) {
+    return 'Meta не ответила вовремя. Перед повтором нужно сверить сохранённый результат.';
+  }
+  if (/proxy_dead|proxy.*failed|bootstrap.*failed/.test(combined)) {
+    return 'Не удалось подключиться через прокси. Результат шага не подтверждён.';
+  }
+  if (/payment_unconfirmed|payment_required/.test(combined)) {
+    return 'Комплект создан, но оплата не подтверждена.';
+  }
+  return 'Шаг не выполнен. Откройте «Технические подробности», чтобы увидеть причину.';
+}
+
+function pythonWorkerPrepareStatusLabel(value) {
+  const status = String(value || '').trim().toUpperCase();
+  const labels = {
+    READY_TO_LAUNCH:'Комплект готов',
+    RETRY:'Нужно повторить шаг',
+    MANUAL_REQUIRED:'Нужен отдельный шаг',
+    PAYMENT_REQUIRED:'Оплата не подтверждена',
+    PAYMENT_UNCONFIRMED:'Оплата не подтверждена',
+    PREPARED:'Комплект подготовлен'
+  };
+  return labels[status] || 'Комплект: ' + (status || 'подготовлен');
+}
+
+function pythonWorkerPrepareReasonLabel(value) {
+  const reason = String(value || '').trim().toUpperCase();
+  const labels = {
+    PAYMENT_UNCONFIRMED:'Оплата не подтверждена',
+    PAYMENT_REQUIRED:'Оплата не подтверждена',
+    READY_TO_LAUNCH:'Готов к следующему шагу',
+    CHECKPOINT_REQUIRED:'Meta запросила проверку безопасности'
+  };
+  return labels[reason] || '';
+}
+
+function pythonWorkerProfileSessionView(value) {
+  const status = String(value && value.status || '').toUpperCase();
+  const labels = {
+    ACTIVE:{label:'СЕССИЯ АКТИВНА',className:'ok'},
+    CHECKPOINT:{label:'ЧЕКПОИНТ',className:'warn'},
+    LOGIN_REQUIRED:{label:'НУЖЕН ВХОД',className:'warn'},
+    TWO_FACTOR:{label:'2FA',className:'warn'},
+    LIMITED:{label:'ОГРАНИЧЕНИЕ META',className:'warn'},
+    IN_PROGRESS:{label:'В РАБОТЕ',className:'warn'}
+  };
+  return labels[status] || {label:'НЕ ПРОВЕРЕНА',className:'warn'};
+}
+
+function pythonWorkerStatusDate(value) {
+  const seconds = Number(value || 0);
+  if (!Number.isFinite(seconds) || seconds <= 0) return '';
+  try {
+    return new Intl.DateTimeFormat('ru-RU', {
+      day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit'
+    }).format(new Date(seconds * 1000));
+  } catch (_) {
+    return '';
+  }
+}
+
+function pythonWorkerTranslateWorkspaceReadiness(cell) {
+  const pill = cell && cell.querySelector('.ws-pill:not(.rmx-session-state)');
+  if (!pill || !/ТРЕБУЕТ ВНИМАНИЯ|REQUIRES ATTENTION/i.test(String(pill.textContent || ''))) return;
+  const subs = Array.from(cell.querySelectorAll('.sub')).filter(function(node) {
+    return !node.classList.contains('rmx-session-status-note');
+  });
+  const raw = subs.map(function(node) { return String(node.textContent || '').trim(); }).filter(Boolean).join(', ');
+  const folded = raw.toLowerCase();
+  const reasons = [];
+  if (/не синхрониз|not synced|sync required/.test(folded)) reasons.push('нет свежей синхронизации Meta');
+  if (/нет bm|no bm/.test(folded)) reasons.push('нет BM');
+  if (/нет rk|нет рекламного кабинета|no rk|no ad account/.test(folded)) reasons.push('нет рекламного кабинета');
+  if (/funding|оплат|payment/.test(folded)) reasons.push('оплата не подтверждена');
+  if (/proxy.*(ошиб|проблем|fail|dead)|прокси.*(ошиб|проблем)/.test(folded)) reasons.push('прокси недоступен');
+
+  let label = 'НЕ ПРОВЕРЕНА';
+  if (/не синхрониз|not synced|sync required/.test(folded)) label = 'НЕ СИНХРОНИЗИРОВАНА';
+  else if (/funding|оплат|payment/.test(folded)) label = 'ОПЛАТА НЕ ГОТОВА';
+  else if (/нет bm|no bm/.test(folded) && /нет rk|no rk|no ad account/.test(folded)) label = 'НЕТ КОМПЛЕКТА';
+  else if (/нет bm|no bm/.test(folded)) label = 'НЕТ BM';
+  else if (/нет rk|no rk|no ad account/.test(folded)) label = 'НЕТ РК';
+
+  pill.textContent = label;
+  pill.title = reasons.length ? reasons.join(' · ') : 'Нет подтверждённой свежей проверки.';
+  const summary = reasons.length ? reasons.join(' · ') : 'Нет свежего статуса проверки.';
+  if (subs.length) {
+    subs[0].textContent = summary;
+    for (const extra of subs.slice(1)) extra.remove();
+  } else {
+    const note = document.createElement('div');
+    note.className = 'sub';
+    note.textContent = summary;
+    cell.appendChild(note);
+  }
+}
+
+function pythonWorkerApplyWorkspaceProfileStatuses() {
+  const statusFilter = document.getElementById('workspaceStatusFilter');
+  if (statusFilter) {
+    for (const option of statusFilter.options || []) {
+      if (/требуют внимания/i.test(String(option.textContent || ''))) option.textContent = 'Нужна проверка';
+    }
+  }
+  const body = document.getElementById('workspaceRows');
+  if (!body) return;
+  for (const row of body.querySelectorAll('tr[data-key]')) {
+    const cells = row.querySelectorAll('td');
+    const cell = cells[3];
+    if (!cell) continue;
+    cell.querySelectorAll('.rmx-session-state,.rmx-session-status-note').forEach(function(node) { node.remove(); });
+    pythonWorkerTranslateWorkspaceReadiness(cell);
+    const session = pythonWorkerProfileSessionStatuses.get(String(row.getAttribute('data-key') || '').trim());
+    if (!session) continue;
+    const view = pythonWorkerProfileSessionView(session);
+    const pill = document.createElement('span');
+    pill.className = 'ws-pill ' + view.className + ' rmx-session-state';
+    pill.textContent = view.label;
+    pill.title = String(session.message || '');
+    const basePill = cell.querySelector('.ws-pill:not(.rmx-session-state)');
+    if (basePill) {
+      basePill.insertAdjacentElement('afterend', pill);
+    } else {
+      cell.insertBefore(pill, cell.firstChild);
+    }
+    const note = document.createElement('div');
+    note.className = 'sub rmx-session-status-note';
+    const date = pythonWorkerStatusDate(session.checked_at);
+    note.textContent = [String(session.message || ''), date ? 'Статус обновлён ' + date : ''].filter(Boolean).join(' · ');
+    cell.appendChild(note);
+  }
+}
+
+async function pythonWorkerLoadProfileStatuses() {
+  if (pythonWorkerProfileStatusRequest) return pythonWorkerProfileStatusRequest;
+  pythonWorkerProfileStatusRequest = (async function() {
+    try {
+      const data = await pythonWorkerBridge({action:'profile_statuses'});
+      if (!data || data.ok !== true || !Array.isArray(data.profiles)) return;
+      pythonWorkerProfileSessionStatuses.clear();
+      for (const row of data.profiles) {
+        if (!row || !/^\d{1,40}$/.test(String(row.profile_id || ''))) continue;
+        pythonWorkerProfileSessionStatuses.set(String(row.profile_id), row);
+      }
+      pythonWorkerApplyWorkspaceProfileStatuses();
+    } catch (_) {
+      // Status lookup is read-only and must not block the existing Workspace.
+    } finally {
+      pythonWorkerProfileStatusRequest = null;
+    }
+  })();
+  return pythonWorkerProfileStatusRequest;
+}
+
+function pythonWorkerRefreshProfileStatusesForJob(job) {
+  const jobId = String(job && job.id || '');
+  const status = String(job && job.status || '').toUpperCase();
+  if (!jobId || !['SUCCESS','FAILED','PARTIAL'].includes(status) || jobId === pythonWorkerProfileStatusJobId) return;
+  pythonWorkerProfileStatusJobId = jobId;
+  pythonWorkerLoadProfileStatuses().catch(function(){});
+}
+
 function pythonWorkerRenderJob(job) {
   pythonWorkerUiState.job = job;
   const items = Array.isArray(job && job.items) ? job.items : [];
@@ -952,14 +1202,16 @@ function pythonWorkerRenderJob(job) {
 
   const prepareTotal = prepareCounts.READY + prepareCounts.RETRY + prepareCounts.MANUAL + prepareCounts.PAYMENT;
   const prepareSummary = prepareTotal
-    ? ' · Prepare: READY ' + prepareCounts.READY
-      + ' / RETRY ' + prepareCounts.RETRY
-      + ' / MANUAL ' + prepareCounts.MANUAL
-      + ' / PAYMENT ' + prepareCounts.PAYMENT
+    ? ' · Комплекты: готово ' + prepareCounts.READY
+      + ' · повторить шаг ' + prepareCounts.RETRY
+      + ' · отдельный шаг ' + prepareCounts.MANUAL
+      + ' · оплата не подтверждена ' + prepareCounts.PAYMENT
     : '';
+  const jobStatusLabels = {QUEUED:'в очереди',RUNNING:'в работе',SUCCESS:'готово',FAILED:'есть ошибки',PARTIAL:'завершено частично'};
+  const jobStatus = String((job && job.status) || 'UNKNOWN').toUpperCase();
   pythonWorkerSetText(
     'pythonPwStatus',
-    'Status: ' + String((job && job.status) || 'UNKNOWN') + ' · ' + done + '/' + total + ' завершено · ' + progress + '%' + prepareSummary
+    'Задание: ' + (jobStatusLabels[jobStatus] || 'статус не определён') + ' · ' + done + ' из ' + total + ' завершено · ' + progress + '%' + prepareSummary
   );
 
   const body = pythonWorkerEl('pythonPwRows');
@@ -982,8 +1234,10 @@ function pythonWorkerRenderJob(job) {
         const statusTd = document.createElement('td');
         const pill = document.createElement('span');
         const itemStatus = String((item && item.status) || 'QUEUED').toUpperCase();
-        pill.className = 'pw-pill pw-' + itemStatus;
-        pill.textContent = itemStatus;
+        const statusView = pythonWorkerJobStatusView(item);
+        pill.className = 'pw-pill pw-' + statusView.key;
+        pill.textContent = statusView.label;
+        pill.title = statusView.message || '';
         statusTd.appendChild(pill);
 
         const stepTd = document.createElement('td');
@@ -991,21 +1245,34 @@ function pythonWorkerRenderJob(job) {
 
         const errorTd = document.createElement('td');
         errorTd.className = 'pw-error';
-        const errorParts = [];
-        if (item && item.error_code) errorParts.push(item.error_code);
-        if (item && item.error_message) errorParts.push(item.error_message);
-
         const businessTelemetry = pythonWorkerBusinessTelemetry(item);
         const fanPageResult = pythonWorkerFanPageResult(item);
         const prepareResult = pythonWorkerPrepareResult(item);
+        const hasFailure = String(item && item.status || '').toUpperCase() === 'FAILED';
 
-        if (errorParts.length) {
-          if (fanPageResult) errorParts.unshift(fanPageResult);
-          errorParts.push(...pythonWorkerFailureDetails(item));
-          if (businessTelemetry.length) {
-            errorParts.push(businessTelemetry.join(' · '));
+        if (hasFailure) {
+          if (fanPageResult) {
+            const partial = document.createElement('div');
+            partial.textContent = fanPageResult;
+            errorTd.appendChild(partial);
           }
-          errorTd.textContent = errorParts.join(' · ');
+          const readable = document.createElement('div');
+          readable.textContent = pythonWorkerUserFailureText(item);
+          errorTd.appendChild(readable);
+
+          const details = document.createElement('details');
+          const summary = document.createElement('summary');
+          summary.textContent = 'Технические подробности';
+          const pre = document.createElement('pre');
+          pre.textContent = [
+            item && item.error_code ? 'Код: ' + item.error_code : '',
+            item && item.error_message ? 'Описание: ' + item.error_message : '',
+            ...pythonWorkerFailureDetails(item),
+            ...businessTelemetry
+          ].filter(Boolean).join('\n');
+          details.appendChild(summary);
+          details.appendChild(pre);
+          errorTd.appendChild(details);
         } else {
           const adAccountResult = pythonWorkerAdAccountResult(item);
           const businessResult = pythonWorkerBusinessResult(item);
@@ -1016,7 +1283,7 @@ function pythonWorkerRenderJob(job) {
               ? prepareResult.desired : {};
             const accounts = Array.isArray(actual.ad_accounts) ? actual.ad_accounts : [];
             const resultParts = [
-              String(prepareResult.status || 'PREPARED')
+              pythonWorkerPrepareStatusLabel(prepareResult.status || 'PREPARED')
             ];
             const bundles = Array.isArray(actual.bundles) ? actual.bundles : [];
             if (bundles.length) {
@@ -1032,7 +1299,7 @@ function pythonWorkerRenderJob(job) {
               if (actual.business_id) resultParts.push('BM ' + actual.business_id);
             }
             resultParts.push('РК ' + accounts.length + '/' + String(desired.ad_accounts || accounts.length));
-            if (prepareResult.reason) resultParts.push(String(prepareResult.reason));
+            if (prepareResult.reason) resultParts.push(pythonWorkerPrepareReasonLabel(prepareResult.reason) || 'Результат комплекта сохранён.');
             errorTd.className = 'pw-result';
             errorTd.textContent = resultParts.join(' · ');
 
@@ -1249,6 +1516,9 @@ function pythonWorkerRenderJob(job) {
       }
     }
   }
+
+  pythonWorkerApplyWorkspaceProfileStatuses();
+  pythonWorkerRefreshProfileStatusesForJob(job);
 
   const retry = pythonWorkerEl('pythonProvisionRetry');
   if (retry) retry.disabled = pythonWorkerUiState.busy || counts.FAILED === 0;
@@ -5076,6 +5346,14 @@ function pythonWorkerInitUi() {
   }, true);
 
   pythonWorkerSelectionRefresh();
+  const workspaceRows = document.getElementById('workspaceRows');
+  if (workspaceRows && !workspaceRows.dataset.remaskSessionStatusObserver) {
+    workspaceRows.dataset.remaskSessionStatusObserver = '1';
+    new MutationObserver(function() { pythonWorkerApplyWorkspaceProfileStatuses(); })
+      .observe(workspaceRows, {childList:true});
+  }
+  pythonWorkerApplyWorkspaceProfileStatuses();
+  pythonWorkerLoadProfileStatuses().catch(function(){});
   pythonWorkerEnhanceBmDialog();
   pythonWorkerEnhanceProfileThreeDots();
   pythonWorkerEnhanceCommonPageMenu();

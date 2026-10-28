@@ -338,6 +338,12 @@ if (strpos($php, 'REMASK_PYTHON_WORKER_PANEL_V1') === false) {
 #pythonWorkerPanel .pw-RUNNING{background:#315f91}
 #pythonWorkerPanel .pw-SUCCESS{background:#2f6b48}
 #pythonWorkerPanel .pw-FAILED{background:#7f3f46}
+#pythonWorkerPanel .pw-CHECKPOINT{background:#8a5a18;color:#fff}
+#pythonWorkerPanel .pw-TWO_FACTOR,#pythonWorkerPanel .pw-LOGIN_REQUIRED{background:#7f3f46;color:#fff}
+#pythonWorkerPanel .pw-LIMITED{background:#806626;color:#fff}
+#pythonWorkerPanel details{margin-top:5px}
+#pythonWorkerPanel details>summary{cursor:pointer;color:#aeb7c4}
+#workspaceRows .rmx-session-state{margin-left:6px}
 #pythonWorkerPanel .pw-PARTIAL{background:#806626}
 #pythonWorkerPanel .pw-error{max-width:460px;white-space:pre-wrap;word-break:break-word;color:#d4a4a8}
 #pythonWorkerPanel .pw-result{max-width:460px;white-space:pre-wrap;word-break:break-word;color:#9fe3b2}
@@ -346,27 +352,27 @@ if (strpos($php, 'REMASK_PYTHON_WORKER_PANEL_V1') === false) {
 <section id="pythonWorkerPanel">
   <div class="pw-head">
     <div>
-      <div class="pw-title">Mass provisioning</div>
-      <div class="pw-sub">Выбранные FB-профили → Job → worker queue → profile context → proxy_check → Meta Business Suite browser flow.</div>
-      <div id="pythonPwWorkerHealth" class="pw-health" data-state="checking">Worker: проверяю…</div>
+      <div class="pw-title">Массовая подготовка</div>
+      <div class="pw-sub">Подготовка комплектов и понятный статус Facebook-сессии для каждого профиля.</div>
+      <div id="pythonPwWorkerHealth" class="pw-health" data-state="checking">Проверяю сервис подготовки…</div>
     </div>
     <div class="pw-actions">
-      <button id="pythonProvisionRetry" type="button" class="btn btn-secondary" disabled>Retry Failed</button>
+      <button id="pythonProvisionRetry" type="button" class="btn btn-secondary" disabled>Повторить доступные</button>
     </div>
   </div>
   <div class="pw-meta">
-    <div class="pw-card"><b id="pythonPwTotal">0</b><span>Total</span></div>
-    <div class="pw-card"><b id="pythonPwQueued">0</b><span>Queued</span></div>
-    <div class="pw-card"><b id="pythonPwRunning">0</b><span>Running</span></div>
-    <div class="pw-card"><b id="pythonPwSuccess">0</b><span>Success</span></div>
-    <div class="pw-card"><b id="pythonPwFailed">0</b><span>Failed</span></div>
+    <div class="pw-card"><b id="pythonPwTotal">0</b><span>Всего</span></div>
+    <div class="pw-card"><b id="pythonPwQueued">0</b><span>В очереди</span></div>
+    <div class="pw-card"><b id="pythonPwRunning">0</b><span>В работе</span></div>
+    <div class="pw-card"><b id="pythonPwSuccess">0</b><span>Готово</span></div>
+    <div class="pw-card"><b id="pythonPwFailed">0</b><span>С ошибкой</span></div>
   </div>
   <div class="pw-progress"><div id="pythonPwProgress"></div></div>
   <div id="pythonPwStatus" class="pw-status">Выберите FB-профили в Workspace.</div>
   <div id="pythonPwJob" class="pw-job"></div>
   <div class="pw-table-wrap">
     <table>
-      <thead><tr><th>FB profile</th><th>Status</th><th>Step</th><th>Result / Error</th></tr></thead>
+      <thead><tr><th>FB-профиль</th><th>Статус</th><th>Шаг</th><th>Результат</th></tr></thead>
       <tbody id="pythonPwRows"><tr><td colspan="4">Нет активного Job.</td></tr></tbody>
     </table>
   </div>
