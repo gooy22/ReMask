@@ -243,6 +243,7 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
 
         bootstrap = await session.bootstrap(
             allow_business_loginpage_probe=True, require_actor_match=False,
+            prefer_business_home=True,
         )
 
         self.assertEqual(bootstrap.actor_id, expected_actor)
