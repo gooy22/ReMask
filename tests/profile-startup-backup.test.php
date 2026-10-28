@@ -88,6 +88,37 @@ try {
     assertStartup(($linkedRestoredCookies['xs'] ?? '') === 'linked-old-xs',
         'symlinked snapshot was not restored on the volume file');
 
+    // A damaged unrelated row must not hide this profile's valid archive snapshot.
+    $archivePath = $dir.'/accounts.json.bak-fixture';
+    $archiveStore = new FbAccountSerializer($archivePath);
+    $archiveOther = new FbAccount('archive-other', 'fixture-token',
+        json_encode([['name'=>'c_user','value'=>'67890'],['name'=>'xs','value'=>'other-xs']]), null, null);
+    $archiveTarget = new FbAccount('archive-target', 'fixture-token',
+        json_encode([['name'=>'c_user','value'=>'12345'],['name'=>'xs','value'=>'archive-xs']]), null, null);
+    $archiveStore->addOrUpdateAccount($archiveOther);
+    $archiveStore->addOrUpdateAccount($archiveTarget);
+    $archiveRows = json_decode((string)file_get_contents($archivePath), true, 512, JSON_THROW_ON_ERROR);
+    foreach ($archiveRows as &$archiveRow) {
+        if (($archiveRow['name'] ?? '') === 'archive-other') {
+            $archiveRow['credentials_encrypted'] = 'v1:malformed-fixture';
+        }
+    }
+    unset($archiveRow);
+    file_put_contents($archivePath, AtomicJsonFile::encode($archiveRows));
+    $fullArchiveReadFailed = false;
+    try {
+        $archiveStore->getAccountByName('archive-target');
+    } catch (Throwable $ignored) {
+        $fullArchiveReadFailed = true;
+    }
+    assertStartup($fullArchiveReadFailed, 'fixture did not include an unrelated damaged row');
+    $archiveTargetRead = $archiveStore->getAccountByNameFromSnapshot('archive-target');
+    assertStartup($archiveTargetRead instanceof FbAccount,
+        'valid target row was hidden by an unrelated damaged row');
+    $archiveTargetCookies = RemaskCookieSession::map((array)$archiveTargetRead->cookies);
+    assertStartup(($archiveTargetCookies['xs'] ?? '') === 'archive-xs',
+        'target archive session changed during isolated read');
+
     // Legacy plaintext migration still encrypts both the current profile and its backup.
     putenv('REMASK_ENCRYPT_PROFILE_JSON=0');
     putenv('REMASK_CREDENTIALS_KEY');
