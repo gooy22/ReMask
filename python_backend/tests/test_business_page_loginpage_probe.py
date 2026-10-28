@@ -1,5 +1,4 @@
 import unittest
-from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from app.business_fan_page_contracts import command, execute
@@ -73,8 +72,16 @@ class BusinessPageLoginpageProbeTests(unittest.TestCase):
                           before_submit=AsyncMock())
 
     def test_unknown_page_operation_cannot_use_the_probe(self):
+        row = command("READ_FP", **bindings_for("READ_FP"))
         with self.assertRaises(RemoteRequestError):
-            self.validate("UNREVIEWED_PAGE_MUTATION")
+            self.web._validate_business_loginpage_probe(
+                "UNREVIEWED_PAGE_MUTATION", row["doc_id"], row["variables"],
+                friendly_name=row["friendly_name"],
+                endpoint_url=row["endpoint_url"],
+                request_envelope=None, before_submit=None,
+                business_context_id=BUSINESS, multipart_files=None,
+                read_timeout_seconds=30,
+            )
 
 
 class BusinessPageContractExecutionTests(unittest.IsolatedAsyncioTestCase):
