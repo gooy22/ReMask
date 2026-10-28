@@ -66,7 +66,7 @@ assert.ok(completionSource.includes('status.textContent=remaskPrivatePageReadFai
     child.textContent==='Проверить черновик в Meta'),false,'only the task with its own saved draft gets a read button');
   assert.match(controls.jobItems.textContent,new RegExp(draft));
   assert.match(controls.jobItems.textContent,new RegExp(campaign));
-  assert.match(controls.jobItems.textContent,/квитанция, чтение не подтверждено/);
+  assert.match(controls.jobItems.textContent,/результат не проверен/);
   assert.equal(controls.activateJobAds.disabled,true);
   assert.equal(controls.retryFailed.disabled,true,'legacy retries must not receive a private worker handle');
   assert.equal(JSON.parse(storage.get('remask_private_source_job_v1')).job_id,id);
