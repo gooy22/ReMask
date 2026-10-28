@@ -946,7 +946,7 @@ function pythonWorkerItemErrorMessage(item) {
     failedStep && failedStep.error_message
   ].map(function(value) { return String(value || '').trim(); }).filter(Boolean);
   return messages.find(function(value) {
-    return /checkpoint_required|checkpoint_redirect|facebook\\.com\\/checkpoint\\//i.test(value);
+    return /checkpoint_required|checkpoint_redirect|facebook[.]com[/]checkpoint[/]/i.test(value);
   }) || messages[0] || '';
 }
 
