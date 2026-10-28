@@ -31,6 +31,7 @@ class JobAccepted(BaseModel):
     job_id: str
     status: JobStatus
     items_total: int
+    blocked_profiles: list[str] = Field(default_factory=list)
 
 class RetryResponse(BaseModel):
     job_id: str
