@@ -1389,10 +1389,12 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
                 resume_state={**saved_grant,**prior}
                 async with _browser_lease(session,v8_old_space_mb=256) as browser:
                     try:
-                        full_access=await ensure_existing_page_full_control(
-                            browser,config,business,checkpoint,resume_state)
+                        # Verify the exact BM/RK pair in Business Suite before
+                        # changing Page ownership or permissions.
                         rk_full_access=await ensure_ad_account_full_control(
                             browser,business,account,rk_name,checkpoint,resume_state)
+                        full_access=await ensure_existing_page_full_control(
+                            browser,config,business,checkpoint,resume_state)
                     except Exception as exc:
                         diagnostic={
                             'stage':'existing_page_full_control',
