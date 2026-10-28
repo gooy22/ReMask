@@ -23,6 +23,7 @@ from .private_ads_document import (_auth_gate, _json_payloads, _JSON_SCRIPT_RE,
                                    _response_only, _strict_json, _strict_json_decoder)
 from .provisioning.models import ProvisioningError
 from .meta_auth_document import has_login_form
+from .private_http_metrics import measure_phase
 
 log = logging.getLogger("remask.private_ads_http")
 
@@ -409,7 +410,11 @@ class AdsManagerPrivateHttp:
             proof_fields = ["id", "account_id", "business"]
             if account_read_fields is not None:
                 proof_fields.extend(name for name in account_read_fields if name not in proof_fields)
-            account = await client.get("/act_" + account_id, {"fields": proof_fields})
+            if account_read_fields is None:
+                account = await client.get("/act_" + account_id, {"fields": proof_fields})
+            else:
+                with measure_phase("account_proof"):
+                    account = await client.get("/act_" + account_id, {"fields": proof_fields})
             # JSON can carry an ID as an exact integer. Never accept floats,
             # booleans or rounded/coerced IDs when proving an advertising scope.
             observed = account.get("id")
