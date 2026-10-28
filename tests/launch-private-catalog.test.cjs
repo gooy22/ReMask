@@ -203,9 +203,10 @@ assert.equal(Boolean(controls.reviewLaunch.title),false);
 assert.equal(Boolean(controls.reviewStatus.textContent),false);
 assert.equal(controls.preflight.textContent,'Загрузить сохранённые РК');
 assert.equal(context.remaskPrivatePageReadFailure({message:'Meta requires sign-in',payload:{code:'PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE',message:'Meta requires sign-in'}},'15','act_120249392950240046'),
-  'Профиль 15 / РК 120249392950240046: Meta вернула BUSINESS_LOGIN_GATE; список FP не загружен.');
+  'Профиль 15 / РК 120249392950240046: Meta остановила доступ. FP не загружены; новые действия запрещены.');
 const safePageFailure=context.remaskPrivatePageReadFailure({message:'xs=PRIVATE_SECRET'},'15','act_120249392950240046');
-assert.match(safePageFailure,/PAGE_READ_FAILED/);
+assert.match(safePageFailure,/не удалось загрузить FP из Meta/);
+assert.doesNotMatch(safePageFailure,/PAGE_READ_FAILED|BUSINESS_LOGIN_GATE|SESSION_EXPIRED/);
 assert.doesNotMatch(safePageFailure,/PRIVATE_SECRET/);
 console.log('Private Launch catalog and funding truth checks passed');
 
@@ -783,10 +784,12 @@ console.log('Private Launch catalog and funding truth checks passed');
     };
     vm.createContext(pageCtx);
     await vm.runInContext('(async()=>{\n'+pageLoader+'\n})()',pageCtx);
-    assert.match(pageCtx.status.textContent,/BUSINESS_LOGIN_GATE/);
+    assert.match(pageCtx.status.textContent,/Meta остановила доступ/);
+    assert.doesNotMatch(pageCtx.status.textContent,/BUSINESS_LOGIN_GATE|SESSION_EXPIRED/);
     assert.equal(Object.hasOwn(pageCtx.state.targetBindingAssets.pages,targetKey),false,
       'a rejected live read must not leave stale Pages selectable for this exact RK');
-    assert.match(pageCtx.state.targetBindingAssets.pageReadErrors[targetKey],/BUSINESS_LOGIN_GATE/);
+    assert.match(pageCtx.state.targetBindingAssets.pageReadErrors[targetKey],/Meta остановила доступ/);
+    assert.doesNotMatch(pageCtx.state.targetBindingAssets.pageReadErrors[targetKey],/BUSINESS_LOGIN_GATE|SESSION_EXPIRED/);
     assert.equal(pageRenderCount,1);
   }
   assert.match(overlay,/BUSINESS_LOGIN_GATE/);

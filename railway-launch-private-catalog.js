@@ -8,11 +8,14 @@ function remaskPrivatePageReadFailure(error, profile, accountId) {
     const accountLabel=String(accountId||'').replace(/^act_/,'').replace(/[^0-9]/g,'').slice(0,30)||'?';
     const scope=`Профиль ${profileLabel} / РК ${accountLabel}`;
     if(gate==='BUSINESS_LOGIN_GATE')
-        return `${scope}: Meta вернула BUSINESS_LOGIN_GATE; список FP не загружен.`;
-    if(gate)
-        return `${scope}: требуется проверка Facebook-сессии (${gate}); список FP не загружен.`;
-    const code=rawCode.match(/^[A-Z0-9_]{1,100}$/)?.[0]||'PAGE_READ_FAILED';
-    return `${scope}: не удалось загрузить FP (${code}).`;
+        return `${scope}: Meta остановила доступ. FP не загружены; новые действия запрещены.`;
+    if(gate==='CHECKPOINT_REQUIRED')
+        return `${scope}: чекпоинт Meta. Аккаунт остановлен, новые задачи запрещены.`;
+    if(gate==='TWO_FACTOR_REQUIRED')
+        return `${scope}: Meta запросила подтверждение 2FA. FP не загружены.`;
+    if(gate==='SESSION_EXPIRED')
+        return `${scope}: Meta не подтвердила вход. FP не загружены.`;
+    return `${scope}: не удалось загрузить FP из Meta. Попробуйте позже.`;
 }
 function remaskFundingState(info) {
     if (!info) return {label:'NOT LOADED',cls:'muted'};
