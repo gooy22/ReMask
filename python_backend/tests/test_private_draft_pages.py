@@ -136,13 +136,15 @@ class DraftPageTests(unittest.IsolatedAsyncioTestCase):
             'ad_account_promotable_objects':{'promotable_page_ids':['555555']}}))
         values = {'ad_account_id':'111111','business_id':'222222','execution_mode':'DRAFT'}
         rows = ([{'id':'555555','name':'Page','business_id':'222222'}],True)
-        with patch('app.private_ads_reads.AdsManagerPrivateHttp.open',new=AsyncMock(return_value=http)), \
+        open_ads = AsyncMock(return_value=http)
+        with patch('app.private_ads_reads.AdsManagerPrivateHttp.open',new=open_ads), \
                 patch('app.private_business_fan_page_create.read_pages',new=AsyncMock(return_value=rows)):
             result = await catalog.pages(self.web,values)
             self.assertFalse(result['ad_account_page_access_verified'])
-            self.assertNotIn('ad_account_promotable_objects',http.get.call_args.args[1]['fields'])
+            open_ads.assert_not_awaited()
             result = await catalog.pages(self.web,{**values,'execution_mode':'PUBLISH'})
             self.assertTrue(result['ad_account_page_access_verified'])
+            open_ads.assert_awaited_once()
             self.assertIn('ad_account_promotable_objects',http.get.call_args.args[1]['fields'])
 
 
