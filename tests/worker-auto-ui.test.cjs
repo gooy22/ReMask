@@ -610,6 +610,12 @@ vm.createContext(sandbox); vm.runInContext(source.slice(start,end), sandbox);
   const detailsEnd = source.indexOf('function pythonWorkerSelectionRefresh()', detailsStart);
   const detailsSandbox = {pythonWorkerItemCanRetry:()=>true};
   vm.createContext(detailsSandbox);
+  const authCodeStart=source.indexOf('function pythonWorkerIsProfileAuthBlockedCode(');
+  const authCodeEnd=source.indexOf('\nasync function pythonWorkerProfilePreflight',authCodeStart);
+  vm.runInContext(source.slice(authCodeStart,authCodeEnd),detailsSandbox);
+  const errorCodeStart=source.indexOf('function pythonWorkerItemErrorCode(item)');
+  const errorCodeEnd=source.indexOf('\nfunction pythonWorkerItemErrorMessage',errorCodeStart);
+  vm.runInContext(source.slice(errorCodeStart,errorCodeEnd),detailsSandbox);
   vm.runInContext(source.slice(detailsStart, detailsEnd), detailsSandbox);
   const details = detailsSandbox.pythonWorkerFailureDetails({
     provisioning_steps:[{status:'FAILED',result:{
