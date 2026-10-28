@@ -1094,6 +1094,12 @@ function pythonWorkerTranslateWorkspaceReadiness(cell) {
 }
 
 function pythonWorkerApplyWorkspaceProfileStatuses() {
+  const statusFilter = document.getElementById('workspaceStatusFilter');
+  if (statusFilter) {
+    for (const option of statusFilter.options || []) {
+      if (/требуют внимания/i.test(String(option.textContent || ''))) option.textContent = 'Нужна проверка';
+    }
+  }
   const body = document.getElementById('workspaceRows');
   if (!body) return;
   for (const row of body.querySelectorAll('tr[data-key]')) {
