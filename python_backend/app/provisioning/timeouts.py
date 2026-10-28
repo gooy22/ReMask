@@ -38,7 +38,8 @@ def private_create_step_timeout(step: ProvisioningStep) -> float:
     if step not in {ProvisioningStep.BUSINESS, ProvisioningStep.AD_ACCOUNT}:
         raise ValueError(f"unsupported private CREATE step: {step}")
     explicit = _env_float("REMASK_PRIVATE_" + step.value + "_STEP_TIMEOUT")
-    return max(60.0, min(explicit, 900.0)) if explicit is not None else 240.0
+    default = 600.0 if step is ProvisioningStep.BUSINESS else 240.0
+    return max(60.0, min(explicit, 900.0)) if explicit is not None else default
 
 
 def provisioning_hard_timeout(steps: Iterable[ProvisioningStep | str]) -> float:
