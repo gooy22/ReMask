@@ -117,6 +117,57 @@ class JobStore:
             CREATE INDEX IF NOT EXISTS idx_items_job_created ON job_items(job_id, created_at);
             CREATE INDEX IF NOT EXISTS idx_tasks_item ON job_tasks(item_id, position);
 
+            ''')
+
+            # Forward-compatible migration for databases created before
+            # retryability became first-class state.
+            for table in ("job_items", "job_tasks"):
+                columns = {
+                    str(row["name"])
+                    for row in con.execute(f"PRAGMA table_info({table})").fetchall()
+                }
+                if "retryable" not in columns:
+                    con.execute(
+                        f"ALTER TABLE {table} "
+                        "ADD COLUMN retryable INTEGER NOT NULL DEFAULT 0"
+                    )
+
+            # Older jobs allowed only one item per profile. Bulk units have
+            # independent checkpoints but keep the real profile identity.
+            unique_profile_index = any(
+                row["unique"] and [col["name"] for col in con.execute(
+                    "SELECT * FROM pragma_index_info(?)", (row["name"],)
+                )] == ["job_id", "profile_id"]
+                for row in con.execute("PRAGMA index_list(job_items)").fetchall()
+            )
+            if unique_profile_index:
+                schema = con.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='job_items'").fetchone()["sql"]
+                new_schema = re.sub(r",\s*UNIQUE\s*\(\s*job_id\s*,\s*profile_id\s*\)", "", schema, flags=re.I)
+                new_schema = re.sub(r"^(CREATE TABLE(?: IF NOT EXISTS)?)\s+(?:\"job_items\"|job_items)", r"\1 job_items_bulk", new_schema, count=1, flags=re.I)
+                if new_schema == schema or "UNIQUE(job_id, profile_id)" in new_schema:
+                    raise RuntimeError("Could not migrate bulk job items schema")
+                con.commit()
+                con.execute("PRAGMA foreign_keys=OFF")
+                try:
+                    con.execute("BEGIN IMMEDIATE")
+                    con.execute(new_schema)
+                    con.execute("INSERT INTO job_items_bulk SELECT * FROM job_items")
+                    con.execute("DROP TABLE job_items")
+                    con.execute("ALTER TABLE job_items_bulk RENAME TO job_items")
+                    con.execute("CREATE INDEX idx_items_status ON job_items(status)")
+                    if con.execute("PRAGMA foreign_key_check").fetchall():
+                        raise RuntimeError("Bulk job migration broke a foreign key")
+                    con.commit()
+                except BaseException:
+                    con.rollback()
+                    raise
+                finally:
+                    con.execute("PRAGMA foreign_keys=ON")
+            # The legacy bulk-item migration rebuilds job_items. Install these
+            # triggers only after that migration so SQLite never carries a
+            # trigger bound to the table being renamed.
+            con.executescript(
+                """
             CREATE TRIGGER IF NOT EXISTS capture_item_checkpoint_insert
             AFTER INSERT ON job_items
             WHEN UPPER(COALESCE(NEW.error_code,''))='CHECKPOINT_REQUIRED'
@@ -196,52 +247,8 @@ class JobStore:
             ON CONFLICT(profile_id) DO UPDATE SET
               checked_at=MAX(profile_terminal_statuses.checked_at,excluded.checked_at),
               message=excluded.message;
-            ''')
-
-            # Forward-compatible migration for databases created before
-            # retryability became first-class state.
-            for table in ("job_items", "job_tasks"):
-                columns = {
-                    str(row["name"])
-                    for row in con.execute(f"PRAGMA table_info({table})").fetchall()
-                }
-                if "retryable" not in columns:
-                    con.execute(
-                        f"ALTER TABLE {table} "
-                        "ADD COLUMN retryable INTEGER NOT NULL DEFAULT 0"
-                    )
-
-            # Older jobs allowed only one item per profile. Bulk units have
-            # independent checkpoints but keep the real profile identity.
-            unique_profile_index = any(
-                row["unique"] and [col["name"] for col in con.execute(
-                    "SELECT * FROM pragma_index_info(?)", (row["name"],)
-                )] == ["job_id", "profile_id"]
-                for row in con.execute("PRAGMA index_list(job_items)").fetchall()
+                """
             )
-            if unique_profile_index:
-                schema = con.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='job_items'").fetchone()["sql"]
-                new_schema = re.sub(r",\s*UNIQUE\s*\(\s*job_id\s*,\s*profile_id\s*\)", "", schema, flags=re.I)
-                new_schema = re.sub(r"^(CREATE TABLE(?: IF NOT EXISTS)?)\s+(?:\"job_items\"|job_items)", r"\1 job_items_bulk", new_schema, count=1, flags=re.I)
-                if new_schema == schema or "UNIQUE(job_id, profile_id)" in new_schema:
-                    raise RuntimeError("Could not migrate bulk job items schema")
-                con.commit()
-                con.execute("PRAGMA foreign_keys=OFF")
-                try:
-                    con.execute("BEGIN IMMEDIATE")
-                    con.execute(new_schema)
-                    con.execute("INSERT INTO job_items_bulk SELECT * FROM job_items")
-                    con.execute("DROP TABLE job_items")
-                    con.execute("ALTER TABLE job_items_bulk RENAME TO job_items")
-                    con.execute("CREATE INDEX idx_items_status ON job_items(status)")
-                    if con.execute("PRAGMA foreign_key_check").fetchall():
-                        raise RuntimeError("Bulk job migration broke a foreign key")
-                    con.commit()
-                except BaseException:
-                    con.rollback()
-                    raise
-                finally:
-                    con.execute("PRAGMA foreign_keys=ON")
             self._recover_legacy_fp_page_crashes(con)
             self._recover_common_page_checkpoint_failure(con)
             self._repair_unstarted_prgssteam_rk_timezone(con)
