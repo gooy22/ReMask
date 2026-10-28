@@ -885,7 +885,7 @@ class JobStore:
                    SET status='FAILED',error_code='CHECKPOINT_REQUIRED',
                        error_message=?,retryable=0,updated_at=?
                    WHERE item_id=? AND status<>'SUCCESS'""",
-                (message,item_id,now),
+                (message,now,item_id),
             )
             con.execute(
                 """UPDATE job_items
