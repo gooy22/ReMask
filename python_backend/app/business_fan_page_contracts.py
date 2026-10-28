@@ -56,6 +56,14 @@ async def execute(web, operation, *, business, before_submit=None, **bindings):
         raise ProvisioningError('PRIVATE_STATIC_INTENT_REQUIRED', 'Durable Page intent must precede CREATE.')
     log.info('FP static_contract operation=%s doc_id=%s business=%s revision=%s browser_started=False',
         operation, row['doc_id'], business, manifest()['revision'])
-    return await web.graphql(row['doc_id'], row['variables'], friendly_name=row['friendly_name'],
-        endpoint_url=row['endpoint_url'], business_context_id=business,
-        **({'before_submit': before_submit} if before_submit is not None else {}))
+    kwargs = {
+        'friendly_name': row['friendly_name'],
+        'endpoint_url': row['endpoint_url'],
+        'business_context_id': business,
+        'business_loginpage_probe': operation,
+    }
+    if row['operation_kind'] == 'query':
+        kwargs['read_timeout_seconds'] = 30
+    if before_submit is not None:
+        kwargs['before_submit'] = before_submit
+    return await web.graphql(row['doc_id'], row['variables'], **kwargs)
