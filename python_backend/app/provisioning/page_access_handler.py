@@ -21,7 +21,7 @@ from ..private_page_access import (
 from .advertising_page import AdvertisingPageStore, _PAGE_LOCK, ensure_common_page
 from .models import ProvisioningError, ProvisioningStep
 from .ad_account_handler import _normalize_ad_account_id
-from .page_full_control import ensure_existing_page_full_control
+from .page_full_control import ensure_existing_page_full_control, MODE as EXISTING_PAGE_FULL_CONTROL_MODE
 from .ad_account_full_control import ensure_ad_account_full_control
 
 log=logging.getLogger('remask.page_access')
@@ -35,6 +35,22 @@ def _browser_lease(session: Any, **kwargs: Any):
     return FacebookBusinessBrowser(
         session.context,
         **kwargs,
+    )
+
+
+def _browser_full_control_requested(params: Any) -> bool:
+    """Prepare full-control checks use Business Suite's exact identity readers."""
+    return (
+        isinstance(params, dict)
+        and params.get("access_mode") == EXISTING_PAGE_FULL_CONTROL_MODE
+    )
+
+
+def _private_http_page_access(session: Any, params: Any) -> bool:
+    """Keep the established browser route for Prepare's full-control workflow."""
+    return (
+        getattr(session, "private_only", False) is True
+        and not _browser_full_control_requested(params)
     )
 
 
@@ -1201,7 +1217,16 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
         elif context_binding:
             verified=True
             evidence=[context_binding]
-        elif getattr(session, 'private_only', False) is True:
+        elif _browser_full_control_requested(params):
+            # Defer this exact BM/RK proof to the Business Suite helpers below.
+            # They read the selected portfolio/account and actor before assigning rights.
+            verified = True
+            evidence = [{
+                'source': 'business_suite_exact_asset_check_deferred',
+                'business_id': business,
+                'ad_account_id': account,
+            }]
+        elif _private_http_page_access(session, params):
             from .private_create_handlers import _rk_inventory
             proof = await _rk_inventory(await session.facebook_web(), business, rk_name, account)
             verified = proof.get('id') == account
@@ -1316,11 +1341,13 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
             await store.patch(grants={**grants,business:{**grants.get(business,{}),**patch}})
         await state.checkpoint(item,profile,scope,ProvisioningStep.PAGE_ACCESS,
             {'page_id':config['page_id'],'business_id':business,'ad_account_id':account,**patch})
-    private_http = getattr(session, 'private_only', False) is True
+    browser_full_control = _browser_full_control_requested(params)
+    private_http = _private_http_page_access(session, params)
     await checkpoint({'diagnostic':{'stage':'target_page_access_start','business_id':business,
-        'ad_account_id':account,'owner_bm_required':private_http,
-        'access_mode':'existing_page_full_control' if private_http else 'shared_ads_access'}})
-    if getattr(session, 'private_only', False) is True:
+        'ad_account_id':account,'owner_bm_required':private_http or browser_full_control,
+        'access_mode':EXISTING_PAGE_FULL_CONTROL_MODE if private_http or browser_full_control
+            else 'shared_ads_access'}})
+    if private_http:
         from ..private_page_ownership import ensure_private_page_full_control
         lock_key = str(config['page_id'])
         lock = _PRIVATE_PAGE_LOCKS.get(lock_key)
