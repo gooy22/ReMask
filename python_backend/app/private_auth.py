@@ -26,6 +26,8 @@ def private_auth_error(exc):
         code = "CHECKPOINT_REQUIRED"
     elif "SESSION_EXPIRED" in route_gates or identity_unconfirmed:
         code = "SESSION_EXPIRED"
+    elif isinstance(payload, dict) and payload.get("bootstrap_fallback_exhausted") is True:
+        code = "SESSION_EXPIRED"
     elif "BUSINESS_LOGIN_GATE" in route_gates:
         code = "BUSINESS_LOGIN_GATE"
     elif not reasons and getattr(exc, 'transport_stage', '') == 'bootstrap':

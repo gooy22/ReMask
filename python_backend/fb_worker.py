@@ -1043,11 +1043,12 @@ class FacebookWebSession:
                                 session, expected_actor, auth_attempts,
                                 require_actor_match=require_actor_match,
                             )
-                        error = AuthenticationError("Meta requires session restoration before bootstrap.")
-                        error.meta_payload = {"business_precheck": auth_attempts}
-                        error.request_may_have_been_sent = False
-                        error.transport_stage = "bootstrap"
-                        raise error
+                        # A Business login page is not proof that the whole
+                        # Facebook session is unusable. Match the prior bundle
+                        # flow: try the remaining profile surfaces and use the
+                        # normal session-expired result only if none yields DTSG.
+                        attempts.append(f"{bootstrap_url}: login/checkpoint")
+                        continue
 
                     if len(candidate_body) > len(best_authenticated_body):
                         best_authenticated_body = candidate_body
@@ -1129,7 +1130,8 @@ class FacebookWebSession:
                     "did not expose a DTSG token on page bootstrap or /ajax/dtsg/. "
                     f"Attempts: {detail}"
                 )
-                error.meta_payload = {"business_precheck": auth_attempts}
+                error.meta_payload = {"business_precheck": auth_attempts,
+                    "bootstrap_fallback_exhausted": True}
                 error.request_may_have_been_sent = False
                 error.transport_stage = "bootstrap"
                 raise error
@@ -2151,13 +2153,17 @@ class FacebookWebSession:
                         page_input.get("categories"),
                     )
                 )
-                prefer_business_home = scoped_probe == "READ_RK"
-                bootstrap = await self.bootstrap(
-                    force=prefer_business_home,
-                    allow_business_loginpage_probe=True,
-                    require_actor_match=not (scoped_read_only or page_create_prechecked),
-                    prefer_business_home=prefer_business_home,
-                )
+                if urlsplit(endpoint).hostname == "business.facebook.com":
+                    # Preserve the bundle's Business-first token and cache.
+                    # Replacing it with a generic /me token before each exact
+                    # Business request breaks the session context used by the
+                    # successful prechecks and by the following CREATE.
+                    bootstrap = await self.bootstrap()
+                else:
+                    bootstrap = await self.bootstrap(
+                        allow_business_loginpage_probe=True,
+                        require_actor_match=not (scoped_read_only or page_create_prechecked),
+                    )
                 current_actor = str(self.profile.cookies.get("c_user") or "").strip()
                 if not current_actor.isdigit() or bootstrap.actor_id != current_actor:
                     raise RemoteRequestError(
