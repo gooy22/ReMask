@@ -51,7 +51,7 @@ class BusinessPageHTTPTests(unittest.IsolatedAsyncioTestCase):
         self.meta = TwoBundleMeta()
         self.meta.mark_business_page_create_precheck_verified = Mock(
             side_effect=lambda business, actor, name, bio, categories: (
-                business == BM2 and actor == UID and bool(name)
+                business in {BM1, BM2} and actor == UID and bool(name)
                 and bio == '' and categories == ['242822000000000']))
         self.context = SimpleNamespace(profile_id='15', cookies={'c_user': UID}, pages=[], businesses=[], ad_accounts=[])
         self.session = SimpleNamespace(context=self.context, private_only=True,
