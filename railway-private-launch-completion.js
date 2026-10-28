@@ -16,7 +16,7 @@ apiJson = async function(url, options = {}) {
             && (typeof options.body === 'string' || typeof options.body?.get === 'function')) {
         const input = typeof options.body === 'string' ? new URLSearchParams(options.body) : options.body;
         const body = new URLSearchParams();
-        for (const key of ['type','q','limit','offset','force']) {
+        for (const key of ['type','q','limit','offset','force','cache_only']) {
             const value = input.get(key);
             if (value !== null) body.set(key, value);
         }
@@ -26,9 +26,8 @@ apiJson = async function(url, options = {}) {
             || (typeof remaskModuleControls!=='undefined' && remaskModuleControls.isTargetingType(type) ? type : null);
         const scope=resource ? remaskPrivateTargetingScope() : null;
         if(scope){
-            // Country, region and language IDs are stable Meta reference data.
-            // Use the installed local Meta module map first; it carries no
-            // account permission and cannot authorize a draft mutation.
+            // Country and language IDs are stable local reference data. It is
+            // suggestion-only and never grants permission to create a draft.
             if(['locations','locales'].includes(resource) && input.get('force')!=='1'){
                 const moduleBody=new URLSearchParams();
                 for(const key of ['type','q','limit','offset']){
@@ -49,7 +48,34 @@ apiJson = async function(url, options = {}) {
                     if(moduleSuggestion)return moduleResult;
                 }catch(error){
                     if(error?.message==='TARGETING_SELECTION_CHANGED' || options.signal?.aborted)throw error;
-                    // Missing city or postal data continues through the exact-account Meta search.
+                    // Missing local geo data continues through the shared cache.
+                }
+            }
+            // Try the workspace's suggestion-only reference before a private
+            // profile read. This avoids rechecking the Meta session on every
+            // typed query; cache entries never authorize the later draft POST.
+            if(input.get('force')!=='1'){
+                const cacheBody=new URLSearchParams();
+                for(const key of ['type','q','limit','offset']){
+                    const value=input.get(key);if(value!==null)cacheBody.set(key,value);
+                }
+                cacheBody.set('cache_only','1');
+                try{
+                    const cached=await remaskPrivateOriginalTargetingApiJson(
+                        'ajax/metaTemplateTargetingSearch.php',{...options,body:cacheBody.toString()});
+                    const current=remaskPrivateTargetingScope();
+                    if(JSON.stringify(current)!==JSON.stringify(scope))throw new Error('TARGETING_SELECTION_CHANGED');
+                    const usable=cached?.checked_live===false
+                        && cached?.source==='private_meta_template_reference'
+                        && cached?.template_account_bound===false
+                        && Array.isArray(cached?.data) && cached.data.length>0
+                        && cached?.availability!=='NOT_LOADED';
+                    if(usable)return {...cached,profile:scope.profile,account_id:scope.account_id,
+                        resource,checked_live:false,account_scope_verified:false,
+                        _cache:{...(cached._cache||{}),hit:true,cached_only:true,shared_reference:true}};
+                }catch(error){
+                    if(error?.message==='TARGETING_SELECTION_CHANGED' || options.signal?.aborted)throw error;
+                    // Cache failure must not change the established exact-account fallback.
                 }
             }
             for(const [key,value] of Object.entries(scope))body.set(key,value);
