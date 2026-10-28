@@ -431,7 +431,7 @@ const captured = [];
 const state = {workerOnline:true, busy:false};
 const storage = new Map();
 const sandbox = {document:{body,createElement(tag) { const el = new Element(tag); elements.push(el); return el; }},
-  crypto:webcrypto, pythonWorkerUiState:state, pythonWorkerSelectedProfiles:()=>['7','8'],
+  crypto:webcrypto, pythonWorkerUiState:state, pythonWorkerProfileSessionStatuses:new Map(), pythonWorkerSelectedProfiles:()=>['7','8'],
   pythonWorkerEnsureBmModalStyle(){},pythonWorkerCloseOwnBmModal(){},pythonWorkerSelectionRefresh(){},
   pythonWorkerClearBatchState(){},pythonWorkerSetText(){},localStorage:{setItem(k,v){storage.set(k,v);},getItem(k){return storage.get(k)||null;},removeItem(k){storage.delete(k);}},
   async pythonWorkerBridge(payload) { captured.push(JSON.parse(JSON.stringify(payload))); if (captured.length === 1) throw Error('lost response'); return {job:{job_id:'saved-job'}}; },
