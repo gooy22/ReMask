@@ -1266,7 +1266,13 @@ class JobStore:
         ))
         if not clean:
             return []
-        return await asyncio.to_thread(self._terminal_checkpoint_profiles_sync, clean)
+        try:
+            return await asyncio.to_thread(self._terminal_checkpoint_profiles_sync, clean)
+        except sqlite3.OperationalError as exc:
+            if 'no such table: profile_terminal_statuses' not in str(exc):
+                raise
+            await self.init()
+            return await asyncio.to_thread(self._terminal_checkpoint_profiles_sync, clean)
 
     def _terminal_checkpoint_profiles_sync(self, profile_ids: list[str]) -> list[str]:
         placeholders = ','.join('?' for _ in profile_ids)
