@@ -1120,11 +1120,12 @@ async function remaskPrivateDelivery(status){
 if(typeof setJobDeliveryStatus==='function')setJobDeliveryStatus=remaskPrivateDelivery;
 
 async function remaskPrivateRestoreSourceJob(){
-    let saved=null;
-    try{saved=JSON.parse(localStorage.getItem('remask_private_source_job_v1')||'null');}catch(_){}
     let linked='';
     try{linked=new URL(window.location.href).searchParams.get('private_job')||'';}catch(_){}
-    const jobId=linked||saved?.job_id;
+    // Restore only the exact URL handle. A localStorage fallback can attach a
+    // previous profile's completed job to a fresh Launch form after the user
+    // selects a different profile.
+    const jobId=linked;
     if(typeof jobId==='string'&&/^[a-f0-9]{32}$/.test(jobId)){
         const job=await remaskPrivatePollJob(jobId);
         if(remaskPrivateIsJob(job))remaskPrivateRememberJob(jobId);
