@@ -10,6 +10,16 @@
       "page_name": "PrgssTeam",
       "authorized_at": 1791527732,
       "reason": "Operator authorized retiring the old unknown Page CREATE on 2026-10-09 at 06:35:32 UTC after repeated unsuccessful reconciliation. This does not prove that the old submit failed."
+    },
+    {
+      "id": "operator-page-reset-20261028-profile15-bm1270807378563360",
+      "item_id": "workspace-business-page-facebook:61594580732804-1270807378563360",
+      "profile_id": "15",
+      "business_id": "1270807378563360",
+      "actor_id": "61594580732804",
+      "page_name": "PrgssTeam",
+      "authorized_at": 1793172431,
+      "reason": "Operator authorized retiring the retained legacy Page CREATE during the requested kit recovery on 2026-10-28 at 07:27:11 UTC. Prior exact Business inventory was empty on three reconciliation reads and managed Page recovery found no candidate; the original submit result remains unknown and is archived."
     }
   ]
 }
