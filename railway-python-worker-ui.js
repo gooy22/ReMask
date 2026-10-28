@@ -922,7 +922,15 @@ function pythonWorkerItemErrorCode(item) {
     failedTask && failedTask.error_code,
     failedStep && failedStep.error_code
   ].map(function(value) { return String(value || '').trim().toUpperCase(); }).filter(Boolean);
-  return candidates.find(pythonWorkerIsProfileAuthBlockedCode) || candidates[0] || '';
+  const authPriority = [
+    'CHECKPOINT_REQUIRED',
+    'TWO_FACTOR_REQUIRED',
+    'FACEBOOK_TEMPORARILY_BLOCKED',
+    'BUSINESS_LOGIN_GATE',
+    'SESSION_EXPIRED'
+  ];
+  return authPriority.find(function(code) { return candidates.includes(code); }) ||
+    candidates.find(pythonWorkerIsProfileAuthBlockedCode) || candidates[0] || '';
 }
 
 function pythonWorkerItemErrorMessage(item) {
@@ -932,11 +940,14 @@ function pythonWorkerItemErrorMessage(item) {
   const failedStep = (Array.isArray(item && item.provisioning_steps) ? item.provisioning_steps : []).find(function(step) {
     return step && String(step.status || '').toUpperCase() === 'FAILED';
   });
-  return [
+  const messages = [
     item && item.error_message,
     failedTask && failedTask.error_message,
     failedStep && failedStep.error_message
-  ].map(function(value) { return String(value || '').trim(); }).find(Boolean) || '';
+  ].map(function(value) { return String(value || '').trim(); }).filter(Boolean);
+  return messages.find(function(value) {
+    return /checkpoint_required|checkpoint_redirect|facebook\\.com\\/checkpoint\\//i.test(value);
+  }) || messages[0] || '';
 }
 
 function pythonWorkerJobStatusView(item) {
@@ -985,7 +996,7 @@ function pythonWorkerUserFailureText(item) {
     return 'Meta временно ограничила создание страниц. Повторять сейчас не нужно.';
   }
   if (/2455031|field_exception/i.test(combined)) {
-    return 'Meta отклонила создание страницы. Перед повтором нужно проверить список страниц.';
+    return 'Meta не подтвердила создание страницы. Перед повтором проверь список страниц.';
   }
   if (/CREATE_AD_ACCOUNT_RESULT_UNKNOWN|AD_ACCOUNT_CREATE_RESULT_UNKNOWN/.test(code)) {
     return 'Meta не подтвердила создание рекламного кабинета. Повтор отключён, чтобы не создать дубль.';
@@ -1005,7 +1016,7 @@ function pythonWorkerUserFailureText(item) {
   if (/payment_unconfirmed|payment_required/.test(combined)) {
     return 'Комплект создан, но оплата не подтверждена.';
   }
-  return 'Шаг не выполнен. Причина доступна в разделе «Подробности».';
+  return 'Шаг не выполнен. Откройте «Технические подробности», чтобы увидеть причину.';
 }
 
 function pythonWorkerPrepareStatusLabel(value) {
@@ -1124,7 +1135,7 @@ function pythonWorkerApplyWorkspaceProfileStatuses() {
     const note = document.createElement('div');
     note.className = 'sub rmx-session-status-note';
     const date = pythonWorkerStatusDate(session.checked_at);
-    note.textContent = [String(session.message || ''), date ? 'Последняя проверка ' + date : ''].filter(Boolean).join(' · ');
+    note.textContent = [String(session.message || ''), date ? 'Статус обновлён ' + date : ''].filter(Boolean).join(' · ');
     cell.appendChild(note);
   }
 }
