@@ -779,19 +779,52 @@ function remaskPrivateRememberJob(jobId) {
         window.history.replaceState(null,'',url.toString());
     }catch(_){}
 }
+function remaskPrivateJobStatusLabel(value) {
+    const status=String(value||'').trim().toUpperCase();
+    const labels={QUEUED:'В очереди',RUNNING:'В работе',SUCCESS:'Готово',FAILED:'Ошибка',
+        PARTIAL:'Выполнено частично',CANCELLED:'Остановлено'};
+    return labels[status]||'Неизвестный статус';
+}
+function remaskPrivateErrorLabel(code) {
+    const key=String(code||'').trim().toUpperCase();
+    const labels={
+        PRIVATE_ADS_DRAFT_READ_SPEC_MISMATCH:'Настройки черновика в Meta отличаются от сохранённых.',
+        PRIVATE_ADS_DRAFT_TRANSPORT_UNAVAILABLE:'Не удалось связаться с Meta. Черновик не создан.',
+        PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE:'Meta запросила вход. Проверка черновика не завершена.',
+        PRIVATE_ADS_DRAFT_RESULT_UNKNOWN:'Meta не подтвердила результат. Перед продолжением нужна сверка.',
+        PRIVATE_ADS_DRAFT_INVALID_INPUT:'Проверьте настройки черновика.'
+    };
+    if(labels[key])return labels[key];
+    if(/LOGIN|SESSION_EXPIRED|AUTHENTICATION/.test(key))return 'Meta запросила вход. Действие остановлено.';
+    return 'Не удалось завершить шаг. Подробности доступны ниже.';
+}
+function remaskPrivateAppendDetails(container,title,body) {
+    if(!body)return;
+    const details=document.createElement('details');
+    details.className='remask-private-technical';
+    const heading=document.createElement('summary');heading.textContent=title;
+    const pre=document.createElement('pre');pre.textContent=body;
+    details.appendChild(heading);details.appendChild(pre);container.appendChild(details);
+}
+function remaskPrivateShowReadResult(container,message,technical) {
+    container.replaceChildren();
+    const visible=document.createElement('span');visible.textContent=message;container.appendChild(visible);
+    remaskPrivateAppendDetails(container,'Технические подробности',technical);
+}
 function remaskPrivateRecentJob(job) {
     const select=$('recentJobSelect');
     if(!select||typeof document==='undefined'||!remaskPrivateIsJob(job))return;
     const value='private:'+job.id;
     let entry=Array.from(select.children||[]).find(child=>child.value===value);
     if(!entry){entry=document.createElement('option');entry.value=value;select.appendChild(entry);}
-    entry.textContent='Meta · '+job.id+' · '+job.status;select.value=value;
+    entry.textContent='Meta · '+job.id+' · '+remaskPrivateJobStatusLabel(job.status);select.value=value;
 }
 function remaskPrivateRenderJob(job) {
     if(!remaskPrivateIsJob(job)||typeof document==='undefined')return;
     const body=$('jobItems'),summary=$('jobSummary');
     if(!body||!summary)return;
-    summary.textContent='Задача '+job.id+' · '+job.status+' · сохранённый журнал. Проверка в Meta выполняется отдельно.';
+    summary.textContent='Задача '+job.id+' · '+remaskPrivateJobStatusLabel(job.status)+
+        ' · сохранённый журнал. Проверка в Meta выполняется отдельно.';
     body.replaceChildren();
     for(const item of job.items||[]){
         for(const task of item.tasks||[]){
@@ -799,29 +832,34 @@ function remaskPrivateRenderJob(job) {
             const ids=steps.filter(step=>step.entity_id).map(step=>step.step+': '+step.entity_id+
                 (step.verified===true?' (чтение подтверждено)':' (квитанция, чтение не подтверждено)'));
             const payload=task.payload||{};
+            const errorCode=String(task.error_code||'').trim();
+            const errorMessage=String(task.error_message||'').trim();
+            const errorLabel=(errorCode||errorMessage)?remaskPrivateErrorLabel(errorCode):'';
             const tr=document.createElement('tr');
             for(const value of [String(item.profile_id||'')+' / '+String(payload.ad_account_id||''),
-                task.status,steps.at(-1)?.step||task.action,task.attempt||0,'HTTP/2',ids.join('\n'),
-                '', '', '', '',[task.error_code,task.error_message].filter(Boolean).join(': ')]){
+                remaskPrivateJobStatusLabel(task.status),steps.at(-1)?.step||task.action,task.attempt||0,'HTTP/2',ids.join('\n'),
+                '', '', '', '',errorLabel]){
                 const td=document.createElement('td');td.textContent=String(value??'');
                 td.style.whiteSpace='pre-wrap';tr.appendChild(td);
             }
+            if(errorCode||errorMessage){
+                remaskPrivateAppendDetails(tr.children[10],'Технические подробности',
+                    [errorCode,errorMessage].filter(Boolean).join('\n'));
+            }
             const launch=payload.launch;
             const draftMode=(launch?.base?.execution_mode||launch?.execution_mode)==='DRAFT';
-            const sameProfileTasks=(job.items||[]).filter(row=>row.profile_id===item.profile_id)
-                .flatMap(row=>row.tasks||[]).filter(row=>row.action==='private_launch');
-            if(task.action==='private_launch'&&draftMode&&sameProfileTasks.length===1&&
-                ['SUCCESS','FAILED','PARTIAL'].includes(job.status)&&
+            if(task.action==='private_launch'&&draftMode&&/^[a-f0-9]{32}$/.test(String(task.id||''))&&
+                ['SUCCESS','FAILED','PARTIAL'].includes(String(job.status||'').toUpperCase())&&
                 steps.some(step=>step.step==='ADS_MANAGER:DRAFT'&&step.entity_id)&&
                 !steps.some(step=>step.step==='ADS_MANAGER:PUBLISH')){
                 const button=document.createElement('button');button.type='button';
                 button.className='btn btn-secondary';button.textContent='Проверить черновик в Meta';
                 const result=document.createElement('div');result.className='muted';
                 button.addEventListener('click',async()=>{
-                    button.disabled=true;result.textContent='Читаю сохранённый черновик. Рекламные объекты не создаются…';
+                    button.disabled=true;result.textContent='Читаю сохранённый черновик…';
                     try{
                         const response=await remaskPrivateWorker({action:'private_draft_read',
-                            profile_id:String(item.profile_id),job_id:job.id});
+                            profile_id:String(item.profile_id),job_id:job.id,task_id:String(task.id)});
                         const read=response?.read;
                         if(read?.draft_verified!==false||read?.advertising_mutation_posts!==0||read?.persisted!==false)
                             throw new Error('Сервер не подтвердил режим чтения.');
@@ -833,26 +871,33 @@ function remaskPrivateRenderJob(job) {
                             if(Number.isSafeInteger(value.length))return String(value.type||'value')+':'+value.length;
                             return String(value.type||'unknown');
                         };
-                        const details=rows.map(row=>{
-                            const checks=row.checks&&typeof row.checks==='object'?row.checks:{};
-                            const relationFailures=Object.entries(checks).filter(([,ok])=>ok!==true).map(([key])=>key);
+                        const checks=rows.map(row=>{
+                            const relationChecks=row.checks&&typeof row.checks==='object'?row.checks:{};
+                            const relationFailures=Object.entries(relationChecks).filter(([,ok])=>ok!==true).map(([key])=>key);
                             const fields=Array.isArray(row.settings_diagnostic?.fields)?row.settings_diagnostic.fields:[];
                             const settingFailures=fields.filter(field=>field.matches!==true).map(field=>
                                 field.field+'['+field.count+'] '+safeShape(field.expected)+' / '+safeShape(field.observed));
                             const parent=row.observed?.parent_ad_object_id;
                             const parentValue=parent?.present===true?safeShape(parent):'absent';
-                            return (row.level||'fragment')+': relation '+(relationFailures.length?relationFailures.join(','):'OK')+
-                                '; settings '+(settingFailures.length?settingFailures.join(','):'OK')+'; parent '+parentValue;
-                        }).join(' | ');
+                            return (row.level||'fragment')+': связи '+
+                                (relationFailures.length?relationFailures.join(','):'совпали')+
+                                '; настройки '+(settingFailures.length?settingFailures.join(','):'совпали')+
+                                '; parent '+parentValue;
+                        });
                         const pending=read.pending_stage&&typeof read.pending_stage==='object'
                             ?String(read.pending_stage.stage||'unknown')+' ('+String(read.pending_stage.reason||'unknown')+')':'';
-                        result.textContent='Прочитан черновик '+read.draft_id+'. Связи и настройки совпали: '+matching+'/'+rows.length+
-                            '. '+(details?'Детали: '+details+'. ':'')+
-                            (pending?'Ожидает продолжения: '+pending+'. ':'')+
-                            'Полнота черновика и редактор этим чтением не подтверждены.';
+                        const technical=checks.join('\n')+(pending?'\nОжидающий этап: '+pending:'')+
+                            '\nПолнота черновика и редактор не проверялись.';
+                        remaskPrivateShowReadResult(result,
+                            'Черновик '+String(read.draft_id||'')+' прочитан. Совпало фрагментов: '+
+                                matching+' из '+rows.length+'. Публикация не выполнялась.',
+                            technical);
                     }catch(error){
-                        result.textContent='Чтение Meta не завершено: '+String(error?.code||error?.message||error)+
-                            '. Сохранённые ID и исходная попытка остаются в журнале.';
+                        const code=String(error?.code||'');
+                        const message=String(error?.message||error||'');
+                        const label=code?remaskPrivateErrorLabel(code):'Не удалось прочитать черновик Meta.';
+                        remaskPrivateShowReadResult(result,label,
+                            [code,message].filter(Boolean).join('\n'));
                     }finally{button.disabled=false;}
                 });
                 tr.children[5].appendChild(button);tr.children[5].appendChild(result);
