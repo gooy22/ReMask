@@ -199,6 +199,8 @@ expect(str_contains($endpoint,"'availability'=>'NOT_LOADED'") && str_contains($e
 $catalogOverlay=file_get_contents(dirname(__DIR__).'/railway-launch-private-catalog-overlay.php');
 expect(str_contains($catalogOverlay,"$reference->put($type,trim((string)($input['q'] ?? '')),$result,time())"),
     'verified exact-account reads warm the shared suggestion reference');
+expect(str_contains($catalogOverlay,"in_array($type,['interests','behaviors'],true)"),
+    'only public interest and behavior dictionaries can seed the shared reference');
 expect(str_contains($catalogOverlay,"($result['checked_live'] ?? null)===true && ($result['account_scope_verified'] ?? null)===true"),
     'unverified or cached private responses cannot seed the shared reference');
 echo "Template targeting uses automatic scoped reads without a publishing binding.\n";
