@@ -197,14 +197,19 @@ expect($unbound['targeting']['interests']===$builder['targeting']['interests'],'
 expect(!isset($unbound['targeting']['custom_audiences']) && $unbound['adset']['promoted_object']===['custom_event_type'=>'PURCHASE'],'account assets deferred, generic settings retained');
 expect(!str_contains(json_encode($unbound),'old-owned-hash'),'nested owned media cannot leak into reusable template');
 $endpoint=file_get_contents(dirname(__DIR__).'/railway-template-targeting-search.php');
-expect(!str_contains($endpoint,"\$input['profile']") && !str_contains($endpoint,"\$input['account_id']"),'client cannot choose destination through template lookup');
+$selectedProfileAt=strpos($endpoint,"\$selectedProfile=trim((string)(\$input['profile'] ?? ''))");
+$selectedAccountAt=strpos($endpoint,"\$selectedAccount=preg_replace('/^act_/i', '', trim((string)(\$input['account_id'] ?? '')))");
+$exactScopeAt=strpos($endpoint,'RemaskTemplateTargetingContext::exactCandidate(');
+expect($selectedProfileAt!==false && $selectedAccountAt!==false && $exactScopeAt!==false
+    && $selectedProfileAt<$exactScopeAt && $selectedAccountAt<$exactScopeAt,
+    'live targeting fallback is constrained to the explicitly selected profile and exact RK');
 expect(str_contains($endpoint,"'checked_live'") && str_contains($endpoint,"'account_scope_verified'"),'actual Meta read proof remains required');
 $cachedIndexAt=strpos($endpoint,"\$cacheMeta=\$result['_cache'] ?? []");
 $liveProofAt=strpos($endpoint,"if ((\$result['checked_live'] ?? null) !== true");
 expect($cachedIndexAt!==false && $liveProofAt!==false && $cachedIndexAt<$liveProofAt,
     'saved index values are returned as suggestions before the live-read proof gate');
 $moduleOnlyAt=strpos($endpoint,'if ($moduleOnly)');
-$profileLookupAt=strpos($endpoint,'$profiles = []');
+$profileLookupAt=strpos($endpoint,"\$selectedProfile=trim((string)(\$input['profile'] ?? ''))");
 expect($moduleOnlyAt!==false && $profileLookupAt!==false && $moduleOnlyAt<$profileLookupAt,
     'static GEO/language misses return before opening any profile or Meta context');
 $cacheOnlyAt=strpos($endpoint,'if ($cacheOnly)');
