@@ -198,7 +198,7 @@ expect(!isset($unbound['targeting']['custom_audiences']) && $unbound['adset']['p
 expect(!str_contains(json_encode($unbound),'old-owned-hash'),'nested owned media cannot leak into reusable template');
 $endpoint=file_get_contents(dirname(__DIR__).'/railway-template-targeting-search.php');
 $selectedProfileAt=strpos($endpoint,"\$selectedProfile=trim((string)(\$input['profile'] ?? ''))");
-$selectedAccountAt=strpos($endpoint,"\$selectedAccount=preg_replace('/^act_/i', '', trim((string)(\$input['account_id'] ?? '')))");
+$selectedAccountAt=strpos($endpoint,"\$selectedAccount=preg_replace('/^act_/i','',trim((string)(\$input['account_id'] ?? '')))");
 $exactScopeAt=strpos($endpoint,'RemaskTemplateTargetingContext::exactCandidate(');
 expect($selectedProfileAt!==false && $selectedAccountAt!==false && $exactScopeAt!==false
     && $selectedProfileAt<$exactScopeAt && $selectedAccountAt<$exactScopeAt,
