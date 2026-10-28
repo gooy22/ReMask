@@ -73,6 +73,31 @@ class BusinessPageHTTPTests(unittest.IsolatedAsyncioTestCase):
             return await original(doc, variables, **kwargs)
         self.meta.graphql = wrapped
 
+    async def test_pre_submit_auth_failure_tries_verified_previous_session(self):
+        error = RuntimeError('profile bootstrap needs restoration')
+        error.request_may_have_been_sent = False
+        error.transport_stage = 'business_auth_precheck'
+        self.meta.bootstrap.side_effect = error
+        self.meta.bootstrap_from_previous_session = AsyncMock(
+            return_value=SimpleNamespace(actor_id=UID))
+        result = await self.run_page()
+        self.assertEqual(result['page_ids'], [FP2])
+        self.meta.bootstrap.assert_awaited_once_with(
+            allow_business_loginpage_probe=True, require_actor_match=True)
+        self.meta.bootstrap_from_previous_session.assert_awaited_once_with()
+        self.assertEqual(len(self.meta.posts), 1)
+
+    async def test_pre_submit_auth_failure_never_recovers_after_possible_submit(self):
+        error = RuntimeError('uncertain bootstrap')
+        error.request_may_have_been_sent = True
+        error.transport_stage = 'business_auth_precheck'
+        self.meta.bootstrap.side_effect = error
+        self.meta.bootstrap_from_previous_session = AsyncMock()
+        with self.assertRaises(RuntimeError):
+            await self.run_page()
+        self.meta.bootstrap_from_previous_session.assert_not_awaited()
+        self.assertEqual(len(self.meta.posts), 0)
+
     async def test_uncached_create_binds_exact_business_and_commits_canonical_delegate(self):
         result = await self.run_page()
         self.assertEqual(result['page_ids'], [FP2])
