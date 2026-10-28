@@ -141,6 +141,25 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         business_error.transport_stage = "business_auth_precheck"
         self.assertEqual(private_auth_error(business_error).code, "BUSINESS_LOGIN_GATE")
 
+    async def test_bundle_bootstrap_follows_native_business_handoff_before_profile_fallback(self):
+        session, client = self.session('<a href="/business/loginrequest/fb/">Log in with Facebook</a>',
+            'https://business.facebook.com/business/loginpage/')
+        recovered = {
+            "status": 200,
+            "body": '["DTSGInitialData",[],{"token":"business-token"}]',
+            "url": "https://business.facebook.com/latest/home",
+            "headers": {},
+        }
+        with patch("fb_worker.continue_business_login_gate", new_callable=AsyncMock,
+                   return_value=recovered) as handoff:
+            bootstrap = await session.bootstrap()
+
+        self.assertEqual(bootstrap.fb_dtsg, "business-token")
+        self.assertEqual(bootstrap.source_url, FacebookWebSession.ADS_MANAGER_URL)
+        self.assertEqual(len(client.calls), 1)
+        handoff.assert_awaited_once()
+        session._fetch_dtsg_refresh_token.assert_not_awaited()
+
     async def test_business_loginpage_probe_requires_same_actor_profile_document(self):
         expected_actor = "123456789"
         profile_html = (
