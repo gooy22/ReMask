@@ -580,6 +580,8 @@ vm.createContext(sandbox); vm.runInContext(source.slice(start,end), sandbox);
   vm.runInContext(source.slice(authStart,source.indexOf('\nasync function pythonWorkerProfilePreflight',authStart)),rb);
   const retryHelperStart=source.indexOf('function pythonWorkerItemCanRetry(');
   vm.runInContext(source.slice(retryHelperStart,source.indexOf('\nfunction pythonWorkerErrorText',retryHelperStart)),rb);
+  const errorCodeStart=source.indexOf('function pythonWorkerItemErrorCode(item)');
+  vm.runInContext(source.slice(errorCodeStart,source.indexOf('\\nfunction pythonWorkerItemErrorMessage',errorCodeStart)),rb);
   const retryStart=source.indexOf('async function pythonWorkerRetryFailed(');
   vm.runInContext(source.slice(retryStart,source.indexOf('\nfunction pythonWorkerSetBmDialogStatus',retryStart)),rb);
   rb.pythonWorkerSelectionRefresh();
