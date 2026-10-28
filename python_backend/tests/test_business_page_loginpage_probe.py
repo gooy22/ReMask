@@ -1,9 +1,9 @@
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from app.business_fan_page_contracts import command, execute
-from fb_worker import FacebookWebSession, RemoteRequestError, WebProfile
+from fb_worker import FacebookBootstrap, FacebookWebSession, RemoteRequestError, WebProfile
 
 BUSINESS = "1451903470239662"
 ACTOR = "61594946647826"
@@ -83,6 +83,53 @@ class BusinessPageLoginpageProbeTests(unittest.TestCase):
                 business_context_id=BUSINESS, multipart_files=None,
                 read_timeout_seconds=30,
             )
+
+
+class BusinessPageSessionRecoveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_previous_snapshot_bootstrap_requires_and_preserves_same_actor(self):
+        web = FacebookWebSession(WebProfile(
+            "15", {"c_user": ACTOR, "xs": "current-xs"}, None, "fixture-UA",
+            recovery_cookies={"c_user": ACTOR, "xs": "previous-xs"},
+        ))
+        refreshed = {"c_user": ACTOR, "xs": "refreshed-xs"}
+
+        class SnapshotClient:
+            closed = False
+            def facebook_cookie_snapshot(self):
+                return dict(refreshed)
+
+        client = SnapshotClient()
+
+        async def verified_bootstrap(previous, **kwargs):
+            previous._bootstrap = FacebookBootstrap(
+                fb_dtsg="fixture-token", actor_id=ACTOR,
+                profile_actor_verified=True,
+            )
+            previous._profile_session_identity_verified = True
+            previous.session = client
+            return previous._bootstrap
+
+        with patch.object(FacebookWebSession, "bootstrap", new=verified_bootstrap):
+            result = await web.bootstrap_from_previous_session()
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.actor_id, ACTOR)
+        self.assertTrue(web._profile_session_identity_verified)
+        self.assertIs(web.session, client)
+        self.assertEqual(web.profile.cookies, refreshed)
+        self.assertIsNone(web.profile.recovery_cookies)
+
+    async def test_previous_snapshot_with_different_actor_is_rejected_without_bootstrap(self):
+        web = FacebookWebSession(WebProfile(
+            "15", {"c_user": ACTOR, "xs": "current-xs"}, None, "fixture-UA",
+            recovery_cookies={"c_user": "61500000000000", "xs": "previous-xs"},
+        ))
+        with patch.object(FacebookWebSession, "bootstrap", new_callable=AsyncMock) as bootstrap:
+            result = await web.bootstrap_from_previous_session()
+        self.assertIsNone(result)
+        bootstrap.assert_not_awaited()
+        self.assertIsNone(web.session)
+        self.assertEqual(web.profile.cookies["c_user"], ACTOR)
 
 
 class BusinessPageContractExecutionTests(unittest.IsolatedAsyncioTestCase):

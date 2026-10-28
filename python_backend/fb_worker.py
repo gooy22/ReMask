@@ -1746,6 +1746,88 @@ class FacebookWebSession:
                     reject()
         return operation
 
+    async def bootstrap_from_previous_session(self) -> FacebookBootstrap | None:
+        """Restore one prior cookie snapshot only after verifying the same c_user."""
+        if self._previous_recovery_attempted:
+            return None
+        self._previous_recovery_attempted = True
+        raw = getattr(self.profile, "recovery_cookies", None)
+        actor = str(self.profile.cookies.get("c_user") or "").strip()
+        if not isinstance(raw, dict) or not actor.isdigit():
+            return None
+        candidate_cookies = dict(raw)
+        candidate_actor = str(candidate_cookies.get("c_user") or "").strip()
+        current_xs = str(self.profile.cookies.get("xs") or "").strip()
+        candidate_xs = str(candidate_cookies.get("xs") or "").strip()
+        if (candidate_actor != actor or not current_xs or not candidate_xs
+                or candidate_xs == current_xs
+                or any(not isinstance(key, str) or not isinstance(value, str)
+                       for key, value in candidate_cookies.items())):
+            return None
+
+        # Consume this spare snapshot before trying it. It can only be used
+        # once, and it must independently confirm the selected profile actor.
+        self.profile.recovery_cookies = None
+        previous = FacebookWebSession(
+            WebProfile(
+                name=self.profile.name,
+                cookies=candidate_cookies,
+                proxy=self.profile.proxy,
+                user_agent=self.profile.user_agent,
+            ),
+            timeout_seconds=self.timeout_seconds,
+            pool_size=self.pool_size,
+        )
+        previous.defer_module_refresh = True
+        try:
+            await previous.bootstrap(
+                allow_business_loginpage_probe=True,
+                require_actor_match=True,
+            )
+            if (not previous._profile_session_identity_verified
+                    or not previous._bootstrap
+                    or previous._bootstrap.actor_id != actor):
+                return None
+            client = previous.session
+            if client is None or client.closed:
+                return None
+            refreshed = client.facebook_cookie_snapshot()
+            if (str(refreshed.get("c_user") or "") != actor
+                    or not str(refreshed.get("xs") or "").strip()):
+                return None
+            previous.profile.cookies = dict(refreshed)
+
+            async with self._session_lock:
+                old = self.session
+                if old is not None and old is not client and not old.closed:
+                    await old.close()
+                self.session = client
+                previous.session = None
+                self.profile.cookies = dict(refreshed)
+                self._bootstrap = previous._bootstrap
+                self._profile_session_identity_verified = True
+                self._business_read_proofs.update(previous._business_read_proofs)
+                self._reviewed_module_ids = dict(
+                    getattr(previous, "_reviewed_module_ids", {}) or {}
+                )
+            log.info(
+                "[%s] verified previous same-actor session recovered for bootstrap",
+                self.profile.name,
+            )
+            return self._bootstrap
+        except asyncio.CancelledError:
+            await previous.close()
+            raise
+        except Exception as exc:
+            log.info(
+                "[%s] previous same-actor bootstrap recovery unavailable kind=%s",
+                self.profile.name, type(exc).__name__,
+            )
+            return None
+        finally:
+            if previous.session is not None:
+                await previous.close()
+
     async def _retry_scoped_read_with_previous_session(
         self,
         doc_id: str,
