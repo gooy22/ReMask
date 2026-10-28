@@ -94,7 +94,10 @@ if (typeof creativeTargetSearchConfig !== 'function') {
             if(offset){
                 box.textContent=targetingFailureMessage(error);
             } else box.textContent=targetingFailureMessage(error);
-        } finally {if(pickerControllers[type]===controller)delete pickerControllers[type];}
+        } finally {
+            if(slowStatusTimer)clearTimeout(slowStatusTimer);
+            if(pickerControllers[type]===controller)delete pickerControllers[type];
+        }
     };
     searchTargeting=type=>runPicker(type);
     searchAudienceLanguages=()=>runPicker('locales');
