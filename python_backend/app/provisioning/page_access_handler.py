@@ -83,6 +83,19 @@ def _browser_auth_fallback_allowed(params: Any, error: Any, prior: Any) -> bool:
     )
 
 
+async def _rk_access_fallback_state(state: Any, profile: str, business: str,
+                                    account: str, session: Any, prior: Any) -> dict[str, Any]:
+    """Include the independent RK checkpoint when deciding whether a fallback is safe."""
+    actor = str((getattr(session.context, "cookies", {}) or {}).get("c_user") or "")
+    if not actor.isdigit():
+        return dict(prior) if isinstance(prior, dict) else {}
+    key = f"workspace-rk-access-facebook:{actor}-{business}-{account}"
+    saved_state = (await state.step(key, ProvisioningStep.PAGE_ACCESS)) or {}
+    saved = saved_state.get("result") if isinstance(saved_state, dict) else {}
+    return {**(prior if isinstance(prior, dict) else {}),
+            **(saved if isinstance(saved, dict) else {})}
+
+
 def _context_rk_binding(
     context: Any,
     *,
@@ -1253,7 +1266,9 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
             try:
                 proof = await _rk_inventory(await session.facebook_web(), business, rk_name, account)
             except ProvisioningError as exc:
-                if not _browser_auth_fallback_allowed(params, exc, prior):
+                fallback_state = await _rk_access_fallback_state(
+                    state, profile, business, account, session, prior)
+                if not _browser_auth_fallback_allowed(params, exc, fallback_state):
                     raise
                 browser_full_control_fallback = True
                 verified = True
@@ -1329,7 +1344,8 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
                 scope=scope, business=business, account=account, account_name=rk_name)
         except ProvisioningError as exc:
             retained = ((await state.step(item, ProvisioningStep.PAGE_ACCESS)) or {}).get('result') or {}
-            safe_prior = {**prior, **retained}
+            safe_prior = await _rk_access_fallback_state(
+                state, profile, business, account, session, {**prior, **retained})
             if not _browser_auth_fallback_allowed(params, exc, safe_prior):
                 raise
             browser_full_control_fallback = True
@@ -1407,7 +1423,9 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
             try:
                 rk_inventory = await _rk_inventory(web, business, rk_name, account)
             except ProvisioningError as exc:
-                if not _browser_auth_fallback_allowed(params, exc, resume_state):
+                fallback_state = await _rk_access_fallback_state(
+                    state, profile, business, account, session, resume_state)
+                if not _browser_auth_fallback_allowed(params, exc, fallback_state):
                     raise
                 browser_full_control_fallback = True
                 private_http = False
