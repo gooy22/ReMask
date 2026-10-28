@@ -4086,6 +4086,11 @@ async def private_draft_read(profile_id: str, payload: dict = Body(...)):
         result = await read_with_saved_auth_refresh(pool.resolver, context, read_draft_once)
         return {'ok': True, **result}
     except ProvisioningError as error:
+        # Ads Manager's exact checkpoint route is a terminal profile status.
+        # This diagnostic is GET-only; persist the account stop without changing
+        # the saved Launch job or retrying any advertising mutation.
+        if error.code in {'CHECKPOINT_REQUIRED', 'PRIVATE_ADS_DRAFT_CHECKPOINT_REQUIRED'}:
+            await store.record_terminal_checkpoint(profile_id)
         raise HTTPException(status_code=409, detail={'code':error.code, 'message':str(error), 'retryable':False}) from None
     except (ProfileContextError, TimeoutError):
         raise HTTPException(status_code=409, detail='PRIVATE_DRAFT_READ_CONTEXT_UNAVAILABLE') from None
