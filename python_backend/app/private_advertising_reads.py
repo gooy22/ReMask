@@ -91,6 +91,23 @@ class AdvertisingReadCatalog:
         return {name: {"configured": name in self.rows} for name in RESOURCE_FIELDS}
 
     async def read(self, web, name, values):
+        if name != "pages" or values.get("execution_mode") != "DRAFT":
+            return await self._read(web, name, values)
+        had_defer = hasattr(web, "defer_module_refresh")
+        previous_defer = getattr(web, "defer_module_refresh", False)
+        web.defer_module_refresh = True
+        try:
+            return await self._read(web, name, values)
+        finally:
+            if had_defer:
+                web.defer_module_refresh = previous_defer
+            else:
+                try:
+                    del web.defer_module_refresh
+                except AttributeError:
+                    pass
+
+    async def _read(self, web, name, values):
         from .private_launch import PrivateLaunchContractStore, _lookup, _render
         from .private_launch_verify import _complete
         row = self.rows.get(name)
