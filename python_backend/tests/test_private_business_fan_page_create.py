@@ -77,30 +77,16 @@ class BusinessPageHTTPTests(unittest.IsolatedAsyncioTestCase):
             return await original(doc, variables, **kwargs)
         self.meta.graphql = wrapped
 
-    async def test_pre_submit_auth_failure_tries_verified_previous_session(self):
-        error = RuntimeError('profile bootstrap needs restoration')
-        error.request_may_have_been_sent = False
-        error.transport_stage = 'business_auth_precheck'
-        self.meta.bootstrap.side_effect = error
-        self.meta.bootstrap_from_previous_session = AsyncMock(
-            return_value=SimpleNamespace(actor_id=UID))
-        result = await self.run_page()
-        self.assertEqual(result['page_ids'], [FP2])
-        self.meta.bootstrap.assert_awaited_once_with(
-            allow_business_loginpage_probe=True, require_actor_match=False)
-        self.meta.bootstrap_from_previous_session.assert_awaited_once_with()
-        self.assertEqual(len(self.meta.posts), 1)
-
-    async def test_pre_submit_auth_failure_never_recovers_after_possible_submit(self):
-        error = RuntimeError('uncertain bootstrap')
-        error.request_may_have_been_sent = True
-        error.transport_stage = 'business_auth_precheck'
+    async def test_business_first_bootstrap_failure_stops_before_create(self):
+        error = RuntimeError('business bootstrap unavailable')
         self.meta.bootstrap.side_effect = error
         self.meta.bootstrap_from_previous_session = AsyncMock()
-        with self.assertRaises(RuntimeError):
+        with self.assertRaisesRegex(RuntimeError, 'business bootstrap unavailable'):
             await self.run_page()
+        self.meta.bootstrap.assert_awaited_once_with()
         self.meta.bootstrap_from_previous_session.assert_not_awaited()
-        self.assertEqual(len(self.meta.posts), 0)
+        self.assertEqual(self.meta.posts, [])
+        self.assertEqual(self.meta.calls, [])
 
     async def test_uncached_create_binds_exact_business_and_commits_canonical_delegate(self):
         result = await self.run_page()
@@ -116,8 +102,7 @@ class BusinessPageHTTPTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.meta.owners[FP1], BM1)
         self.meta.mark_business_page_create_precheck_verified.assert_called_once_with(
             BM2, UID, 'PrgssTeam', '', ['242822000000000'])
-        self.meta.bootstrap.assert_awaited_once_with(
-            allow_business_loginpage_probe=True, require_actor_match=False)
+        self.meta.bootstrap.assert_awaited_once_with()
         self.meta.fetch_text.assert_not_awaited()
         self.session.facebook_business_browser.assert_not_awaited()
         await self.run_page()
