@@ -20,6 +20,8 @@ if (typeof creativeTargetSearchConfig !== 'function') {
         if(/CHECKPOINT/.test(raw))return 'Чекпоинт Meta: профиль остановлен. Новые запросы запрещены.';
         if(/TWO_FACTOR_REQUIRED/.test(raw))return 'Meta запросила подтверждение входа. Список недоступен.';
         if(/TARGETING_META_ACCESS_STOPPED|SESSION_EXPIRED|BUSINESS_LOGIN_GATE|LOGIN/.test(raw))return 'Meta не подтвердила вход. Список недоступен.';
+        if(/RESOURCE_READ_INCOMPLETE/.test(raw))return 'Meta не вернула список для выбранного РК. Доступ не подтверждён.';
+        if(/TIMEOUT|TIMED_OUT/.test(raw))return 'Meta отвечает слишком долго. Список не загружен.';
         return 'Список сейчас недоступен. Выбранные настройки не изменены.';
     };
     const runPicker = async (type, offset=0) => {
