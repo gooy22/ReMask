@@ -1243,10 +1243,11 @@ if(typeof document!=='undefined'&&document.addEventListener){
             return originalLoad();
         }
 
-        deferForCurrentAccount(key);
-        if (!force && !hasPendingAudiences()) return;
-        if (!force && loadedKey === key) return;
+        const changed = currentKey !== key;
+        if (changed) deferForCurrentAccount(key);
         if (inFlightKey === key && inFlightPromise) return inFlightPromise;
+        if (!force && loadedKey === key) return;
+        if (!force && !hasPendingAudiences()) return;
 
         const button = getButton();
         if (button) {
@@ -1288,7 +1289,7 @@ if(typeof document!=='undefined'&&document.addEventListener){
         const originalBundleLoad = loadSelectedBundle;
         loadSelectedBundle = function(...args) {
             const result = originalBundleLoad.apply(this, args);
-            if (hasPendingAudiences()) Promise.resolve(loadCustomAudiences()).catch(() => {});
+            if (hasPendingAudiences()) Promise.resolve(loadCustomAudiences(true)).catch(() => {});
             return result;
         };
     }
