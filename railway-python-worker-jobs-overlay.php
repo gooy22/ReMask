@@ -169,14 +169,19 @@ try {
         }
         $profileId = $input['profile_id'] ?? null;
         $jobId = $input['job_id'] ?? null;
+        $taskId = $input['task_id'] ?? null;
         if (!is_string($profileId) || !preg_match('/^[0-9]{1,30}$/D', $profileId)
-            || !is_string($jobId) || !preg_match('/^[a-f0-9]{32}$/D', $jobId)) {
+            || !is_string($jobId) || !preg_match('/^[a-f0-9]{32}$/D', $jobId)
+            || (array_key_exists('task_id', $input)
+                && (!is_string($taskId) || !preg_match('/^[a-f0-9]{32}$/D', $taskId)))) {
             rmx_pwj_out(['ok'=>false,'error'=>'PRIVATE_DRAFT_READ_INVALID_INPUT'], 400);
         }
         if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
+        $readPayload = ['job_id'=>$jobId];
+        if ($taskId !== null) $readPayload['task_id'] = $taskId;
         $read = rmx_pwj_worker_request('POST',
             '/api/v1/profiles/' . rawurlencode($profileId) . '/private-draft-read',
-            ['job_id'=>$jobId], 150);
+            $readPayload, 150);
         rmx_pwj_out(['ok'=>true,'read'=>$read]);
     }
 
