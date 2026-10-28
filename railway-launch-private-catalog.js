@@ -8,11 +8,14 @@ function remaskPrivatePageReadFailure(error, profile, accountId) {
     const accountLabel=String(accountId||'').replace(/^act_/,'').replace(/[^0-9]/g,'').slice(0,30)||'?';
     const scope=`Профиль ${profileLabel} / РК ${accountLabel}`;
     if(gate==='BUSINESS_LOGIN_GATE')
-        return `${scope}: Meta вернула BUSINESS_LOGIN_GATE; список FP не загружен.`;
-    if(gate)
-        return `${scope}: требуется проверка Facebook-сессии (${gate}); список FP не загружен.`;
-    const code=rawCode.match(/^[A-Z0-9_]{1,100}$/)?.[0]||'PAGE_READ_FAILED';
-    return `${scope}: не удалось загрузить FP (${code}).`;
+        return `${scope}: Meta остановила доступ. FP не загружены; новые действия запрещены.`;
+    if(gate==='CHECKPOINT_REQUIRED')
+        return `${scope}: чекпоинт Meta. Аккаунт остановлен, новые задачи запрещены.`;
+    if(gate==='TWO_FACTOR_REQUIRED')
+        return `${scope}: Meta запросила подтверждение 2FA. FP не загружены.`;
+    if(gate==='SESSION_EXPIRED')
+        return `${scope}: Meta не подтвердила вход. FP не загружены.`;
+    return `${scope}: не удалось загрузить FP из Meta. Попробуйте позже.`;
 }
 function remaskFundingState(info) {
     if (!info) return {label:'NOT LOADED',cls:'muted'};
@@ -506,6 +509,24 @@ function remaskPrivateFingerprint(rows) {
         launch:row.launch
     })));
 }
+function remaskPrivateIntentDigest(value) {
+    // Stable across reloads and cleared localStorage. The backend compares the
+    // full fingerprint before adopting this key, so collisions fail closed.
+    const text=String(value);
+    let a=0x811c9dc5,b=0x9e3779b9,c=0x85ebca6b,d=0xc2b2ae35;
+    for(let i=0;i<text.length;i++){
+        const code=text.charCodeAt(i);
+        a=Math.imul(a^code,0x01000193)>>>0;
+        b=Math.imul(b^code,0x5bd1e995)>>>0;b^=b>>>13;
+        c=Math.imul(c+code,0x27d4eb2d)>>>0;c^=c>>>15;
+        d=Math.imul(d^(code+i),0x165667b1)>>>0;d^=d>>>16;
+    }
+    a=Math.imul(a^(a>>>16),0x85ebca6b)>>>0;
+    b=Math.imul(b^(b>>>13),0xc2b2ae35)>>>0;
+    c=Math.imul(c^(c>>>16),0x85ebca77)>>>0;
+    d=Math.imul(d^(d>>>16),0x27d4eb2f)>>>0;
+    return [a,b,c,d].map(part=>part.toString(16).padStart(8,'0')).join('');
+}
 function remaskPrivatePendingRead(fingerprint) {
     try{
         const saved=JSON.parse(localStorage.getItem(remaskPrivateLaunchPendingKey)||'null');
@@ -724,12 +745,13 @@ function remaskPrivateJobRequest(config,reviewed) {
     const fingerprint=remaskPrivateFingerprint(rows);
     const pending=remaskPrivatePendingRead(fingerprint);
     if(pending)return {request:pending,fingerprint,reused:true};
-    const nonce=remaskPrivateNonce();
     const request={
         action:'create',
-        idempotency_key:'private-launch-batch-'+nonce,
-        profiles:rows.map((row,index)=>{
-            const key='private-launch-'+row.profile+'-'+row.ad_account_id+'-'+nonce+'-'+(index+1);
+        idempotency_key:'private-launch-batch-'+remaskPrivateIntentDigest(fingerprint),
+        profiles:rows.map(row=>{
+            const rowFingerprint=remaskPrivateFingerprint([row]);
+            const key='private-launch-'+row.profile+'-'+row.ad_account_id+'-'+
+                remaskPrivateIntentDigest(rowFingerprint);
             return {
                 profile_id:row.profile,
                 tasks:[{
@@ -805,11 +827,16 @@ function remaskPrivateErrorLabel(code) {
     const labels={
         PRIVATE_ADS_DRAFT_READ_SPEC_MISMATCH:'Настройки черновика в Meta отличаются от сохранённых.',
         PRIVATE_ADS_DRAFT_TRANSPORT_UNAVAILABLE:'Не удалось связаться с Meta. Черновик не создан.',
-        PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE:'Meta запросила вход. Проверка черновика не завершена.',
+        PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE:'Meta остановила доступ. Новые действия запрещены.',
+        BUSINESS_LOGIN_GATE:'Meta остановила доступ. Новые действия запрещены.',
+        PROFILE_META_BLOCKED:'Meta остановила доступ. Новые действия запрещены.',
         PRIVATE_ADS_DRAFT_CHECKPOINT_REQUIRED:'Чекпоинт Meta: аккаунт остановлен.',
         CHECKPOINT_REQUIRED:'Чекпоинт Meta: аккаунт остановлен.',
         PRIVATE_ADS_DRAFT_RESULT_UNKNOWN:'Meta не подтвердила результат. Перед продолжением нужна сверка.',
-        PRIVATE_ADS_DRAFT_INVALID_INPUT:'Проверьте настройки черновика.'
+        PRIVATE_ADS_DRAFT_INVALID_INPUT:'Проверьте настройки черновика.',
+        PRIVATE_LAUNCH_PLAN_CHANGED:'У этой задачи уже сохранены другие настройки. Новый запрос не отправлен.',
+        PRIVATE_LAUNCH_EXISTING_INTENT:'Для этого РК уже есть незавершённый черновик. Продолжите сохранённую задачу.',
+        PRIVATE_LAUNCH_MULTIPLE_PENDING_INTENTS:'Для этого РК найдены несколько черновиков. Новые объекты не создавались; нужна сверка.'
     };
     if(labels[key])return labels[key];
     if(/LOGIN|SESSION_EXPIRED|AUTHENTICATION/.test(key))return 'Meta запросила вход. Действие остановлено.';
@@ -872,7 +899,16 @@ function remaskPrivateRenderJob(job) {
                 const button=document.createElement('button');button.type='button';
                 button.className='btn btn-secondary';button.textContent='Проверить черновик в Meta';
                 const result=document.createElement('div');result.className='muted';
+                const terminalReadKey='remask_private_meta_terminal_v1:'+String(item.profile_id||'');
+                let terminalReadCode='';
+                try{terminalReadCode=String(localStorage.getItem(terminalReadKey)||'');}catch(_){}
+                let terminalStopped=Boolean(terminalReadCode);
+                if(terminalStopped){
+                    button.disabled=true;button.textContent='Действия остановлены';
+                    result.textContent=remaskPrivateErrorLabel(terminalReadCode);
+                }
                 button.addEventListener('click',async()=>{
+                    if(terminalStopped)return;
                     button.disabled=true;result.textContent='Читаю сохранённый черновик…';
                     try{
                         const response=await remaskPrivateWorker({action:'private_draft_read',
@@ -913,9 +949,17 @@ function remaskPrivateRenderJob(job) {
                         const code=String(error?.code||'');
                         const message=String(error?.message||error||'');
                         const label=code?remaskPrivateErrorLabel(code):'Не удалось прочитать черновик Meta.';
+                        terminalStopped=[
+                            'CHECKPOINT_REQUIRED','PRIVATE_ADS_DRAFT_CHECKPOINT_REQUIRED',
+                            'BUSINESS_LOGIN_GATE','PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE','PROFILE_META_BLOCKED'
+                        ].includes(code)||/BUSINESS_LOGIN_GATE/.test(code);
+                        if(terminalStopped){
+                            try{localStorage.setItem(terminalReadKey,code||'PROFILE_META_BLOCKED');}catch(_){}
+                            button.disabled=true;button.textContent='Действия остановлены';
+                        }
                         remaskPrivateShowReadResult(result,label,
                             [code,message].filter(Boolean).join('\n'));
-                    }finally{button.disabled=false;}
+                    }finally{if(!terminalStopped)button.disabled=false;}
                 });
                 tr.children[5].appendChild(button);tr.children[5].appendChild(result);
             }

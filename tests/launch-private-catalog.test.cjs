@@ -77,7 +77,9 @@ assert.ok(completionSource.includes('status.textContent=remaskPrivatePageReadFai
   await button.events.click();
   assert.match(idsCell.textContent,/BUSINESS_LOGIN_GATE/);
   assert.match(idsCell.textContent,new RegExp(campaign));
-  assert.equal(button.disabled,false);
+  assert.equal(button.disabled,true,'Meta access gates are terminal and must not be checked again');
+  assert.equal(button.textContent,'Действия остановлены');
+  assert.equal(storage.get('remask_private_meta_terminal_v1:'+profile),'PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE');
   assert.equal(JSON.stringify(job),original,'the read failure must preserve the immutable source journal');
   assert.deepEqual(calls.map(row=>row.action),['status','private_draft_read']);
   assert.equal(calls[1].profile_id,profile);assert.equal(calls[1].job_id,id);assert.equal(calls[1].task_id,taskId);
@@ -201,9 +203,10 @@ assert.equal(Boolean(controls.reviewLaunch.title),false);
 assert.equal(Boolean(controls.reviewStatus.textContent),false);
 assert.equal(controls.preflight.textContent,'Загрузить сохранённые РК');
 assert.equal(context.remaskPrivatePageReadFailure({message:'Meta requires sign-in',payload:{code:'PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE',message:'Meta requires sign-in'}},'15','act_120249392950240046'),
-  'Профиль 15 / РК 120249392950240046: Meta вернула BUSINESS_LOGIN_GATE; список FP не загружен.');
+  'Профиль 15 / РК 120249392950240046: Meta остановила доступ. FP не загружены; новые действия запрещены.');
 const safePageFailure=context.remaskPrivatePageReadFailure({message:'xs=PRIVATE_SECRET'},'15','act_120249392950240046');
-assert.match(safePageFailure,/PAGE_READ_FAILED/);
+assert.match(safePageFailure,/не удалось загрузить FP из Meta/);
+assert.doesNotMatch(safePageFailure,/PAGE_READ_FAILED|BUSINESS_LOGIN_GATE|SESSION_EXPIRED/);
 assert.doesNotMatch(safePageFailure,/PRIVATE_SECRET/);
 console.log('Private Launch catalog and funding truth checks passed');
 
@@ -510,11 +513,18 @@ console.log('Private Launch catalog and funding truth checks passed');
   assert.equal(storage.has('remask_private_launch_pending_v1'),false,
     'only matching terminal SUCCESS may clear the pending request');
 
-  // Recreate one pending request so the explicit clear helper stays covered.
-  privateCtx.remaskPrivateJobRequest(config,reviewed);
+  // A cleared browser cache must not mint a fresh server intent for the same settings.
+  const beforeClear=privateCtx.remaskPrivateJobRequest(config,reviewed);
+  const priorBatchKey=beforeClear.request.idempotency_key;
+  const priorTaskKeys=Array.from(beforeClear.request.profiles,row=>row.tasks[0].idempotency_key);
   assert.equal(storage.has('remask_private_launch_pending_v1'),true);
   privateCtx.remaskPrivatePendingClear();
   assert.equal(storage.has('remask_private_launch_pending_v1'),false);
+  const afterClear=privateCtx.remaskPrivateJobRequest(config,reviewed);
+  assert.equal(afterClear.reused,false);
+  assert.equal(afterClear.request.idempotency_key,priorBatchKey);
+  assert.deepEqual(Array.from(afterClear.request.profiles,row=>row.tasks[0].idempotency_key),priorTaskKeys);
+  privateCtx.remaskPrivatePendingClear();
 
   privateCtx.creativeFormat=()=> 'CAROUSEL';
   config.payload.creative.official_params={};
@@ -774,10 +784,12 @@ console.log('Private Launch catalog and funding truth checks passed');
     };
     vm.createContext(pageCtx);
     await vm.runInContext('(async()=>{\n'+pageLoader+'\n})()',pageCtx);
-    assert.match(pageCtx.status.textContent,/BUSINESS_LOGIN_GATE/);
+    assert.match(pageCtx.status.textContent,/Meta остановила доступ/);
+    assert.doesNotMatch(pageCtx.status.textContent,/BUSINESS_LOGIN_GATE|SESSION_EXPIRED/);
     assert.equal(Object.hasOwn(pageCtx.state.targetBindingAssets.pages,targetKey),false,
       'a rejected live read must not leave stale Pages selectable for this exact RK');
-    assert.match(pageCtx.state.targetBindingAssets.pageReadErrors[targetKey],/BUSINESS_LOGIN_GATE/);
+    assert.match(pageCtx.state.targetBindingAssets.pageReadErrors[targetKey],/Meta остановила доступ/);
+    assert.doesNotMatch(pageCtx.state.targetBindingAssets.pageReadErrors[targetKey],/BUSINESS_LOGIN_GATE|SESSION_EXPIRED/);
     assert.equal(pageRenderCount,1);
   }
   assert.match(overlay,/BUSINESS_LOGIN_GATE/);

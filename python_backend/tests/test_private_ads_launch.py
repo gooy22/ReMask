@@ -45,6 +45,123 @@ class ImageClient(DraftClient):
         return await super().get(path, params)
 
 class LaunchTests(unittest.IsolatedAsyncioTestCase):
+    async def test_service_passes_adopted_durable_key_to_ads_manager(self):
+        from app.private_ads_draft import identity
+        from app.private_launch_extensions import OperationKey
+
+        values = {"profile_id":"19","business_id":"222222","ad_account_id":"111111"}
+        original_manager = self.owner.ads_manager
+        await self.owner.state.init()
+        actor = identity(self.context.cookies["c_user"])
+        digest = hashlib.sha256((original_manager.source_digest + actor).encode()).hexdigest()
+        await self.owner.state.claim_launch_plan(
+            "saved-launch", values, "same-fingerprint", digest
+        )
+        await self.owner.state.save(
+            launch_key="saved-launch", **values, step=OperationKey("ADS_MANAGER:DRAFT"),
+            status="SUBMITTING",
+            result={"status":"RECONCILE_REQUIRED","verified":False,"evidence":{}},
+            error_code="PRIVATE_ADS_DRAFT_SUBMITTING", submitted=None,
+        )
+
+        class ManagerStub:
+            source_digest = original_manager.source_digest
+            def prepare(self, profile_id, payload):
+                return values, {}, [], "same-fingerprint"
+            async def run(self, **kwargs):
+                return {"launch_key":kwargs["payload"].get("launch_key")}
+
+        self.owner.ads_manager = ManagerStub()
+        result = await self.owner.run(
+            item_id="item", profile_id="19", context=self.context, session=self.session,
+            payload={"business_id":"222222","ad_account_id":"111111","page_id":"555555"},
+            task_idempotency_key="new-browser-key",
+        )
+        self.assertEqual(result["launch_key"], "saved-launch")
+
+    async def test_new_launch_key_resumes_the_same_account_intent_without_resubmitting(self):
+        from app.private_launch_extensions import OperationKey
+        state = self.owner.state
+        await state.init()
+        values = {"profile_id":"19","business_id":"222222","ad_account_id":"111111"}
+        self.assertEqual(
+            await state.claim_launch_plan("saved-launch", values, "same-fingerprint", "same-contract"),
+            "saved-launch",
+        )
+        await state.save(
+            launch_key="saved-launch", profile_id="19", business_id="222222",
+            ad_account_id="111111", step=OperationKey("ADS_MANAGER:DRAFT"),
+            status="SUBMITTING",
+            result={"status":"RECONCILE_REQUIRED","verified":False,"evidence":{}},
+            error_code="PRIVATE_ADS_DRAFT_SUBMITTING", submitted=None,
+        )
+
+        resumed = await state.claim_launch_plan(
+            "new-browser-key", values, "same-fingerprint", "same-contract"
+        )
+        self.assertEqual(resumed, "saved-launch")
+        with self.assertRaises(ProvisioningError) as caught:
+            await state.claim_launch_plan(
+                "changed-browser-key", values, "changed-fingerprint", "same-contract"
+            )
+        self.assertEqual(caught.exception.code, "PRIVATE_LAUNCH_EXISTING_INTENT")
+
+    async def test_completed_exact_draft_is_reused_after_client_key_changes(self):
+        from app.private_launch_extensions import OperationKey
+        state = self.owner.state
+        await state.init()
+        values = {"profile_id":"19","business_id":"222222","ad_account_id":"111111"}
+        await state.claim_launch_plan("completed-launch", values, "same-fingerprint", "same-contract")
+
+        async def save_success(step, entity_id, receipt, verification):
+            await state.save(
+                launch_key="completed-launch", profile_id="19", business_id="222222",
+                ad_account_id="111111", step=OperationKey("ADS_MANAGER:" + step),
+                status="SUCCESS", entity_id=entity_id,
+                result={"status":"SUCCESS","verified":True,"entity_id":entity_id,
+                    "evidence":{"receipt":receipt,"verification":verification}},
+                error_code="", submitted=True,
+            )
+
+        await save_success("DRAFT", "300001", {"draft_id":"300001"},
+            {"verified":True,"source":"independent_private_ads_http","draft_id":"300001"})
+        for step, fragment_id in (
+            ("FRAGMENT_CAMPAIGN","300002"),
+            ("FRAGMENT_AD_SET","300003"),
+            ("FRAGMENT_AD","300004"),
+        ):
+            await save_success(step, fragment_id, {"fragment_id":fragment_id},
+                {"verified":True,"source":"independent_private_ads_http",
+                 "draft_id":"300001","fragment_id":fragment_id,"relationships_confirmed":True,
+                 "meta_validation_status":"VALIDATED","active_errors_observed":True})
+
+        resumed = await state.claim_launch_plan(
+            "after-local-storage-reset", values, "same-fingerprint", "same-contract"
+        )
+        self.assertEqual(resumed, "completed-launch")
+
+    async def test_partial_delivery_fragment_remains_an_unfinished_account_intent(self):
+        from app.private_launch_extensions import OperationKey
+
+        state = self.owner.state
+        await state.init()
+        values = {"profile_id":"19","business_id":"222222","ad_account_id":"111111"}
+        await state.claim_launch_plan("pending-delivery", values, "delivery-fingerprint", "same-contract")
+        await state.save(
+            launch_key="pending-delivery", profile_id="19", business_id="222222",
+            ad_account_id="111111", step=OperationKey("ADS_MANAGER:DELIVERY_AD_FRAGMENT"),
+            status="SUCCESS", entity_id="900001",
+            result={"status":"SUCCESS","verified":True,"entity_id":"900001",
+                "evidence":{"receipt":{"fragment_id":"900001","old_status":"PAUSED"},
+                    "verification":{"verified":True,"source":"independent_private_ads_http",
+                        "fragment_id":"900001","meta_validation_status":"VALIDATED"}}},
+            error_code="", submitted=True,
+        )
+
+        with self.assertRaises(ProvisioningError) as caught:
+            await state.claim_launch_plan("new-launch", values, "new-fingerprint", "same-contract")
+        self.assertEqual(caught.exception.code, "PRIVATE_LAUNCH_EXISTING_INTENT")
+
     async def test_reviewed_parent_read_fix_resumes_same_draft_without_replaying_prefix(self):
         from app.private_ads_launch import DRAFT_PARENT_READ_PREDECESSOR
         self.payload['launch']['execution_mode'] = 'DRAFT'
@@ -81,7 +198,7 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
         self.payload['launch']['campaign']['name'] = 'changed'
         with self.assertRaises(ProvisioningError) as caught:
             await self.launch()
-        self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_SAVED_OPERATION_MISMATCH')
+        self.assertEqual(caught.exception.code, 'PRIVATE_LAUNCH_PLAN_CHANGED')
         self.assertEqual(len(self.client.posts), 4)
 
     async def asyncSetUp(self):
@@ -249,7 +366,7 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
         with patch('app.static_payment_read.inspect_methods',new=AsyncMock(side_effect=AssertionError('No billing read'))) as payment:
             with self.assertRaises(ProvisioningError) as caught:
                 await self.launch()
-        self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_SAVED_OPERATION_MISMATCH')
+        self.assertEqual(caught.exception.code, 'PRIVATE_LAUNCH_PLAN_CHANGED')
         self.assertEqual(len(self.client.posts), 4)
         payment.assert_not_awaited()
 
