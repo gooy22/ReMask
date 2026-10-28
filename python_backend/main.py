@@ -1060,6 +1060,39 @@ def _view_fan_page_retry_profile_ids(view: dict[str, Any]) -> list[str]:
                 out.append(profile_id)
     return out
 
+async def _checkpointed_profile_ids(profile_ids: list[str]) -> set[str]:
+    clean = list(dict.fromkeys(
+        str(value or '').strip() for value in profile_ids if str(value or '').strip()
+    ))
+    if not clean:
+        return set()
+    reader = getattr(store, 'terminal_checkpoint_profiles', None)
+    if callable(reader):
+        return {
+            str(value or '').strip()
+            for value in await reader(clean)
+            if str(value or '').strip()
+        }
+    status_reader = getattr(store, 'latest_profile_session_statuses', None)
+    rows = await status_reader() if callable(status_reader) else []
+    return {
+        str(row.get('profile_id') or '').strip()
+        for row in rows
+        if isinstance(row,dict)
+        and str(row.get('status') or '').strip().upper() == 'CHECKPOINT'
+        and str(row.get('profile_id') or '').strip() in set(clean)
+    }
+
+
+async def _require_profile_not_checkpoint(profile_id: str) -> None:
+    clean = str(profile_id or '').strip()
+    if clean and clean in await _checkpointed_profile_ids([clean]):
+        raise HTTPException(
+            status_code=409,
+            detail="Чекпоинт Meta: аккаунт остановлен. Запрос не отправлен.",
+        )
+
+
 async def _require_fp_auth_ready(profile_ids: list[str]) -> None:
     async def check(profile_id: str) -> tuple[str, dict[str, Any]]:
         cached = _cached_fp_auth_gate(profile_id)
@@ -1237,6 +1270,7 @@ async def profile_preflight(profile_id: str, purpose: str = 'business'):
     clean_profile=str(profile_id or '').strip()
     if not clean_profile:
         raise HTTPException(status_code=400,detail='profile_id is required')
+    await _require_profile_not_checkpoint(clean_profile)
 
     try:
         context=await pool.resolver.resolve(clean_profile)
@@ -1503,7 +1537,7 @@ async def profile_preflight(profile_id: str, purpose: str = 'business'):
         _remember_fp_auth_gate(clean_profile, result)
     return result
 
-@app.get('/api/v1/profiles/{profile_id}/page-access',dependencies=[Depends(require_key)])
+@app.get('/api/v1/profiles/{profile_id}/page-access',dependencies=[Depends(require_key),Depends(_require_profile_not_checkpoint)])
 async def profile_page_access(profile_id: str, account_id: str):
     from app.private_launch_read import inspect_profile_pages_http as inspect_profile_pages
     from app.page_access_inspection import unverified_result
@@ -1536,7 +1570,7 @@ async def profile_page_access(profile_id: str, account_id: str):
     return result
 
 
-@app.get('/api/v1/profiles/{profile_id}/payment-methods',dependencies=[Depends(require_key)])
+@app.get('/api/v1/profiles/{profile_id}/payment-methods',dependencies=[Depends(require_key),Depends(_require_profile_not_checkpoint)])
 async def profile_payment_methods(profile_id: str, account_id: str, business_id: str = '',
                                  business_asset_id: str = '', account_name: str = ''):
     from app.payment_inspection import inspect_profile_payment_methods
@@ -1564,7 +1598,7 @@ async def profile_payment_methods(profile_id: str, account_id: str, business_id:
         raise HTTPException(status_code=409,detail=exc.code) from exc
 
 
-@app.get('/api/v1/profiles/{profile_id}/payment-contract-sources',dependencies=[Depends(require_key)])
+@app.get('/api/v1/profiles/{profile_id}/payment-contract-sources',dependencies=[Depends(require_key),Depends(_require_profile_not_checkpoint)])
 async def profile_payment_contract_sources(profile_id: str, account_id: str):
     from app.contract_maintenance.payment_sources import inspect_profile_payment_sources
     profile = str(profile_id or '').strip()
@@ -1582,7 +1616,7 @@ async def profile_payment_contract_sources(profile_id: str, account_id: str):
         raise HTTPException(status_code=502, detail='PAYMENT_CONTRACT_SOURCE_UNAVAILABLE') from None
 
 
-@app.post('/api/v1/profiles/{profile_id}/payment-card',dependencies=[Depends(require_key)])
+@app.post('/api/v1/profiles/{profile_id}/payment-card',dependencies=[Depends(require_key),Depends(_require_profile_not_checkpoint)])
 async def profile_payment_card_action(profile_id: str, payload: dict = Body(...)):
     from app.payment_card_binding import profile_payment_card
     profile=str(profile_id or '').strip()
@@ -1763,7 +1797,7 @@ def _live_inventory_targets_ready(
     })
 
 
-@app.get('/api/v1/profiles/{profile_id}/live-inventory',dependencies=[Depends(require_key)])
+@app.get('/api/v1/profiles/{profile_id}/live-inventory',dependencies=[Depends(require_key),Depends(_require_profile_not_checkpoint)])
 @observe_profile_inventory
 async def profile_live_inventory(
     profile_id: str,
@@ -3757,7 +3791,7 @@ async def private_launch_media_prepare(payload: dict = Body(...)):
     except ProvisioningError as exc:
         raise HTTPException(status_code=422, detail={'code':exc.code,'message':str(exc),'retryable':False}) from exc
 
-@app.get('/api/v1/profiles/{profile_id}/advertising-resources',dependencies=[Depends(require_key)])
+@app.get('/api/v1/profiles/{profile_id}/advertising-resources',dependencies=[Depends(require_key),Depends(_require_profile_not_checkpoint)])
 @observe_profile_read
 async def private_advertising_resources(profile_id: str, resource: str, account_id: str,
                                         force: bool = False, query: str = '', limit: int = 100,
@@ -3846,7 +3880,7 @@ async def private_advertising_resources(profile_id: str, resource: str, account_
     except asyncio.TimeoutError as exc:
         raise HTTPException(status_code=504,detail='ADVERTISING_RESOURCE_READ_TIMEOUT') from exc
 
-@app.post('/api/v1/profiles/{profile_id}/template-reference/{operation}',dependencies=[Depends(require_key)])
+@app.post('/api/v1/profiles/{profile_id}/template-reference/{operation}',dependencies=[Depends(require_key),Depends(_require_profile_not_checkpoint)])
 @observe_profile_read
 async def private_template_reference(profile_id: str, operation: str, payload: dict = Body(...)):
     from app.private_template_reads import read_template_reference, REFERENCE_TYPES
@@ -3917,7 +3951,7 @@ async def private_template_reference(profile_id: str, operation: str, payload: d
         raise HTTPException(status_code=504, detail={'code':'TEMPLATE_REFERENCE_READ_TIMEOUT'}) from None
 
 
-@app.post('/api/v1/profiles/{profile_id}/advertising-helper/{helper}',dependencies=[Depends(require_key)])
+@app.post('/api/v1/profiles/{profile_id}/advertising-helper/{helper}',dependencies=[Depends(require_key),Depends(_require_profile_not_checkpoint)])
 async def private_advertising_helper(profile_id: str, helper: str, payload: dict = Body(...)):
     from app.private_ads_helpers import read_form_helper
     from app.private_auth import private_auth_error
@@ -4001,7 +4035,7 @@ async def private_launch_contract_register(step_name: str, payload: dict = Body(
         },
     }
 
-@app.post('/api/v1/profiles/{profile_id}/private-session-probe',dependencies=[Depends(require_key)])
+@app.post('/api/v1/profiles/{profile_id}/private-session-probe',dependencies=[Depends(require_key),Depends(_require_profile_not_checkpoint)])
 async def private_session_probe(profile_id: str, payload: dict = Body(...)):
     clean_profile = str(profile_id or '').strip()
     if not clean_profile or len(clean_profile) > 160:
@@ -4018,7 +4052,7 @@ async def private_session_probe(profile_id: str, payload: dict = Body(...)):
             'message':'Saved profile context is unavailable.', 'retryable':False}) from None
 
 
-@app.post('/api/v1/profiles/{profile_id}/private-draft-read',dependencies=[Depends(require_key)])
+@app.post('/api/v1/profiles/{profile_id}/private-draft-read',dependencies=[Depends(require_key),Depends(_require_profile_not_checkpoint)])
 async def private_draft_read(profile_id: str, payload: dict = Body(...)):
     import re
     if set(payload) != {'job_id'} or not isinstance(payload.get('job_id'), str) or not re.fullmatch(r'[a-f0-9]{32}', payload['job_id']):
@@ -4051,7 +4085,7 @@ async def private_draft_read(profile_id: str, payload: dict = Body(...)):
         raise HTTPException(status_code=409, detail='PRIVATE_DRAFT_READ_CONTEXT_UNAVAILABLE') from None
 
 
-@app.post('/api/v1/profiles/{profile_id}/private-launch-review',dependencies=[Depends(require_key)])
+@app.post('/api/v1/profiles/{profile_id}/private-launch-review',dependencies=[Depends(require_key),Depends(_require_profile_not_checkpoint)])
 async def private_launch_review(profile_id: str, payload: dict = Body(...)):
     clean_profile=str(profile_id or '').strip()
     if not clean_profile:
@@ -4086,6 +4120,20 @@ async def private_launch_review(profile_id: str, payload: dict = Body(...)):
 
 @app.post('/api/v1/jobs',response_model=JobAccepted,dependencies=[Depends(require_key)])
 async def create_job(request: CreateJobRequest) -> JobAccepted:
+    requested_profile_ids = [str(profile.profile_id) for profile in request.profiles]
+    blocked_profiles = sorted(await _checkpointed_profile_ids(requested_profile_ids))
+    if blocked_profiles:
+        allowed_profiles = [
+            profile for profile in request.profiles
+            if str(profile.profile_id) not in set(blocked_profiles)
+        ]
+        if not allowed_profiles:
+            raise HTTPException(
+                status_code=409,
+                detail="Чекпоинт Meta: все выбранные аккаунты остановлены. Prepare не запущен.",
+            )
+        request = request.model_copy(update={"profiles": allowed_profiles})
+
     # Server-side canonicalization: stale Workspace tabs are not allowed to
     # turn ordinary Add BM back into a Page/RK flow. Persist the normalized
     # task so retries use the same clean contract.
@@ -4147,6 +4195,7 @@ async def create_job(request: CreateJobRequest) -> JobAccepted:
         job_id=job_id,
         status=(view or {'status':'QUEUED'})['status'],
         items_total=(view or {'items_total':len(request.profiles)})['items_total'],
+        blocked_profiles=blocked_profiles,
     )
 
 @app.get('/api/v1/jobs/{job_id}',dependencies=[Depends(require_key)])
@@ -4161,6 +4210,12 @@ async def retry_failed(job_id: str, consent: dict | None = Body(default=None)) -
     current_view=await store.job_view(job_id)
     if not current_view:
         raise HTTPException(status_code=404,detail='job not found')
+    view_profile_ids = [
+        str(item.get('profile_id') or '').strip()
+        for item in current_view.get('items') or []
+        if isinstance(item,dict) and str(item.get('profile_id') or '').strip()
+    ]
+    checkpoint_profiles = await _checkpointed_profile_ids(view_profile_ids)
     if isinstance(consent,dict) and consent.get('consent_page_policies') is True:
         eligible=any(item.get('error_code')=='PAGE_POLICIES_CONFIRMATION_REQUIRED' and
             any(((task.get('payload') or {}).get('parameters',{}).get('FAN_PAGES') or {}).get('common_page') is True
@@ -4168,7 +4223,16 @@ async def retry_failed(job_id: str, consent: dict | None = Body(default=None)) -
         if not eligible:
             raise HTTPException(status_code=409,detail='PAGE_POLICY_REVIEW_JOB_REQUIRED')
         from app.provisioning.advertising_page import AdvertisingPageStore
-        eligible_items=[item for item in current_view.get('items',[]) if item.get('error_code')=='PAGE_POLICIES_CONFIRMATION_REQUIRED']
+        eligible_items=[
+            item for item in current_view.get('items',[])
+            if item.get('error_code')=='PAGE_POLICIES_CONFIRMATION_REQUIRED'
+            and str(item.get('profile_id') or '').strip() not in checkpoint_profiles
+        ]
+        if not eligible_items:
+            raise HTTPException(
+                status_code=409,
+                detail="Чекпоинт Meta: аккаунт остановлен. Confirm не выполнялся.",
+            )
         for item in eligible_items:
             profile=str(item.get('profile_id') or '9')
             page_store=AdvertisingPageStore(pool.provisioning_state,profile)
@@ -4186,14 +4250,17 @@ async def retry_failed(job_id: str, consent: dict | None = Body(default=None)) -
     # worker. Retry Failed may resume them only after a fresh browser preflight
     # proves that the profile session is usable again. Blocked profiles stay
     # FAILED while healthy profiles from the same bulk Job can continue.
-    auth_retry_profiles=_view_terminal_auth_retry_profile_ids(current_view)
+    auth_retry_profiles=[
+        profile for profile in _view_terminal_auth_retry_profile_ids(current_view)
+        if profile not in checkpoint_profiles
+    ]
     status_reader=getattr(store,'latest_profile_session_statuses',None)
     profile_statuses=await status_reader() if callable(status_reader) else []
     status_blocked_profiles=_view_failed_profiles_with_known_session_blocks(
         current_view, profile_statuses
     )
     _auth_ready,auth_blocked=await _partition_auth_retry_profiles(auth_retry_profiles)
-    excluded_profiles=set(auth_blocked) | status_blocked_profiles
+    excluded_profiles=set(auth_blocked) | status_blocked_profiles | checkpoint_profiles
 
     fp_profiles=_view_fan_page_retry_profile_ids(current_view)
     fp_profiles_for_gate=[
@@ -4225,6 +4292,7 @@ async def retry_failed(job_id: str, consent: dict | None = Body(default=None)) -
         requeued=count,
         blocked_profiles=sorted(excluded_profiles),
         blocked_reason=(
+            'CHECKPOINT_TERMINAL' if checkpoint_profiles else
             'FACEBOOK_AUTH_REQUIRED' if auth_blocked else
             'PROFILE_SESSION_BLOCKED' if status_blocked_profiles else ''
         ),
