@@ -1147,3 +1147,151 @@ if(typeof document!=='undefined'&&document.addEventListener){
         remaskPrivateCreateJob();
     },true);
 }
+
+
+/* REMASK_AUTOUPLOAD_LAZY_CUSTOM_AUDIENCES_V1 */
+/* Custom Audiences are optional. Do not make every RK selection wait for an
+   Ads Manager document; read them only on demand or when restoring saved IDs. */
+(function installLazyCustomAudienceDiscovery() {
+    if (typeof loadCustomAudiences !== 'function'
+            || typeof selectedAccountIds !== 'function'
+            || typeof state === 'undefined') return;
+
+    const originalLoad = loadCustomAudiences;
+    const buttonId = 'remaskLoadCustomAudiences';
+    let currentKey = '';
+    let loadedKey = '';
+    let inFlightKey = '';
+    let inFlightPromise = null;
+
+    function isTargetMode() {
+        return typeof targetMode === 'function' && targetMode();
+    }
+
+    function selectedKey() {
+        if (isTargetMode()) return '';
+        const ids = selectedAccountIds();
+        if (!Array.isArray(ids) || ids.length !== 1) return '';
+        const profile = String(state.profile || $('profile')?.value || '').trim();
+        const account = String(ids[0] || '').trim().replace(/^act_/, '');
+        return profile && account ? profile + '|' + account : '';
+    }
+
+    function hasPendingAudiences() {
+        const pending = state.pendingBundleAssets || {};
+        return ['customAudiences', 'excludedCustomAudiences'].some((key) =>
+            Array.isArray(pending[key]) && pending[key].some((id) => String(id || '').trim())
+        );
+    }
+
+    function getButton() {
+        if (typeof document === 'undefined') return null;
+        let button = document.getElementById(buttonId);
+        const status = $('customAudienceStatus');
+        if (!button && status?.parentNode && document.createElement) {
+            button = document.createElement('button');
+            button.id = buttonId;
+            button.type = 'button';
+            button.className = 'btn btn-outline-secondary btn-sm mt-2';
+            button.textContent = 'Загрузить аудитории';
+            status.parentNode.insertBefore(button, status);
+            button.addEventListener('click', () => loadCustomAudiences(true));
+        }
+        return button;
+    }
+
+    function setButton(text, disabled, hidden = false) {
+        const button = getButton();
+        if (!button) return;
+        button.textContent = text;
+        button.disabled = Boolean(disabled);
+        button.hidden = Boolean(hidden);
+    }
+
+    function deferForCurrentAccount(key) {
+        if (currentKey !== key) {
+            currentKey = key;
+            loadedKey = '';
+            state.customAudiences = [];
+            state.launchReview = null;
+            for (const id of ['customAudiences', 'excludedCustomAudiences']) {
+                const select = $(id);
+                if (!select) continue;
+                select.innerHTML = '<option value="">Список не загружен</option>';
+                select.disabled = true;
+            }
+        }
+        setButton('Загрузить аудитории', false);
+        const status = $('customAudienceStatus');
+        if (status) status.textContent = 'Не загружены. Нажмите «Загрузить аудитории», если они нужны.';
+    }
+
+    async function load(force = false) {
+        if (isTargetMode()) {
+            currentKey = '';
+            loadedKey = '';
+            setButton('Аудитории доступны в привязках по РК', true, true);
+            return originalLoad();
+        }
+
+        const key = selectedKey();
+        if (!key) {
+            currentKey = '';
+            loadedKey = '';
+            const ids = selectedAccountIds();
+            setButton(ids.length > 1 ? 'Выберите один РК' : 'Загрузить аудитории', true);
+            return originalLoad();
+        }
+
+        deferForCurrentAccount(key);
+        if (!force && !hasPendingAudiences()) return;
+        if (!force && loadedKey === key) return;
+        if (inFlightKey === key && inFlightPromise) return inFlightPromise;
+
+        const button = getButton();
+        if (button) {
+            button.hidden = false;
+            button.disabled = true;
+            button.textContent = 'Загружаю…';
+        }
+        const status = $('customAudienceStatus');
+        if (status) status.textContent = 'Загружаем аудитории…';
+
+        const request = Promise.resolve().then(() => originalLoad()).then(() => {
+            if (selectedKey() !== key) return;
+            const message = String($('customAudienceStatus')?.textContent || '');
+            const failed = /failed|error|timeout|timed out|gateway|\b504\b|не удалось|не вернула список|ошибк|таймаут|не загруз/i.test(message);
+            if (failed) {
+                setButton('Повторить загрузку', false);
+            } else {
+                loadedKey = key;
+                setButton('Аудитории загружены', true);
+            }
+        }).catch(() => {
+            if (selectedKey() !== key) return;
+            if (status) status.textContent = 'Не удалось загрузить аудитории. Остальная форма доступна.';
+            setButton('Повторить загрузку', false);
+        }).finally(() => {
+            if (inFlightPromise === request) {
+                inFlightPromise = null;
+                inFlightKey = '';
+            }
+        });
+        inFlightKey = key;
+        inFlightPromise = request;
+        return request;
+    }
+
+    loadCustomAudiences = load;
+
+    if (typeof loadSelectedBundle === 'function') {
+        const originalBundleLoad = loadSelectedBundle;
+        loadSelectedBundle = function(...args) {
+            const result = originalBundleLoad.apply(this, args);
+            if (hasPendingAudiences()) Promise.resolve(loadCustomAudiences()).catch(() => {});
+            return result;
+        };
+    }
+
+    getButton();
+})();
