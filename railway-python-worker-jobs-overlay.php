@@ -48,7 +48,7 @@ function rmx_pwj_input(): array {
     // that creates/retries a job or changes a contract.
     if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         $requested = trim((string)($_GET['action'] ?? ''));
-        if (in_array($requested, ['csrf','health','ready','payment_status','funding_status','preflight','profile_state','docids','private_launch_contracts','private_launch_sources','status','get','private_launch_media_preview'], true)) {
+        if (in_array($requested, ['csrf','health','ready','payment_status','funding_status','preflight','profile_state','profile_statuses','docids','private_launch_contracts','private_launch_sources','status','get','private_launch_media_preview'], true)) {
             $input['action'] = $requested;
             if ($requested === 'private_launch_media_preview') $input['id'] = $_GET['id'] ?? '';
         }
@@ -277,6 +277,11 @@ try {
             150
         );
         rmx_pwj_out(['ok'=>true,'preflight'=>$result]);
+    }
+
+    if ($action === 'profile_statuses') {
+        $result = rmx_pwj_worker_request('GET', '/api/v1/profile-statuses');
+        rmx_pwj_out($result);
     }
 
     if ($action === 'profile_state') {
