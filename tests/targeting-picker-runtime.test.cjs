@@ -140,8 +140,11 @@ function fixture(){
   launch.nodes.get('geoQuery').value='Ukraine';
   launchFailure=Object.assign(new Error('PRIVATE_ADS_DRAFT_RESOURCE_READ_INCOMPLETE'),{code:'PRIVATE_ADS_DRAFT_RESOURCE_READ_INCOMPLETE'});
   await launch.ctx.searchTargeting('locations');
-  assert.equal(launch.nodes.get('geoResults').textContent,'Список сейчас недоступен. Выбранные настройки не изменены.');
+  assert.equal(launch.nodes.get('geoResults').textContent,'Meta не вернула список для выбранного РК. Доступ не подтверждён.');
   assert.doesNotMatch(launch.nodes.get('geoResults').textContent,/PRIVATE_ADS_DRAFT/,'internal Meta codes stay out of the UI');
+  launchFailure=Object.assign(new Error('PRIVATE_HTTP_READ_TIMEOUT'),{code:'PRIVATE_HTTP_READ_TIMEOUT'});
+  await launch.ctx.searchTargeting('locations');
+  assert.equal(launch.nodes.get('geoResults').textContent,'Meta отвечает слишком долго. Список не загружен.');
   launchFailure=Object.assign(new Error('PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE'),{code:'PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE'});
   await launch.ctx.searchTargeting('locations');
   assert.equal(launch.nodes.get('geoResults').textContent,'Meta не подтвердила вход. Список недоступен.');
@@ -206,6 +209,8 @@ function fixture(){
     'Meta не подтвердила вход для этого профиля.');
   assert.equal(overlayContext.targetingErrorMessage({payload:{code:'CHECKPOINT_REQUIRED'}}),
     'Meta остановила профиль. Новые запросы не отправлены.');
+  assert.equal(overlayContext.targetingErrorMessage({payload:{code:'PRIVATE_ADS_DRAFT_RESOURCE_READ_INCOMPLETE'}}),
+    'Meta не вернула список для выбранного РК. Доступ не подтверждён.');
   assert.equal(targetingOverlayUi.includes('Targeting endpoint error'),false);
   assert.equal(targetingOverlayUi.includes('HTTP ${response.status}'),false);
   // Installed Launch API wrapper must retain the page offset. Previously it
