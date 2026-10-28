@@ -205,9 +205,11 @@ expect($selectedProfileAt!==false && $selectedAccountAt!==false && $exactScopeAt
     'live targeting fallback is constrained to the explicitly selected profile and exact RK');
 expect(str_contains($endpoint,"'checked_live'") && str_contains($endpoint,"'account_scope_verified'"),'actual Meta read proof remains required');
 $cachedIndexAt=strpos($endpoint,"\$cacheMeta=\$result['_cache'] ?? []");
-$liveProofAt=strpos($endpoint,"if ((\$result['checked_live'] ?? null) !== true");
-expect($cachedIndexAt!==false && $liveProofAt!==false && $cachedIndexAt<$liveProofAt,
-    'saved index values are returned as suggestions before the live-read proof gate');
+$cacheSuggestionAt=$cachedIndexAt===false ? false : strpos($endpoint,"'checked_live'=>false",$cachedIndexAt);
+$liveProofAt=$cachedIndexAt===false ? false : strpos($endpoint,"\$reference->put(\$type, \$query, \$result, time())",$cachedIndexAt);
+expect($cachedIndexAt!==false && $cacheSuggestionAt!==false && $liveProofAt!==false
+    && $cachedIndexAt<$cacheSuggestionAt && $cacheSuggestionAt<$liveProofAt,
+    'saved index values are returned as suggestions before the verified-only cache write');
 $moduleOnlyAt=strpos($endpoint,'if ($moduleOnly)');
 $profileLookupAt=strpos($endpoint,"\$selectedProfile=trim((string)(\$input['profile'] ?? ''))");
 expect($moduleOnlyAt!==false && $profileLookupAt!==false && $moduleOnlyAt<$profileLookupAt,
