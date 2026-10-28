@@ -34,6 +34,7 @@ apiJson = async function(url, options = {}) {
                 for(const key of ['type','q','limit','offset']){
                     const value=input.get(key);if(value!==null)cacheBody.set(key,value);
                 }
+                cacheBody.set('type',resource);
                 cacheBody.set('cache_only','1');
                 try{
                     const cached=await remaskPrivateOriginalTargetingApiJson(
