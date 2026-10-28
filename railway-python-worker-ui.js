@@ -361,6 +361,7 @@ async function pythonWorkerMapLimit(items, limit, worker) {
 function pythonWorkerItemCanRetry(item) {
   if (!item || String(item.status || '').toUpperCase() !== 'FAILED') return false;
   const tasks = Array.isArray(item.tasks) ? item.tasks : [];
+  if (pythonWorkerItemBlockedByKnownProfileStatus(item)) return false;
   // A stale aggregate flag must not turn a security checkpoint into a retry.
   if (pythonWorkerIsProfileAuthBlockedCode(item.error_code) || tasks.some(function(task) {
     return task && String(task.status || '').toUpperCase() === 'FAILED' &&
@@ -369,6 +370,16 @@ function pythonWorkerItemCanRetry(item) {
   return item.retryable === true || tasks.some(function(task) {
     return task && String(task.status || '').toUpperCase() === 'FAILED' && task.retryable === true;
   });
+}
+
+function pythonWorkerItemBlockedByKnownProfileStatus(item) {
+  const sessions = typeof pythonWorkerProfileSessionStatuses !== 'undefined'
+    ? pythonWorkerProfileSessionStatuses : null;
+  if (!sessions || typeof sessions.get !== 'function') return false;
+  const profileId = String(item && item.profile_id || '').trim();
+  const session = profileId ? sessions.get(profileId) : null;
+  const status = String(session && session.status || '').toUpperCase();
+  return ['CHECKPOINT','LOGIN_REQUIRED','TWO_FACTOR','LIMITED','IN_PROGRESS'].includes(status);
 }
 
 function pythonWorkerFailureDetails(item) {
@@ -992,7 +1003,7 @@ function pythonWorkerUserFailureText(item) {
     return 'Meta временно ограничила создание страниц. Повторять сейчас не нужно.';
   }
   if (/2455031|field_exception/i.test(combined)) {
-    return 'Meta не подтвердила создание страницы. Перед повтором проверь список страниц.';
+    return 'Meta вернула внутреннюю ошибку при создании страницы. Результат не подтверждён; повтор остановлен до сверки.';
   }
   if (/CREATE_AD_ACCOUNT_RESULT_UNKNOWN|AD_ACCOUNT_CREATE_RESULT_UNKNOWN/.test(code)) {
     return 'Meta не подтвердила создание рекламного кабинета. Повтор отключён, чтобы не создать дубль.';
@@ -1006,8 +1017,13 @@ function pythonWorkerUserFailureText(item) {
   if (code === 'AD_ACCOUNT_CHECKPOINT_MISMATCH') {
     return 'Сохранённый РК не совпадает с текущим заданием. Создание остановлено до сверки.';
   }
+  if (/PROFILE_PROXY_UNAVAILABLE|PROFILE_PROXY_NOT_CONFIGURED/.test(code)) {
+    return code === 'PROFILE_PROXY_NOT_CONFIGURED'
+      ? 'Для профиля не задан прокси. Создание не запускалось.'
+      : 'Прокси не установил соединение с Meta. Создание не запускалось.';
+  }
   if (/facebook bootstrap connection failed/.test(combined) && /check the profile proxy/.test(combined)) {
-    return 'Прокси профиля не ответил. Запрос в Facebook не отправлялся.';
+    return 'Прокси не установил соединение с Meta. Создание не запускалось.';
   }
   if (/proxy_dead|proxy.*failed|bootstrap.*failed/.test(combined)) {
     return 'Не удалось подключиться через прокси. Результат шага не подтверждён.';
@@ -1154,6 +1170,7 @@ async function pythonWorkerLoadProfileStatuses() {
         pythonWorkerProfileSessionStatuses.set(String(row.profile_id), row);
       }
       pythonWorkerApplyWorkspaceProfileStatuses();
+      pythonWorkerSelectionRefresh();
     } catch (_) {
       // Status lookup is read-only and must not block the existing Workspace.
     } finally {
@@ -2755,6 +2772,8 @@ async function pythonWorkerPoll() {
 window.pythonWorkerStartBusiness = pythonWorkerStartBusiness;
 
 async function pythonWorkerRetryFailed(options) {
+  // Refresh the read-only local status map before deciding whether retries are safe.
+  if (typeof pythonWorkerLoadProfileStatuses === 'function') await pythonWorkerLoadProfileStatuses();
   const batchIds = Array.isArray(pythonWorkerUiState.batchJobIds)
     ? pythonWorkerUiState.batchJobIds.slice()
     : [];
@@ -2772,6 +2791,7 @@ async function pythonWorkerRetryFailed(options) {
     try {
       let requeued = 0;
       const retryErrors = [];
+      const blockedProfiles = new Set();
 
       await pythonWorkerMapLimit(batchIds, 4, async function(jobId) {
         try {
@@ -2785,6 +2805,9 @@ async function pythonWorkerRetryFailed(options) {
             action: 'retry_failed',
             job_id: jobId
           });
+          (data && data.result && Array.isArray(data.result.blocked_profiles)
+            ? data.result.blocked_profiles : []
+          ).forEach(function(profileId) { blockedProfiles.add(String(profileId)); });
           requeued += Number(
             (data && data.result && data.result.requeued) || 0
           );
@@ -2798,12 +2821,17 @@ async function pythonWorkerRetryFailed(options) {
       if (requeued <= 0) {
         pythonWorkerUiState.busy = false;
         pythonWorkerSelectionRefresh();
+        const blockedText = blockedProfiles.size
+          ? 'Профили с блокирующим статусом Meta: ' + Array.from(blockedProfiles).join(', ') + '.'
+          : '';
         pythonWorkerSetText(
           'pythonPwStatus',
           retryErrors.length
             ? 'Retry Failed batch: ничего не поставлено в очередь. ' +
               retryErrors.join(' · ')
-            : 'Retry Failed batch: нет retryable FAILED элементов.'
+            : blockedText
+              ? 'Retry Failed batch: ' + blockedText + ' Job сохранён.'
+              : 'Retry Failed batch: нет retryable FAILED элементов.'
         );
         return;
       }
@@ -2813,6 +2841,9 @@ async function pythonWorkerRetryFailed(options) {
       pythonWorkerSetText(
         'pythonPwStatus',
         'Retry Failed batch: возвращено в очередь ' + requeued +
+          (blockedProfiles.size
+            ? ' · заблокированы профили ' + Array.from(blockedProfiles).join(', ')
+            : '') +
           (retryErrors.length
             ? ' · ошибки отдельных Jobs: ' + retryErrors.join(' · ')
             : '.')
@@ -2851,7 +2882,13 @@ async function pythonWorkerRetryFailed(options) {
     if (!currentItems.some(pythonWorkerItemCanRetry)) {
       pythonWorkerUiState.busy = false;
       pythonWorkerSelectionRefresh();
-      pythonWorkerSetText('pythonPwStatus', 'Retry недоступен: нет retryable FAILED элементов. Сохранённый Job не изменён.');
+      const blocked = Array.from(new Set(currentItems
+        .filter(pythonWorkerItemBlockedByKnownProfileStatus)
+        .map(function(item) { return String(item.profile_id || '').trim(); })
+        .filter(Boolean)));
+      pythonWorkerSetText('pythonPwStatus', blocked.length
+        ? 'Повтор остановлен: профиль(и) ' + blocked.join(', ') + ' имеют блокирующий статус Meta. Job не изменён.'
+        : 'Retry недоступен: нет retryable FAILED элементов. Сохранённый Job не изменён.');
       return;
     }
 
@@ -2863,17 +2900,22 @@ async function pythonWorkerRetryFailed(options) {
     });
 
     const requeued = Number((data && data.result && data.result.requeued) || 0);
+    const serverBlocked = Array.isArray(data && data.result && data.result.blocked_profiles)
+      ? data.result.blocked_profiles.map(String).filter(Boolean) : [];
 
     if (requeued <= 0) {
       pythonWorkerUiState.busy = false;
       pythonWorkerSelectionRefresh();
-      pythonWorkerSetText('pythonPwStatus', 'Нет FAILED элементов для повторного запуска.');
+      pythonWorkerSetText('pythonPwStatus', serverBlocked.length
+        ? 'Повтор остановлен: профиль(и) ' + serverBlocked.join(', ') + ' имеют блокирующий статус Meta. Job не изменён.'
+        : 'Нет FAILED элементов для повторного запуска.');
       return;
     }
 
     pythonWorkerSetText(
       'pythonPwStatus',
-      'Retry Failed: возвращено в очередь ' + requeued + '.'
+      'Retry Failed: возвращено в очередь ' + requeued +
+        (serverBlocked.length ? ' · заблокированы профили ' + serverBlocked.join(', ') : '.')
     );
 
     pythonWorkerPoll().catch(function(error) {

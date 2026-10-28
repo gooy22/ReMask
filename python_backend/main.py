@@ -1114,6 +1114,35 @@ def _view_terminal_auth_retry_profile_ids(view: dict[str, Any]) -> list[str]:
     return out
 
 
+def _view_failed_profiles_with_known_session_blocks(
+    view: dict[str, Any],
+    profile_statuses: list[dict[str, Any]],
+) -> set[str]:
+    """Do not requeue non-auth failures for profiles already known to be gated."""
+    status_by_profile = {
+        str(row.get('profile_id') or '').strip():
+            str(row.get('status') or '').strip().upper()
+        for row in profile_statuses
+        if isinstance(row, dict) and str(row.get('profile_id') or '').strip()
+    }
+    blocked_states = {'CHECKPOINT', 'LOGIN_REQUIRED', 'TWO_FACTOR', 'LIMITED', 'IN_PROGRESS'}
+    blocked: set[str] = set()
+    for item in view.get('items') or []:
+        if not isinstance(item, dict) or str(item.get('status') or '').upper() != 'FAILED':
+            continue
+        codes = {str(item.get('error_code') or '').strip().upper()}
+        for task in item.get('tasks') or []:
+            if isinstance(task, dict) and str(task.get('status') or '').upper() == 'FAILED':
+                codes.add(str(task.get('error_code') or '').strip().upper())
+        if any(code in BROWSER_TERMINAL_ACCESS_CODES for code in codes):
+            # These already pass through the explicit, bounded auth preflight.
+            continue
+        profile = str(item.get('profile_id') or '').strip()
+        if profile and status_by_profile.get(profile) in blocked_states:
+            blocked.add(profile)
+    return blocked
+
+
 async def _partition_auth_retry_profiles(
     profile_ids: list[str],
 ) -> tuple[set[str], dict[str,str]]:
@@ -4158,8 +4187,13 @@ async def retry_failed(job_id: str, consent: dict | None = Body(default=None)) -
     # proves that the profile session is usable again. Blocked profiles stay
     # FAILED while healthy profiles from the same bulk Job can continue.
     auth_retry_profiles=_view_terminal_auth_retry_profile_ids(current_view)
+    status_reader=getattr(store,'latest_profile_session_statuses',None)
+    profile_statuses=await status_reader() if callable(status_reader) else []
+    status_blocked_profiles=_view_failed_profiles_with_known_session_blocks(
+        current_view, profile_statuses
+    )
     _auth_ready,auth_blocked=await _partition_auth_retry_profiles(auth_retry_profiles)
-    excluded_profiles=set(auth_blocked)
+    excluded_profiles=set(auth_blocked) | status_blocked_profiles
 
     fp_profiles=_view_fan_page_retry_profile_ids(current_view)
     fp_profiles_for_gate=[
@@ -4190,6 +4224,9 @@ async def retry_failed(job_id: str, consent: dict | None = Body(default=None)) -
         job_id=job_id,
         requeued=count,
         blocked_profiles=sorted(excluded_profiles),
-        blocked_reason='FACEBOOK_AUTH_REQUIRED' if excluded_profiles else '',
+        blocked_reason=(
+            'FACEBOOK_AUTH_REQUIRED' if auth_blocked else
+            'PROFILE_SESSION_BLOCKED' if status_blocked_profiles else ''
+        ),
     )
 

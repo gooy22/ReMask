@@ -595,6 +595,25 @@ class ProvisioningService:
         auth_error = private_auth_error(exc)
         if auth_error is not None:
             return auth_error
+        # A profile-proxy failure during bootstrap happens before any GraphQL
+        # mutation. Keep it distinct from auth failures and allow a safe retry.
+        # This does not apply to a retained CREATE whose outcome is unknown.
+        transport_stage = str(getattr(exc, "transport_stage", "") or "").strip().lower()
+        request_not_sent = getattr(exc, "request_may_have_been_sent", None) is False
+        meta_payload = getattr(exc, "meta_payload", None)
+        transport_failure = (
+            meta_payload.get("transport_failure")
+            if isinstance(meta_payload, dict) else None
+        )
+        if transport_stage == "bootstrap" and request_not_sent and isinstance(transport_failure, dict):
+            proxy_configured = transport_failure.get("proxy_configured") is True
+            code = "PROFILE_PROXY_UNAVAILABLE" if proxy_configured else "PROFILE_PROXY_NOT_CONFIGURED"
+            message = (
+                "The profile proxy failed during Meta session bootstrap; no GraphQL CREATE was sent."
+                if proxy_configured else
+                "No profile proxy is configured; no GraphQL CREATE was sent."
+            )
+            return ProvisioningError(code, message, retryable=proxy_configured)
         if isinstance(exc, TransportError):
             return ProvisioningError(exc.code, str(exc), retryable=exc.retryable)
         if isinstance(exc, ProxyCheckError):
