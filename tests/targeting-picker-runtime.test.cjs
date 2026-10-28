@@ -319,7 +319,8 @@ function fixture(){
   });
   assert.equal(localCalls.length,1,'known GEO values return without a private Meta request');
   assert.equal(localCalls[0].url,'ajax/metaTemplateTargetingSearch.php');
-  assert.match(localCalls[0].options.body,/module_only=1/);
+  assert.match(localCalls[0].options.body,/cache_only=1/);
+  assert.doesNotMatch(localCalls[0].options.body,/module_only=/);
   assert.doesNotMatch(localCalls[0].options.body,/account_id|profile=/,
     'shared IDs are suggestions, never represented as selected-account permission');
   assert.equal(country.data[0].key,'UA');
