@@ -216,9 +216,11 @@ $js = <<<'JS'
   function targetingErrorMessage(error) {
     const raw = String(error?.payload?.error?.code || error?.payload?.code
       || error?.payload?.error || error?.payload?.message || error?.message || '').toUpperCase();
-    if (/CHECKPOINT/.test(raw)) return 'Meta остановила профиль. Новые запросы не отправлены.';
+    if (/CHECKPOINT|PROFILE_META_BLOCKED/.test(raw)) return 'Профиль заблокирован Meta. Новые запросы остановлены.';
     if (/SESSION|LOGIN|BUSINESS_LOGIN|TWO_FACTOR|AUTH/.test(raw)) return 'Meta не подтвердила вход для этого профиля.';
-    if (/RESOURCE_READ_INCOMPLETE/.test(raw)) return 'Meta не вернула список для выбранного РК. Доступ не подтверждён.';
+    if (/TEMPLATE_LOOKUP_SOURCE_UNAVAILABLE/.test(raw)) return 'Для выбранного РК не подтверждена связь с BM. Список недоступен.';
+    if (/TEMPLATE_LOOKUP_ACCESS_UNVERIFIED|TARGETING_SOURCE_SCOPE_UNVERIFIED|RESOURCE_READ_INCOMPLETE/.test(raw)) return 'Meta не подтвердила доступ к выбранному РК.';
+    if (/TEMPLATE_LOOKUP_UNAVAILABLE/.test(raw)) return 'Справочник Meta недоступен. Попробуйте позже.';
     if (/TIMEOUT|TIMED OUT/.test(raw)) return 'Meta не ответила вовремя. Попробуйте позже.';
     return 'Не удалось загрузить варианты. Проверьте вход и доступ к выбранному РК.';
   }
