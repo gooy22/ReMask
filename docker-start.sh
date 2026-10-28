@@ -131,7 +131,7 @@ done
 
 # Run the one-time account-store migration as its storage owner. This keeps
 # atomic replacements owned by www-data and removes the second volume-wide scan.
-runuser -u www-data -- php -r 'require $argv[1]."/settings.php";require $argv[1]."/classes/AccountStoreFactory.php";$store=AccountStoreFactory::create(ACCOUNTSFILENAME);$profiles=$store->deserialize();if ($store instanceof FbAccountSerializer) $store->ensureEncrypted();echo "[profile-storage] ready count=".count($store->deserialize())." encrypted=1 key_encoding=".CredentialVault::environmentEncoding()."\\n";' "$ROOT"
+runuser -u www-data -- php -r 'require $argv[1]."/settings.php";require $argv[1]."/classes/AccountStoreFactory.php";$store=AccountStoreFactory::create(ACCOUNTSFILENAME);$profiles=$store->deserialize();if ($store instanceof FbAccountSerializer) $store->ensureEncrypted();echo "[profile-storage] ready count=".count($store->deserialize())." encrypted=1 key_encoding=".CredentialVault::environmentEncoding()."\n";' "$ROOT"
 chmod 700 "$REMASK_PHP_SESSION_DIR"
 chown www-data:www-data "$REMASK_PHP_SESSION_DIR"
 
