@@ -985,7 +985,10 @@ function pythonWorkerJobStatusView(item) {
   if (status === 'RUNNING') return {label:'В РАБОТЕ', key:'RUNNING', message:''};
   if (status === 'QUEUED') return {label:'В ОЧЕРЕДИ', key:'QUEUED', message:''};
   if (status === 'FAILED') return {label:'ОШИБКА', key:'FAILED', message:''};
-  return {label:status || 'НЕИЗВЕСТНО', key:'FAILED', message:''};
+  if (status === 'PARTIAL') return {label:'ЧАСТИЧНО ВЫПОЛНЕНО', key:'PARTIAL', message:'Часть шагов завершена.'};
+  if (status === 'CANCELLED' || status === 'STOPPED') return {label:'ОСТАНОВЛЕНО', key:'FAILED', message:'Задача остановлена.'};
+  if (status === 'SKIPPED') return {label:'ПРОПУЩЕНО', key:'FAILED', message:'Шаг пропущен.'};
+  return {label:'НЕИЗВЕСТНЫЙ СТАТУС', key:'FAILED', message:'Проверьте технические подробности.'};
 }
 
 function pythonWorkerUserFailureText(item) {
