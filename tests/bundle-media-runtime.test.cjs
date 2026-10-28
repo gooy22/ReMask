@@ -18,12 +18,16 @@ function targetingFixture(){
       const body=Object.fromEntries(new URLSearchParams(options.body));calls.push({url,body});
       if(ctx.failure)throw new Error(ctx.failure);
       if(ctx.pending)await ctx.pending;
-      if(url==='ajax/metaTemplateTargetingSearch.php'&&body.module_only==='1')
-        return {data:[],checked_live:false,source:'private_meta_module_reference',template_account_bound:false};
       if(url==='ajax/metaTemplateTargetingSearch.php'&&body.cache_only==='1'&&ctx.cacheHit)
         return {data:[{id:'6003277229371'}],checked_live:false,account_scope_verified:false,
           availability:'AVAILABLE',source:'private_meta_template_reference',template_account_bound:false,
           reference_checked_at:1,_cache:{hit:true,cached_only:true}};
+      if(url==='ajax/metaTemplateTargetingSearch.php'&&body.cache_only==='1'&&body.type==='locales')
+        return {data:[{id:'6003277229371'}],checked_live:false,source:'private_meta_module_reference',
+          template_account_bound:false};
+      if(url==='ajax/metaTemplateTargetingSearch.php'&&body.cache_only==='1')
+        return {data:[],checked_live:false,account_scope_verified:false,availability:'NOT_LOADED',
+          source:'private_meta_template_reference',template_account_bound:false};
       return {...{data:[{id:'6003277229371'}],profile:body.profile,account_id:body.account_id,resource:body.type,
         checked_live:true,account_scope_verified:true},...ctx.response};
     }};
@@ -50,11 +54,8 @@ test('selected RK reads GEO fallback, interests and behaviors in its exact scope
     ctx.mode='PUBLISH';await search(type);
     assert.equal(scoped()[1].body.execution_mode,'PUBLISH');
     const referenceCalls=calls.filter(call=>call.url==='ajax/metaTemplateTargetingSearch.php');
-    assert.equal(referenceCalls.length,type==='locations'?4:2);
-    if(type==='locations'){
-      assert.deepEqual(referenceCalls.map(call=>call.body.module_only==='1'?'module':'cache'),['module','cache','module','cache']);
-      assert.ok(referenceCalls[1].body.cache_only==='1'&&referenceCalls[3].body.cache_only==='1');
-    }else assert.ok(referenceCalls.every(call=>call.body.cache_only==='1'));
+    assert.equal(referenceCalls.length,2,'one cache-only lookup per query precedes the exact selected-RK read');
+    assert.ok(referenceCalls.every(call=>call.body.cache_only==='1'&&!('module_only' in call.body)));
   }
 });
 test('selected RK accepts unbound local language reference data without account reads',async()=>{
@@ -62,7 +63,7 @@ test('selected RK accepts unbound local language reference data without account 
   assert.equal(result.checked_live,false);
   assert.equal(result.source,'private_meta_module_reference');
   assert.equal(result.template_account_bound,false);
-  assert.deepEqual(calls,[{url:'ajax/metaTemplateTargetingSearch.php',body:{type:'locales',q:'fitness',limit:'25',module_only:'1'}}]);
+  assert.deepEqual(calls,[{url:'ajax/metaTemplateTargetingSearch.php',body:{type:'locales',q:'fitness',limit:'25',cache_only:'1'}}]);
   ctx.mode='PUBLISH';await search('languages');
   assert.deepEqual(calls[1],calls[0]);
 });
