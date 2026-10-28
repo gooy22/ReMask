@@ -32,6 +32,9 @@ class PageAccessTransportRoutingTests(unittest.TestCase):
         self.assertFalse(_browser_auth_fallback_allowed(
             prepare_params, ProvisioningError('SESSION_EXPIRED', 'expired'),
             {'private_operations': {'claim_page': {'status': 'SUBMIT_INTENT'}}}))
+        self.assertFalse(_browser_auth_fallback_allowed(
+            prepare_params, ProvisioningError('SESSION_EXPIRED', 'expired'),
+            {'private_rk_operations': {'assign_rk': {'status': 'RESULT_UNKNOWN'}}}))
         self.assertFalse(_private_http_page_access(
             SimpleNamespace(private_only=False), prepare_params))
 
