@@ -468,8 +468,8 @@ function pythonWorkerSelectionRefresh() {
     retry.disabled = pythonWorkerUiState.busy || !hasRetryableFailed ||
       (!hasTerminalBatchFailure && !pythonWorkerUiState.jobId);
     retry.textContent = hasTerminalBatchFailure
-      ? 'Retry Failed batch'
-      : 'Retry Failed';
+      ? 'Повторить доступные'
+      : 'Повторить доступные';
   }
 
   pythonWorkerEnsureRkFanPageActions();
@@ -487,10 +487,10 @@ function pythonWorkerSelectionRefresh() {
       profiles.length
         ? (
             pythonWorkerUiState.workerOnline === true
-              ? 'Worker UI v181 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
-              : 'Worker UI v181 · Выбрано FB-профилей: ' + profiles.length + '. Жду READY от worker.'
+              ? 'Выбрано профилей: ' + profiles.length + '. Готово к подготовке комплектов.'
+              : 'Выбрано профилей: ' + profiles.length + '. Сервис подготовки недоступен.'
           )
-        : 'Worker UI v181 · Выберите FB-профили в Workspace.'
+        : 'Выберите FB-профили для подготовки комплектов.'
     );
   }
 }
@@ -646,13 +646,7 @@ async function pythonWorkerHealthCheckOnce() {
     if (isReady) {
       el.dataset.state = 'online';
       el.textContent =
-        'Worker: READY' +
-        (revision ? ' · rev ' + revision : '') +
-        (bmPayloadVersion ? ' · BM ' + bmPayloadVersion : '') +
-        ' · профили ' + profilesVisible +
-        ' · volume ' + (volumeMounted ? 'YES' : 'NO') +
-        ' · очередь ' + queued +
-        ' · concurrency ' + concurrency;
+        'Сервис подготовки работает · профилей ' + profilesVisible + ' · очередь ' + queued;
       if (readiness && readiness.network_test && readiness.network_test.mode === 'DIRECT_TEST') {
         const test = readiness.network_test;
         el.textContent += ' · БЕЗ ПРОКСИ: FB ' + String(test.profile_id) +
@@ -661,11 +655,7 @@ async function pythonWorkerHealthCheckOnce() {
     } else {
       el.dataset.state = 'offline';
       el.textContent =
-        'Worker: ONLINE · resolver ERROR · ' +
-        pythonWorkerErrorText(
-          data && data.readiness_error,
-          'profile resolver is not ready'
-        );
+        'Сервис подготовки доступен, но профили сейчас проверить не удалось.';
     }
 
     pythonWorkerSelectionRefresh();
@@ -674,11 +664,7 @@ async function pythonWorkerHealthCheckOnce() {
     pythonWorkerUiState.workerOnline = false;
     el.dataset.state = 'offline';
     el.textContent =
-      'Worker: OFFLINE · ' +
-      pythonWorkerErrorText(
-        error && error.message != null ? error.message : error,
-        'health request failed'
-      );
+      'Сервис подготовки временно недоступен.';
     pythonWorkerSelectionRefresh();
     return false;
   }
