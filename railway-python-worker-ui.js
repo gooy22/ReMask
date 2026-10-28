@@ -372,6 +372,16 @@ function pythonWorkerItemCanRetry(item) {
   });
 }
 
+function pythonWorkerItemBlockedByKnownProfileStatus(item) {
+  const sessions = typeof pythonWorkerProfileSessionStatuses !== 'undefined'
+    ? pythonWorkerProfileSessionStatuses : null;
+  if (!sessions || typeof sessions.get !== 'function') return false;
+  const profileId = String(item && item.profile_id || '').trim();
+  const session = profileId ? sessions.get(profileId) : null;
+  const status = String(session && session.status || '').toUpperCase();
+  return ['CHECKPOINT','LOGIN_REQUIRED','TWO_FACTOR','LIMITED','IN_PROGRESS'].includes(status);
+}
+
 function pythonWorkerFailureDetails(item) {
   const parts = [];
   if (item && /^[a-zA-Z0-9_-]{1,80}$/.test(String(item.worker_job_id || ''))) {
@@ -903,13 +913,6 @@ function pythonWorkerPrepareResult(item) {
 const pythonWorkerProfileSessionStatuses = new Map();
 let pythonWorkerProfileStatusRequest = null;
 let pythonWorkerProfileStatusJobId = '';
-
-function pythonWorkerItemBlockedByKnownProfileStatus(item) {
-  const profileId = String(item && item.profile_id || '').trim();
-  const session = profileId ? pythonWorkerProfileSessionStatuses.get(profileId) : null;
-  const status = String(session && session.status || '').toUpperCase();
-  return ['CHECKPOINT','LOGIN_REQUIRED','TWO_FACTOR','LIMITED','IN_PROGRESS'].includes(status);
-}
 
 function pythonWorkerItemErrorCode(item) {
   const failedTask = (Array.isArray(item && item.tasks) ? item.tasks : []).find(function(task) {
