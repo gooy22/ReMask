@@ -861,6 +861,7 @@ class FacebookWebSession:
         force: bool = False,
         allow_business_loginpage_probe: bool = False,
         require_actor_match: bool = True,
+        prefer_business_home: bool = False,
     ) -> FacebookBootstrap:
 
         if (allow_business_loginpage_probe and self._bootstrap is not None
@@ -909,14 +910,15 @@ class FacebookWebSession:
                     raise AuthenticationError(
                         "A profile-bound Business operation requires the selected c_user actor."
                     )
-                # Exact reviewed BM/RK/Page contracts use the imported profile
-                # identity directly. Visiting Business Suite first can redirect
-                # to business/loginpage, mutate its in-memory cookies, and spend
-                # the Sync deadline before the same profile is checked.
-                return await self._verified_profile_bootstrap(
-                    session, expected_actor, [], require_actor_match=require_actor_match,
-                )
 
+                if not prefer_business_home:
+                    return await self._verified_profile_bootstrap(
+                        session, expected_actor, [], require_actor_match=require_actor_match,
+                    )
+
+            # Prefer Business home only for the exact READ_RK route whose
+            # successful production path starts there. Other scoped operations
+            # retain their independent profile-page identity bootstrap.
             token_patterns = list(self.FB_DTSG_PATTERNS)
 
             bootstrap_urls = (
@@ -992,6 +994,7 @@ class FacebookWebSession:
                                 and expected_actor.isdigit()):
                             return await self._verified_profile_bootstrap(
                                 session, expected_actor, auth_attempts,
+                                require_actor_match=require_actor_match,
                             )
                         error = AuthenticationError("Meta requires session restoration before bootstrap.")
                         error.meta_payload = {"business_precheck": auth_attempts}
@@ -1850,9 +1853,12 @@ class FacebookWebSession:
                 # while still providing the usable token needed for these reads.
                 # Changes still require the selected c_user to be verified.
                 scoped_read_only = scoped_probe in {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS", "PRIVATE_RK_INVENTORY"}
+                prefer_business_home = scoped_probe == "READ_RK"
                 bootstrap = await self.bootstrap(
+                    force=prefer_business_home,
                     allow_business_loginpage_probe=True,
                     require_actor_match=not scoped_read_only,
+                    prefer_business_home=prefer_business_home,
                 )
                 current_actor = str(self.profile.cookies.get("c_user") or "").strip()
                 if not current_actor.isdigit() or bootstrap.actor_id != current_actor:
