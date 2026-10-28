@@ -61,6 +61,33 @@ try {
         'the pre-restore session was not retained as rollback');
     assertStartup($restored->token === 'fixture-token', 'restore changed the profile token');
 
+    // Legacy webroot aliases must read and restore the snapshot beside the volume target.
+    $linkPath = $dir.'/linked-accounts.json';
+    symlink($path, $linkPath);
+    $linked = new FbAccountSerializer($linkPath);
+    foreach (['linked-old-xs', 'linked-new-xs'] as $xs) {
+        $linkedProfile = new FbAccount('5', 'fixture-token',
+            json_encode([['name'=>'c_user','value'=>'54321'],['name'=>'xs','value'=>$xs]]), null, null);
+        $linked->addOrUpdateAccount($linkedProfile);
+    }
+    $linkedPrevious = $linked->getPreviousAccountByName('5');
+    $linkedCurrent = $linked->getAccountByName('5');
+    assertStartup($linkedPrevious instanceof FbAccount && $linkedCurrent instanceof FbAccount,
+        'symlinked profile snapshot lookup failed');
+    $linkedPreviousCookies = RemaskCookieSession::map((array)$linkedPrevious->cookies);
+    $linkedCurrentCookies = RemaskCookieSession::map((array)$linkedCurrent->cookies);
+    assertStartup(($linkedPreviousCookies['xs'] ?? '') === 'linked-old-xs',
+        'symlinked previous snapshot was not read from the volume path');
+    $linkedCurrentHash = hash('sha256', $linkedCurrentCookies['xs']);
+    $linkedPreviousHash = hash('sha256', $linkedPreviousCookies['xs']);
+    assertStartup($linked->restorePreviousCookiesIfUnchanged(
+        '5', '54321', $linkedCurrentHash, $linkedPreviousHash, $linkedPreviousCookies
+    ), 'symlinked verified snapshot restore failed');
+    $linkedRestored = $linked->getAccountByName('5');
+    $linkedRestoredCookies = RemaskCookieSession::map((array)$linkedRestored->cookies);
+    assertStartup(($linkedRestoredCookies['xs'] ?? '') === 'linked-old-xs',
+        'symlinked snapshot was not restored on the volume file');
+
     // Legacy plaintext migration still encrypts both the current profile and its backup.
     putenv('REMASK_ENCRYPT_PROFILE_JSON=0');
     putenv('REMASK_CREDENTIALS_KEY');
