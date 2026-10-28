@@ -1003,11 +1003,17 @@ function pythonWorkerUserFailureText(item) {
   if (/CREATE_BUSINESS_RESULT_UNKNOWN|BUSINESS_CREATE_RESULT_UNKNOWN/.test(code)) {
     return 'Meta не подтвердила создание Business Manager. Повтор отключён, чтобы не создать дубль.';
   }
-  if (/timeout|timed out|_TIMEOUT/.test(combined)) {
-    return 'Meta не ответила вовремя. Перед повтором нужно сверить сохранённый результат.';
+  if (code === 'AD_ACCOUNT_CHECKPOINT_MISMATCH') {
+    return 'Сохранённый РК не совпадает с текущим заданием. Создание остановлено до сверки.';
+  }
+  if (/facebook bootstrap connection failed/.test(combined) && /check the profile proxy/.test(combined)) {
+    return 'Прокси профиля не ответил. Запрос в Facebook не отправлялся.';
   }
   if (/proxy_dead|proxy.*failed|bootstrap.*failed/.test(combined)) {
     return 'Не удалось подключиться через прокси. Результат шага не подтверждён.';
+  }
+  if (/timeout|timed out|_TIMEOUT/.test(combined)) {
+    return 'Meta не ответила вовремя. Перед повтором нужно сверить сохранённый результат.';
   }
   if (/payment_unconfirmed|payment_required/.test(combined)) {
     return 'Комплект создан, но оплата не подтверждена.';
