@@ -806,6 +806,8 @@ function remaskPrivateErrorLabel(code) {
         PRIVATE_ADS_DRAFT_READ_SPEC_MISMATCH:'Настройки черновика в Meta отличаются от сохранённых.',
         PRIVATE_ADS_DRAFT_TRANSPORT_UNAVAILABLE:'Не удалось связаться с Meta. Черновик не создан.',
         PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE:'Meta запросила вход. Проверка черновика не завершена.',
+        PRIVATE_ADS_DRAFT_CHECKPOINT_REQUIRED:'Чекпоинт Meta: аккаунт остановлен.',
+        CHECKPOINT_REQUIRED:'Чекпоинт Meta: аккаунт остановлен.',
         PRIVATE_ADS_DRAFT_RESULT_UNKNOWN:'Meta не подтвердила результат. Перед продолжением нужна сверка.',
         PRIVATE_ADS_DRAFT_INVALID_INPUT:'Проверьте настройки черновика.'
     };
