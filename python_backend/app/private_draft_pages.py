@@ -24,7 +24,12 @@ async def _actor(web):
 async def read_draft_pages(web, *, account, business, query=""):
     """Picker metadata only; Launch independently checks ownership and rights."""
     from .private_business_fan_page_create import read_pages
-    await _actor(web)
+    # READ_FP is already profile-bound: FacebookWebSession.graphql verifies
+    # its fresh bootstrap actor against this profile's c_user before sending
+    # the exact-Business query. A preliminary _actor() bootstrap is redundant;
+    # the Business GraphQL path discards verified profile bootstrap state and
+    # downloads the document again. Keep the read private and bootstrap once.
+    web.private_only = True
     rows, complete = await read_pages(web, business)
     if not complete or len(rows) > 500:
         raise fail("DRAFT_PAGE_INVENTORY_INCOMPLETE", "Exact Business Page inventory is incomplete", True)
