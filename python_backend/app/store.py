@@ -1266,6 +1266,34 @@ class JobStore:
             self._recover_owner_confirmed_operator_assignment(con)
         return imported
 
+    async def record_terminal_checkpoint(self, profile_id: str) -> bool:
+        """Persist an explicitly observed Meta checkpoint as a terminal profile state."""
+        clean = str(profile_id or '').strip()
+        if not clean:
+            return False
+        try:
+            return await asyncio.to_thread(self._record_terminal_checkpoint_sync, clean)
+        except sqlite3.OperationalError as exc:
+            if 'no such table: profile_terminal_statuses' not in str(exc):
+                raise
+            await self.init()
+            return await asyncio.to_thread(self._record_terminal_checkpoint_sync, clean)
+
+    def _record_terminal_checkpoint_sync(self, profile_id: str) -> bool:
+        now = _now()
+        message = 'Чекпоинт Meta: аккаунт остановлен. Новые задачи запрещены.'
+        with self._connect() as con:
+            con.execute(
+                """INSERT INTO profile_terminal_statuses(profile_id,status,checked_at,message)
+                   VALUES(?,'CHECKPOINT',?,?)
+                   ON CONFLICT(profile_id) DO UPDATE SET
+                     status='CHECKPOINT',
+                     checked_at=MAX(profile_terminal_statuses.checked_at,excluded.checked_at),
+                     message=excluded.message""",
+                (profile_id, now, message),
+            )
+        return True
+
     async def terminal_checkpoint_profiles(self, profile_ids: list[str]) -> list[str]:
         """Return profiles whose Meta checkpoint has been recorded as terminal."""
         clean = list(dict.fromkeys(
