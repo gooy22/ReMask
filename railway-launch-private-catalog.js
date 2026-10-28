@@ -54,6 +54,25 @@ loadFunding=async function(force=false) {
     $('fundingStatus').textContent='Оплата считается готовой после проверки выбранного РК в Meta.';
 };
 
+function remaskPrivateLaunchUserMessage(error) {
+    const code=String(error?.code||error?.payload?.code||error?.payload?.error?.code||
+        error?.payload?.detail?.code||'').toUpperCase();
+    const message=String(error?.message||error?.payload?.message||error?.payload?.error?.message||error||'').trim();
+    const raw=(code+' '+message).toUpperCase();
+    if(/CHECKPOINT_REQUIRED/.test(raw))
+        return 'Чекпоинт Meta: профиль остановлен; новые задачи запрещены';
+    if(/TWO_FACTOR_REQUIRED/.test(raw))
+        return 'Meta запросила подтверждение входа';
+    if(/BUSINESS_LOGIN_GATE|SESSION_EXPIRED/.test(raw))
+        return 'Meta не подтвердила вход';
+    if(/PAGE_ACCESS_UNVERIFIED|PAGE_UNVERIFIED|PAGE_ACCESS_REQUIRED/.test(raw))
+        return 'Meta не подтвердила доступ к выбранной странице';
+    if(/PAYMENT_SELECTION_REQUIRED|PAYMENT_UNVERIFIED/.test(raw))
+        return 'Не удалось выполнить проверку выбранного режима';
+    if(/^[A-Z][A-Z0-9_]{2,}$/.test(message)||/\b(?:PRIVATE_ADS|BUSINESS|SESSION|CHECKPOINT)_[A-Z0-9_]+\b/.test(message))
+        return 'Не удалось завершить проверку';
+    return message ? message.slice(0,240) : 'Не удалось завершить проверку';
+}
 const remaskPrivateLaunchNotice='Подготовьте план рекламы. Выберите сохранение черновика или публикацию.';
 let remaskPrivateLaunchBusy=false;
 const remaskPrivateLaunchPendingKey='remask_private_launch_pending_v1';
@@ -1166,7 +1185,7 @@ async function remaskPrivateCreateJob() {
         remaskPrivatePollJob(jobId);
         return accepted;
     }catch(error){
-        const message=String(error?.message||error).replace(/[.!?]+$/,'');
+        const message=remaskPrivateLaunchUserMessage(error).replace(/[.!?]+$/,'');
         remaskPrivateShow((submitting?'Не удалось подтвердить сохранение. ':'Черновик не сохранён. ')+message+
             (submitting?' Проверьте статус в «Задачи и результаты» перед повторной отправкой.':''),'failed');
         return null;
