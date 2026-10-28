@@ -46,8 +46,11 @@ test('selected RK reads GEO fallback, interests and behaviors in its exact scope
     ctx.mode='PUBLISH';await search(type);
     assert.equal(scoped()[1].body.execution_mode,'PUBLISH');
     const referenceCalls=calls.filter(call=>call.url==='ajax/metaTemplateTargetingSearch.php');
-    assert.equal(referenceCalls.length,type==='locations'?2:0);
-    if(type==='locations')assert.equal(referenceCalls[0].body.module_only,'1');
+    assert.equal(referenceCalls.length,type==='locations'?4:2);
+    if(type==='locations'){
+      assert.deepEqual(referenceCalls.map(call=>call.body.module_only==='1'?'module':'cache'),['module','cache','module','cache']);
+      assert.ok(referenceCalls[1].body.cache_only==='1'&&referenceCalls[3].body.cache_only==='1');
+    }else assert.ok(referenceCalls.every(call=>call.body.cache_only==='1'));
   }
 });
 test('selected RK accepts unbound local language reference data without account reads',async()=>{
@@ -61,12 +64,13 @@ test('selected RK accepts unbound local language reference data without account 
 });
 test('installed picker reference URL also uses the selected RK live read',async()=>{
   const {calls,search}=targetingFixture();await search('interests','ajax/metaTemplateTargetingSearch.php');
-  assert.equal(calls[0].url,'ajax/metaTargetingSearch.php');assert.equal(calls[0].body.profile,'38');
+  assert.equal(calls[0].url,'ajax/metaTemplateTargetingSearch.php');assert.equal(calls[0].body.cache_only,'1');
+  assert.equal(calls[1].url,'ajax/metaTargetingSearch.php');assert.equal(calls[1].body.profile,'38');
 });
 test('single bulk target uses its owning profile, never the current unrelated profile',async()=>{
   const {ctx,calls,search}=targetingFixture();ctx.state.profile='16';
   ctx.state.targets=[{profile:'38',account_id:'120249912222240685'}];
-  await search();assert.equal(calls[0].body.profile,'38');
+  await search();assert.equal(calls[1].body.profile,'38');
 });
 test('unbound and multiple-account templates stay explicitly unbound',async()=>{
   for(const accounts of [[],['111111','222222']]){
@@ -76,8 +80,8 @@ test('unbound and multiple-account templates stay explicitly unbound',async()=>{
 });
 test('reviewed advanced targeting types use the existing scoped sender',async()=>{
   const {calls,search}=targetingFixture();await search('work_positions');
-  assert.equal(calls[0].url,'ajax/metaTargetingSearch.php');
-  assert.equal(calls[0].body.profile,'38');assert.equal(calls[0].body.type,'work_positions');
+  assert.equal(calls[1].url,'ajax/metaTargetingSearch.php');
+  assert.equal(calls[1].body.profile,'38');assert.equal(calls[1].body.type,'work_positions');
 });
 test('unreviewed types never call an unsupported account read contract',async()=>{
   const {calls,search}=targetingFixture();await search('invented_type');
@@ -87,7 +91,9 @@ test('unreviewed types never call an unsupported account read contract',async()=
 test('failed scoped read never falls back to cached or another profile reference',async()=>{
   const {ctx,calls,search}=targetingFixture();
   ctx.failure='SESSION_EXPIRED';await assert.rejects(search,/SESSION_EXPIRED/);
-  assert.equal(calls.length,1);assert.equal(calls[0].url,'ajax/metaTargetingSearch.php');
+  assert.equal(calls.length,2);
+  assert.equal(calls[0].url,'ajax/metaTemplateTargetingSearch.php');assert.equal(calls[0].body.cache_only,'1');
+  assert.equal(calls[1].url,'ajax/metaTargetingSearch.php');
 });
 test('fresh exact-scope Meta results and explicitly cached suggestions are selectable',async()=>{
   const {ctx,search}=targetingFixture();
