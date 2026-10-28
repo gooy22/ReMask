@@ -260,21 +260,35 @@ async def ad_account_handler(session, params, state, *args, **kwargs):
     if action.saved.get("business_id") and _id(action.saved["business_id"]) != business:
         raise ProvisioningError("AD_ACCOUNT_CHECKPOINT_MISMATCH", "Saved CREATE belongs to another BM.")
     saved_name = _clean(action.saved.get("account_name") or action.saved.get("name"))
+    saved_phase = _clean(action.saved.get("phase")).upper()
+    saved_expected = _id(action.saved.get("ad_account_id") or action.saved.get("create_response_ad_account_id"))
     historical_single_rk_recovery = (
         bool(action.saved.get("recovered_from_item_id"))
         and params.get("allow_multiple_in_business") is not True
     )
     saved_name_mismatch = bool(saved_name and saved_name.casefold() != name.casefold())
-    if saved_name_mismatch and not historical_single_rk_recovery:
+    same_item_checkpoint_recovery = (
+        saved_name_mismatch
+        and params.get("allow_multiple_in_business") is not True
+        and (saved_phase in _PENDING or bool(saved_expected))
+    )
+    if saved_name_mismatch and not (historical_single_rk_recovery or same_item_checkpoint_recovery):
         raise ProvisioningError("AD_ACCOUNT_CHECKPOINT_MISMATCH", "An existing or pending RK operation in this BM belongs to another name; verify that operation first.")
-    expected = _id(action.saved.get("ad_account_id") or action.saved.get("create_response_ad_account_id") or state.get("ad_account_id"))
-    # A historical operation may have been created under an earlier generated
-    # slot name. Reconcile that exact identity inside this exact BM before
-    # refusing the current slot. This remains read-only; an unconfirmed
-    # historical CREATE is never re-submitted.
-    inventory_name = saved_name if saved_name_mismatch and historical_single_rk_recovery else name
+    expected = saved_expected or _id(state.get("ad_account_id"))
+    # A saved operation may retain an earlier generated slot name. Reconcile
+    # it read-only inside the exact BM before refusing the current slot. This
+    # applies to both recovered historical items and this item's own pending
+    # checkpoint. If the inventory is inconclusive, keep the CREATE retained
+    # and stop; never submit another POST to compensate.
+    reconcile_saved_name = saved_name_mismatch and (
+        historical_single_rk_recovery or same_item_checkpoint_recovery
+    )
+    inventory_name = saved_name if reconcile_saved_name else name
+    # A mismatched saved name must never be paired with an ID inherited only
+    # from the current in-memory state; use only this item's saved identity.
+    inventory_expected = saved_expected if reconcile_saved_name else expected
     try:
-        before = await _rk_inventory(action.web, business, inventory_name, expected)
+        before = await _rk_inventory(action.web, business, inventory_name, inventory_expected)
     except ProvisioningError as exc:
         if getattr(exc, "inventory_diagnostics", None):
             await action.checkpoint({"inventory_verification": exc.inventory_diagnostics,
