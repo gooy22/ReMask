@@ -66,6 +66,7 @@ class WebProfile:
     proxy: str | None
     user_agent: str
     recovery_cookies: dict[str, str] | None = field(default=None, repr=False)
+    recovery_cookie_candidates: list[dict[str, str]] | None = field(default=None, repr=False)
 
 
 @dataclass(slots=True)
@@ -1746,113 +1747,162 @@ class FacebookWebSession:
                     reject()
         return operation
 
+    def _take_previous_session_candidates(self) -> tuple[list[dict[str, str]], str]:
+        raw_candidates = getattr(self.profile, "recovery_cookie_candidates", None)
+        if isinstance(raw_candidates, list) and raw_candidates:
+            rows = raw_candidates[:8]
+        else:
+            legacy = getattr(self.profile, "recovery_cookies", None)
+            rows = [legacy] if isinstance(legacy, dict) and legacy else []
+
+        actor = str(self.profile.cookies.get("c_user") or "").strip()
+        current_xs = str(self.profile.cookies.get("xs") or "").strip()
+        if not actor.isdigit():
+            return [], "selected_actor_invalid"
+        if not rows:
+            return [], "no_snapshot"
+
+        accepted: list[dict[str, str]] = []
+        seen_xs: set[str] = set()
+        last_reason = "no_eligible_snapshot"
+        for raw in rows:
+            if not isinstance(raw, dict) or not raw or len(raw) > 500:
+                last_reason = "invalid_cookie_shape"
+                continue
+            candidate: dict[str, str] = {}
+            candidate_valid = True
+            cookie_bytes = 0
+            for key, value in raw.items():
+                if (not isinstance(key, str)
+                        or not re.fullmatch(r"[A-Za-z0-9_.-]{1,256}", key)
+                        or not isinstance(value, str) or len(value) > 8192
+                        or re.search(r"[\x00-\x1f\x7f]", value)):
+                    candidate_valid = False
+                    break
+                cookie_bytes += len(key) + len(value)
+                if cookie_bytes > 131072:
+                    candidate_valid = False
+                    break
+                candidate[key] = value
+            if not candidate_valid:
+                last_reason = "invalid_cookie_shape"
+                continue
+            candidate_actor = str(candidate.get("c_user") or "").strip()
+            candidate_xs = str(candidate.get("xs") or "").strip()
+            if candidate_actor != actor:
+                last_reason = "actor_mismatch"
+                continue
+            if not current_xs or not candidate_xs:
+                last_reason = "missing_xs"
+                continue
+            if candidate_xs == current_xs:
+                last_reason = "same_xs"
+                continue
+            if candidate_xs in seen_xs:
+                continue
+            seen_xs.add(candidate_xs)
+            accepted.append(candidate)
+
+        if not accepted:
+            return [], last_reason
+        self._previous_recovery_attempted = True
+        self.profile.recovery_cookies = None
+        self.profile.recovery_cookie_candidates = []
+        return accepted, ""
+
     async def bootstrap_from_previous_session(self) -> FacebookBootstrap | None:
-        """Restore one prior cookie snapshot only after verifying the same c_user."""
+        """Try bounded prior same-actor snapshots; adopt only one Meta verifies."""
         if self._previous_recovery_attempted:
             log.info(
                 "[%s] previous same-actor bootstrap recovery skipped reason=already_attempted",
                 self.profile.name,
             )
             return None
-        raw = getattr(self.profile, "recovery_cookies", None)
+        candidates, reason = self._take_previous_session_candidates()
+        if reason:
+            log.info(
+                "[%s] previous same-actor bootstrap recovery skipped reason=%s",
+                self.profile.name, reason,
+            )
+            return None
         actor = str(self.profile.cookies.get("c_user") or "").strip()
-        if not isinstance(raw, dict) or not raw:
-            reason = "no_snapshot"
-        elif not actor.isdigit():
-            reason = "selected_actor_invalid"
-        else:
-            reason = ""
-        if reason:
-            log.info(
-                "[%s] previous same-actor bootstrap recovery skipped reason=%s",
-                self.profile.name, reason,
-            )
-            return None
-        candidate_cookies = dict(raw)
-        candidate_actor = str(candidate_cookies.get("c_user") or "").strip()
-        current_xs = str(self.profile.cookies.get("xs") or "").strip()
-        candidate_xs = str(candidate_cookies.get("xs") or "").strip()
-        if candidate_actor != actor:
-            reason = "actor_mismatch"
-        elif not current_xs or not candidate_xs:
-            reason = "missing_xs"
-        elif candidate_xs == current_xs:
-            reason = "same_xs"
-        elif any(not isinstance(key, str) or not isinstance(value, str)
-                 for key, value in candidate_cookies.items()):
-            reason = "invalid_cookie_shape"
-        else:
-            reason = ""
-        if reason:
-            log.info(
-                "[%s] previous same-actor bootstrap recovery skipped reason=%s",
-                self.profile.name, reason,
-            )
-            return None
-        self._previous_recovery_attempted = True
 
-        # Consume this spare snapshot before trying it. It can only be used
-        # once, and it must independently confirm the selected profile actor.
-        self.profile.recovery_cookies = None
-        previous = FacebookWebSession(
-            WebProfile(
-                name=self.profile.name,
-                cookies=candidate_cookies,
-                proxy=self.profile.proxy,
-                user_agent=self.profile.user_agent,
-            ),
-            timeout_seconds=self.timeout_seconds,
-            pool_size=self.pool_size,
-        )
-        previous.defer_module_refresh = True
-        try:
-            await previous.bootstrap(
-                allow_business_loginpage_probe=True,
-                require_actor_match=True,
+        for candidate_index, candidate_cookies in enumerate(candidates, 1):
+            previous = FacebookWebSession(
+                WebProfile(
+                    name=self.profile.name,
+                    cookies=candidate_cookies,
+                    proxy=self.profile.proxy,
+                    user_agent=self.profile.user_agent,
+                ),
+                timeout_seconds=self.timeout_seconds,
+                pool_size=self.pool_size,
             )
-            if (not previous._profile_session_identity_verified
-                    or not previous._bootstrap
-                    or previous._bootstrap.actor_id != actor):
-                return None
-            client = previous.session
-            if client is None or client.closed:
-                return None
-            refreshed = client.facebook_cookie_snapshot()
-            if (str(refreshed.get("c_user") or "") != actor
-                    or not str(refreshed.get("xs") or "").strip()):
-                return None
-            previous.profile.cookies = dict(refreshed)
-
-            async with self._session_lock:
-                old = self.session
-                if old is not None and old is not client and not old.closed:
-                    await old.close()
-                self.session = client
-                previous.session = None
-                self.profile.cookies = dict(refreshed)
-                self._bootstrap = previous._bootstrap
-                self._profile_session_identity_verified = True
-                self._business_read_proofs.update(previous._business_read_proofs)
-                self._reviewed_module_ids = dict(
-                    getattr(previous, "_reviewed_module_ids", {}) or {}
+            previous.defer_module_refresh = True
+            try:
+                await previous.bootstrap(
+                    allow_business_loginpage_probe=True,
+                    require_actor_match=True,
                 )
-            log.info(
-                "[%s] verified previous same-actor session recovered for bootstrap",
-                self.profile.name,
-            )
-            return self._bootstrap
-        except asyncio.CancelledError:
-            await previous.close()
-            raise
-        except Exception as exc:
-            log.info(
-                "[%s] previous same-actor bootstrap recovery unavailable kind=%s",
-                self.profile.name, type(exc).__name__,
-            )
-            return None
-        finally:
-            if previous.session is not None:
+                if (not previous._profile_session_identity_verified
+                        or not previous._bootstrap
+                        or previous._bootstrap.actor_id != actor):
+                    log.info(
+                        "[%s] previous same-actor bootstrap candidate rejected candidate=%d reason=actor_unverified",
+                        self.profile.name, candidate_index,
+                    )
+                    continue
+                client = previous.session
+                if client is None or client.closed:
+                    log.info(
+                        "[%s] previous same-actor bootstrap candidate rejected candidate=%d reason=session_unavailable",
+                        self.profile.name, candidate_index,
+                    )
+                    continue
+                refreshed = client.facebook_cookie_snapshot()
+                if (str(refreshed.get("c_user") or "") != actor
+                        or not str(refreshed.get("xs") or "").strip()):
+                    log.info(
+                        "[%s] previous same-actor bootstrap candidate rejected candidate=%d reason=refreshed_actor_unverified",
+                        self.profile.name, candidate_index,
+                    )
+                    continue
+                previous.profile.cookies = dict(refreshed)
+
+                async with self._session_lock:
+                    old = self.session
+                    if old is not None and old is not client and not old.closed:
+                        await old.close()
+                    self.session = client
+                    previous.session = None
+                    self.profile.cookies = dict(refreshed)
+                    self._bootstrap = previous._bootstrap
+                    self._profile_session_identity_verified = True
+                    self._business_read_proofs.update(previous._business_read_proofs)
+                    self._reviewed_module_ids = dict(
+                        getattr(previous, "_reviewed_module_ids", {}) or {}
+                    )
+                log.info(
+                    "[%s] verified previous same-actor session recovered for bootstrap candidate=%d",
+                    self.profile.name, candidate_index,
+                )
+                return self._bootstrap
+            except asyncio.CancelledError:
                 await previous.close()
+                raise
+            except Exception as exc:
+                log.info(
+                    "[%s] previous same-actor bootstrap candidate unavailable candidate=%d kind=%s",
+                    self.profile.name, candidate_index, type(exc).__name__,
+                )
+            finally:
+                if previous.session is not None:
+                    await previous.close()
+        log.info(
+            "[%s] previous same-actor bootstrap recovery exhausted candidates=%d",
+            self.profile.name, len(candidates),
+        )
+        return None
 
     async def _retry_scoped_read_with_previous_session(
         self,
@@ -1868,7 +1918,7 @@ class FacebookWebSession:
         before_submit: Any | None = None,
         private_inventory_query_contract: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
-        """Retry one exact inventory read with a verified same-actor prior snapshot."""
+        """Retry only allowlisted inventory reads using verified same-actor snapshots."""
         allowed_reads = {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS", "PRIVATE_RK_INVENTORY"}
         if business_loginpage_probe not in allowed_reads:
             return None
@@ -1878,120 +1928,106 @@ class FacebookWebSession:
                 self.profile.name, business_loginpage_probe,
             )
             return None
-        raw = getattr(self.profile, "recovery_cookies", None)
+        candidates, reason = self._take_previous_session_candidates()
+        if reason:
+            log.info(
+                "[%s] previous same-actor read recovery skipped reason=%s operation=%s",
+                self.profile.name, reason, business_loginpage_probe,
+            )
+            return None
         actor = str(self.profile.cookies.get("c_user") or "").strip()
-        if not isinstance(raw, dict) or not raw:
-            reason = "no_snapshot"
-        elif not actor.isdigit():
-            reason = "selected_actor_invalid"
-        else:
-            reason = ""
-        if reason:
-            log.info(
-                "[%s] previous same-actor read recovery skipped reason=%s operation=%s",
-                self.profile.name, reason, business_loginpage_probe,
-            )
-            return None
-        candidate_cookies = dict(raw)
-        candidate_actor = str(candidate_cookies.get("c_user") or "").strip()
-        current_xs = str(self.profile.cookies.get("xs") or "").strip()
-        candidate_xs = str(candidate_cookies.get("xs") or "").strip()
-        if candidate_actor != actor:
-            reason = "actor_mismatch"
-        elif not current_xs or not candidate_xs:
-            reason = "missing_xs"
-        elif candidate_xs == current_xs:
-            reason = "same_xs"
-        elif any(not isinstance(key, str) or not isinstance(value, str)
-                 for key, value in candidate_cookies.items()):
-            reason = "invalid_cookie_shape"
-        else:
-            reason = ""
-        if reason:
-            log.info(
-                "[%s] previous same-actor read recovery skipped reason=%s operation=%s",
-                self.profile.name, reason, business_loginpage_probe,
-            )
-            return None
-        self._previous_recovery_attempted = True
 
-        # Do not retain the spare auth material after starting its single,
-        # actor-verified read attempt.
-        self.profile.recovery_cookies = None
-        previous = FacebookWebSession(
-            WebProfile(
-                name=self.profile.name,
-                cookies=candidate_cookies,
-                proxy=self.profile.proxy,
-                user_agent=self.profile.user_agent,
-            ),
-            timeout_seconds=self.timeout_seconds,
-            pool_size=self.pool_size,
-        )
-        previous.defer_module_refresh = True
-        try:
-            await previous.bootstrap(
-                allow_business_loginpage_probe=True,
-                require_actor_match=True,
+        for candidate_index, candidate_cookies in enumerate(candidates, 1):
+            previous = FacebookWebSession(
+                WebProfile(
+                    name=self.profile.name,
+                    cookies=candidate_cookies,
+                    proxy=self.profile.proxy,
+                    user_agent=self.profile.user_agent,
+                ),
+                timeout_seconds=self.timeout_seconds,
+                pool_size=self.pool_size,
             )
-            if (not previous._profile_session_identity_verified
-                    or not previous._bootstrap
-                    or previous._bootstrap.actor_id != actor):
-                return None
-            result = await previous.graphql(
-                doc_id,
-                dict(variables),
-                friendly_name=friendly_name,
-                endpoint_url=endpoint_url,
-                request_envelope=request_envelope,
-                before_submit=before_submit,
-                business_context_id=business_context_id,
-                read_timeout_seconds=read_timeout_seconds,
-                business_loginpage_probe=business_loginpage_probe,
-                private_inventory_query_contract=private_inventory_query_contract,
-            )
-            client = previous.session
-            if (not previous._profile_session_identity_verified
-                    or not previous._bootstrap
-                    or previous._bootstrap.actor_id != actor
-                    or client is None or client.closed):
-                return None
-            refreshed = client.facebook_cookie_snapshot()
-            if (str(refreshed.get("c_user") or "") != actor
-                    or not str(refreshed.get("xs") or "").strip()):
-                return None
-            previous.profile.cookies = dict(refreshed)
-
-            async with self._session_lock:
-                old = self.session
-                if old is not None and old is not client and not old.closed:
-                    await old.close()
-                self.session = client
-                previous.session = None
-                self.profile.cookies = dict(refreshed)
-                self._bootstrap = previous._bootstrap
-                self._profile_session_identity_verified = True
-                self._business_read_proofs.update(previous._business_read_proofs)
-                self._reviewed_module_ids = dict(
-                    getattr(previous, "_reviewed_module_ids", {}) or {}
+            previous.defer_module_refresh = True
+            try:
+                await previous.bootstrap(
+                    allow_business_loginpage_probe=True,
+                    require_actor_match=True,
                 )
-            log.info(
-                "[%s] verified previous same-actor session recovered for scoped read operation=%s",
-                self.profile.name, business_loginpage_probe,
-            )
-            return result
-        except asyncio.CancelledError:
-            await previous.close()
-            raise
-        except Exception as exc:
-            log.info(
-                "[%s] previous same-actor session read recovery unavailable kind=%s",
-                self.profile.name, type(exc).__name__,
-            )
-            return None
-        finally:
-            if previous.session is not None:
+                if (not previous._profile_session_identity_verified
+                        or not previous._bootstrap
+                        or previous._bootstrap.actor_id != actor):
+                    log.info(
+                        "[%s] previous same-actor read candidate rejected operation=%s candidate=%d reason=actor_unverified",
+                        self.profile.name, business_loginpage_probe, candidate_index,
+                    )
+                    continue
+                result = await previous.graphql(
+                    doc_id,
+                    dict(variables),
+                    friendly_name=friendly_name,
+                    endpoint_url=endpoint_url,
+                    request_envelope=request_envelope,
+                    before_submit=before_submit,
+                    business_context_id=business_context_id,
+                    read_timeout_seconds=read_timeout_seconds,
+                    business_loginpage_probe=business_loginpage_probe,
+                    private_inventory_query_contract=private_inventory_query_contract,
+                )
+                client = previous.session
+                if (not previous._profile_session_identity_verified
+                        or not previous._bootstrap
+                        or previous._bootstrap.actor_id != actor
+                        or client is None or client.closed):
+                    log.info(
+                        "[%s] previous same-actor read candidate rejected operation=%s candidate=%d reason=session_unverified",
+                        self.profile.name, business_loginpage_probe, candidate_index,
+                    )
+                    continue
+                refreshed = client.facebook_cookie_snapshot()
+                if (str(refreshed.get("c_user") or "") != actor
+                        or not str(refreshed.get("xs") or "").strip()):
+                    log.info(
+                        "[%s] previous same-actor read candidate rejected operation=%s candidate=%d reason=refreshed_actor_unverified",
+                        self.profile.name, business_loginpage_probe, candidate_index,
+                    )
+                    continue
+                previous.profile.cookies = dict(refreshed)
+
+                async with self._session_lock:
+                    old = self.session
+                    if old is not None and old is not client and not old.closed:
+                        await old.close()
+                    self.session = client
+                    previous.session = None
+                    self.profile.cookies = dict(refreshed)
+                    self._bootstrap = previous._bootstrap
+                    self._profile_session_identity_verified = True
+                    self._business_read_proofs.update(previous._business_read_proofs)
+                    self._reviewed_module_ids = dict(
+                        getattr(previous, "_reviewed_module_ids", {}) or {}
+                    )
+                log.info(
+                    "[%s] verified previous same-actor session recovered for scoped read operation=%s candidate=%d",
+                    self.profile.name, business_loginpage_probe, candidate_index,
+                )
+                return result
+            except asyncio.CancelledError:
                 await previous.close()
+                raise
+            except Exception as exc:
+                log.info(
+                    "[%s] previous same-actor session read candidate unavailable operation=%s candidate=%d kind=%s",
+                    self.profile.name, business_loginpage_probe, candidate_index, type(exc).__name__,
+                )
+            finally:
+                if previous.session is not None:
+                    await previous.close()
+        log.info(
+            "[%s] previous same-actor read recovery exhausted operation=%s candidates=%d",
+            self.profile.name, business_loginpage_probe, len(candidates),
+        )
+        return None
 
     async def graphql(
         self,

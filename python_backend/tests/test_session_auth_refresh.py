@@ -296,6 +296,24 @@ class InternalCookieResolverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(context.recovery_cookies["c_user"], "123456789")
         self.assertEqual(context.recovery_cookies["xs"], "fixture-previous")
 
+    async def test_resolver_accepts_bounded_archive_candidates_for_same_actor(self):
+        payload = self.base_payload({"c_user": "123456789", "xs": "fixture-legacy"})
+        payload["recovery_cookie_candidates"] = [
+            {"c_user": "999999999", "xs": "fixture-other-actor"},
+            {"c_user": "123456789", "xs": "fixture-current"},
+            {"c_user": "123456789", "xs": "fixture-archive-one", "datr": "fixture"},
+            {"c_user": "123456789", "xs": "fixture-archive-one"},
+            {"c_user": "123456789", "xs": "fixture-archive-two"},
+        ]
+        resolver = ProfileResolver(None, None)
+        resolver._fetch = AsyncMock(return_value=payload)
+        context = await resolver.resolve("15")
+        self.assertEqual(
+            [candidate["xs"] for candidate in context.recovery_cookie_candidates],
+            ["fixture-archive-one", "fixture-archive-two"],
+        )
+        self.assertEqual(context.recovery_cookies["xs"], "fixture-archive-one")
+
     async def test_resolver_discards_cross_actor_unchanged_or_malformed_snapshot(self):
         for recovery in (
             {"c_user": "999999999", "xs": "fixture-previous"},
@@ -344,3 +362,5 @@ class InternalCookieResolverTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("json_decode((string)file_get_contents('php://input'), true)", source)
         self.assertIn("$store->compareAndSwapCookies($profile, $actor, $expectedXs, $cookies)", source)
         self.assertIn("$store->getPreviousAccountByName($profile)", source)
+        self.assertIn("glob($accountsFile . '.bak*')", source)
+        self.assertIn("rmx_py_proxy_url($candidateAccount->proxy) !== $currentProxyUrl", source)

@@ -69,6 +69,7 @@ class ProfileContext:
     _cookie_persistor: Any = field(default=None, repr=False, compare=False)
     _loaded_cookies: dict[str, str] = field(default_factory=dict, repr=False, compare=False)
     recovery_cookies: dict[str, str] = field(default_factory=dict, repr=False, compare=False)
+    recovery_cookie_candidates: list[dict[str, str]] = field(default_factory=list, repr=False, compare=False)
 
 
 
@@ -371,24 +372,46 @@ class ProfileResolver:
 
         cookie_map = {str(k): str(v) for k, v in cookies.items()}
         recovery_cookie_map: dict[str, str] = {}
-        recovery_raw = payload.get("recovery_cookies")
-        if isinstance(recovery_raw, dict) and 0 < len(recovery_raw) <= 500:
+        recovery_cookie_candidates: list[dict[str, str]] = []
+        expected_actor = str(cookie_map.get("c_user") or "").strip()
+        current_xs = str(cookie_map.get("xs") or "").strip()
+        raw_candidates = payload.get("recovery_cookie_candidates")
+        if isinstance(raw_candidates, list):
+            candidate_rows = raw_candidates[:8]
+        else:
+            candidate_rows = []
+        legacy_recovery = payload.get("recovery_cookies")
+        if not candidate_rows and isinstance(legacy_recovery, dict):
+            candidate_rows = [legacy_recovery]
+
+        seen_candidate_xs: set[str] = set()
+        for recovery_raw in candidate_rows:
+            if not isinstance(recovery_raw, dict) or not recovery_raw or len(recovery_raw) > 500:
+                continue
             candidate: dict[str, str] = {}
             candidate_valid = True
+            candidate_bytes = 0
             for key, value in recovery_raw.items():
                 if (not isinstance(key, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,256}", key)
                         or not isinstance(value, str) or len(value) > 8192
                         or re.search(r"[\x00-\x1f\x7f]", value)):
                     candidate_valid = False
                     break
+                candidate_bytes += len(key) + len(value)
+                if candidate_bytes > 131072:
+                    candidate_valid = False
+                    break
                 candidate[key] = value
-            expected_actor = str(cookie_map.get("c_user") or "").strip()
-            current_xs = str(cookie_map.get("xs") or "").strip()
+            candidate_actor = str(candidate.get("c_user") or "").strip()
             candidate_xs = str(candidate.get("xs") or "").strip()
             if (candidate_valid and expected_actor.isdigit()
-                    and candidate.get("c_user") == expected_actor
-                    and current_xs and candidate_xs and candidate_xs != current_xs):
-                recovery_cookie_map = candidate
+                    and candidate_actor == expected_actor and current_xs
+                    and candidate_xs and candidate_xs != current_xs
+                    and candidate_xs not in seen_candidate_xs):
+                seen_candidate_xs.add(candidate_xs)
+                recovery_cookie_candidates.append(candidate)
+        if recovery_cookie_candidates:
+            recovery_cookie_map = dict(recovery_cookie_candidates[0])
         missing_auth_cookies = [
             key for key in ("c_user", "xs")
             if not str(cookie_map.get(key) or "").strip()
@@ -458,6 +481,7 @@ class ProfileResolver:
             ),
             inventory_source=str(payload.get("inventory_source") or "").strip(),
             recovery_cookies=recovery_cookie_map,
+            recovery_cookie_candidates=recovery_cookie_candidates,
         )
         context._loaded_cookies = dict(cookie_map)
         context._cookie_persistor = self.persist_cookie_refresh
@@ -551,6 +575,11 @@ class MetaSession:
                     proxy=self.context.proxy,
                     user_agent=self.context.user_agent,
                     recovery_cookies=dict(getattr(self.context, "recovery_cookies", {}) or {}),
+                    recovery_cookie_candidates=[
+                        dict(candidate) for candidate in (
+                            getattr(self.context, "recovery_cookie_candidates", []) or []
+                        )[:8] if isinstance(candidate, dict)
+                    ],
                 )
                 current = FacebookWebSession(
                     profile,

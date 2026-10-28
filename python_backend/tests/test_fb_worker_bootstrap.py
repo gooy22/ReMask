@@ -794,6 +794,62 @@ class PreviousSessionReadRecoveryTests(unittest.IsolatedAsyncioTestCase):
         async def close(self):
             self.closed = True
 
+    async def test_read_recovery_tries_next_verified_same_actor_snapshot(self):
+        actor = "123456789"
+        current_cookies = {"c_user": actor, "xs": "fixture-current"}
+        first_cookies = {"c_user": actor, "xs": "fixture-archive-one"}
+        second_cookies = {"c_user": actor, "xs": "fixture-archive-two"}
+        refreshed_cookies = {"c_user": actor, "xs": "fixture-refreshed"}
+        session = FacebookWebSession(WebProfile(
+            name="15", cookies=dict(current_cookies), proxy="http://fixture-proxy:80",
+            user_agent="Fixture",
+            recovery_cookie_candidates=[dict(first_cookies), dict(second_cookies)],
+        ))
+        old_client = self.Client(current_cookies)
+        new_client = self.Client(refreshed_cookies)
+        session.session = old_client
+        rejected = SimpleNamespace(
+            bootstrap=AsyncMock(side_effect=AuthenticationError("fixture auth gate")),
+            session=None,
+            defer_module_refresh=False,
+        )
+        verified = SimpleNamespace(
+            profile=SimpleNamespace(cookies=dict(second_cookies)),
+            session=new_client,
+            _bootstrap=FacebookBootstrap(
+                fb_dtsg="fixture-token", actor_id=actor, profile_actor_verified=True,
+            ),
+            _profile_session_identity_verified=True,
+            _business_read_proofs={},
+            _reviewed_module_ids={},
+            bootstrap=AsyncMock(),
+            graphql=AsyncMock(return_value={"data": {"adaccounts": []}}),
+            close=AsyncMock(),
+        )
+        with patch("fb_worker.FacebookWebSession", side_effect=[rejected, verified]) as construct:
+            result = await session._retry_scoped_read_with_previous_session(
+                "26033539376343649",
+                {"businessID": "987654321"},
+                friendly_name="BusinessAdAccounts",
+                endpoint_url="https://business.facebook.com/api/graphql/",
+                request_envelope=None,
+                business_context_id="987654321",
+                business_loginpage_probe="READ_RK",
+                read_timeout_seconds=30,
+            )
+
+        self.assertEqual(result, {"data": {"adaccounts": []}})
+        self.assertEqual(construct.call_count, 2)
+        rejected.bootstrap.assert_awaited_once_with(
+            allow_business_loginpage_probe=True, require_actor_match=True,
+        )
+        verified.bootstrap.assert_awaited_once_with(
+            allow_business_loginpage_probe=True, require_actor_match=True,
+        )
+        verified.graphql.assert_awaited_once()
+        self.assertEqual(session.profile.cookies, refreshed_cookies)
+        self.assertIs(session.session, new_client)
+        self.assertTrue(old_client.closed)
     async def test_read_recovery_adopts_only_verified_same_actor_session(self):
         actor = "123456789"
         current_cookies = {"c_user": actor, "xs": "fixture-current"}
