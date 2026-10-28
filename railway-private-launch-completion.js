@@ -26,34 +26,9 @@ apiJson = async function(url, options = {}) {
             || (typeof remaskModuleControls!=='undefined' && remaskModuleControls.isTargetingType(type) ? type : null);
         const scope=resource ? remaskPrivateTargetingScope() : null;
         if(scope){
-            // Country and language IDs are stable local reference data. It is
-            // suggestion-only and never grants permission to create a draft.
-            if(['locations','locales'].includes(resource) && input.get('force')!=='1'){
-                const moduleBody=new URLSearchParams();
-                for(const key of ['type','q','limit','offset']){
-                    const value=input.get(key);if(value!==null)moduleBody.set(key,value);
-                }
-                moduleBody.set('type',resource);
-                moduleBody.set('module_only','1');
-                try{
-                    const moduleResult=await remaskPrivateOriginalTargetingApiJson(
-                        'ajax/metaTemplateTargetingSearch.php',{...options,body:moduleBody.toString()});
-                    const current=remaskPrivateTargetingScope();
-                    if(JSON.stringify(current)!==JSON.stringify(scope))throw new Error('TARGETING_SELECTION_CHANGED');
-                    const moduleSuggestion=moduleResult?.checked_live===false
-                        && moduleResult?.source==='private_meta_module_reference'
-                        && moduleResult?.template_account_bound===false
-                        && Array.isArray(moduleResult?.data)
-                        && (moduleResult.data.length>0 || resource==='locales');
-                    if(moduleSuggestion)return moduleResult;
-                }catch(error){
-                    if(error?.message==='TARGETING_SELECTION_CHANGED' || options.signal?.aborted)throw error;
-                    // Missing local geo data continues through the shared cache.
-                }
-            }
-            // Try the workspace's suggestion-only reference before a private
-            // profile read. This avoids rechecking the Meta session on every
-            // typed query; cache entries never authorize the later draft POST.
+            // One cache-only request checks static GEO/language references
+            // and the shared suggestion catalog. It cannot open a profile;
+            // cache entries never authorize the later draft POST.
             if(input.get('force')!=='1'){
                 const cacheBody=new URLSearchParams();
                 for(const key of ['type','q','limit','offset']){
@@ -65,6 +40,12 @@ apiJson = async function(url, options = {}) {
                         'ajax/metaTemplateTargetingSearch.php',{...options,body:cacheBody.toString()});
                     const current=remaskPrivateTargetingScope();
                     if(JSON.stringify(current)!==JSON.stringify(scope))throw new Error('TARGETING_SELECTION_CHANGED');
+                    const moduleSuggestion=cached?.checked_live===false
+                        && cached?.source==='private_meta_module_reference'
+                        && cached?.template_account_bound===false
+                        && Array.isArray(cached?.data)
+                        && (cached.data.length>0 || resource==='locales');
+                    if(moduleSuggestion)return cached;
                     const usable=cached?.checked_live===false
                         && cached?.source==='private_meta_template_reference'
                         && cached?.template_account_bound===false
