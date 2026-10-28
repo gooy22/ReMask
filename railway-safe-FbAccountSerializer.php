@@ -96,6 +96,40 @@ class FbAccountSerializer implements ProfileStoreInterface
         return null;
     }
 
+    /**
+     * Decode only the requested profile from an immutable archive.
+     * A damaged ciphertext for another row must not hide a valid snapshot.
+     */
+    public function getAccountByNameFromSnapshot(string $name): ?FbAccount
+    {
+        if ($name === '') return null;
+        $handle = AtomicJsonFile::lock($this->filename, LOCK_SH);
+        try {
+            foreach (AtomicJsonFile::read($this->filename) as $row) {
+                if (!is_array($row) || (string)($row['name'] ?? '') !== $name) continue;
+                $accountData = $row;
+                if (array_key_exists('credentials_encrypted', $accountData)) {
+                    $encrypted = $accountData['credentials_encrypted'];
+                    if (!is_string($encrypted)) {
+                        throw new RuntimeException('PROFILE_CREDENTIAL_CONTEXT_INVALID');
+                    }
+                    $accountData = CredentialVault::fromEnvironment()->decryptJson(
+                        $encrypted,
+                        'profile-json:'.$name
+                    );
+                }
+                if (!is_array($accountData) || (string)($accountData['name'] ?? '') !== $name) {
+                    throw new RuntimeException('PROFILE_CREDENTIAL_CONTEXT_INVALID');
+                }
+                return FbAccount::fromArray($accountData);
+            }
+            return null;
+        } finally {
+            AtomicJsonFile::unlock($handle);
+        }
+    }
+
+
     private function resolvedStoragePath(): string
     {
         if (is_link($this->filename)) {
