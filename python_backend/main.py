@@ -4187,8 +4187,10 @@ async def retry_failed(job_id: str, consent: dict | None = Body(default=None)) -
     # proves that the profile session is usable again. Blocked profiles stay
     # FAILED while healthy profiles from the same bulk Job can continue.
     auth_retry_profiles=_view_terminal_auth_retry_profile_ids(current_view)
+    status_reader=getattr(store,'latest_profile_session_statuses',None)
+    profile_statuses=await status_reader() if callable(status_reader) else []
     status_blocked_profiles=_view_failed_profiles_with_known_session_blocks(
-        current_view, await store.latest_profile_session_statuses()
+        current_view, profile_statuses
     )
     _auth_ready,auth_blocked=await _partition_auth_retry_profiles(auth_retry_profiles)
     excluded_profiles=set(auth_blocked) | status_blocked_profiles
