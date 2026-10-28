@@ -218,13 +218,13 @@ class AdvertisingBridgeTests(unittest.TestCase):
             'message': 'Cookie=' + secret, 'response': {'html': secret}}}
         self.worker_requests.clear()
         status, result = self.request({'action': 'private_draft_read',
-            'profile_id': '4', 'job_id': 'a' * 32})
+            'profile_id': '4', 'job_id': 'a' * 32, 'task_id': 'b' * 32})
         self.assertEqual(status, 502)
         self.assertEqual(result['code'], 'PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE')
         self.assertTrue(result['retryable'])
         self.assertNotIn(secret, json.dumps(result))
         self.assertEqual(self.worker_requests, [{'method': 'POST',
-            'path': '/api/v1/profiles/4/private-draft-read', 'payload': {'job_id': 'a' * 32}}])
+            'path': '/api/v1/profiles/4/private-draft-read', 'payload': {'job_id': 'a' * 32, 'task_id': 'b' * 32}}])
 
     def test_disabled_and_missing_read_contract_flags_survive_bridge(self):
         _, result = self.request({'action': 'private_launch_contracts'})
