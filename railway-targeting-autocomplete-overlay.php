@@ -217,6 +217,7 @@ $js = <<<'JS'
       || error?.payload?.error || error?.payload?.message || error?.message || '').toUpperCase();
     if (/CHECKPOINT/.test(raw)) return 'Meta остановила профиль. Новые запросы не отправлены.';
     if (/SESSION|LOGIN|BUSINESS_LOGIN|TWO_FACTOR|AUTH/.test(raw)) return 'Meta не подтвердила вход для этого профиля.';
+    if (/RESOURCE_READ_INCOMPLETE/.test(raw)) return 'Meta не вернула список для выбранного РК. Доступ не подтверждён.';
     if (/TIMEOUT|TIMED OUT/.test(raw)) return 'Meta не ответила вовремя. Попробуйте позже.';
     return 'Не удалось загрузить варианты. Проверьте вход и доступ к выбранному РК.';
   }
