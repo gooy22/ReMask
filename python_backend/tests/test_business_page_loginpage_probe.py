@@ -139,7 +139,8 @@ class BusinessPageBootstrapProofTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIs(result, bootstrap)
         web.invalidate_bootstrap()
-        self.assertFalse(web.has_fresh_business_page_create_precheck(BUSINESS, ACTOR))
+        self.assertFalse(web.has_fresh_business_page_create_precheck(
+            BUSINESS, ACTOR, "PrgssTeam", "", [CATEGORY_ID]))
 
 
 class BusinessPageSessionRecoveryTests(unittest.IsolatedAsyncioTestCase):
