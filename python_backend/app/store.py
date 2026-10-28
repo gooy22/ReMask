@@ -1143,6 +1143,75 @@ class JobStore:
             self._recover_owner_confirmed_operator_assignment(con)
         return imported
 
+    async def latest_profile_session_statuses(self) -> list[dict[str, Any]]:
+        """Return a short, evidence-based session status from each profile's latest job item."""
+        return await asyncio.to_thread(self._latest_profile_session_statuses_sync)
+
+    def _latest_profile_session_statuses_sync(self) -> list[dict[str, Any]]:
+        with self._connect() as con:
+            rows = con.execute(
+                """
+                SELECT i.profile_id,i.status,i.error_code,i.error_message,i.updated_at,
+                       j.created_at AS job_created_at
+                FROM job_items i
+                JOIN jobs j ON j.id=i.job_id
+                ORDER BY i.updated_at DESC,j.created_at DESC,i.created_at DESC,i.job_id DESC
+                """
+            ).fetchall()
+
+        output: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for row in rows:
+            profile_id = str(row["profile_id"] or "").strip()
+            if not profile_id or profile_id in seen:
+                continue
+            seen.add(profile_id)
+
+            item_status = str(row["status"] or "").strip().upper()
+            error_code = str(row["error_code"] or "").strip().upper()
+            error_message = str(row["error_message"] or "").strip()
+            search_text = (error_code + " " + error_message).casefold()
+
+            if item_status in {"QUEUED", "RUNNING"}:
+                state = "IN_PROGRESS"
+                message = "Подготовка выполняется."
+            elif error_code == "CHECKPOINT_REQUIRED" or "checkpoint_redirect" in search_text or "/checkpoint/" in search_text:
+                state = "CHECKPOINT"
+                message = "Meta запросила проверку безопасности."
+            elif error_code == "TWO_FACTOR_REQUIRED" or "two_factor_required" in search_text:
+                state = "TWO_FACTOR"
+                message = "Meta запросила двухфакторную проверку."
+            elif error_code in {"SESSION_EXPIRED", "BUSINESS_LOGIN_GATE"} or "loginpage" in search_text:
+                state = "LOGIN_REQUIRED"
+                message = "Meta не подтвердила вход."
+            elif error_code == "FACEBOOK_TEMPORARILY_BLOCKED":
+                state = "LIMITED"
+                message = "Meta временно ограничила действия."
+            elif item_status == "SUCCESS" or re.search(
+                r"1373107|2455031|field_exception|too many attempts",
+                search_text,
+                re.IGNORECASE,
+            ):
+                state = "ACTIVE"
+                message = (
+                    "Meta ответила, но ограничила последнее действие."
+                    if item_status != "SUCCESS"
+                    else "Meta ответила на последнюю задачу."
+                )
+            else:
+                state = "UNVERIFIED"
+                message = "Последняя задача не подтвердила состояние сессии."
+
+            output.append(
+                {
+                    "profile_id": profile_id,
+                    "status": state,
+                    "checked_at": int(row["updated_at"] or row["job_created_at"] or 0),
+                    "message": message,
+                }
+            )
+        return output
+
     async def retry_failed(
         self,
         job_id: str,
