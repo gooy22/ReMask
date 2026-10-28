@@ -85,6 +85,8 @@ class BusinessPageHTTPTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('actor_id', body['input'])
         self.assertNotEqual(result['page_ids'], ['61500012345678'])
         self.assertEqual(self.meta.owners[FP1], BM1)
+        self.meta.bootstrap.assert_awaited_once_with(
+            allow_business_loginpage_probe=True, require_actor_match=True)
         self.meta.fetch_text.assert_not_awaited()
         self.session.facebook_business_browser.assert_not_awaited()
         await self.run_page()

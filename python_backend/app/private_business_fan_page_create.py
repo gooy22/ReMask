@@ -183,7 +183,7 @@ async def create_business_page(session, params, *, state, item_id, profile_id, s
     actor = _id((getattr(session.context, 'cookies', {}) or {}).get('c_user'))
     web = await session.facebook_web()
     web.private_only = True
-    bootstrap = await web.bootstrap()
+    bootstrap = await web.bootstrap(allow_business_loginpage_probe=True, require_actor_match=True)
     if not actor or str(getattr(bootstrap, 'actor_id', '')) != actor:
         raise ProvisioningError('SESSION_EXPIRED', 'Page HTTP actor differs from the selected profile.', retryable=True)
     if ((checkpoint.get('business_id') and checkpoint['business_id'] != business)

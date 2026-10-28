@@ -1342,9 +1342,10 @@ class FacebookWebSession:
         self, bootstrap: FacebookBootstrap, *, business_id: str = "",
         business_create: bool = False, business_loginpage_probe: str = "",
     ) -> FacebookBootstrap:
-        """Confirm Business auth using bounded, read-only operation surfaces."""
+        """Confirm Business auth using bounded, operation-scoped surfaces."""
         if (business_loginpage_probe in {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS", "PRIVATE_RK_INVENTORY",
-                "CREATE_BM", "CREATE_RK", "CLAIM", "ASSIGN"}
+                "CREATE_BM", "CREATE_RK", "CLAIM", "ASSIGN",
+                "READ_FP", "FP_CATEGORY", "FP_PRECHECK", "CREATE_FP"}
                 and bootstrap.profile_actor_verified):
             return bootstrap
         source = str(getattr(bootstrap, "source_url", "") or "").strip()
@@ -1530,6 +1531,7 @@ class FacebookWebSession:
         allowed = {
             "READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS", "PRIVATE_RK_INVENTORY",
             "CREATE_BM", "CREATE_RK", "CLAIM", "ASSIGN", "LIST_PAGES",
+            "READ_FP", "FP_CATEGORY", "FP_PRECHECK", "CREATE_FP",
         }
 
         def reject():
@@ -1578,6 +1580,63 @@ class FacebookWebSession:
                     or str(business_context_id or "").strip()):
                 reject()
             return operation
+        if operation in {"READ_FP", "FP_CATEGORY", "FP_PRECHECK", "CREATE_FP"}:
+            business = str(business_context_id or "").strip()
+            page_endpoint = "https://business.facebook.com/api/graphql/"
+            if (not re.fullmatch(r"\d{5,30}", business)
+                    or str(endpoint_url or "").strip() != page_endpoint
+                    or not isinstance(variables, dict)
+                    or request_envelope is not None):
+                reject()
+            try:
+                from app.business_fan_page_contracts import command as page_command
+                if operation == "READ_FP":
+                    bound_business = str(variables.get("businessID") or "").strip()
+                    cursor = variables.get("cursor")
+                    if bound_business != business or (cursor is not None and not isinstance(cursor, str)):
+                        reject()
+                    expected = page_command(operation, business=business, cursor=cursor)
+                elif operation == "FP_PRECHECK":
+                    bound_business = str(variables.get("businessID") or "").strip()
+                    if bound_business != business:
+                        reject()
+                    expected = page_command(operation, business=business)
+                elif operation == "FP_CATEGORY":
+                    params = variables.get("params")
+                    category = params.get("search_string") if isinstance(params, dict) else None
+                    if not isinstance(category, str) or not category.strip():
+                        reject()
+                    expected = page_command(operation, category=category)
+                else:
+                    payload = variables.get("input")
+                    if not isinstance(payload, dict):
+                        reject()
+                    bound_business = str(payload.get("business_id") or "").strip()
+                    name, bio, categories, join = (
+                        payload.get("name"), payload.get("bio"),
+                        payload.get("categories"), payload.get("qpl_join_id"),
+                    )
+                    if (bound_business != business
+                            or not isinstance(name, str) or not name.strip() or len(name) > 120
+                            or not isinstance(bio, str) or len(bio) > 255
+                            or not isinstance(join, str) or not join.strip()):
+                        reject()
+                    expected = page_command(operation, business=business, name=name,
+                        bio=bio, categories=categories, join=join)
+                is_query = operation != "CREATE_FP"
+                if (expected["doc_id"] != str(doc_id or "").strip()
+                        or expected["friendly_name"] != friendly_name
+                        or expected["endpoint_url"] != page_endpoint
+                        or expected["variables"] != variables
+                        or multipart_files is not None
+                        or (is_query and (before_submit is not None or read_timeout_seconds != 30))
+                        or (not is_query and (not callable(before_submit) or read_timeout_seconds is not None))):
+                    reject()
+                return operation
+            except RemoteRequestError:
+                raise
+            except Exception:
+                reject()
         try:
             from app.static_meta_contracts import ENDPOINT, command, contract_metadata
             meta = contract_metadata(operation)
@@ -3086,4 +3145,3 @@ __all__ = [
     "WebSessionManager",
     "BusinessLogicController",
 ]
-
