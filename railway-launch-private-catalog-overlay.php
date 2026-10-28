@@ -428,6 +428,7 @@ require_once __DIR__.'/../checkpassword.php';
 require_once __DIR__.'/../classes/MetaEndpoint.php';
 require_once __DIR__.'/../classes/RemaskPrivateLaunchCatalog.php';
 require_once __DIR__.'/../classes/RemaskAdvertisingAssetBridge.php';
+require_once __DIR__.'/../classes/RemaskTemplateTargetingContext.php';
 try {
     $input=MetaEndpoint::input();
     $profile=trim((string)($input['profile'] ?? ''));
@@ -436,7 +437,18 @@ try {
     $type=['location'=>'locations','interest'=>'interests','behavior'=>'behaviors',
            'language'=>'locales','languages'=>'locales','locale'=>'locales'][$type] ?? $type;
     if (!in_array($type,array_merge(['locations','interests','behaviors','locales'],RemaskAdvertisingAssetBridge::targetingTypes()),true)) throw new InvalidArgumentException('UNKNOWN_TARGETING_TYPE');
-    MetaEndpoint::ok(RemaskAdvertisingAssetBridge::read($input,RemaskPrivateLaunchCatalog::load($profile),$type,($input['force'] ?? '')==='1'));
+    $result=RemaskAdvertisingAssetBridge::read($input,RemaskPrivateLaunchCatalog::load($profile),$type,($input['force'] ?? '')==='1');
+    // Only successful, exact-account Meta reads may seed the shared suggestion
+    // cache. The cache stores IDs and labels only, and never proves permission.
+    if (($result['checked_live'] ?? null)===true && ($result['account_scope_verified'] ?? null)===true) {
+        try {
+            $reference=new RemaskTemplateTargetingReference(dirname(ACCOUNTSFILENAME).'/template-targeting-'.hash('sha256',ACCOUNTSFILENAME).'.json');
+            $reference->put($type,trim((string)($input['q'] ?? '')),$result,time());
+        } catch (Throwable $cacheError) {
+            // Cache persistence is optional; return the verified live result.
+        }
+    }
+    MetaEndpoint::ok($result);
 } catch (Throwable $e) { MetaEndpoint::fail($e); }
 TARGETING
 );
