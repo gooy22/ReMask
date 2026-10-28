@@ -16,6 +16,7 @@ import aiohttp
 import httpx
 
 from app.private_http import PrivateHttpClient
+from app.business_login_gate_http import continue_business_login_gate, is_business_login_gate_url
 from app.meta_auth_document import has_login_form as _has_login_form
 
 
@@ -157,6 +158,7 @@ class FacebookWebSession:
         self._business_read_proofs: dict[tuple[str, str, str, str, str], float] = {}
         self._business_page_create_prechecks: dict[tuple[str, str, str, str, str], float] = {}
         self._graphql_request_counter = 0
+        self._business_login_gate_attempted = False
         self._previous_recovery_attempted = False
 
     # ------------------------------------------------------------------
@@ -1014,11 +1016,21 @@ class FacebookWebSession:
                         allow_redirects=True, request_timeout_seconds=max(30, self.timeout_seconds),
                     ), 16 * 1024 * 1024 + 1, retry_read=True, reader=lambda response: response.text())
                     candidate_url = str(response.url)
+                    candidate_status = int(response.status)
                     self._restore_invalid_profile_cookie_snapshot(session, actor_id)
+                    if is_business_login_gate_url(candidate_url):
+                        recovered = await self._maybe_continue_business_login_gate(
+                            gate_url=candidate_url, body=candidate_body,
+                            return_url=bootstrap_url,
+                        )
+                        if recovered:
+                            candidate_status = int(recovered["status"])
+                            candidate_body = str(recovered["body"] or "")
+                            candidate_url = str(recovered["url"] or "")
 
-                    if response.status >= 500:
+                    if candidate_status >= 500:
                         attempts.append(
-                            f"{bootstrap_url}: HTTP {response.status}"
+                            f"{bootstrap_url}: HTTP {candidate_status}"
                         )
                         continue
 
@@ -1073,7 +1085,7 @@ class FacebookWebSession:
                             if any(marker in source for source in normalized_sources)
                         ]
                         surface = (
-                            f"HTTP {response.status} final={candidate_url} "
+                            f"HTTP {candidate_status} final={candidate_url} "
                             f"bytes={len(candidate_body)}"
                         )
                         if marker_names:
@@ -1198,6 +1210,21 @@ class FacebookWebSession:
             )
 
             return bootstrap
+
+    async def _maybe_continue_business_login_gate(
+        self, *, gate_url: str, body: str, return_url: str,
+    ) -> dict | None:
+        if self._business_login_gate_attempted:
+            return None
+        self._business_login_gate_attempted = True
+        self.invalidate_bootstrap()
+        result = await continue_business_login_gate(
+            self, gate_url=gate_url, body=body, return_url=return_url,
+        )
+        log.info("[%s] business_login_handoff outcome=%s",
+            self.profile.name,
+            str(getattr(self, "_business_login_gate_outcome", "unavailable")))
+        return result
 
     def invalidate_bootstrap(self) -> None:
         self._bootstrap = None
