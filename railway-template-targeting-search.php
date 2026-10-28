@@ -29,6 +29,9 @@ try {
         throw new InvalidArgumentException('INVALID_TARGETING_MODE');
     if ($moduleOnly && !in_array($type,['locations','locales'],true))
         throw new InvalidArgumentException('INVALID_TARGETING_MODE');
+    $cacheOnly = (string)($input['cache_only'] ?? '') === '1';
+    if (array_key_exists('cache_only',$input) && !$cacheOnly)
+        throw new InvalidArgumentException('INVALID_TARGETING_MODE');
     $module = RemaskModuleTargetingReference::search($type,$query,
         __DIR__.'/../classes/meta-targeting-reference.json',$offset);
     if ($module !== null) { MetaEndpoint::ok($module); exit; }
@@ -43,6 +46,12 @@ try {
     if ($cached !== null) { MetaEndpoint::ok($cached); exit; }
     if (($cached=$reference->search($type,$query,time(),$offset)) !== null) {
         MetaEndpoint::ok($cached); exit;
+    }
+    if ($cacheOnly) {
+        MetaEndpoint::ok(['data'=>[],'checked_live'=>false,'account_scope_verified'=>false,
+            'availability'=>'NOT_LOADED','source'=>'private_meta_template_reference','offset'=>$offset,
+            'next_offset'=>null,'template_account_bound'=>false]);
+        exit;
     }
     $profiles = [];
     foreach ((array)AccountStoreFactory::create(ACCOUNTSFILENAME)->deserialize() as $row) {
