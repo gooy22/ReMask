@@ -85,14 +85,20 @@ def _browser_auth_fallback_allowed(params: Any, error: Any, prior: Any) -> bool:
 
 async def _rk_access_fallback_state(state: Any, profile: str, business: str,
                                     account: str, session: Any, prior: Any) -> dict[str, Any]:
-    """Include the independent RK checkpoint when deciding whether a fallback is safe."""
+    """Include durable Page and RK intents before allowing a transport fallback."""
     actor = str((getattr(session.context, "cookies", {}) or {}).get("c_user") or "")
     if not actor.isdigit():
         return dict(prior) if isinstance(prior, dict) else {}
+    from .business_pages import BusinessPageStore
+    bundle = await BusinessPageStore(state, session.context, business).get()
+    common = await AdvertisingPageStore.for_context(state, session.context, profile).get()
+    grant = ((bundle.get("grants") or {}).get(business)
+        or (common.get("grants") or {}).get(business) or {})
     key = f"workspace-rk-access-facebook:{actor}-{business}-{account}"
     saved_state = (await state.step(key, ProvisioningStep.PAGE_ACCESS)) or {}
     saved = saved_state.get("result") if isinstance(saved_state, dict) else {}
-    return {**(prior if isinstance(prior, dict) else {}),
+    return {**(grant if isinstance(grant, dict) else {}),
+            **(prior if isinstance(prior, dict) else {}),
             **(saved if isinstance(saved, dict) else {})}
 
 
