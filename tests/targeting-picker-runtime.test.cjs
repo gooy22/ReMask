@@ -138,6 +138,13 @@ function fixture(){
   launch.nodes.get('geoResults').children[0].fire('click');
   assert.equal(launch.ctx.state.geo[0].key,'UA','selection keeps the original country key');
   launch.nodes.get('geoQuery').value='Ukraine';
+  launchFailure=Object.assign(new Error('TEMPLATE_LOOKUP_SOURCE_UNAVAILABLE'),{code:'TEMPLATE_LOOKUP_SOURCE_UNAVAILABLE'});
+  await launch.ctx.searchTargeting('locations');
+  assert.equal(launch.nodes.get('geoResults').textContent,'Для выбранного РК не подтверждена связь с BM. Список недоступен.');
+  assert.doesNotMatch(launch.nodes.get('geoResults').textContent,/TEMPLATE_LOOKUP/,'internal Meta codes stay out of the UI');
+  launchFailure=Object.assign(new Error('TEMPLATE_LOOKUP_ACCESS_UNVERIFIED'),{code:'TEMPLATE_LOOKUP_ACCESS_UNVERIFIED'});
+  await launch.ctx.searchTargeting('locations');
+  assert.equal(launch.nodes.get('geoResults').textContent,'Meta не подтвердила доступ к выбранному РК.');
   launchFailure=Object.assign(new Error('PRIVATE_ADS_DRAFT_RESOURCE_READ_INCOMPLETE'),{code:'PRIVATE_ADS_DRAFT_RESOURCE_READ_INCOMPLETE'});
   await launch.ctx.searchTargeting('locations');
   assert.equal(launch.nodes.get('geoResults').textContent,'Meta не вернула список для выбранного РК. Доступ не подтверждён.');
@@ -208,9 +215,11 @@ function fixture(){
   assert.equal(overlayContext.targetingErrorMessage({payload:{error:{code:'BUSINESS_LOGIN_GATE'}}}),
     'Meta не подтвердила вход для этого профиля.');
   assert.equal(overlayContext.targetingErrorMessage({payload:{code:'CHECKPOINT_REQUIRED'}}),
-    'Meta остановила профиль. Новые запросы не отправлены.');
+    'Профиль заблокирован Meta. Новые запросы остановлены.');
+  assert.equal(overlayContext.targetingErrorMessage({payload:{code:'TEMPLATE_LOOKUP_SOURCE_UNAVAILABLE'}}),
+    'Для выбранного РК не подтверждена связь с BM. Список недоступен.');
   assert.equal(overlayContext.targetingErrorMessage({payload:{code:'PRIVATE_ADS_DRAFT_RESOURCE_READ_INCOMPLETE'}}),
-    'Meta не вернула список для выбранного РК. Доступ не подтверждён.');
+    'Meta не подтвердила доступ к выбранному РК.');
   assert.equal(targetingOverlayUi.includes('Targeting endpoint error'),false);
   assert.equal(targetingOverlayUi.includes('HTTP ${response.status}'),false);
   // Installed Launch API wrapper must retain the page offset. Previously it
