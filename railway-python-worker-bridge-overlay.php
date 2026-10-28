@@ -363,13 +363,23 @@ try {
     $liveInventory = rmx_py_live_inventory($profile);
     $cookieMap = rmx_py_cookie_map($account->cookies);
 
+
     $recoveryCookieCandidates = [];
     $seenRecoveryXs = [];
+    $recoverySnapshotDiagnostics = [
+        'archive_files' => 0,
+        'archive_scanned' => 0,
+        'archive_profiles' => 0,
+        'actor_matches' => 0,
+        'distinct_xs' => 0,
+        'eligible' => 0,
+        'archive_read_errors' => 0,
+    ];
     $actor = trim((string)($cookieMap['c_user'] ?? ''));
     $currentXs = trim((string)($cookieMap['xs'] ?? ''));
-    $currentProxyUrl = rmx_py_proxy_url($account->proxy);
-    $appendRecoveryCandidate = static function ($candidateAccount) use (
-        &$recoveryCookieCandidates, &$seenRecoveryXs, $profile, $actor, $currentXs, $currentProxyUrl
+    $appendRecoveryCandidate = static function ($candidateAccount, string $source) use (
+        &$recoveryCookieCandidates, &$seenRecoveryXs, &$recoverySnapshotDiagnostics,
+        $profile, $actor, $currentXs
     ): bool {
         if (count($recoveryCookieCandidates) >= 8
             || !($candidateAccount instanceof FbAccount)
@@ -377,6 +387,7 @@ try {
             || !ctype_digit($actor) || $currentXs === '') {
             return false;
         }
+        if ($source === 'archive') $recoverySnapshotDiagnostics['archive_profiles']++;
         $candidateCookies = rmx_py_cookie_map($candidateAccount->cookies);
         if (count($candidateCookies) > 500) return false;
         $cookieBytes = 0;
@@ -386,33 +397,56 @@ try {
         }
         $candidateActor = trim((string)($candidateCookies['c_user'] ?? ''));
         $candidateXs = trim((string)($candidateCookies['xs'] ?? ''));
-        if ($candidateActor !== $actor || $candidateXs === ''
-            || hash_equals($currentXs, $candidateXs)) {
-            return false;
-        }
-        // A cookie snapshot is only eligible through the profile's currently
-        // configured proxy route. Credentials are compared in memory and never logged.
-        if (rmx_py_proxy_url($candidateAccount->proxy) !== $currentProxyUrl) return false;
+        if ($candidateActor !== $actor) return false;
+        if ($source === 'archive') $recoverySnapshotDiagnostics['actor_matches']++;
+        if ($candidateXs === '' || hash_equals($currentXs, $candidateXs)) return false;
+        if ($source === 'archive') $recoverySnapshotDiagnostics['distinct_xs']++;
+
+        // All candidate cookies are probed through the selected profile's current
+        // proxy and are adopted only after Meta confirms the exact same actor.
         $xsFingerprint = hash('sha256', $candidateXs);
         if (isset($seenRecoveryXs[$xsFingerprint])) return false;
         $seenRecoveryXs[$xsFingerprint] = true;
         $recoveryCookieCandidates[] = $candidateCookies;
+        $recoverySnapshotDiagnostics['eligible']++;
         return true;
     };
 
     if (method_exists($store, 'getPreviousAccountByName')) {
         try {
-            $appendRecoveryCandidate($store->getPreviousAccountByName($profile));
+            $appendRecoveryCandidate($store->getPreviousAccountByName($profile), 'previous');
         } catch (Throwable $ignored) {
             // A damaged optional snapshot must not prevent profile resolution.
         }
     }
 
-    // AtomicJsonFile uses .previous, while older profile stores may have durable
-    // encrypted .bak* snapshots. Read those newest-first and never mutate them.
+    // AtomicJsonFile resolves legacy webroot symlinks into the persistent volume.
+    // Search both names, but let realpath find archives beside the durable file.
     $accountsFile = defined('ACCOUNTSFILENAME') ? (string)ACCOUNTSFILENAME : '';
-    if (count($recoveryCookieCandidates) < 8 && $accountsFile !== '') {
-        $backupFiles = glob($accountsFile . '.bak*') ?: [];
+    $archiveBases = [];
+    if ($accountsFile !== '') {
+        $archiveBases[] = $accountsFile;
+        $resolvedAccountsFile = realpath($accountsFile);
+        if (is_string($resolvedAccountsFile) && $resolvedAccountsFile !== '') {
+            $archiveBases[] = $resolvedAccountsFile;
+        }
+    }
+    $configuredAccountsFile = trim((string)(getenv('REMASK_ACCOUNTS_FILE') ?: ''));
+    if ($configuredAccountsFile !== '') {
+        $archiveBases[] = $configuredAccountsFile;
+        $resolvedConfiguredFile = realpath($configuredAccountsFile);
+        if (is_string($resolvedConfiguredFile) && $resolvedConfiguredFile !== '') {
+            $archiveBases[] = $resolvedConfiguredFile;
+        }
+    }
+    $archiveBases = array_values(array_unique(array_filter($archiveBases, static fn($path) => is_string($path) && $path !== '')));
+    $backupFiles = [];
+    foreach ($archiveBases as $archiveBase) {
+        $backupFiles = array_merge($backupFiles, glob($archiveBase . '.bak*') ?: []);
+    }
+    $backupFiles = array_values(array_unique($backupFiles));
+    $recoverySnapshotDiagnostics['archive_files'] = count($backupFiles);
+    if (count($recoveryCookieCandidates) < 8 && $backupFiles !== []) {
         usort($backupFiles, static function ($left, $right): int {
             $leftTime = (int)(@filemtime($left) ?: 0);
             $rightTime = (int)(@filemtime($right) ?: 0);
@@ -421,11 +455,13 @@ try {
         });
         foreach (array_slice($backupFiles, 0, 120) as $backupFile) {
             if (!is_string($backupFile) || !is_file($backupFile) || is_link($backupFile)) continue;
+            $recoverySnapshotDiagnostics['archive_scanned']++;
             try {
                 $backupStore = AccountStoreFactory::create($backupFile);
                 if (!is_object($backupStore) || !method_exists($backupStore, 'getAccountByName')) continue;
-                $appendRecoveryCandidate($backupStore->getAccountByName($profile));
+                $appendRecoveryCandidate($backupStore->getAccountByName($profile), 'archive');
             } catch (Throwable $ignored) {
+                $recoverySnapshotDiagnostics['archive_read_errors']++;
                 // Ignore malformed, stale, or incompatible archive snapshots.
             }
             if (count($recoveryCookieCandidates) >= 8) break;
@@ -438,6 +474,7 @@ try {
         'cookies' => $cookieMap,
         'recovery_cookies' => $recoveryCookieCandidates[0] ?? [],
         'recovery_cookie_candidates' => $recoveryCookieCandidates,
+        'recovery_snapshot_diagnostics' => $recoverySnapshotDiagnostics,
         'access_token' => '',
         'auth_mode' => 'cookies',
         'proxy' => rmx_py_proxy_url($account->proxy),

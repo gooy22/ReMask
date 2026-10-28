@@ -96,12 +96,23 @@ class FbAccountSerializer implements ProfileStoreInterface
         return null;
     }
 
+    private function resolvedStoragePath(): string
+    {
+        if (is_link($this->filename)) {
+            $resolved = realpath($this->filename);
+            if ($resolved === false) throw new RuntimeException('STORAGE_LINK_UNAVAILABLE');
+            return $resolved;
+        }
+        return $this->filename;
+    }
+
     public function getPreviousAccountByName($name): ?FbAccount
     {
         if (!is_string($name) || $name === '') return null;
-        $backupPath = $this->filename . '.previous';
+        $storagePath = $this->resolvedStoragePath();
+        $backupPath = $storagePath . '.previous';
         if (!is_file($backupPath)) return null;
-        $handle = AtomicJsonFile::lock($this->filename, LOCK_SH);
+        $handle = AtomicJsonFile::lock($storagePath, LOCK_SH);
         try {
             if (!is_file($backupPath)) return null;
             $rows = AtomicJsonFile::read($backupPath);
@@ -146,7 +157,7 @@ class FbAccountSerializer implements ProfileStoreInterface
                     throw new RuntimeException('PROFILE_SESSION_CHANGED');
                 }
 
-                $backupPath = $this->filename . '.previous';
+                $backupPath = $this->resolvedStoragePath() . '.previous';
                 if (!is_file($backupPath)) throw new RuntimeException('PROFILE_SESSION_CHANGED');
                 $backupRows = AtomicJsonFile::read($backupPath);
                 $backupAccounts = $this->decodeAccounts(AtomicJsonFile::encode($backupRows));

@@ -412,6 +412,22 @@ class ProfileResolver:
                 recovery_cookie_candidates.append(candidate)
         if recovery_cookie_candidates:
             recovery_cookie_map = dict(recovery_cookie_candidates[0])
+        scan_diagnostics = payload.get("recovery_snapshot_diagnostics")
+        if isinstance(scan_diagnostics, dict):
+            diagnostic_keys = (
+                "archive_files", "archive_scanned", "archive_profiles",
+                "actor_matches", "distinct_xs", "eligible", "archive_read_errors",
+            )
+            safe_counts = {
+                key: max(0, min(1000000, int(scan_diagnostics.get(key) or 0)))
+                for key in diagnostic_keys
+                if isinstance(scan_diagnostics.get(key, 0), (int, float))
+            }
+            logging.getLogger("remask.profile_resolver").info(
+                "same_actor_snapshot_scan %s worker_candidates=%d",
+                " ".join(f"{key}={value}" for key, value in safe_counts.items()),
+                len(recovery_cookie_candidates),
+            )
         missing_auth_cookies = [
             key for key in ("c_user", "xs")
             if not str(cookie_map.get(key) or "").strip()

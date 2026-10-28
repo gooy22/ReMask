@@ -362,5 +362,6 @@ class InternalCookieResolverTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("json_decode((string)file_get_contents('php://input'), true)", source)
         self.assertIn("$store->compareAndSwapCookies($profile, $actor, $expectedXs, $cookies)", source)
         self.assertIn("$store->getPreviousAccountByName($profile)", source)
-        self.assertIn("glob($accountsFile . '.bak*')", source)
-        self.assertIn("rmx_py_proxy_url($candidateAccount->proxy) !== $currentProxyUrl", source)
+        self.assertIn("realpath($accountsFile)", source)
+        self.assertIn("glob($archiveBase . '.bak*')", source)
+        self.assertIn("same actor", source)
