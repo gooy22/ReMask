@@ -160,7 +160,10 @@ function fixture(){
   assert.equal(launch.nodes.get('geoResults').textContent,'Meta не подтвердила вход. Список недоступен.');
   launchFailure=Object.assign(new Error('CHECKPOINT_REQUIRED'),{code:'CHECKPOINT_REQUIRED'});
   await launch.ctx.searchTargeting('locations');
-  assert.equal(launch.nodes.get('geoResults').textContent,'Чекпоинт Meta: профиль остановлен. Новые запросы запрещены.');
+  assert.equal(launch.nodes.get('geoResults').textContent,'Профиль заблокирован Meta. Новые запросы остановлены.');
+  launchFailure=Object.assign(new Error('PROFILE_META_BLOCKED'),{code:'PROFILE_META_BLOCKED'});
+  await launch.ctx.searchTargeting('locations');
+  assert.equal(launch.nodes.get('geoResults').textContent,'Профиль заблокирован Meta. Новые запросы остановлены.');
   console.log('Launch choices: no extra search buttons, no blank catalog fetch, friendly errors and exact selection IDs passed.');
   for(const id of ['interestQuery','interestResults','selectedInterests'])launch.nodes.set(id,id.endsWith('Query')?new Input():new Element());
   launch.ctx.state.interests=[];
