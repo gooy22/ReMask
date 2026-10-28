@@ -785,6 +785,21 @@ function remaskPrivateJobStatusLabel(value) {
         PARTIAL:'Выполнено частично',CANCELLED:'Остановлено'};
     return labels[status]||'Неизвестный статус';
 }
+function remaskPrivateStepLabel(value) {
+    const key=String(value||'').trim().toUpperCase();
+    const labels={
+        'ADS_MANAGER:DRAFT':'Черновик',
+        'ADS_MANAGER:FRAGMENT_CAMPAIGN':'Кампания',
+        'ADS_MANAGER:FRAGMENT_ADSET':'Группа объявлений',
+        'ADS_MANAGER:FRAGMENT_AD_SET':'Группа объявлений',
+        'ADS_MANAGER:FRAGMENT_CREATIVE':'Креатив',
+        'ADS_MANAGER:FRAGMENT_AD':'Объявление',
+        'ADS_MANAGER:PUBLISH':'Публикация',
+        PRIVATE_LAUNCH:'Запуск рекламы',
+        PREPARE:'Подготовка комплекта'
+    };
+    return labels[key]||(/^[A-Z0-9_]+(?::[A-Z0-9_]+)*$/.test(key)?'Шаг Meta':String(value||''));
+}
 function remaskPrivateErrorLabel(code) {
     const key=String(code||'').trim().toUpperCase();
     const labels={
@@ -829,15 +844,15 @@ function remaskPrivateRenderJob(job) {
     for(const item of job.items||[]){
         for(const task of item.tasks||[]){
             const steps=(item.advertising_steps||[]).filter(step=>step.task_id===task.id);
-            const ids=steps.filter(step=>step.entity_id).map(step=>step.step+': '+step.entity_id+
-                (step.verified===true?' (чтение подтверждено)':' (квитанция, чтение не подтверждено)'));
+            const ids=steps.filter(step=>step.entity_id).map(step=>remaskPrivateStepLabel(step.step)+': '+step.entity_id+
+                (step.verified===true?' (подтверждено чтением)':' (результат не проверен)'));
             const payload=task.payload||{};
             const errorCode=String(task.error_code||'').trim();
             const errorMessage=String(task.error_message||'').trim();
             const errorLabel=(errorCode||errorMessage)?remaskPrivateErrorLabel(errorCode):'';
             const tr=document.createElement('tr');
             for(const value of [String(item.profile_id||'')+' / '+String(payload.ad_account_id||''),
-                remaskPrivateJobStatusLabel(task.status),steps.at(-1)?.step||task.action,task.attempt||0,'HTTP/2',ids.join('\n'),
+                remaskPrivateJobStatusLabel(task.status),remaskPrivateStepLabel(steps.at(-1)?.step||task.action),task.attempt||0,'HTTP/2',ids.join('\n'),
                 '', '', '', '',errorLabel]){
                 const td=document.createElement('td');td.textContent=String(value??'');
                 td.style.whiteSpace='pre-wrap';tr.appendChild(td);
