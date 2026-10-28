@@ -156,10 +156,14 @@ function fixture(){
   vm.runInContext(read('railway-targeting-pickers.js'),paged.ctx);
   paged.nodes.get('interestQuery').value='Travel';
   let first=paged.ctx.searchTargeting('interests');
+  const slowStatus=Array.from(paged.timers.values()).at(-1);
+  slowStatus();
+  const resultBox=paged.nodes.get('interestResults');
+  assert.equal(resultBox.textContent,'Загрузка списка занимает дольше обычного…',
+    'a slow catalog request shows progress instead of looking like an endless spinner');
   pageReplies.shift()({data:[{id:'100001',name:'First interest',path:['Category']}],
     next_offset:100,offset:0,truncated:true,source:'private_meta_template_reference'});
   await first;
-  const resultBox=paged.nodes.get('interestResults');
   assert.equal(resultBox.children.at(-1).textContent,'Показать ещё 100 вариантов',
     'template picker exposes next-page control instead of hiding all but 100 IDs');
   resultBox.children.at(-1).fire('click');
@@ -197,18 +201,48 @@ function fixture(){
   // The wrapped source function is a closure over the original mock: replace
   // its returned value by constructing a fresh selected-account fixture.
   const selected=fixture(),selectedCalls=[];
+  const cacheMiss={data:[],checked_live:false,account_scope_verified:false,availability:'NOT_LOADED',
+    source:'private_meta_template_reference',offset:100,next_offset:null,template_account_bound:false};
   Object.assign(selected.ctx,{$:()=>null,URLSearchParams,state:{profile:'38'},
     selectedAccountIds:()=>['111111'],targetMode:()=>false,
-    apiJson:async(url,options)=>{selectedCalls.push({url,options});return scopedResponse;}});
+    apiJson:async(url,options)=>{
+      selectedCalls.push({url,options});
+      return new URLSearchParams(options.body).get('cache_only')==='1'?cacheMiss:scopedResponse;
+    }});
   vm.runInContext(completionSource.slice(0,completionSource.indexOf('// A selected RK needs')),selected.ctx);
   const selectedPage=await selected.ctx.apiJson('ajax/metaTemplateTargetingSearch.php',{
     body:'type=interests&q=&limit=100&offset=100'
   });
-  assert.equal(selectedCalls[0].url,'ajax/metaTargetingSearch.php',
-    'selected account routes paging through its own private Meta resource reader');
-  assert.equal(new URLSearchParams(selectedCalls[0].options.body).get('offset'),'100');
+  assert.equal(selectedCalls[0].url,'ajax/metaTemplateTargetingSearch.php',
+    'selected account checks the shared cache before opening a slow private Meta read');
+  assert.equal(new URLSearchParams(selectedCalls[0].options.body).get('cache_only'),'1');
+  assert.equal(selectedCalls[1].url,'ajax/metaTargetingSearch.php',
+    'a cache miss falls back to the exact selected account resource reader');
+  assert.equal(new URLSearchParams(selectedCalls[1].options.body).get('offset'),'100');
   assert.equal(selectedPage.next_offset,200);
-  console.log('Installed targeting API bridge: later page offset survives request routing.');
+
+  const cacheHit=fixture(),cacheHitCalls=[];
+  const cachedReference={data:[{id:'123456',name:'Cached interest'}],checked_live:false,
+    source:'private_meta_template_reference',template_account_bound:false,offset:0,next_offset:null,
+    reference_checked_at:1001,reference_stale:false};
+  Object.assign(cacheHit.ctx,{$:()=>null,URLSearchParams,state:{profile:'38'},
+    selectedAccountIds:()=>['111111'],targetMode:()=>false,
+    apiJson:async(url,options)=>{cacheHitCalls.push({url,options});return cachedReference;}});
+  vm.runInContext(completionSource.slice(0,completionSource.indexOf('// A selected RK needs')),cacheHit.ctx);
+  const suggestion=await cacheHit.ctx.apiJson('ajax/metaTemplateTargetingSearch.php',{
+    body:'type=interests&q=health&limit=100'
+  });
+  assert.equal(cacheHitCalls.length,1,'a shared cache hit bypasses the account-specific private read');
+  assert.equal(new URLSearchParams(cacheHitCalls[0].options.body).get('cache_only'),'1');
+  assert.equal(suggestion.checked_live,false,'suggestions are never returned as a live account permission check');
+  assert.equal(suggestion.account_scope_verified,false,'shared options never establish account access');
+  assert.equal(suggestion.profile,'38');
+  assert.equal(suggestion.account_id,'111111');
+  assert.equal(suggestion.resource,'interests');
+  assert.equal(suggestion.data[0].id,'123456');
+  assert.equal(suggestion._cache.shared_reference,true);
+  assert.equal(suggestion._cache.cached_only,true);
+  console.log('Installed targeting API bridge: cache hits are instant suggestions and misses retain exact-account routing.');
 
   // GEO countries/regions and languages must hit the installed Meta module
   // reference before a slow profile/account private search.
