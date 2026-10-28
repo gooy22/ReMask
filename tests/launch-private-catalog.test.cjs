@@ -100,6 +100,10 @@ assert.ok(source.includes('const message=remaskPrivateLaunchUserMessage(error)')
   controls.recentJobSelect.value='legacy';
   controls.recentJobSelect.events.change({});ctx.renderJob({id:'legacy',items:[]});
   assert.equal(legacyRenders,1,'explicitly selecting a legacy recent job still works');
+  calls.length=0;ctx.window.location.href='https://remask.fixture/launch.php';
+  await ctx.remaskPrivateRestoreSourceJob();
+  assert.equal(calls.length,0,'a fresh Launch must not restore an old job from local storage');
+  assert.equal(ctx.window.location.href,'https://remask.fixture/launch.php','a fresh Launch must stay on its own URL');
   calls.length=0;storage.clear();ctx.window.location.href='https://remask.fixture/launch.php?private_job=https://other.invalid';
   await ctx.remaskPrivateRestoreSourceJob();assert.equal(calls.length,0);
   console.log('Private Draft reopens from its exact handle; rejected Meta reads retain receipts without advertising writes.');
