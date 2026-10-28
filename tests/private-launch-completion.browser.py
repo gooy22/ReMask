@@ -65,7 +65,7 @@ class InstalledLaunchTests(unittest.TestCase):
         self.worker_requests=[]
         self.review_ready=False
         self.saved_private_job=None
-        if self._testMethodName=='test_saved_private_draft_read_failure_preserves_receipts':
+        if self._testMethodName in {'test_saved_private_draft_read_failure_preserves_receipts','test_saved_private_draft_checkpoint_uses_plain_terminal_message'}:
             self.saved_private_job={'id':'a'*32,'status':'FAILED','items_total':1,'items':[{
                 'profile_id':'4','status':'FAILED','tasks':[{'id':'b'*32,'action':'private_launch',
                     'status':'FAILED','attempt':5,'error_code':'PRIVATE_ADS_DRAFT_READ_RELATION_MISMATCH',
@@ -225,8 +225,11 @@ class InstalledLaunchTests(unittest.TestCase):
                 self.assertEqual(fields['job_id'],self.saved_private_job['id'])
                 data={'ok':True,'job':self.saved_private_job}
             elif action=='private_draft_read' and self.saved_private_job:
-                route.fulfill(status=502,json={'ok':False,'code':'PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE',
-                    'message':'Meta requires sign-in'});return
+                code=('PRIVATE_ADS_DRAFT_CHECKPOINT_REQUIRED'
+                    if self._testMethodName=='test_saved_private_draft_checkpoint_uses_plain_terminal_message'
+                    else 'PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE')
+                message='Meta requires a security checkpoint' if code.endswith('CHECKPOINT_REQUIRED') else 'Meta requires sign-in'
+                route.fulfill(status=502,json={'ok':False,'code':code,'message':message});return
             elif action=='private_launch_media_inspect':
                 from app.private_launch import _effective_launch_payload
                 from app.private_launch_media import local_references
@@ -334,6 +337,9 @@ class InstalledLaunchTests(unittest.TestCase):
         original=json.dumps(self.saved_private_job,sort_keys=True)
         self.page.locator('#jobItems').get_by_text('1000002',exact=False).wait_for()
         self.assertIn('Ошибка',self.page.locator('#jobSummary').inner_text())
+        launch_result=self.page.locator('#launchResult').inner_text()
+        self.assertIn('Ошибка',launch_result)
+        self.assertNotIn('FAILED',launch_result)
         self.assertEqual(self.page.locator('#recentJobSelect').input_value(),'private:'+'a'*32)
         self.assertIn('результат не проверен',self.page.locator('#jobItems').inner_text())
         self.assertTrue(self.page.locator('#activateJobAds').is_disabled())
@@ -350,6 +356,20 @@ class InstalledLaunchTests(unittest.TestCase):
         self.assertFalse(any(row.get('action') in {'create','retry','retry_failed'} for row in self.worker_requests))
         self.assertEqual(json.loads(self.page.evaluate('localStorage.getItem("remask_private_source_job_v1")')),
                          {'job_id':'a'*32})
+
+    def test_saved_private_draft_checkpoint_uses_plain_terminal_message(self):
+        original=json.dumps(self.saved_private_job,sort_keys=True)
+        self.page.locator('#jobItems').get_by_text('1000002',exact=False).wait_for()
+        self.page.get_by_role('button',name='Проверить черновик в Meta',exact=True).click()
+        self.page.locator('#jobItems').get_by_text('Чекпоинт Meta: аккаунт остановлен.',exact=True).wait_for()
+        text=self.page.locator('#jobItems').inner_text()
+        self.assertNotIn('PRIVATE_ADS_DRAFT_CHECKPOINT_REQUIRED',text)
+        self.page.locator('#jobItems tr:first-child td:nth-child(6) details summary').click()
+        self.assertIn('PRIVATE_ADS_DRAFT_CHECKPOINT_REQUIRED',self.page.locator('#jobItems').inner_text())
+        self.assertEqual(json.dumps(self.saved_private_job,sort_keys=True),original)
+        reads=[row for row in self.worker_requests if row.get('action')=='private_draft_read']
+        self.assertEqual(reads,[{'action':'private_draft_read','profile_id':'4','job_id':'a'*32,'task_id':'b'*32}])
+        self.assertFalse(any(row.get('action') in {'create','retry','retry_failed'} for row in self.worker_requests))
 
     def test_bundle_restore_rejects_foreign_media_without_checksums(self):
         self.page.locator('#creativeLibrarySelect').select_option('preset')

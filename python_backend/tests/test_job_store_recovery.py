@@ -1158,6 +1158,21 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
 
 
 
+    async def test_checkpoint_from_readonly_launch_diagnostic_is_terminal_without_job_mutation(self):
+        job,item=self._seed(task_status='SUCCESS')
+        await self.store.finalize_item(item)
+        before=await self.store.job_view(job)
+
+        self.assertTrue(await self.store.record_terminal_checkpoint('4'))
+
+        row=next(value for value in await self.store.latest_profile_session_statuses()
+                 if value['profile_id']=='4')
+        self.assertEqual(row['status'],'CHECKPOINT')
+        self.assertIn('остановлен',row['message'].lower())
+        self.assertEqual(await self.store.terminal_checkpoint_profiles(['4']),['4'])
+        self.assertEqual(await self.store.job_view(job),before)
+
+
     async def test_terminal_checkpoint_survives_newer_success_and_blocks_store_retry(self):
         now=int(time.time())
         job,item=self._seed(task_status='FAILED')
