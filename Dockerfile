@@ -282,7 +282,7 @@ RUN set -eux; \
     grep -q "action === 'csrf'" /var/www/html/ajax/pythonWorkerJobs.php; \
     grep -q 'remask_csrf_token' /var/www/html/ajax/pythonWorkerJobs.php; \
     grep -q 'pythonWorkerJobs.php' /var/www/html/scripts/workspace.js; \
-    grep -q 'Retry Failed' /var/www/html/workspace.php; \
+    grep -q 'id="pythonProvisionRetry"' /var/www/html/workspace.php; \
     php -l /var/www/html/ajax/metaHierarchy.php; \
     grep -q 'REMASK_PRIVATE_BROWSER_SYNC_V1' /var/www/html/ajax/metaHierarchy.php; \
     grep -q 'hierarchy_worker_live_inventory' /var/www/html/ajax/metaHierarchy.php; \
