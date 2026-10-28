@@ -96,7 +96,7 @@ if (typeof creativeTargetSearchConfig !== 'function') {
                 box.textContent=targetingFailureMessage(error);
             } else box.textContent=targetingFailureMessage(error);
         } finally {
-            if(slowStatusTimer)clearTimeout(slowStatusTimer);
+            if(typeof slowStatusTimer!=='undefined'&&slowStatusTimer)clearTimeout(slowStatusTimer);
             if(pickerControllers[type]===controller)delete pickerControllers[type];
         }
     };
