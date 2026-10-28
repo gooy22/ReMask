@@ -1173,6 +1173,41 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.store.job_view(job),before)
 
 
+    async def test_business_login_gate_is_distinct_terminal_and_blocks_retry(self):
+        job_id, item_id = self._seed(task_status="FAILED")
+        with self.store._connect() as con:
+            con.execute(
+                "UPDATE job_items SET status='FAILED',retryable=1,"
+                "error_code='PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE',"
+                "error_message='Meta stopped access' WHERE id=?",
+                (item_id,),
+            )
+            con.execute(
+                "UPDATE job_tasks SET status='FAILED',retryable=1,"
+                "error_code='PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE',"
+                "error_message='Meta stopped access' WHERE item_id=?",
+                (item_id,),
+            )
+
+        row = next(value for value in await self.store.latest_profile_session_statuses()
+                   if value["profile_id"] == "4")
+        self.assertEqual(row["status"], "BUSINESS_LOGIN_GATE")
+        self.assertEqual(
+            (await self.store.terminal_profile_statuses(["4"]))["4"]["status"],
+            "BUSINESS_LOGIN_GATE",
+        )
+        self.assertEqual(await self.store.terminal_checkpoint_profiles(["4"]), [])
+        self.assertEqual(await self.store.retry_failed(job_id), 0)
+        self.assertEqual((await self.store.item(item_id))["status"], "FAILED")
+
+        # An actual checkpoint is the stronger account-terminal state and cannot
+        # be downgraded if an older Business Login Gate is recorded later.
+        self.assertTrue(await self.store.record_terminal_checkpoint("4"))
+        self.assertTrue(await self.store.record_terminal_profile_status("4", "BUSINESS_LOGIN_GATE"))
+        final = next(value for value in await self.store.latest_profile_session_statuses()
+                     if value["profile_id"] == "4")
+        self.assertEqual(final["status"], "CHECKPOINT")
+
     async def test_terminal_checkpoint_survives_newer_success_and_blocks_store_retry(self):
         now=int(time.time())
         job,item=self._seed(task_status='FAILED')
@@ -1243,6 +1278,47 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
         task=(await self.store.tasks("item-queued-after-checkpoint"))[0]
         self.assertEqual(task['status'],'FAILED')
         self.assertEqual(task['error_code'],'CHECKPOINT_REQUIRED')
+
+    async def test_already_queued_business_login_gate_is_stopped_before_session_resolution(self):
+        now = int(time.time())
+        _, prior_item = self._seed(task_status="FAILED")
+        with self.store._connect() as con:
+            con.execute(
+                "UPDATE job_items SET status='FAILED',error_code='BUSINESS_LOGIN_GATE',"
+                "error_message='Meta stopped access',updated_at=? WHERE id=?",
+                (now, prior_item),
+            )
+            con.execute(
+                "UPDATE job_tasks SET status='FAILED',error_code='BUSINESS_LOGIN_GATE',"
+                "error_message='Meta stopped access',updated_at=? WHERE item_id=?",
+                (now, prior_item),
+            )
+            con.execute(
+                "INSERT INTO jobs(id,status,idempotency_key,created_at,updated_at) VALUES(?,?,?,?,?)",
+                ("job-queued-after-meta-gate","QUEUED","idem-meta-gate",now+1,now+1),
+            )
+            con.execute(
+                "INSERT INTO job_items(id,job_id,profile_id,status,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?)",
+                ("item-queued-after-meta-gate","job-queued-after-meta-gate","4","QUEUED",now+1,now+1),
+            )
+            con.execute(
+                "INSERT INTO job_tasks(id,item_id,position,action,payload_json,status,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                ("task-queued-after-meta-gate","item-queued-after-meta-gate",0,"prepare","{}","QUEUED",now+1,now+1),
+            )
+        worker = WorkerPool(self.store, concurrency=1)
+        resolver = SimpleNamespace(resolve=AsyncMock())
+        worker.resolver = resolver
+        await worker._run_item("item-queued-after-meta-gate")
+        resolver.resolve.assert_not_awaited()
+        item = await self.store.item("item-queued-after-meta-gate")
+        self.assertEqual(item["status"], "FAILED")
+        self.assertEqual(item["error_code"], "BUSINESS_LOGIN_GATE")
+        task = (await self.store.tasks("item-queued-after-meta-gate"))[0]
+        self.assertEqual(task["status"], "FAILED")
+        self.assertEqual(task["error_code"], "BUSINESS_LOGIN_GATE")
+
 
 
 

@@ -1060,6 +1060,38 @@ def _view_fan_page_retry_profile_ids(view: dict[str, Any]) -> list[str]:
                 out.append(profile_id)
     return out
 
+async def _terminal_profile_statuses(profile_ids: list[str]) -> dict[str, dict[str, Any]]:
+    clean = list(dict.fromkeys(
+        str(value or '').strip() for value in profile_ids if str(value or '').strip()
+    ))
+    if not clean:
+        return {}
+    reader = getattr(store, 'terminal_profile_statuses', None)
+    if callable(reader):
+        return await reader(clean)
+    checkpoint_reader = getattr(store, 'terminal_checkpoint_profiles', None)
+    checkpointed = set(await checkpoint_reader(clean)) if callable(checkpoint_reader) else set()
+    status_reader = getattr(store, 'latest_profile_session_statuses', None)
+    rows = await status_reader() if callable(status_reader) else []
+    result = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        profile = str(row.get('profile_id') or '').strip()
+        status = str(row.get('status') or '').strip().upper()
+        if profile not in clean:
+            continue
+        if profile in checkpointed or status in {'CHECKPOINT', 'BUSINESS_LOGIN_GATE'}:
+            result[profile] = {
+                'status': 'CHECKPOINT' if profile in checkpointed else status,
+                'checked_at': row.get('checked_at', 0),
+                'message': str(row.get('message') or ''),
+            }
+    for profile in checkpointed:
+        result.setdefault(str(profile), {'status':'CHECKPOINT','checked_at':0,'message':''})
+    return result
+
+
 async def _checkpointed_profile_ids(profile_ids: list[str]) -> set[str]:
     clean = list(dict.fromkeys(
         str(value or '').strip() for value in profile_ids if str(value or '').strip()
@@ -1086,11 +1118,21 @@ async def _checkpointed_profile_ids(profile_ids: list[str]) -> set[str]:
 
 async def _require_profile_not_checkpoint(profile_id: str) -> None:
     clean = str(profile_id or '').strip()
-    if clean and clean in await _checkpointed_profile_ids([clean]):
-        raise HTTPException(
-            status_code=409,
-            detail="Чекпоинт Meta: аккаунт остановлен. Запрос не отправлен.",
-        )
+    if not clean:
+        return
+    terminal = (await _terminal_profile_statuses([clean])).get(clean)
+    status = str((terminal or {}).get('status') or '').upper()
+    if status == 'CHECKPOINT':
+        raise HTTPException(status_code=409, detail={
+            'code':'CHECKPOINT_REQUIRED',
+            'message':'Чекпоинт Meta: аккаунт остановлен. Запрос не отправлен.',
+        })
+    if status == 'BUSINESS_LOGIN_GATE':
+        raise HTTPException(status_code=409, detail={
+            'code':'PROFILE_META_BLOCKED',
+            'message':str((terminal or {}).get('message') or
+                'Meta остановила доступ. Новые действия запрещены.'),
+        })
 
 
 async def _require_fp_auth_ready(profile_ids: list[str]) -> None:
@@ -1158,7 +1200,7 @@ def _view_failed_profiles_with_known_session_blocks(
         for row in profile_statuses
         if isinstance(row, dict) and str(row.get('profile_id') or '').strip()
     }
-    blocked_states = {'CHECKPOINT', 'LOGIN_REQUIRED', 'TWO_FACTOR', 'LIMITED', 'IN_PROGRESS'}
+    blocked_states = {'CHECKPOINT', 'BUSINESS_LOGIN_GATE', 'LOGIN_REQUIRED', 'TWO_FACTOR', 'LIMITED', 'IN_PROGRESS'}
     blocked: set[str] = set()
     for item in view.get('items') or []:
         if not isinstance(item, dict) or str(item.get('status') or '').upper() != 'FAILED':
@@ -4091,6 +4133,8 @@ async def private_draft_read(profile_id: str, payload: dict = Body(...)):
         # the saved Launch job or retrying any advertising mutation.
         if error.code in {'CHECKPOINT_REQUIRED', 'PRIVATE_ADS_DRAFT_CHECKPOINT_REQUIRED'}:
             await store.record_terminal_checkpoint(profile_id)
+        elif error.code in {'BUSINESS_LOGIN_GATE', 'PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE'}:
+            await store.record_terminal_profile_status(profile_id, 'BUSINESS_LOGIN_GATE')
         raise HTTPException(status_code=409, detail={'code':error.code, 'message':str(error), 'retryable':False}) from None
     except (ProfileContextError, TimeoutError):
         raise HTTPException(status_code=409, detail='PRIVATE_DRAFT_READ_CONTEXT_UNAVAILABLE') from None
@@ -4111,6 +4155,10 @@ async def private_launch_review(profile_id: str, payload: dict = Body(...)):
         result = {key:value for key,value in result.items() if not key.startswith('_')}
         return {'ok':True,**result}
     except ProvisioningError as exc:
+        if exc.code in {'CHECKPOINT_REQUIRED', 'PRIVATE_ADS_DRAFT_CHECKPOINT_REQUIRED'}:
+            await store.record_terminal_checkpoint(clean_profile)
+        elif exc.code in {'BUSINESS_LOGIN_GATE', 'PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE'}:
+            await store.record_terminal_profile_status(clean_profile, 'BUSINESS_LOGIN_GATE')
         raise HTTPException(
             status_code=409,
             detail={
@@ -4132,17 +4180,25 @@ async def private_launch_review(profile_id: str, payload: dict = Body(...)):
 @app.post('/api/v1/jobs',response_model=JobAccepted,dependencies=[Depends(require_key)])
 async def create_job(request: CreateJobRequest) -> JobAccepted:
     requested_profile_ids = [str(profile.profile_id) for profile in request.profiles]
-    blocked_profiles = sorted(await _checkpointed_profile_ids(requested_profile_ids))
+    terminal_statuses = await _terminal_profile_statuses(requested_profile_ids)
+    blocked_profiles = sorted(terminal_statuses)
     if blocked_profiles:
+        blocked_set = set(blocked_profiles)
         allowed_profiles = [
             profile for profile in request.profiles
-            if str(profile.profile_id) not in set(blocked_profiles)
+            if str(profile.profile_id) not in blocked_set
         ]
         if not allowed_profiles:
-            raise HTTPException(
-                status_code=409,
-                detail="Чекпоинт Meta: все выбранные аккаунты остановлены. Prepare не запущен.",
-            )
+            states = {str(value.get('status') or '').upper() for value in terminal_statuses.values()}
+            if states == {'CHECKPOINT'}:
+                message = "Чекпоинт Meta: выбранные профили остановлены. Prepare не запущен."
+            elif states == {'BUSINESS_LOGIN_GATE'}:
+                message = "Meta остановила доступ выбранных профилей. Prepare не запущен."
+            else:
+                message = "Meta остановила выбранные профили. Prepare не запущен."
+            raise HTTPException(status_code=409, detail=message)
+        # Keep healthy profiles in the batch and return the blocked IDs in
+        # JobAccepted.blocked_profiles; no task is queued for a terminal profile.
         request = request.model_copy(update={"profiles": allowed_profiles})
 
     # Server-side canonicalization: stale Workspace tabs are not allowed to
@@ -4226,7 +4282,12 @@ async def retry_failed(job_id: str, consent: dict | None = Body(default=None)) -
         for item in current_view.get('items') or []
         if isinstance(item,dict) and str(item.get('profile_id') or '').strip()
     ]
-    checkpoint_profiles = await _checkpointed_profile_ids(view_profile_ids)
+    terminal_statuses = await _terminal_profile_statuses(view_profile_ids)
+    terminal_profiles = set(terminal_statuses)
+    checkpoint_profiles = {
+        profile for profile, value in terminal_statuses.items()
+        if str(value.get('status') or '').upper() == 'CHECKPOINT'
+    }
     if isinstance(consent,dict) and consent.get('consent_page_policies') is True:
         eligible=any(item.get('error_code')=='PAGE_POLICIES_CONFIRMATION_REQUIRED' and
             any(((task.get('payload') or {}).get('parameters',{}).get('FAN_PAGES') or {}).get('common_page') is True
@@ -4237,12 +4298,15 @@ async def retry_failed(job_id: str, consent: dict | None = Body(default=None)) -
         eligible_items=[
             item for item in current_view.get('items',[])
             if item.get('error_code')=='PAGE_POLICIES_CONFIRMATION_REQUIRED'
-            and str(item.get('profile_id') or '').strip() not in checkpoint_profiles
+            and str(item.get('profile_id') or '').strip() not in terminal_profiles
         ]
         if not eligible_items:
             raise HTTPException(
                 status_code=409,
-                detail="Чекпоинт Meta: аккаунт остановлен. Confirm не выполнялся.",
+                detail=("Meta остановила доступ. Confirm не выполнялся."
+                    if any(str(value.get('status') or '').upper() == 'BUSINESS_LOGIN_GATE'
+                           for value in terminal_statuses.values())
+                    else "Чекпоинт Meta: аккаунт остановлен. Confirm не выполнялся."),
             )
         for item in eligible_items:
             profile=str(item.get('profile_id') or '9')
@@ -4263,7 +4327,7 @@ async def retry_failed(job_id: str, consent: dict | None = Body(default=None)) -
     # FAILED while healthy profiles from the same bulk Job can continue.
     auth_retry_profiles=[
         profile for profile in _view_terminal_auth_retry_profile_ids(current_view)
-        if profile not in checkpoint_profiles
+        if profile not in terminal_profiles
     ]
     status_reader=getattr(store,'latest_profile_session_statuses',None)
     profile_statuses=await status_reader() if callable(status_reader) else []
@@ -4274,7 +4338,7 @@ async def retry_failed(job_id: str, consent: dict | None = Body(default=None)) -
         _auth_ready,auth_blocked=await _partition_auth_retry_profiles(auth_retry_profiles)
     else:
         auth_blocked={}
-    excluded_profiles=set(auth_blocked) | status_blocked_profiles | checkpoint_profiles
+    excluded_profiles=set(auth_blocked) | status_blocked_profiles | terminal_profiles
 
     fp_profiles=_view_fan_page_retry_profile_ids(current_view)
     fp_profiles_for_gate=[
@@ -4307,6 +4371,10 @@ async def retry_failed(job_id: str, consent: dict | None = Body(default=None)) -
         blocked_profiles=sorted(excluded_profiles),
         blocked_reason=(
             'CHECKPOINT_TERMINAL' if checkpoint_profiles else
+            'PROFILE_META_BLOCKED' if any(
+                str(value.get('status') or '').upper() == 'BUSINESS_LOGIN_GATE'
+                for value in terminal_statuses.values()
+            ) else
             'FACEBOOK_AUTH_REQUIRED' if auth_blocked else
             'PROFILE_SESSION_BLOCKED' if status_blocked_profiles else ''
         ),

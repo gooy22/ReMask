@@ -456,8 +456,24 @@ class WorkerPool:
             item = await self.store.item(item_id)
             if not item or item['status'] != 'QUEUED':
                 return
+            terminal_reader = getattr(self.store, 'terminal_profile_statuses', None)
+            terminal = (await terminal_reader([profile_id])).get(profile_id, {}) if callable(terminal_reader) else {}
+            terminal_status = str(terminal.get('status') or '').upper()
+            if terminal_status == 'CHECKPOINT':
+                fail_checkpoint = getattr(self.store, 'fail_item_for_checkpoint', None)
+                if callable(fail_checkpoint):
+                    await fail_checkpoint(item_id)
+                    log.info('worker_item_blocked_terminal_checkpoint item=%s profile=%s',item_id,profile_id)
+                    return
+            if terminal_status == 'BUSINESS_LOGIN_GATE':
+                fail_terminal = getattr(self.store, 'fail_item_for_terminal_access', None)
+                if callable(fail_terminal):
+                    await fail_terminal(item_id, terminal_status)
+                    log.info('worker_item_blocked_meta_access item=%s profile=%s',item_id,profile_id)
+                    return
+            # Backward-compatible fallback for stores without terminal status support.
             checkpoint_reader = getattr(self.store, 'terminal_checkpoint_profiles', None)
-            if callable(checkpoint_reader) and profile_id in await checkpoint_reader([profile_id]):
+            if not callable(terminal_reader) and callable(checkpoint_reader) and profile_id in await checkpoint_reader([profile_id]):
                 fail_checkpoint = getattr(self.store, 'fail_item_for_checkpoint', None)
                 if callable(fail_checkpoint):
                     await fail_checkpoint(item_id)

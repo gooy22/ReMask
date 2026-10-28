@@ -677,6 +677,177 @@ class PrivateLaunchStateStore:
                 """
             )
 
+    async def claim_launch_plan(self, launch_key, values, fingerprint, contract_digest):
+        """Reserve/adopt one durable Ads Manager intent before any Meta request."""
+        return await asyncio.to_thread(
+            self._claim_launch_plan_sync, launch_key, values, fingerprint, contract_digest
+        )
+
+    def _claim_launch_plan_sync(self, launch_key, values, fingerprint, contract_digest):
+        expected_target = (
+            str(values["profile_id"]),
+            str(values["business_id"]),
+            str(values["ad_account_id"]),
+        )
+        now = int(time.time())
+        with self._connect() as con:
+            con.execute("BEGIN IMMEDIATE")
+            current = con.execute(
+                "SELECT * FROM private_launch_plans WHERE launch_key=?", (launch_key,)
+            ).fetchone()
+            if current:
+                actual_target = tuple(current[name] for name in
+                    ("profile_id", "business_id", "ad_account_id"))
+                if actual_target != expected_target or current["fingerprint"] != fingerprint:
+                    raise ProvisioningError(
+                        "PRIVATE_LAUNCH_PLAN_CHANGED",
+                        "This Launch key already has another target or configuration",
+                        retryable=False,
+                    )
+
+            plans = con.execute(
+                """SELECT launch_key,profile_id,business_id,ad_account_id,fingerprint,
+                          contract_digest,created_at
+                   FROM private_launch_plans
+                   WHERE profile_id=? AND business_id=? AND ad_account_id=?
+                   ORDER BY created_at DESC,launch_key""",
+                expected_target,
+            ).fetchall()
+            unfinished = []
+            exact_existing = []
+            for plan in plans:
+                raw_steps = con.execute(
+                    "SELECT * FROM private_launch_steps WHERE launch_key=? ORDER BY step",
+                    (plan["launch_key"],),
+                ).fetchall()
+                steps = [self._decode_step_row(row) for row in raw_steps]
+                if not steps:
+                    # An empty reservation is live for 15 minutes. A crashed empty
+                    # reservation can be reused for its exact intent or replaced.
+                    if plan["fingerprint"] == fingerprint:
+                        exact_existing.append(plan)
+                    if now - int(plan["created_at"] or 0) <= 900:
+                        unfinished.append(plan)
+                    continue
+                complete = self._ads_manager_intent_complete(steps)
+                if complete:
+                    if plan["fingerprint"] == fingerprint:
+                        exact_existing.append(plan)
+                    continue
+                unfinished.append(plan)
+
+            if len(unfinished) > 1:
+                raise ProvisioningError(
+                    "PRIVATE_LAUNCH_MULTIPLE_PENDING_INTENTS",
+                    "This ad account has multiple unfinished drafts; no new Meta request was sent",
+                    retryable=False,
+                )
+            if unfinished:
+                prior = unfinished[0]
+                if prior["fingerprint"] == fingerprint:
+                    return str(prior["launch_key"])
+                raise ProvisioningError(
+                    "PRIVATE_LAUNCH_EXISTING_INTENT",
+                    "This ad account already has an unfinished draft; resume its saved task before starting another",
+                    retryable=False,
+                )
+
+            if len(exact_existing) > 1:
+                raise ProvisioningError(
+                    "PRIVATE_LAUNCH_MULTIPLE_PENDING_INTENTS",
+                    "This ad account already has multiple drafts for the same settings; no new Meta request was sent",
+                    retryable=False,
+                )
+            if exact_existing:
+                # Reuse a fully completed or abandoned empty intent too. The
+                # downstream journal then returns saved receipts and cannot
+                # create a second hierarchy for the same exact settings.
+                return str(exact_existing[0]["launch_key"])
+            if current:
+                return launch_key
+            con.execute(
+                "INSERT INTO private_launch_plans VALUES(?,?,?,?,?,?,?)",
+                (launch_key, *expected_target, fingerprint, contract_digest, now),
+            )
+        return launch_key
+
+    @staticmethod
+    def _ads_manager_intent_complete(steps):
+        required = (
+            "ADS_MANAGER:DRAFT",
+            "ADS_MANAGER:FRAGMENT_CAMPAIGN",
+            "ADS_MANAGER:FRAGMENT_AD_SET",
+            "ADS_MANAGER:FRAGMENT_AD",
+        )
+        by_step = {str(row.get("step") or ""): row for row in steps}
+        if not set(required).issubset(by_step):
+            return False
+
+        def verified_result(row):
+            result = row.get("result")
+            evidence = result.get("evidence") if isinstance(result, dict) else None
+            if not isinstance(evidence, dict):
+                return None, None
+            receipt = evidence.get("receipt")
+            proof = evidence.get("verification")
+            if (
+                row.get("status") != "SUCCESS"
+                or not isinstance(receipt, dict)
+                or not isinstance(proof, dict)
+                or proof.get("verified") is not True
+                or proof.get("source") != "independent_private_ads_http"
+            ):
+                return None, None
+            return receipt, proof
+
+        # Validate the draft first. Set iteration order must not decide whether
+        # an already verified hierarchy is considered complete.
+        draft_receipt, draft_proof = verified_result(by_step["ADS_MANAGER:DRAFT"])
+        draft_id = str((draft_receipt or {}).get("draft_id") or "")
+        if not draft_id or str((draft_proof or {}).get("draft_id") or "") != draft_id:
+            return False
+
+        fragment_ids = []
+        for name in required[1:]:
+            receipt, proof = verified_result(by_step[name])
+            fragment_id = str((receipt or {}).get("fragment_id") or "")
+            if (
+                not fragment_id
+                or str((proof or {}).get("draft_id") or "") != draft_id
+                or str((proof or {}).get("fragment_id") or "") != fragment_id
+                or (proof or {}).get("relationships_confirmed") is not True
+                or (proof or {}).get("meta_validation_status") != "VALIDATED"
+                or (proof or {}).get("active_errors_observed") is not True
+            ):
+                return False
+            fragment_ids.append(fragment_id)
+
+        if len(fragment_ids) != len(set(fragment_ids)) or any(
+            row.get("status") != "SUCCESS" for row in steps
+        ):
+            return False
+        publication = by_step.get("ADS_MANAGER:PUBLISH")
+        if publication:
+            _, proof = verified_result(publication)
+            if not proof:
+                return False
+        return True
+
+    async def release_empty_plan(self, launch_key):
+        """Release a reservation only when it never recorded a Meta request."""
+        await asyncio.to_thread(self._release_empty_plan_sync, launch_key)
+
+    def _release_empty_plan_sync(self, launch_key):
+        with self._connect() as con:
+            con.execute(
+                """DELETE FROM private_launch_plans
+                   WHERE launch_key=?
+                     AND NOT EXISTS (
+                         SELECT 1 FROM private_launch_steps WHERE launch_key=?
+                     )""",
+                (launch_key, launch_key),
+            )
+
     async def bind_plan(self, launch_key, values, fingerprint, contract_digest):
         await asyncio.to_thread(self._bind_plan_sync, launch_key, values, fingerprint, contract_digest)
 
@@ -2009,9 +2180,42 @@ class PrivateLaunchService:
         task_idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         if self.ads_manager is not None:
-            return await self.ads_manager.run(item_id=item_id, profile_id=profile_id,
-                context=context, session=session, payload=payload,
-                task_idempotency_key=task_idempotency_key)
+            saved_command = isinstance(payload, dict) and any(
+                payload.get(name) is True
+                for name in ("publish_saved_draft", "repair_objective", "reconcile_only")
+            )
+            if saved_command or not isinstance(payload, dict):
+                return await self.ads_manager.run(item_id=item_id, profile_id=profile_id,
+                    context=context, session=session, payload=payload,
+                    task_idempotency_key=task_idempotency_key)
+
+            target, _launch, _references, fingerprint = self.ads_manager.prepare(profile_id, payload)
+            requested_key = str(payload.get("launch_key") or task_idempotency_key or
+                f"{profile_id}:{target['business_id']}:{target['ad_account_id']}").strip()
+            if not requested_key or len(requested_key) > 200:
+                raise ProvisioningError("PRIVATE_LAUNCH_INVALID_INPUT",
+                    "Advertising Launch key is missing or too long", retryable=False)
+            from .private_ads_draft import identity
+            actor = identity(str((getattr(context, "cookies", None) or {}).get("c_user") or ""))
+            contract_digest = hashlib.sha256((self.ads_manager.source_digest + actor).encode()).hexdigest()
+            await self.state.init()
+            key = await self.state.claim_launch_plan(
+                requested_key, target, fingerprint, contract_digest
+            )
+            resumed_payload = copy.deepcopy(payload)
+            resumed_payload["launch_key"] = key
+            try:
+                return await self.ads_manager.run(item_id=item_id, profile_id=profile_id,
+                    context=context, session=session, payload=resumed_payload,
+                    task_idempotency_key=task_idempotency_key)
+            except BaseException:
+                # Preflight failures before the first durable submission may
+                # release their empty reservation; accepted work stays locked.
+                try:
+                    await self.state.release_empty_plan(key)
+                except Exception:
+                    pass
+                raise
         del item_id
         if not isinstance(payload, dict):
             raise ProvisioningError(

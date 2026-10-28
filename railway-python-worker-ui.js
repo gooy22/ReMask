@@ -380,7 +380,7 @@ function pythonWorkerItemBlockedByKnownProfileStatus(item) {
   const profileId = String(item && item.profile_id || '').trim();
   const session = profileId ? sessions.get(profileId) : null;
   const status = String(session && session.status || '').toUpperCase();
-  return ['CHECKPOINT','LOGIN_REQUIRED','TWO_FACTOR','LIMITED','IN_PROGRESS'].includes(status);
+  return ['CHECKPOINT','BUSINESS_LOGIN_GATE','LOGIN_REQUIRED','TWO_FACTOR','LIMITED','IN_PROGRESS'].includes(status);
 }
 
 function pythonWorkerFailureDetails(item) {
@@ -415,8 +415,11 @@ function pythonWorkerFailureDetails(item) {
   }
   if (result.phase === 'CREATE_NOT_SUBMITTED') parts.push('CREATE не отправлен');
   else if (result.phase === 'CREATE_SENT') parts.push('CREATE отправлен; результат требует проверки');
-  if (['SESSION_EXPIRED','BUSINESS_LOGIN_GATE'].includes(String(item && item.error_code || '').toUpperCase())) {
-    parts.push('Meta требует входа: выберите этот профиль → Обновить FB-сессию. Комплект продолжайте после успешного обновления сессии.');
+  const failureCode=pythonWorkerItemErrorCode(item);
+  if (/BUSINESS_LOGIN_GATE$/.test(failureCode)) {
+    parts.push('Meta остановила доступ. Новые действия по профилю запрещены.');
+  } else if (failureCode === 'SESSION_EXPIRED') {
+    parts.push('Meta не подтвердила вход. Действия по профилю остановлены.');
   }
   if (!pythonWorkerItemCanRetry(item)) parts.push('Повтор недоступен');
   return parts;
@@ -676,13 +679,14 @@ async function pythonWorkerHealthCheckOnce() {
 }
 
 function pythonWorkerIsProfileAuthBlockedCode(code) {
+  const value=String(code || '').trim().toUpperCase();
   return [
     'CHECKPOINT_REQUIRED',
     'SESSION_EXPIRED',
     'BUSINESS_LOGIN_GATE',
     'TWO_FACTOR_REQUIRED',
     'FACEBOOK_TEMPORARILY_BLOCKED'
-  ].indexOf(String(code || '').trim().toUpperCase()) !== -1;
+  ].indexOf(value) !== -1 || /(?:CHECKPOINT_REQUIRED|BUSINESS_LOGIN_GATE)$/.test(value);
 }
 
 async function pythonWorkerProfilePreflight(profileId) {
@@ -690,8 +694,12 @@ async function pythonWorkerProfilePreflight(profileId) {
   const savedStatus = typeof pythonWorkerProfileSessionStatuses !== 'undefined'
     ? pythonWorkerProfileSessionStatuses.get(cleanProfileId)
     : null;
-  if (String(savedStatus && savedStatus.status || '').toUpperCase() === 'CHECKPOINT') {
+  const savedState=String(savedStatus && savedStatus.status || '').toUpperCase();
+  if (savedState === 'CHECKPOINT') {
     throw new Error('Чекпоинт Meta: аккаунт остановлен. Запрос не отправлен.');
+  }
+  if (savedState === 'BUSINESS_LOGIN_GATE') {
+    throw new Error('Meta остановила доступ. Новые действия запрещены.');
   }
   const data = await pythonWorkerBridge({
     action: 'preflight',
@@ -966,13 +974,25 @@ function pythonWorkerJobStatusView(item) {
   const status = String(item && item.status || 'QUEUED').toUpperCase();
   const code = pythonWorkerItemErrorCode(item);
   const message = pythonWorkerItemErrorMessage(item).toLowerCase();
-  if (code === 'CHECKPOINT_REQUIRED' || /checkpoint_required|checkpoint_redirect|facebook\.com\/checkpoint\//i.test(message)) {
+  if (/(?:^|_)CHECKPOINT_REQUIRED$/.test(code) || /checkpoint_required|checkpoint_redirect|facebook\.com\/checkpoint\//i.test(message)) {
     return {label:'ЧЕКПОИНТ', key:'CHECKPOINT', message:'Чекпоинт Meta: аккаунт остановлен. Новые задачи запрещены.'};
+  }
+  if (/BUSINESS_LOGIN_GATE$/.test(code)) {
+    return {label:'ДОСТУП META ОСТАНОВЛЕН', key:'BUSINESS_LOGIN_GATE', message:'Meta остановила доступ. Новые задачи запрещены.'};
+  }
+  if (code === 'PRIVATE_LAUNCH_PLAN_CHANGED') {
+    return {label:'НАСТРОЙКИ ИЗМЕНИЛИСЬ', key:'FAILED', message:'У этой задачи уже сохранены другие настройки. Новый запрос не отправлен.'};
+  }
+  if (code === 'PRIVATE_LAUNCH_EXISTING_INTENT') {
+    return {label:'ЧЕРНОВИК УЖЕ НАЧАТ', key:'FAILED', message:'Продолжите сохранённую задачу для этого РК.'};
+  }
+  if (code === 'PRIVATE_LAUNCH_MULTIPLE_PENDING_INTENTS') {
+    return {label:'НУЖНА СВЕРКА', key:'FAILED', message:'Найдены несколько черновиков. Новые объекты не создавались.'};
   }
   if (code === 'TWO_FACTOR_REQUIRED') {
     return {label:'2FA', key:'TWO_FACTOR', message:'Meta запросила двухфакторную проверку. Действия остановлены.'};
   }
-  if (code === 'SESSION_EXPIRED' || code === 'BUSINESS_LOGIN_GATE') {
+  if (code === 'SESSION_EXPIRED') {
     return {label:'НУЖЕН ВХОД', key:'LOGIN_REQUIRED', message:'Meta не подтвердила вход. Действия по профилю остановлены.'};
   }
   if (code === 'FACEBOOK_TEMPORARILY_BLOCKED') {
@@ -995,8 +1015,20 @@ function pythonWorkerUserFailureText(item) {
   const code = pythonWorkerItemErrorCode(item);
   const message = pythonWorkerItemErrorMessage(item);
   const combined = (code + ' ' + message).toLowerCase();
-  if (code === 'CHECKPOINT_REQUIRED' || /checkpoint_required|checkpoint_redirect|facebook\.com\/checkpoint\//i.test(message)) {
+  if (/(?:^|_)CHECKPOINT_REQUIRED$/.test(code) || /checkpoint_required|checkpoint_redirect|facebook\.com\/checkpoint\//i.test(message)) {
     return 'Чекпоинт Meta: аккаунт остановлен. Повтор и новые задачи запрещены.';
+  }
+  if (/BUSINESS_LOGIN_GATE$/.test(code) || code === 'PROFILE_META_BLOCKED') {
+    return 'Meta остановила доступ. Новые действия по профилю запрещены.';
+  }
+  if (code === 'PRIVATE_LAUNCH_PLAN_CHANGED') {
+    return 'У этой задачи уже сохранены другие настройки. Новый запрос не отправлен.';
+  }
+  if (code === 'PRIVATE_LAUNCH_EXISTING_INTENT') {
+    return 'Для этого РК уже есть незавершённый черновик. Продолжите сохранённую задачу.';
+  }
+  if (code === 'PRIVATE_LAUNCH_MULTIPLE_PENDING_INTENTS') {
+    return 'Для этого РК найдены несколько черновиков. Новые объекты не создавались; нужна сверка.';
   }
   if (code === 'PRIVATE_ADS_DRAFT_VALIDATION_ERRORS') {
     return 'Meta нашла ошибки в рекламном черновике. Проверьте кампанию, группу и объявление.';
@@ -1004,8 +1036,8 @@ function pythonWorkerUserFailureText(item) {
   if (code === 'TWO_FACTOR_REQUIRED') {
     return 'Meta запросила двухфакторную проверку. Подготовка остановлена.';
   }
-  if (code === 'SESSION_EXPIRED' || code === 'BUSINESS_LOGIN_GATE') {
-    return 'Не удалось подтвердить вход в Facebook. Подготовка остановлена.';
+  if (code === 'SESSION_EXPIRED') {
+    return 'Meta не подтвердила вход. Действия остановлены.';
   }
   if (code === 'FACEBOOK_TEMPORARILY_BLOCKED') {
     return 'Meta временно ограничила действия по профилю.';
@@ -1067,7 +1099,7 @@ function pythonWorkerPrepareReasonLabel(value) {
     PAYMENT_UNCONFIRMED:'Оплата не подтверждена',
     PAYMENT_REQUIRED:'Оплата не подтверждена',
     READY_TO_LAUNCH:'Готов к следующему шагу',
-    CHECKPOINT_REQUIRED:'Meta запросила проверку безопасности'
+    CHECKPOINT_REQUIRED:'Чекпоинт Meta: аккаунт остановлен. Новые задачи запрещены.'
   };
   return labels[reason] || '';
 }
@@ -1077,6 +1109,7 @@ function pythonWorkerProfileSessionView(value) {
   const labels = {
     ACTIVE:{label:'АКТИВНО',className:'ok'},
     CHECKPOINT:{label:'ЧЕКПОИНТ',className:'warn'},
+    BUSINESS_LOGIN_GATE:{label:'ДОСТУП META ОСТАНОВЛЕН',className:'warn'},
     LOGIN_REQUIRED:{label:'НУЖЕН ВХОД',className:'warn'},
     TWO_FACTOR:{label:'2FA',className:'warn'},
     LIMITED:{label:'ОГРАНИЧЕНИЕ META',className:'warn'},
@@ -4887,7 +4920,7 @@ async function pythonWorkerOpenAutoModal() {
       const jobId = String(job.job_id || '').trim();
       if (!jobId) throw new Error('Worker did not return job_id.');
 
-      const checkpointProfiles = new Set();
+      const blockedProfiles = new Set();
       [
         data && data.blocked_profiles,
         data && data.result && data.result.blocked_profiles,
@@ -4895,7 +4928,7 @@ async function pythonWorkerOpenAutoModal() {
       ].forEach(function(values) {
         (Array.isArray(values) ? values : []).forEach(function(value) {
           const id = String(value || '').trim();
-          if (id) checkpointProfiles.add(id);
+          if (id) blockedProfiles.add(id);
         });
       });
       if (Array.isArray(job.items)) {
@@ -4903,22 +4936,38 @@ async function pythonWorkerOpenAutoModal() {
           return String(item && item.profile_id || '').trim();
         }).filter(Boolean));
         profiles.forEach(function(profileId) {
-          if (!acceptedProfiles.has(String(profileId))) checkpointProfiles.add(String(profileId));
+          if (!acceptedProfiles.has(String(profileId))) blockedProfiles.add(String(profileId));
         });
       }
       profiles.forEach(function(profileId) {
         const saved = pythonWorkerProfileSessionStatuses.get(String(profileId));
-        if (String(saved && saved.status || '').toUpperCase() === 'CHECKPOINT') {
-          checkpointProfiles.add(String(profileId));
+        if (['CHECKPOINT','BUSINESS_LOGIN_GATE'].includes(String(saved && saved.status || '').toUpperCase())) {
+          blockedProfiles.add(String(profileId));
         }
       });
-      pythonWorkerUiState.jobNotice = checkpointProfiles.size
-        ? 'Чекпоинт Meta: пропущены профили ' + Array.from(checkpointProfiles).join(', ') + '.'
-        : '';
+      const checkpointProfiles=[],metaBlockedProfiles=[];
+      blockedProfiles.forEach(function(profileId){
+        const saved=pythonWorkerProfileSessionStatuses.get(String(profileId));
+        const status=String(saved && saved.status || '').toUpperCase();
+        if(status==='CHECKPOINT')checkpointProfiles.push(String(profileId));
+        else if(status==='BUSINESS_LOGIN_GATE')metaBlockedProfiles.push(String(profileId));
+      });
+      if(checkpointProfiles.length&&metaBlockedProfiles.length){
+        pythonWorkerUiState.jobNotice='Meta остановила профили: чекпоинт — '+
+          checkpointProfiles.join(', ')+'; доступ закрыт — '+metaBlockedProfiles.join(', ')+'.';
+      }else if(checkpointProfiles.length){
+        pythonWorkerUiState.jobNotice='Чекпоинт Meta: пропущены профили '+checkpointProfiles.join(', ')+'.';
+      }else if(metaBlockedProfiles.length){
+        pythonWorkerUiState.jobNotice='Meta остановила доступ: пропущены профили '+metaBlockedProfiles.join(', ')+'.';
+      }else if(blockedProfiles.size){
+        pythonWorkerUiState.jobNotice='Meta остановила часть профилей. Они пропущены без запросов.';
+      }else{
+        pythonWorkerUiState.jobNotice='';
+      }
       const requestedCount = Number(job.items_total);
       const acceptedCount = Number.isFinite(requestedCount)
         ? requestedCount
-        : (Array.isArray(job.items) ? job.items.length : Math.max(0, profiles.length - checkpointProfiles.size));
+        : (Array.isArray(job.items) ? job.items.length : Math.max(0, profiles.length - blockedProfiles.size));
 
       pythonWorkerClearBatchState();
       pythonWorkerUiState.jobId = jobId; pythonWorkerUiState.job = null;
