@@ -45,10 +45,19 @@ class _ReadClient:
         if row["method"] != "GET" or set(params or {}) - set(row["params"]):
             raise fail("INVALID_RESOURCE_ROUTE", "Resource request differs from its reviewed source")
         if self.http is None:
+            account_fields = (params.get("fields") if name == "ACCOUNT_READ"
+                              and isinstance(params, dict) else None)
             with measure_phase('ads_document'):
                 self.http = await AdsManagerPrivateHttp.open(self.web, account_id=self.account,
                     business_id=self.business, actor_id=self.actor,
-                    reference_read=self.reference_read)
+                    reference_read=self.reference_read,
+                    account_read_fields=account_fields if self.reference_read else None)
+            if name == "ACCOUNT_READ" and isinstance(account_fields, list):
+                verified = getattr(self.http, "_verified_account_read", None)
+                if (isinstance(verified, tuple) and len(verified) == 2
+                        and verified[0] == tuple(account_fields)):
+                    self.http._verified_account_read = None
+                    return verified[1]
         with measure_phase('account_proof' if name == 'ACCOUNT_READ' else 'meta_read'):
             return await self.http.get(path.removeprefix("/" + self.catalog.data["api_version"]), params or {})
 

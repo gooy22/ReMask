@@ -23,6 +23,7 @@ from .private_ads_document import (_auth_gate, _json_payloads, _JSON_SCRIPT_RE,
                                    _response_only, _strict_json, _strict_json_decoder)
 from .provisioning.models import ProvisioningError
 from .meta_auth_document import has_login_form
+from .private_http_metrics import measure_phase
 
 log = logging.getLogger("remask.private_ads_http")
 
@@ -250,6 +251,9 @@ class AdsManagerPrivateHttp:
     def __init__(self, web, context):
         self.web, self.context = web, context
         self.read_only = False
+        # Reuse the exact-account response that already proved a redirected
+        # Ads Manager scope; only the read-only catalog path can populate it.
+        self._verified_account_read = None
         self.document_origin = 'https://adsmanager.facebook.com'
         # Settings calls business_object_id the admarketID and returns the
         # advertising/UI ID separately. This alias is usable only after fresh
@@ -284,8 +288,17 @@ class AdsManagerPrivateHttp:
                 and str(self.web.profile.cookies.get("c_user") or "") == self.context.actor_id)
 
     @classmethod
-    async def open(cls, web, *, account_id, business_id, actor_id, reference_read=False):
+    async def open(cls, web, *, account_id, business_id, actor_id, reference_read=False,
+                   account_read_fields=None):
         account_id, business_id, actor_id = map(identity, (account_id, business_id, actor_id))
+        if account_read_fields is not None:
+            allowed_fields = {"id", "account_id", "business", "account_status",
+                              "ad_account_promotable_objects", "currency"}
+            if (not reference_read or not isinstance(account_read_fields, list)
+                    or any(not isinstance(name, str) or name not in allowed_fields
+                           for name in account_read_fields)):
+                raise fail("INVALID_RESOURCE_ROUTE", "Account proof fields differ from the reviewed read")
+            account_read_fields = tuple(dict.fromkeys(account_read_fields))
         if not reference_read:
             # Mutation-capable paths keep their original fresh-document contract.
             return await cls._open_uncached(web, account_id=account_id,
@@ -298,7 +311,8 @@ class AdsManagerPrivateHttp:
         if not name or not proxy:
             # Explicit direct-test leases and unnamed sessions are never shared.
             client = await cls._open_uncached(web, account_id=account_id,
-                business_id=business_id, actor_id=actor_id, refresh_modules=False)
+                business_id=business_id, actor_id=actor_id, refresh_modules=False,
+                account_read_fields=account_read_fields)
             client.read_only = True
             return client
         digest = hashlib.sha256(json.dumps([name, proxy,
@@ -318,7 +332,8 @@ class AdsManagerPrivateHttp:
                     return client
             _REFERENCE_CONTEXT_CACHE.pop(digest, None)
             client = await cls._open_uncached(web, account_id=account_id,
-                business_id=business_id, actor_id=actor_id, refresh_modules=False)
+                business_id=business_id, actor_id=actor_id, refresh_modules=False,
+                account_read_fields=account_read_fields)
             client.read_only = True
             _REFERENCE_CONTEXT_CACHE[digest] = (time.monotonic(),
                 client.context, client.document_origin)
@@ -328,7 +343,8 @@ class AdsManagerPrivateHttp:
             return client
 
     @classmethod
-    async def _open_uncached(cls, web, *, account_id, business_id, actor_id, refresh_modules):
+    async def _open_uncached(cls, web, *, account_id, business_id, actor_id, refresh_modules,
+                             account_read_fields=None):
         account_id, business_id, actor_id = map(identity, (account_id, business_id, actor_id))
         web.private_only = True
         if str(web.profile.cookies.get("c_user") or "") != actor_id:
@@ -391,7 +407,14 @@ class AdsManagerPrivateHttp:
             # Before returning a usable sender, prove the requested account
             # and BM through the reviewed account READ on this same session.
             client.read_only = True
-            account = await client.get("/act_" + account_id, {"fields": ["id", "account_id", "business"]})
+            proof_fields = ["id", "account_id", "business"]
+            if account_read_fields is not None:
+                proof_fields.extend(name for name in account_read_fields if name not in proof_fields)
+            if account_read_fields is None:
+                account = await client.get("/act_" + account_id, {"fields": proof_fields})
+            else:
+                with measure_phase("account_proof"):
+                    account = await client.get("/act_" + account_id, {"fields": proof_fields})
             # JSON can carry an ID as an exact integer. Never accept floats,
             # booleans or rounded/coerced IDs when proving an advertising scope.
             observed = account.get("id")
@@ -414,6 +437,8 @@ class AdsManagerPrivateHttp:
                     getattr(web.profile, "name", ""), account_matches,
                     business_matches, account_id, observed_id or "invalid", legacy_id or "absent", type(observed).__name__)
                 raise fail("BOOTSTRAP_SCOPE_UNVERIFIED", "Ads Manager did not confirm the requested account and Business", True)
+            if account_read_fields is not None:
+                client._verified_account_read = (account_read_fields, account)
             client.read_only = False
             log.info("ads_bootstrap scope_confirmed profile=%s source=exact_account_read", getattr(web.profile, "name", ""))
         return client
