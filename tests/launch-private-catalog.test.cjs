@@ -26,12 +26,15 @@ assert.ok(completionSource.includes('status.textContent=remaskPrivatePageReadFai
     'jobItems','jobSummary','recentJobSelect','jobActionSelect','retryFailed','forceRetryReview',
     'continueJob','refreshInsights','activateJobAds','pauseJobAds'].map(id=>[id,new Element()]));
   const id='a'.repeat(32),profile='4',draft='1000001',campaign='1000002';
-  const job={id,status:'FAILED',items_total:1,items:[{profile_id:profile,status:'FAILED',tasks:[{
-    id:'task',action:'private_launch',status:'FAILED',attempt:5,error_code:'READ_RELATION_MISMATCH',
-    error_message:'<img src=x onerror=alert(1)>',payload:{ad_account_id:'120248891583720408',
+  const taskId='b'.repeat(32),otherTaskId='c'.repeat(32);
+  const job={id,status:'FAILED',items_total:1,items:[{profile_id:profile,status:'FAILED',tasks:[
+    {id:taskId,action:'private_launch',status:'FAILED',attempt:5,error_code:'READ_RELATION_MISMATCH',
+      error_message:'<img src=x onerror=alert(1)>',payload:{ad_account_id:'120248891583720408',
+        launch:{base:{execution_mode:'DRAFT'}}}},
+    {id:otherTaskId,action:'private_launch',status:'FAILED',payload:{ad_account_id:'120249297411010775',
       launch:{base:{execution_mode:'DRAFT'}}}}],advertising_steps:[
-    {task_id:'task',step:'ADS_MANAGER:DRAFT',entity_id:draft,status:'SUCCESS',verified:true},
-    {task_id:'task',step:'ADS_MANAGER:FRAGMENT_CAMPAIGN',entity_id:campaign,status:'RECONCILE_REQUIRED',verified:false}]}]};
+    {task_id:taskId,step:'ADS_MANAGER:DRAFT',entity_id:draft,status:'SUCCESS',verified:true},
+    {task_id:taskId,step:'ADS_MANAGER:FRAGMENT_CAMPAIGN',entity_id:campaign,status:'RECONCILE_REQUIRED',verified:false}]}]};
   const original=JSON.stringify(job),storage=new Map(),calls=[];
   let legacyRenders=0;
   const ctx={console,URL,queueMicrotask,setTimeout:handler=>queueMicrotask(handler),
@@ -50,10 +53,20 @@ assert.ok(completionSource.includes('status.textContent=remaskPrivatePageReadFai
     }};
   vm.createContext(ctx);vm.runInContext(source,ctx);
   await ctx.remaskPrivateRestoreSourceJob();
-  assert.match(controls.jobSummary.textContent,/FAILED/);
+  assert.match(controls.jobSummary.textContent,/Ошибка/);
+  assert.doesNotMatch(controls.jobSummary.textContent,/FAILED/);
+  assert.equal(controls.jobItems.children.length,2,'a job may contain two Launch tasks for the same profile');
+  const errorCell=controls.jobItems.children[0].children[10];
+  assert.match(errorCell.textContent,/Не удалось завершить шаг/);
+  assert.doesNotMatch(errorCell.textContent,/^READ_RELATION_MISMATCH/);
+  const errorDetails=errorCell.children.find(child=>child.className==='remask-private-technical');
+  assert.ok(errorDetails,'machine details are available on demand');
+  assert.equal(Boolean(errorDetails.open),false,'machine details stay collapsed');
+  assert.equal(controls.jobItems.children[1].children[5].children.some(child=>
+    child.textContent==='Проверить черновик в Meta'),false,'only the task with its own saved draft gets a read button');
   assert.match(controls.jobItems.textContent,new RegExp(draft));
   assert.match(controls.jobItems.textContent,new RegExp(campaign));
-  assert.match(controls.jobItems.textContent,/квитанция, чтение не подтверждено/);
+  assert.match(controls.jobItems.textContent,/результат не проверен/);
   assert.equal(controls.activateJobAds.disabled,true);
   assert.equal(controls.retryFailed.disabled,true,'legacy retries must not receive a private worker handle');
   assert.equal(JSON.parse(storage.get('remask_private_source_job_v1')).job_id,id);
@@ -67,7 +80,7 @@ assert.ok(completionSource.includes('status.textContent=remaskPrivatePageReadFai
   assert.equal(button.disabled,false);
   assert.equal(JSON.stringify(job),original,'the read failure must preserve the immutable source journal');
   assert.deepEqual(calls.map(row=>row.action),['status','private_draft_read']);
-  assert.equal(calls[1].profile_id,profile);assert.equal(calls[1].job_id,id);
+  assert.equal(calls[1].profile_id,profile);assert.equal(calls[1].job_id,id);assert.equal(calls[1].task_id,taskId);
   ctx.renderJob({id:'legacy',items:[]});
   assert.equal(legacyRenders,0,'late legacy init must not erase the restored private result');
   assert.match(controls.jobItems.textContent,new RegExp(campaign));

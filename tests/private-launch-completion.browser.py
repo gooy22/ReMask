@@ -67,12 +67,12 @@ class InstalledLaunchTests(unittest.TestCase):
         self.saved_private_job=None
         if self._testMethodName=='test_saved_private_draft_read_failure_preserves_receipts':
             self.saved_private_job={'id':'a'*32,'status':'FAILED','items_total':1,'items':[{
-                'profile_id':'4','status':'FAILED','tasks':[{'id':'task','action':'private_launch',
+                'profile_id':'4','status':'FAILED','tasks':[{'id':'b'*32,'action':'private_launch',
                     'status':'FAILED','attempt':5,'error_code':'PRIVATE_ADS_DRAFT_READ_RELATION_MISMATCH',
                     'payload':{'ad_account_id':'111111','launch':{'base':{'execution_mode':'DRAFT'}}}}],
                 'advertising_steps':[
-                    {'task_id':'task','step':'ADS_MANAGER:DRAFT','entity_id':'1000001','verified':True},
-                    {'task_id':'task','step':'ADS_MANAGER:FRAGMENT_CAMPAIGN','entity_id':'1000002','verified':False}]}]}
+                    {'task_id':'b'*32,'step':'ADS_MANAGER:DRAFT','entity_id':'1000001','verified':True},
+                    {'task_id':'b'*32,'step':'ADS_MANAGER:FRAGMENT_CAMPAIGN','entity_id':'1000002','verified':False}]}]}
         self.page = self.browser.new_page()
         self.page.set_default_timeout(5000)
         self.page.on('pageerror', lambda e: self.errors.append(str(e)))
@@ -333,19 +333,20 @@ class InstalledLaunchTests(unittest.TestCase):
     def test_saved_private_draft_read_failure_preserves_receipts(self):
         original=json.dumps(self.saved_private_job,sort_keys=True)
         self.page.locator('#jobItems').get_by_text('1000002',exact=False).wait_for()
-        self.assertIn('FAILED',self.page.locator('#jobSummary').inner_text())
+        self.assertIn('Ошибка',self.page.locator('#jobSummary').inner_text())
         self.assertEqual(self.page.locator('#recentJobSelect').input_value(),'private:'+'a'*32)
-        self.assertIn('квитанция, чтение не подтверждено',self.page.locator('#jobItems').inner_text())
+        self.assertIn('результат не проверен',self.page.locator('#jobItems').inner_text())
         self.assertTrue(self.page.locator('#activateJobAds').is_disabled())
         self.assertTrue(self.page.locator('#retryFailed').is_disabled())
         self.page.get_by_role('button',name='Проверить черновик в Meta',exact=True).click()
-        self.page.locator('#jobItems').get_by_text('Чтение Meta не завершено:',exact=False).wait_for()
+        self.page.locator('#jobItems').get_by_text('Meta запросила вход',exact=False).wait_for()
+        self.page.locator('#jobItems tr:first-child td:nth-child(6) details summary').click()
         text=self.page.locator('#jobItems').inner_text()
         self.assertIn('PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE',text)
         self.assertIn('1000001',text);self.assertIn('1000002',text)
         self.assertEqual(json.dumps(self.saved_private_job,sort_keys=True),original)
         reads=[row for row in self.worker_requests if row.get('action')=='private_draft_read']
-        self.assertEqual(reads,[{'action':'private_draft_read','profile_id':'4','job_id':'a'*32}])
+        self.assertEqual(reads,[{'action':'private_draft_read','profile_id':'4','job_id':'a'*32,'task_id':'b'*32}])
         self.assertFalse(any(row.get('action') in {'create','retry','retry_failed'} for row in self.worker_requests))
         self.assertEqual(json.loads(self.page.evaluate('localStorage.getItem("remask_private_source_job_v1")')),
                          {'job_id':'a'*32})

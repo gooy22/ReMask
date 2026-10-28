@@ -4,14 +4,15 @@ import os
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
+from types import SimpleNamespace
 
 import aiohttp
 from pathlib import Path
 
 from app.store import JobStore
 from app.provisioning.state import ProvisioningStateStore
-from app.runner import _await_with_hard_watchdog
+from app.runner import WorkerPool, _await_with_hard_watchdog
 from app.provisioning.models import ProvisioningError, ProvisioningStep
 from app.provisioning.service import ProvisioningService
 from app.session import ProfileContextError, ProfileResolver
@@ -1008,10 +1009,10 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
         item = await self.store.item(item_id)
         tasks = await self.store.tasks(item_id)
 
-        self.assertEqual(requeued, 1)
-        self.assertEqual(item["status"], "QUEUED")
-        self.assertEqual(tasks[0]["status"], "QUEUED")
-        self.assertIsNone(tasks[0]["error_code"])
+        self.assertEqual(requeued, 0)
+        self.assertEqual(item["status"], "FAILED")
+        self.assertEqual(tasks[0]["status"], "FAILED")
+        self.assertEqual(tasks[0]["error_code"], "CHECKPOINT_REQUIRED")
 
     async def test_retry_failed_excludes_auth_blocked_profile_but_requeues_healthy_peer(self):
         now=int(time.time())
@@ -1157,6 +1158,78 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
 
 
 
+    async def test_terminal_checkpoint_survives_newer_success_and_blocks_store_retry(self):
+        now=int(time.time())
+        job,item=self._seed(task_status='FAILED')
+        with self.store._connect() as con:
+            con.execute(
+                "UPDATE job_items SET status='FAILED',error_code='CHECKPOINT_REQUIRED',"
+                "error_message='checkpoint_required',retryable=1,updated_at=? WHERE id=?",
+                (now,item),
+            )
+            con.execute(
+                "UPDATE job_tasks SET status='FAILED',error_code='CHECKPOINT_REQUIRED',"
+                "error_message='checkpoint_required',retryable=1,updated_at=? WHERE item_id=?",
+                (now,item),
+            )
+            con.execute(
+                "INSERT INTO jobs(id,status,idempotency_key,created_at,updated_at) VALUES(?,?,?,?,?)",
+                ("job-newer-success","SUCCESS","idem-newer",now+10,now+10),
+            )
+            con.execute(
+                "INSERT INTO job_items(id,job_id,profile_id,status,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?)",
+                ("item-newer-success","job-newer-success","4","SUCCESS",now+10,now+10),
+            )
+        statuses=await self.store.latest_profile_session_statuses()
+        row=next(value for value in statuses if value['profile_id']=='4')
+        self.assertEqual(row['status'],'CHECKPOINT')
+        self.assertIn('остановлен',row['message'].lower())
+        self.assertEqual(await self.store.terminal_checkpoint_profiles(['4']),['4'])
+        self.assertEqual(await self.store.retry_failed(job),0)
+        self.assertEqual((await self.store.item(item))['status'],'FAILED')
+
+    async def test_already_queued_profile_is_stopped_before_worker_resolves_session(self):
+        now=int(time.time())
+        _,checkpoint_item=self._seed(task_status='FAILED')
+        with self.store._connect() as con:
+            con.execute(
+                "UPDATE job_items SET status='FAILED',error_code='CHECKPOINT_REQUIRED',"
+                "error_message='checkpoint_required',updated_at=? WHERE id=?",
+                (now,checkpoint_item),
+            )
+            con.execute(
+                "UPDATE job_tasks SET status='FAILED',error_code='CHECKPOINT_REQUIRED',"
+                "error_message='checkpoint_required',updated_at=? WHERE item_id=?",
+                (now,checkpoint_item),
+            )
+            con.execute(
+                "INSERT INTO jobs(id,status,idempotency_key,created_at,updated_at) VALUES(?,?,?,?,?)",
+                ("job-queued-after-checkpoint","QUEUED","idem-queued",now+1,now+1),
+            )
+            con.execute(
+                "INSERT INTO job_items(id,job_id,profile_id,status,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?)",
+                ("item-queued-after-checkpoint","job-queued-after-checkpoint","4","QUEUED",now+1,now+1),
+            )
+            con.execute(
+                "INSERT INTO job_tasks(id,item_id,position,action,payload_json,status,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                ("task-queued-after-checkpoint","item-queued-after-checkpoint",0,"prepare","{}","QUEUED",now+1,now+1),
+            )
+        worker=WorkerPool(self.store,concurrency=1)
+        resolver=SimpleNamespace(resolve=AsyncMock())
+        worker.resolver=resolver
+        await worker._run_item("item-queued-after-checkpoint")
+        resolver.resolve.assert_not_awaited()
+        item=await self.store.item("item-queued-after-checkpoint")
+        self.assertEqual(item['status'],'FAILED')
+        self.assertEqual(item['error_code'],'CHECKPOINT_REQUIRED')
+        task=(await self.store.tasks("item-queued-after-checkpoint"))[0]
+        self.assertEqual(task['status'],'FAILED')
+        self.assertEqual(task['error_code'],'CHECKPOINT_REQUIRED')
+
+
 
 class ProfileResolverRecoveryTests(unittest.IsolatedAsyncioTestCase):
     @staticmethod
@@ -1267,6 +1340,8 @@ class ProfileResolverRecoveryTests(unittest.IsolatedAsyncioTestCase):
 
 
 
+
+
 class ProfileMutationCooldownTests(unittest.IsolatedAsyncioTestCase):
     async def test_first_mutation_has_no_delay(self):
         from app.provisioning import service as service_module
@@ -1319,6 +1394,8 @@ class ProfileMutationCooldownTests(unittest.IsolatedAsyncioTestCase):
         finally:
             service_module._PROFILE_MUTATION_LAST_FINISHED.clear()
             service_module._PROFILE_MUTATION_COOLDOWN_SECONDS = original
+
+
 
 
 if __name__ == "__main__":

@@ -52,7 +52,8 @@ const pythonWorkerUiState = {
   batchPollTimer: null,
   polling: false,
   batchPolling: false,
-  fpResolving: false
+  fpResolving: false,
+  jobNotice: ''
 };
 
 window.pythonWorkerUiState = pythonWorkerUiState;
@@ -685,9 +686,16 @@ function pythonWorkerIsProfileAuthBlockedCode(code) {
 }
 
 async function pythonWorkerProfilePreflight(profileId) {
+  const cleanProfileId = String(profileId || '').trim();
+  const savedStatus = typeof pythonWorkerProfileSessionStatuses !== 'undefined'
+    ? pythonWorkerProfileSessionStatuses.get(cleanProfileId)
+    : null;
+  if (String(savedStatus && savedStatus.status || '').toUpperCase() === 'CHECKPOINT') {
+    throw new Error('Чекпоинт Meta: аккаунт остановлен. Запрос не отправлен.');
+  }
   const data = await pythonWorkerBridge({
     action: 'preflight',
-    profile_id: String(profileId || '').trim(),
+    profile_id: cleanProfileId,
     purpose: 'fan_pages'
   });
 
@@ -958,8 +966,8 @@ function pythonWorkerJobStatusView(item) {
   const status = String(item && item.status || 'QUEUED').toUpperCase();
   const code = pythonWorkerItemErrorCode(item);
   const message = pythonWorkerItemErrorMessage(item).toLowerCase();
-  if (code === 'CHECKPOINT_REQUIRED' || /checkpoint_redirect|facebook\.com\/checkpoint\//i.test(message)) {
-    return {label:'ЧЕКПОИНТ', key:'CHECKPOINT', message:'Meta запросила проверку безопасности. Действия по профилю остановлены.'};
+  if (code === 'CHECKPOINT_REQUIRED' || /checkpoint_required|checkpoint_redirect|facebook\.com\/checkpoint\//i.test(message)) {
+    return {label:'ЧЕКПОИНТ', key:'CHECKPOINT', message:'Чекпоинт Meta: аккаунт остановлен. Новые задачи запрещены.'};
   }
   if (code === 'TWO_FACTOR_REQUIRED') {
     return {label:'2FA', key:'TWO_FACTOR', message:'Meta запросила двухфакторную проверку. Действия остановлены.'};
@@ -977,15 +985,18 @@ function pythonWorkerJobStatusView(item) {
   if (status === 'RUNNING') return {label:'В РАБОТЕ', key:'RUNNING', message:''};
   if (status === 'QUEUED') return {label:'В ОЧЕРЕДИ', key:'QUEUED', message:''};
   if (status === 'FAILED') return {label:'ОШИБКА', key:'FAILED', message:''};
-  return {label:status || 'НЕИЗВЕСТНО', key:'FAILED', message:''};
+  if (status === 'PARTIAL') return {label:'ЧАСТИЧНО ВЫПОЛНЕНО', key:'PARTIAL', message:'Часть шагов завершена.'};
+  if (status === 'CANCELLED' || status === 'STOPPED') return {label:'ОСТАНОВЛЕНО', key:'FAILED', message:'Задача остановлена.'};
+  if (status === 'SKIPPED') return {label:'ПРОПУЩЕНО', key:'FAILED', message:'Шаг пропущен.'};
+  return {label:'НЕИЗВЕСТНЫЙ СТАТУС', key:'FAILED', message:'Проверьте технические подробности.'};
 }
 
 function pythonWorkerUserFailureText(item) {
   const code = pythonWorkerItemErrorCode(item);
   const message = pythonWorkerItemErrorMessage(item);
   const combined = (code + ' ' + message).toLowerCase();
-  if (code === 'CHECKPOINT_REQUIRED' || /checkpoint_redirect|facebook\.com\/checkpoint\//i.test(message)) {
-    return 'Facebook запросил проверку безопасности. Подготовка остановлена.';
+  if (code === 'CHECKPOINT_REQUIRED' || /checkpoint_required|checkpoint_redirect|facebook\.com\/checkpoint\//i.test(message)) {
+    return 'Чекпоинт Meta: аккаунт остановлен. Повтор и новые задачи запрещены.';
   }
   if (code === 'PRIVATE_ADS_DRAFT_VALIDATION_ERRORS') {
     return 'Meta нашла ошибки в рекламном черновике. Проверьте кампанию, группу и объявление.';
@@ -1064,7 +1075,7 @@ function pythonWorkerPrepareReasonLabel(value) {
 function pythonWorkerProfileSessionView(value) {
   const status = String(value && value.status || '').toUpperCase();
   const labels = {
-    ACTIVE:{label:'СЕССИЯ АКТИВНА',className:'ok'},
+    ACTIVE:{label:'АКТИВНО',className:'ok'},
     CHECKPOINT:{label:'ЧЕКПОИНТ',className:'warn'},
     LOGIN_REQUIRED:{label:'НУЖЕН ВХОД',className:'warn'},
     TWO_FACTOR:{label:'2FA',className:'warn'},
@@ -1126,7 +1137,7 @@ function pythonWorkerApplyWorkspaceProfileStatuses() {
   const statusFilter = document.getElementById('workspaceStatusFilter');
   if (statusFilter) {
     for (const option of statusFilter.options || []) {
-      if (/требуют внимания/i.test(String(option.textContent || ''))) option.textContent = 'Нужна проверка';
+      if (/требуют внимания|нужна проверка/i.test(String(option.textContent || ''))) option.textContent = 'Не готово';
     }
   }
   const body = document.getElementById('workspaceRows');
@@ -2757,6 +2768,15 @@ async function pythonWorkerPoll() {
       localStorage.setItem('remask_python_worker_job_v1', pythonWorkerUiState.jobId);
     }
 
+    if (pythonWorkerUiState.jobNotice) {
+      const statusElement = pythonWorkerEl('pythonPwStatus');
+      const statusText = String(statusElement && statusElement.textContent || '');
+      pythonWorkerSetText(
+        'pythonPwStatus',
+        [statusText, pythonWorkerUiState.jobNotice].filter(Boolean).join(' · ')
+      );
+      pythonWorkerUiState.jobNotice = '';
+    }
     pythonWorkerSelectionRefresh();
   } catch (error) {
     pythonWorkerSetText(
@@ -3583,7 +3603,7 @@ function pythonWorkerFpAuthBlockedMessage(error) {
   const codeMatch = message.match(/\b(CHECKPOINT_REQUIRED|TWO_FACTOR_REQUIRED|SESSION_EXPIRED|FACEBOOK_TEMPORARILY_BLOCKED|FACEBOOK_AUTH_BLOCKED)\b/i);
   if (
     !codeMatch &&
-    !/(checkpoint|two-factor|redirected.*login)/i.test(message)
+    !/(checkpoint|чекпоинт|two-factor|redirected.*login)/i.test(message)
   ) {
     return '';
   }
@@ -4861,24 +4881,68 @@ async function pythonWorkerOpenAutoModal() {
 
       [count, category, currency, timezone].forEach(function(input) { input.disabled = true; });
       localStorage.setItem(pendingKey, JSON.stringify(acceptedRequest));
+      pythonWorkerUiState.jobNotice = '';
       const data = await pythonWorkerBridge(acceptedRequest);
-      const jobId = String((data && data.job && data.job.job_id) || '').trim();
+      const job = data && data.job && typeof data.job === 'object' ? data.job : {};
+      const jobId = String(job.job_id || '').trim();
       if (!jobId) throw new Error('Worker did not return job_id.');
+
+      const checkpointProfiles = new Set();
+      [
+        data && data.blocked_profiles,
+        data && data.result && data.result.blocked_profiles,
+        job.blocked_profiles
+      ].forEach(function(values) {
+        (Array.isArray(values) ? values : []).forEach(function(value) {
+          const id = String(value || '').trim();
+          if (id) checkpointProfiles.add(id);
+        });
+      });
+      if (Array.isArray(job.items)) {
+        const acceptedProfiles = new Set(job.items.map(function(item) {
+          return String(item && item.profile_id || '').trim();
+        }).filter(Boolean));
+        profiles.forEach(function(profileId) {
+          if (!acceptedProfiles.has(String(profileId))) checkpointProfiles.add(String(profileId));
+        });
+      }
+      profiles.forEach(function(profileId) {
+        const saved = pythonWorkerProfileSessionStatuses.get(String(profileId));
+        if (String(saved && saved.status || '').toUpperCase() === 'CHECKPOINT') {
+          checkpointProfiles.add(String(profileId));
+        }
+      });
+      pythonWorkerUiState.jobNotice = checkpointProfiles.size
+        ? 'Чекпоинт Meta: пропущены профили ' + Array.from(checkpointProfiles).join(', ') + '.'
+        : '';
+      const requestedCount = Number(job.items_total);
+      const acceptedCount = Number.isFinite(requestedCount)
+        ? requestedCount
+        : (Array.isArray(job.items) ? job.items.length : Math.max(0, profiles.length - checkpointProfiles.size));
 
       pythonWorkerClearBatchState();
       pythonWorkerUiState.jobId = jobId; pythonWorkerUiState.job = null;
       localStorage.setItem('remask_python_worker_job_v1', jobId);
       localStorage.removeItem(pendingKey);
       pythonWorkerSetText('pythonPwJob', 'Job: ' + jobId);
-      pythonWorkerSetText('pythonPwStatus', 'Prepare: ' + profiles.length + ' проф., target ' + Math.min(n, 2) + ' РК/профиль.');
+      pythonWorkerSetText('pythonPwStatus', 'Prepare: ' + acceptedCount + ' проф., target ' + Math.min(n, 2) + ' РК/профиль.' + (pythonWorkerUiState.jobNotice ? ' ' + pythonWorkerUiState.jobNotice : ''));
       pythonWorkerCloseOwnBmModal();
       pythonWorkerPoll().catch(function(error) {
         pythonWorkerSetText('pythonPwStatus', 'Ошибка polling: ' + String(error.message || error));
       });
     } catch (error) {
       pythonWorkerUiState.busy = false; refresh(); pythonWorkerSelectionRefresh();
-      create.textContent = 'Повторить отправку';
-      status.textContent = 'Ошибка: ' + String(error.message || error) + '. Повторная отправка использует тот же Prepare Job.';
+      const errorMessage = String(error.message || error);
+      if (/чекпоинт meta/i.test(errorMessage)) {
+        localStorage.removeItem(pendingKey);
+        acceptedRequest = null;
+        create.disabled = true;
+        create.textContent = 'Prepare';
+        status.textContent = errorMessage;
+      } else {
+        create.textContent = 'Повторить отправку';
+        status.textContent = 'Ошибка: ' + errorMessage + '. Повторная отправка использует тот же Prepare Job.';
+      }
     }
   });
 

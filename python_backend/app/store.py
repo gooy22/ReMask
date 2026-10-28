@@ -107,9 +107,16 @@ class JobStore:
                 updated_at INTEGER NOT NULL,
                 UNIQUE(item_id, position)
             );
+            CREATE TABLE IF NOT EXISTS profile_terminal_statuses (
+                profile_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                checked_at INTEGER NOT NULL,
+                message TEXT NOT NULL
+            );
             CREATE INDEX IF NOT EXISTS idx_items_status ON job_items(status);
             CREATE INDEX IF NOT EXISTS idx_items_job_created ON job_items(job_id, created_at);
             CREATE INDEX IF NOT EXISTS idx_tasks_item ON job_tasks(item_id, position);
+
             ''')
 
             # Forward-compatible migration for databases created before
@@ -156,6 +163,92 @@ class JobStore:
                     raise
                 finally:
                     con.execute("PRAGMA foreign_keys=ON")
+            # The legacy bulk-item migration rebuilds job_items. Install these
+            # triggers only after that migration so SQLite never carries a
+            # trigger bound to the table being renamed.
+            con.executescript(
+                """
+            CREATE TRIGGER IF NOT EXISTS capture_item_checkpoint_insert
+            AFTER INSERT ON job_items
+            WHEN UPPER(COALESCE(NEW.error_code,''))='CHECKPOINT_REQUIRED'
+              OR LOWER(COALESCE(NEW.error_message,'')) LIKE '%checkpoint_required%'
+              OR LOWER(COALESCE(NEW.error_message,'')) LIKE '%checkpoint_redirect%'
+              OR LOWER(COALESCE(NEW.error_message,'')) LIKE '%/checkpoint/%'
+            BEGIN
+              INSERT INTO profile_terminal_statuses(profile_id,status,checked_at,message)
+              VALUES(NEW.profile_id,'CHECKPOINT',NEW.updated_at,
+                     'Чекпоинт Meta: аккаунт остановлен. Новые задачи запрещены.')
+              ON CONFLICT(profile_id) DO UPDATE SET
+                checked_at=MAX(profile_terminal_statuses.checked_at,excluded.checked_at),
+                message=excluded.message;
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS capture_item_checkpoint_update
+            AFTER UPDATE OF error_code,error_message ON job_items
+            WHEN UPPER(COALESCE(NEW.error_code,''))='CHECKPOINT_REQUIRED'
+              OR LOWER(COALESCE(NEW.error_message,'')) LIKE '%checkpoint_required%'
+              OR LOWER(COALESCE(NEW.error_message,'')) LIKE '%checkpoint_redirect%'
+              OR LOWER(COALESCE(NEW.error_message,'')) LIKE '%/checkpoint/%'
+            BEGIN
+              INSERT INTO profile_terminal_statuses(profile_id,status,checked_at,message)
+              VALUES(NEW.profile_id,'CHECKPOINT',NEW.updated_at,
+                     'Чекпоинт Meta: аккаунт остановлен. Новые задачи запрещены.')
+              ON CONFLICT(profile_id) DO UPDATE SET
+                checked_at=MAX(profile_terminal_statuses.checked_at,excluded.checked_at),
+                message=excluded.message;
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS capture_task_checkpoint_insert
+            AFTER INSERT ON job_tasks
+            WHEN UPPER(COALESCE(NEW.error_code,''))='CHECKPOINT_REQUIRED'
+              OR LOWER(COALESCE(NEW.error_message,'')) LIKE '%checkpoint_required%'
+              OR LOWER(COALESCE(NEW.error_message,'')) LIKE '%checkpoint_redirect%'
+              OR LOWER(COALESCE(NEW.error_message,'')) LIKE '%/checkpoint/%'
+            BEGIN
+              INSERT INTO profile_terminal_statuses(profile_id,status,checked_at,message)
+              SELECT i.profile_id,'CHECKPOINT',NEW.updated_at,
+                     'Чекпоинт Meta: аккаунт остановлен. Новые задачи запрещены.'
+              FROM job_items i WHERE i.id=NEW.item_id
+              ON CONFLICT(profile_id) DO UPDATE SET
+                checked_at=MAX(profile_terminal_statuses.checked_at,excluded.checked_at),
+                message=excluded.message;
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS capture_task_checkpoint_update
+            AFTER UPDATE OF error_code,error_message ON job_tasks
+            WHEN UPPER(COALESCE(NEW.error_code,''))='CHECKPOINT_REQUIRED'
+              OR LOWER(COALESCE(NEW.error_message,'')) LIKE '%checkpoint_required%'
+              OR LOWER(COALESCE(NEW.error_message,'')) LIKE '%checkpoint_redirect%'
+              OR LOWER(COALESCE(NEW.error_message,'')) LIKE '%/checkpoint/%'
+            BEGIN
+              INSERT INTO profile_terminal_statuses(profile_id,status,checked_at,message)
+              SELECT i.profile_id,'CHECKPOINT',NEW.updated_at,
+                     'Чекпоинт Meta: аккаунт остановлен. Новые задачи запрещены.'
+              FROM job_items i WHERE i.id=NEW.item_id
+              ON CONFLICT(profile_id) DO UPDATE SET
+                checked_at=MAX(profile_terminal_statuses.checked_at,excluded.checked_at),
+                message=excluded.message;
+            END;
+
+            INSERT INTO profile_terminal_statuses(profile_id,status,checked_at,message)
+            SELECT i.profile_id,'CHECKPOINT',MAX(i.updated_at),
+                   'Чекпоинт Meta: аккаунт остановлен. Новые задачи запрещены.'
+            FROM job_items i
+            LEFT JOIN job_tasks t ON t.item_id=i.id AND UPPER(COALESCE(t.status,''))='FAILED'
+            WHERE UPPER(COALESCE(i.error_code,''))='CHECKPOINT_REQUIRED'
+               OR LOWER(COALESCE(i.error_message,'')) LIKE '%checkpoint_required%'
+               OR LOWER(COALESCE(i.error_message,'')) LIKE '%checkpoint_redirect%'
+               OR LOWER(COALESCE(i.error_message,'')) LIKE '%/checkpoint/%'
+               OR UPPER(COALESCE(t.error_code,''))='CHECKPOINT_REQUIRED'
+               OR LOWER(COALESCE(t.error_message,'')) LIKE '%checkpoint_required%'
+               OR LOWER(COALESCE(t.error_message,'')) LIKE '%checkpoint_redirect%'
+               OR LOWER(COALESCE(t.error_message,'')) LIKE '%/checkpoint/%'
+            GROUP BY i.profile_id
+            ON CONFLICT(profile_id) DO UPDATE SET
+              checked_at=MAX(profile_terminal_statuses.checked_at,excluded.checked_at),
+              message=excluded.message;
+                """
+            )
             self._recover_legacy_fp_page_crashes(con)
             self._recover_common_page_checkpoint_failure(con)
             self._repair_unstarted_prgssteam_rk_timezone(con)
@@ -781,6 +874,36 @@ class JobStore:
                 out.append(d)
             return out
 
+    async def fail_item_for_checkpoint(self, item_id: str) -> bool:
+        return await asyncio.to_thread(self._fail_item_for_checkpoint_sync, item_id)
+
+    def _fail_item_for_checkpoint_sync(self, item_id: str) -> bool:
+        now = _now()
+        message = "Чекпоинт Meta: аккаунт остановлен. Новые задачи запрещены."
+        with self._connect() as con:
+            row = con.execute(
+                "SELECT job_id FROM job_items WHERE id=? AND status='QUEUED'",
+                (item_id,),
+            ).fetchone()
+            if not row:
+                return False
+            con.execute(
+                """UPDATE job_tasks
+                   SET status='FAILED',error_code='CHECKPOINT_REQUIRED',
+                       error_message=?,retryable=0,updated_at=?
+                   WHERE item_id=? AND status<>'SUCCESS'""",
+                (message,now,item_id),
+            )
+            con.execute(
+                """UPDATE job_items
+                   SET status='FAILED',error_code='CHECKPOINT_REQUIRED',
+                       error_message=?,retryable=0,updated_at=?
+                   WHERE id=? AND status='QUEUED'""",
+                (message,now,item_id),
+            )
+            self._refresh_job_sync(con,str(row['job_id']))
+            return True
+
     async def set_item_running(self, item_id: str) -> bool:
         return await asyncio.to_thread(self._claim_item_sync, item_id)
 
@@ -1143,12 +1266,45 @@ class JobStore:
             self._recover_owner_confirmed_operator_assignment(con)
         return imported
 
+    async def terminal_checkpoint_profiles(self, profile_ids: list[str]) -> list[str]:
+        """Return profiles whose Meta checkpoint has been recorded as terminal."""
+        clean = list(dict.fromkeys(
+            str(value or '').strip() for value in profile_ids if str(value or '').strip()
+        ))
+        if not clean:
+            return []
+        try:
+            return await asyncio.to_thread(self._terminal_checkpoint_profiles_sync, clean)
+        except sqlite3.OperationalError as exc:
+            if 'no such table: profile_terminal_statuses' not in str(exc):
+                raise
+            await self.init()
+            return await asyncio.to_thread(self._terminal_checkpoint_profiles_sync, clean)
+
+    def _terminal_checkpoint_profiles_sync(self, profile_ids: list[str]) -> list[str]:
+        placeholders = ','.join('?' for _ in profile_ids)
+        with self._connect() as con:
+            rows = con.execute(
+                "SELECT profile_id FROM profile_terminal_statuses "
+                "WHERE status='CHECKPOINT' AND profile_id IN (" + placeholders + ")",
+                tuple(profile_ids),
+            ).fetchall()
+        return [str(row['profile_id']) for row in rows]
+
     async def latest_profile_session_statuses(self) -> list[dict[str, Any]]:
-        """Return a short, evidence-based session status from each profile's latest job item."""
+        """Return concise per-profile status, with terminal checkpoints preserved."""
         return await asyncio.to_thread(self._latest_profile_session_statuses_sync)
 
     def _latest_profile_session_statuses_sync(self) -> list[dict[str, Any]]:
         with self._connect() as con:
+            terminal_rows = con.execute(
+                "SELECT profile_id,checked_at FROM profile_terminal_statuses "
+                "WHERE status='CHECKPOINT' ORDER BY checked_at DESC,profile_id"
+            ).fetchall()
+            terminal_by_profile = {
+                str(row['profile_id']): int(row['checked_at'] or 0)
+                for row in terminal_rows
+            }
             rows = con.execute(
                 """
                 SELECT i.id AS item_id,i.profile_id,i.status,i.error_code,i.error_message,i.updated_at,
@@ -1177,6 +1333,17 @@ class JobStore:
                 continue
             seen.add(profile_id)
 
+            if profile_id in terminal_by_profile:
+                output.append(
+                    {
+                        "profile_id": profile_id,
+                        "status": "CHECKPOINT",
+                        "checked_at": terminal_by_profile[profile_id],
+                        "message": "Чекпоинт Meta: аккаунт остановлен. Новые задачи запрещены.",
+                    }
+                )
+                continue
+
             item_status = str(row["status"] or "").strip().upper()
             error_code = str(row["error_code"] or "").strip().upper()
             error_message = str(row["error_message"] or "").strip()
@@ -1196,7 +1363,7 @@ class JobStore:
                 or "/checkpoint/" in search_text
             ):
                 state = "CHECKPOINT"
-                message = "Meta запросила проверку безопасности."
+                message = "Чекпоинт Meta: аккаунт остановлен. Новые задачи запрещены."
             elif error_code == "TWO_FACTOR_REQUIRED" or "two_factor_required" in search_text:
                 state = "TWO_FACTOR"
                 message = "Meta запросила двухфакторную проверку."
@@ -1234,6 +1401,17 @@ class JobStore:
                     "message": message,
                 }
             )
+
+        for profile_id, checked_at in terminal_by_profile.items():
+            if profile_id not in seen:
+                output.append(
+                    {
+                        "profile_id": profile_id,
+                        "status": "CHECKPOINT",
+                        "checked_at": checked_at,
+                        "message": "Чекпоинт Meta: аккаунт остановлен. Новые задачи запрещены.",
+                    }
+                )
         return output
 
     async def retry_failed(
@@ -1263,6 +1441,12 @@ class JobStore:
                 "SELECT id,profile_id,retryable,error_code FROM job_items "
                 "WHERE job_id=? AND status='FAILED'", (job_id,),
             ).fetchall()
+            excluded.update(
+                str(row['profile_id'] or '')
+                for row in con.execute(
+                    "SELECT profile_id FROM profile_terminal_statuses WHERE status='CHECKPOINT'"
+                ).fetchall()
+            )
             recovery_ids = {
                 str(row['id']) for row in rows
                 if row['error_code'] == 'META_AD_ACCOUNT_CREATE_UNAVAILABLE'

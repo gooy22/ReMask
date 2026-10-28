@@ -456,6 +456,13 @@ class WorkerPool:
             item = await self.store.item(item_id)
             if not item or item['status'] != 'QUEUED':
                 return
+            checkpoint_reader = getattr(self.store, 'terminal_checkpoint_profiles', None)
+            if callable(checkpoint_reader) and profile_id in await checkpoint_reader([profile_id]):
+                fail_checkpoint = getattr(self.store, 'fail_item_for_checkpoint', None)
+                if callable(fail_checkpoint):
+                    await fail_checkpoint(item_id)
+                    log.info('worker_item_blocked_terminal_checkpoint item=%s profile=%s',item_id,profile_id)
+                    return
             if not await self.store.set_item_running(item_id):
                 return
             tasks=await self.store.tasks(item_id)

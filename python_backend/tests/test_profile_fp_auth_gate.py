@@ -91,3 +91,85 @@ class ProfileFpAuthGateTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(result['bm_route_ready']);self.assertTrue(result['private_pages']['inventory_complete'])
             await api._require_fp_auth_ready(['9'])
         session.facebook_business_browser.assert_not_awaited()
+
+
+    async def test_create_job_skips_checkpoint_profile_and_preflights_only_healthy_sibling(self):
+        request=api.CreateJobRequest(profiles=[
+            {'profile_id':'21','tasks':[{'action':'provisioning','payload':{'steps':['FAN_PAGES']}}]},
+            {'profile_id':'22','tasks':[{'action':'provisioning','payload':{'steps':['FAN_PAGES']}}]},
+        ])
+        fake=SimpleNamespace(
+            terminal_checkpoint_profiles=AsyncMock(return_value=['22']),
+            create_job=AsyncMock(return_value=('job-safe',True)),
+            job_view=AsyncMock(return_value={'status':'QUEUED','items_total':1}),
+        )
+        worker=SimpleNamespace(enqueue_job=AsyncMock())
+        mirror=SimpleNamespace(enabled=False)
+        with patch.object(api,'store',fake),patch.object(api,'pool',worker),patch.object(api,'mirror',mirror), \
+             patch.object(api,'_request_fan_page_profile_ids',side_effect=lambda value:[p.profile_id for p in value.profiles]), \
+             patch.object(api,'_automatic_profile_page_tasks',return_value=False), \
+             patch.object(api,'_require_fp_auth_ready',new=AsyncMock()) as preflight:
+            accepted=await api.create_job(request)
+        created_request=fake.create_job.await_args.args[0]
+        self.assertEqual([p.profile_id for p in created_request.profiles],['21'])
+        preflight.assert_awaited_once_with(['21'])
+        self.assertEqual(accepted.blocked_profiles,['22'])
+        self.assertEqual(accepted.items_total,1)
+        worker.enqueue_job.assert_awaited_once_with('job-safe')
+
+    async def test_create_job_rejects_all_checkpoint_profiles_before_preflight_or_enqueue(self):
+        request=api.CreateJobRequest(profiles=[
+            {'profile_id':'22','tasks':[{'action':'prepare','payload':{'desired':{'business':True}}}]},
+            {'profile_id':'23','tasks':[{'action':'prepare','payload':{'desired':{'business':True}}}]},
+        ])
+        fake=SimpleNamespace(
+            terminal_checkpoint_profiles=AsyncMock(return_value=['22','23']),
+            create_job=AsyncMock(),
+            job_view=AsyncMock(),
+        )
+        worker=SimpleNamespace(enqueue_job=AsyncMock(),resolver=SimpleNamespace(resolve=AsyncMock()))
+        with patch.object(api,'store',fake),patch.object(api,'pool',worker), \
+             patch.object(api,'mirror',SimpleNamespace(enabled=False)), \
+             patch.object(api,'_require_fp_auth_ready',new=AsyncMock()) as preflight:
+            with self.assertRaises(api.HTTPException) as failure:
+                await api.create_job(request)
+        self.assertEqual(failure.exception.status_code,409)
+        self.assertIn('Чекпоинт Meta',str(failure.exception.detail))
+        fake.create_job.assert_not_awaited()
+        worker.enqueue_job.assert_not_awaited()
+        worker.resolver.resolve.assert_not_awaited()
+        preflight.assert_not_awaited()
+
+    async def test_profile_preflight_stops_checkpoint_before_resolving_profile(self):
+        fake=SimpleNamespace(terminal_checkpoint_profiles=AsyncMock(return_value=['22']))
+        worker=SimpleNamespace(resolver=SimpleNamespace(resolve=AsyncMock()))
+        with patch.object(api,'store',fake),patch.object(api,'pool',worker):
+            with self.assertRaises(api.HTTPException) as failure:
+                await api.profile_preflight('22',purpose='business')
+        self.assertEqual(failure.exception.status_code,409)
+        self.assertIn('Чекпоинт Meta',str(failure.exception.detail))
+        worker.resolver.resolve.assert_not_awaited()
+
+    async def test_retry_failed_never_preflights_or_requeues_checkpoint_profile(self):
+        view={'items':[{'profile_id':'22','status':'FAILED','error_code':'CHECKPOINT_REQUIRED',
+            'tasks':[{'status':'FAILED','error_code':'CHECKPOINT_REQUIRED','payload':{
+                'steps':['FAN_PAGES'],'parameters':{'FAN_PAGES':{'common_page':True}}}}]}]}
+        fake=SimpleNamespace(
+            job_view=AsyncMock(return_value=view),
+            terminal_checkpoint_profiles=AsyncMock(return_value=['22']),
+            latest_profile_session_statuses=AsyncMock(return_value=[
+                {'profile_id':'22','status':'CHECKPOINT'}
+            ]),
+            retry_failed=AsyncMock(return_value=0),
+        )
+        worker=SimpleNamespace(enqueue_job=AsyncMock())
+        with patch.object(api,'store',fake),patch.object(api,'pool',worker), \
+             patch.object(api,'_partition_auth_retry_profiles',new=AsyncMock()) as auth_preflight, \
+             patch.object(api,'_require_fp_auth_ready',new=AsyncMock()) as fp_preflight:
+            result=await api.retry_failed('checkpoint-job')
+        auth_preflight.assert_not_awaited()
+        fp_preflight.assert_not_awaited()
+        self.assertEqual(fake.retry_failed.await_args.kwargs['excluded_profile_ids'],{'22'})
+        self.assertEqual(result.requeued,0)
+        self.assertEqual(result.blocked_profiles,['22'])
+        worker.enqueue_job.assert_not_awaited()
