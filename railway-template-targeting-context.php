@@ -43,6 +43,19 @@ final class RemaskTemplateTargetingContext {
         return array_map(static fn($row)=>array_intersect_key($row, array_flip(['profile','account_id','catalog'])), $candidates);
     }
 
+    /** Resolve only the explicitly selected profile and RK for a template read. */
+    public static function exactCandidate(array $profile, callable $loadCatalog, string $accountId, array $excluded = []): array {
+        $name = trim((string)($profile['name'] ?? ''));
+        $accountId = preg_replace('/^act_/i', '', trim($accountId));
+        if ($name === '' || !preg_match('/^[0-9]{5,30}$/D', $accountId))
+            throw new RuntimeException('TEMPLATE_LOOKUP_SOURCE_UNAVAILABLE');
+        $candidates = self::candidates([$profile], $loadCatalog, '', $excluded, false);
+        $matches = array_values(array_filter($candidates, static fn($row) =>
+            ($row['profile'] ?? '') === $name && ($row['account_id'] ?? '') === $accountId));
+        if (count($matches) !== 1) throw new RuntimeException('TEMPLATE_LOOKUP_SOURCE_UNAVAILABLE');
+        return $matches[0];
+    }
+
     public static function resolve(array $profiles, callable $loadCatalog, string $preferred = '', array $excluded = []): array {
         return self::candidates($profiles, $loadCatalog, $preferred, $excluded)[0];
     }

@@ -6,6 +6,22 @@ $catalogs=['16'=>['profile'=>'16','ad_accounts'=>['data'=>[]]],
     '19'=>['profile'=>'19','ad_accounts'=>['data'=>[['profile'=>'19','account_id'=>'654321','business_id'=>'123456','account_status'=>null]]]],
     '20'=>['profile'=>'20','ad_accounts'=>['data'=>[['profile'=>'20','account_id'=>'222222','business_id'=>'333333','account_status'=>1]]]]];
 $load=static fn($name)=>$catalogs[$name];
+$exactLoaded=[];
+$exact=RemaskTemplateTargetingContext::exactCandidate($profiles[1],static function($name) use (&$exactLoaded,$catalogs) {
+    $exactLoaded[]=$name; return $catalogs[$name];
+},'act_654321');
+expect($exact['profile']==='19' && $exact['account_id']==='654321' && $exactLoaded===['19'],
+    'a live targeting fallback can read only the selected profile and exact RK');
+try { RemaskTemplateTargetingContext::exactCandidate($profiles[1],$load,'222222');
+    throw new LogicException('fallback borrowed another RK');
+} catch(RuntimeException $error) {
+    expect($error->getMessage()==='TEMPLATE_LOOKUP_SOURCE_UNAVAILABLE','a selected profile cannot borrow a different RK');
+}
+try { RemaskTemplateTargetingContext::exactCandidate($profiles[1],$load,'654321',['19']);
+    throw new LogicException('excluded profile supplied a targeting fallback');
+} catch(RuntimeException $error) {
+    expect($error->getMessage()==='TEMPLATE_LOOKUP_SOURCE_UNAVAILABLE','an excluded profile cannot supply live targeting');
+}
 $new=RemaskTemplateTargetingContext::candidates([$profiles[0]],$load,'',[],true);
 expect($new[0]['account_id']==='' && $new[0]['profile']==='16','empty catalogs remain eligible for read-only discovery');
 $newProfile=['name'=>'25','proxy_configured'=>false,'cookies_ready'=>true];

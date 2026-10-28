@@ -33,6 +33,10 @@ if (typeof creativeTargetSearchConfig !== 'function') {
         if(offset && (pickerPages[type]?.query!==query || pickerPages[type]?.next_offset!==offset))return;
         pickerControllers[type]?.abort();
         const controller=new AbortController(); pickerControllers[type]=controller;
+        const slowStatusTimer=!offset?setTimeout(()=>{
+            if(pickerControllers[type]===controller && input.value.trim()===query)
+                box.textContent='Загрузка списка занимает дольше обычного…';
+        },3000):0;
         if(!offset) {delete pickerPages[type];box.textContent='Загружаю варианты Meta…';}
         try {
             const data=await apiJson('ajax/metaTemplateTargetingSearch.php',{
@@ -96,7 +100,7 @@ if (typeof creativeTargetSearchConfig !== 'function') {
                 box.textContent=targetingFailureMessage(error);
             } else box.textContent=targetingFailureMessage(error);
         } finally {
-            if(typeof slowStatusTimer!=='undefined'&&slowStatusTimer)clearTimeout(slowStatusTimer);
+            if(slowStatusTimer)clearTimeout(slowStatusTimer);
             if(pickerControllers[type]===controller)delete pickerControllers[type];
         }
     };
