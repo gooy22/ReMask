@@ -121,17 +121,25 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         session.refresh_reviewed_modules = AsyncMock()
         return session, client
 
-    async def test_actual_login_redirect_stops_before_other_routes_refresh_or_post(self):
+    async def test_business_login_redirect_falls_through_and_classifies_generic_failure_as_session_expired(self):
         session, client = self.session('<form id="login_form">',
             'https://business.facebook.com/business/loginpage/?secret=must-not-leak')
         with self.assertRaises(AuthenticationError) as caught:
             await session.bootstrap()
-        self.assertEqual(len(client.calls), 1)
-        session._fetch_dtsg_refresh_token.assert_not_awaited()
+        self.assertGreater(len(client.calls), 1)
+        session._fetch_dtsg_refresh_token.assert_awaited_once()
         self.assertFalse(caught.exception.request_may_have_been_sent)
         from app.private_auth import private_auth_error
-        self.assertEqual(private_auth_error(caught.exception).code, 'BUSINESS_LOGIN_GATE')
+        self.assertEqual(private_auth_error(caught.exception).code, 'SESSION_EXPIRED')
         self.assertNotIn('must-not-leak', str(caught.exception.meta_payload))
+
+        business_error = AuthenticationError("exact Business precheck failed")
+        business_error.meta_payload = {"business_precheck": [{
+            "auth_reason": "login_redirect",
+            "final_url": "https://business.facebook.com/business/loginpage/",
+        }]}
+        business_error.transport_stage = "business_auth_precheck"
+        self.assertEqual(private_auth_error(business_error).code, "BUSINESS_LOGIN_GATE")
 
     async def test_business_loginpage_probe_requires_same_actor_profile_document(self):
         expected_actor = "123456789"
@@ -160,15 +168,20 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         session._fetch_dtsg_refresh_token = AsyncMock(return_value=("", ""))
         session.refresh_reviewed_modules = AsyncMock()
 
-        with self.assertRaises(AuthenticationError):
-            await session.bootstrap()
-        self.assertEqual(len(calls), 1)
+        generic = await session.bootstrap()
+        self.assertEqual(generic.fb_dtsg, "profile-token")
+        self.assertEqual(generic.actor_id, expected_actor)
+        self.assertFalse(generic.profile_actor_verified)
+        self.assertGreater(len(calls), 1)
+        self.assertEqual(calls[0][0], FacebookWebSession.ADS_MANAGER_URL)
+        self.assertEqual(calls[-1][0], "https://www.facebook.com/me")
+
+        generic_call_count = len(calls)
         bootstrap = await session.bootstrap(allow_business_loginpage_probe=True)
         self.assertTrue(bootstrap.profile_actor_verified)
         self.assertEqual(bootstrap.actor_id, expected_actor)
         self.assertEqual(bootstrap.fb_dtsg, "profile-token")
-        self.assertEqual([call[0] for call in calls], [
-            "https://business.facebook.com/latest/home",
+        self.assertEqual([call[0] for call in calls[generic_call_count:]], [
             "https://www.facebook.com/me",
         ])
         session._fetch_dtsg_refresh_token.assert_not_awaited()
