@@ -189,6 +189,25 @@ function fixture(){
   const cleanUiSource=read('railway-targeting-autocomplete-overlay.php');
   assert.match(cleanUiSource,/remask-targeting-search-cleanup/,'legacy search controls stay hidden before first paint');
   assert.match(cleanUiSource,/#geoSearch,#interestSearch\{display:none!important;visibility:hidden!important\}/);
+  const targetingOverlayUi=cleanUiSource.match(/\$js = <<<'JS'\n([\s\S]*?)\nJS;/)?.[1];
+  assert.ok(targetingOverlayUi,'targeting overlay JavaScript remains embedded');
+  const ownershipFn=targetingOverlayUi.match(/function isLaunchTargetingInput\(input\) \{[\s\S]*?\n  \}/)?.[0];
+  assert.ok(ownershipFn,'Launch fields have an explicit owner guard');
+  const overlayContext=vm.createContext({});
+  vm.runInContext(ownershipFn+'\nthis.isLaunchTargetingInput=isLaunchTargetingInput;',overlayContext);
+  for(const id of ['geoQuery','interestQuery','behaviorQuery','languageQuery'])
+    assert.equal(overlayContext.isLaunchTargetingInput({id,dataset:{}}),true,'Launch field '+id+' must not start a duplicate global Meta request');
+  assert.equal(overlayContext.isLaunchTargetingInput({id:'creativeName',dataset:{}}),false);
+  assert.equal(overlayContext.isLaunchTargetingInput({id:'customField',dataset:{remaskLaunchTargetingPicker:'true'}}),true);
+  const errorMessageFn=targetingOverlayUi.match(/function targetingErrorMessage\(error\) \{[\s\S]*?\n  \}/)?.[0];
+  assert.ok(errorMessageFn,'targeting request failures are converted to user text');
+  vm.runInContext(errorMessageFn+'\nthis.targetingErrorMessage=targetingErrorMessage;',overlayContext);
+  assert.equal(overlayContext.targetingErrorMessage({payload:{error:{code:'BUSINESS_LOGIN_GATE'}}}),
+    'Meta не подтвердила вход для этого профиля.');
+  assert.equal(overlayContext.targetingErrorMessage({payload:{code:'CHECKPOINT_REQUIRED'}}),
+    'Meta остановила профиль. Новые запросы не отправлены.');
+  assert.equal(targetingOverlayUi.includes('Targeting endpoint error'),false);
+  assert.equal(targetingOverlayUi.includes('HTTP ${response.status}'),false);
   // Installed Launch API wrapper must retain the page offset. Previously it
   // forwarded type/query/limit but silently dropped offset from a template.
   const completion=fixture(),bridged=[];
