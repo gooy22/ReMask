@@ -89,8 +89,12 @@ class BusinessPageSessionRecoveryTests(unittest.IsolatedAsyncioTestCase):
     async def test_previous_snapshot_bootstrap_requires_and_preserves_same_actor(self):
         web = FacebookWebSession(WebProfile(
             "15", {"c_user": ACTOR, "xs": "current-xs"}, None, "fixture-UA",
-            recovery_cookies={"c_user": ACTOR, "xs": "previous-xs"},
+            recovery_cookies={"c_user": ACTOR, "xs": "current-xs"},
         ))
+        self.assertIsNone(await web.bootstrap_from_previous_session())
+        self.assertFalse(web._previous_recovery_attempted)
+        self.assertIsNotNone(web.profile.recovery_cookies)
+        web.profile.recovery_cookies = {"c_user": ACTOR, "xs": "previous-xs"}
         refreshed = {"c_user": ACTOR, "xs": "refreshed-xs"}
 
         class SnapshotClient:
@@ -118,6 +122,21 @@ class BusinessPageSessionRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(web.session, client)
         self.assertEqual(web.profile.cookies, refreshed)
         self.assertIsNone(web.profile.recovery_cookies)
+
+    async def test_unusable_scoped_read_snapshot_does_not_consume_bootstrap_recovery(self):
+        web = FacebookWebSession(WebProfile(
+            "15", {"c_user": ACTOR, "xs": "current-xs"}, None, "fixture-UA",
+            recovery_cookies={"c_user": ACTOR, "xs": "current-xs"},
+        ))
+        result = await web._retry_scoped_read_with_previous_session(
+            "fixture-doc", {}, friendly_name="READ_RK",
+            endpoint_url=None, request_envelope=None,
+            business_context_id=BUSINESS, business_loginpage_probe="READ_RK",
+            read_timeout_seconds=30,
+        )
+        self.assertIsNone(result)
+        self.assertFalse(web._previous_recovery_attempted)
+        self.assertIsNotNone(web.profile.recovery_cookies)
 
     async def test_previous_snapshot_with_different_actor_is_rejected_without_bootstrap(self):
         web = FacebookWebSession(WebProfile(

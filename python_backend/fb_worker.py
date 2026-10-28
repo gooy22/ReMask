@@ -1749,21 +1749,47 @@ class FacebookWebSession:
     async def bootstrap_from_previous_session(self) -> FacebookBootstrap | None:
         """Restore one prior cookie snapshot only after verifying the same c_user."""
         if self._previous_recovery_attempted:
+            log.info(
+                "[%s] previous same-actor bootstrap recovery skipped reason=already_attempted",
+                self.profile.name,
+            )
             return None
-        self._previous_recovery_attempted = True
         raw = getattr(self.profile, "recovery_cookies", None)
         actor = str(self.profile.cookies.get("c_user") or "").strip()
-        if not isinstance(raw, dict) or not actor.isdigit():
+        if not isinstance(raw, dict) or not raw:
+            reason = "no_snapshot"
+        elif not actor.isdigit():
+            reason = "selected_actor_invalid"
+        else:
+            reason = ""
+        if reason:
+            log.info(
+                "[%s] previous same-actor bootstrap recovery skipped reason=%s",
+                self.profile.name, reason,
+            )
             return None
         candidate_cookies = dict(raw)
         candidate_actor = str(candidate_cookies.get("c_user") or "").strip()
         current_xs = str(self.profile.cookies.get("xs") or "").strip()
         candidate_xs = str(candidate_cookies.get("xs") or "").strip()
-        if (candidate_actor != actor or not current_xs or not candidate_xs
-                or candidate_xs == current_xs
-                or any(not isinstance(key, str) or not isinstance(value, str)
-                       for key, value in candidate_cookies.items())):
+        if candidate_actor != actor:
+            reason = "actor_mismatch"
+        elif not current_xs or not candidate_xs:
+            reason = "missing_xs"
+        elif candidate_xs == current_xs:
+            reason = "same_xs"
+        elif any(not isinstance(key, str) or not isinstance(value, str)
+                 for key, value in candidate_cookies.items()):
+            reason = "invalid_cookie_shape"
+        else:
+            reason = ""
+        if reason:
+            log.info(
+                "[%s] previous same-actor bootstrap recovery skipped reason=%s",
+                self.profile.name, reason,
+            )
             return None
+        self._previous_recovery_attempted = True
 
         # Consume this spare snapshot before trying it. It can only be used
         # once, and it must independently confirm the selected profile actor.
@@ -1844,23 +1870,50 @@ class FacebookWebSession:
     ) -> dict[str, Any] | None:
         """Retry one exact inventory read with a verified same-actor prior snapshot."""
         allowed_reads = {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS", "PRIVATE_RK_INVENTORY"}
-        if (business_loginpage_probe not in allowed_reads
-                or self._previous_recovery_attempted):
+        if business_loginpage_probe not in allowed_reads:
             return None
-        self._previous_recovery_attempted = True
+        if self._previous_recovery_attempted:
+            log.info(
+                "[%s] previous same-actor read recovery skipped reason=already_attempted operation=%s",
+                self.profile.name, business_loginpage_probe,
+            )
+            return None
         raw = getattr(self.profile, "recovery_cookies", None)
         actor = str(self.profile.cookies.get("c_user") or "").strip()
-        if not isinstance(raw, dict) or not actor.isdigit():
+        if not isinstance(raw, dict) or not raw:
+            reason = "no_snapshot"
+        elif not actor.isdigit():
+            reason = "selected_actor_invalid"
+        else:
+            reason = ""
+        if reason:
+            log.info(
+                "[%s] previous same-actor read recovery skipped reason=%s operation=%s",
+                self.profile.name, reason, business_loginpage_probe,
+            )
             return None
         candidate_cookies = dict(raw)
         candidate_actor = str(candidate_cookies.get("c_user") or "").strip()
         current_xs = str(self.profile.cookies.get("xs") or "").strip()
         candidate_xs = str(candidate_cookies.get("xs") or "").strip()
-        if (candidate_actor != actor or not current_xs or not candidate_xs
-                or candidate_xs == current_xs
-                or any(not isinstance(key, str) or not isinstance(value, str)
-                       for key, value in candidate_cookies.items())):
+        if candidate_actor != actor:
+            reason = "actor_mismatch"
+        elif not current_xs or not candidate_xs:
+            reason = "missing_xs"
+        elif candidate_xs == current_xs:
+            reason = "same_xs"
+        elif any(not isinstance(key, str) or not isinstance(value, str)
+                 for key, value in candidate_cookies.items()):
+            reason = "invalid_cookie_shape"
+        else:
+            reason = ""
+        if reason:
+            log.info(
+                "[%s] previous same-actor read recovery skipped reason=%s operation=%s",
+                self.profile.name, reason, business_loginpage_probe,
+            )
             return None
+        self._previous_recovery_attempted = True
 
         # Do not retain the spare auth material after starting its single,
         # actor-verified read attempt.
