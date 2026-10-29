@@ -147,7 +147,7 @@ function fixture(){
   assert.equal(launch.nodes.get('geoResults').textContent,'Нет доступа к выбранному кабинету.');
   launchFailure=Object.assign(new Error('PRIVATE_ADS_DRAFT_RESOURCE_READ_INCOMPLETE'),{code:'PRIVATE_ADS_DRAFT_RESOURCE_READ_INCOMPLETE'});
   await launch.ctx.searchTargeting('locations');
-  assert.equal(launch.nodes.get('geoResults').textContent,'Не удалось загрузить список.');
+  assert.equal(launch.nodes.get('geoResults').textContent,'Список временно недоступен.');
   assert.doesNotMatch(launch.nodes.get('geoResults').textContent,/PRIVATE_ADS_DRAFT/,'internal Meta codes stay out of the UI');
   launchFailure=Object.assign(new Error('PRIVATE_HTTP_READ_TIMEOUT'),{code:'PRIVATE_HTTP_READ_TIMEOUT'});
   await launch.ctx.searchTargeting('locations');
