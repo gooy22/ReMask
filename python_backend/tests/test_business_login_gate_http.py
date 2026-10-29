@@ -41,6 +41,21 @@ class GateContinuationParserTests(unittest.TestCase):
         self.assertEqual(result["fields"], [("fb_dtsg", "csrf-token"), ("continue", "1")])
         self.assertEqual(result["label_kind"], "facebook_continue")
 
+    def test_accepts_russian_form_backed_aria_button(self):
+        body = """
+        <form id="handoff" action="/business/loginpage/continue" method="post">
+          <input type="hidden" name="fb_dtsg" value="csrf-token">
+          <div role="button" aria-label="Продолжить с аккаунтом Facebook"
+               name="continue" value="1">Продолжить с аккаунтом Facebook</div>
+        </form>
+        """
+        result = extract_business_login_continuation(body, GATE_URL)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["method"], "POST")
+        self.assertEqual(result["url"], "https://business.facebook.com/business/loginpage/continue")
+        self.assertEqual(result["fields"], [("fb_dtsg", "csrf-token"), ("continue", "1")])
+        self.assertEqual(result["label_kind"], "facebook_continue")
+
     def test_ignores_checkpoint_markers_inside_scripts(self):
         body = """
         <script>const route = "/checkpoint/";</script>
