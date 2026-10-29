@@ -262,7 +262,8 @@ function fixture(){
     'Launch preserves page offsets through its installed account/template bridge');
   assert.equal(bridged[0].url,'ajax/metaTemplateTargetingSearch.php');
   const scopedResponse={data:[],checked_live:true,account_scope_verified:true,
-    profile:'38',account_id:'111111',resource:'interests',offset:100,next_offset:200};
+    profile:'38',account_id:'111111',business_id:'222222',resource:'interests',
+    transport:'private_http_h2',offset:100,next_offset:200};
   // The wrapped source function is a closure over the original mock: replace
   // its returned value by constructing a fresh selected-account fixture.
   const selected=fixture(),selectedCalls=[];
@@ -281,9 +282,14 @@ function fixture(){
   assert.equal(selectedCalls[0].url,'ajax/metaTemplateTargetingSearch.php',
     'selected account checks the shared cache before opening a slow private Meta read');
   assert.equal(new URLSearchParams(selectedCalls[0].options.body).get('cache_only'),'1');
-  assert.equal(selectedCalls[1].url,'ajax/metaTargetingSearch.php',
-    'a cache miss falls back to the exact selected account resource reader');
-  assert.equal(new URLSearchParams(selectedCalls[1].options.body).get('offset'),'100');
+  assert.equal(selectedCalls[1].url,'ajax/metaTemplateTargetingSearch.php',
+    'a cache miss uses the scoped template-reference reader, never the legacy search endpoint');
+  const selectedLiveBody=new URLSearchParams(selectedCalls[1].options.body);
+  assert.equal(selectedLiveBody.get('offset'),'100');
+  assert.equal(selectedLiveBody.get('profile'),'38');
+  assert.equal(selectedLiveBody.get('account_id'),'111111');
+  assert.equal(selectedLiveBody.has('execution_mode'),false,
+    'targeting reads carry only the exact profile and RK identity');
   assert.equal(selectedPage.next_offset,200);
 
   const cacheHit=fixture(),cacheHitCalls=[];
