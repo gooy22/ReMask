@@ -191,7 +191,9 @@ class _BusinessGateParser(HTMLParser):
                 if form is not None:
                     form["interactive"] = True
 
-            if tag in {"button", "a"}:
+            role = str(attrs.get("role") or "").casefold()
+            aria_button = role == "button"
+            if tag in {"button", "a"} or aria_button:
                 control_type = str(attrs.get("type") or "").casefold()
                 candidate = {
                     "tag": tag,
