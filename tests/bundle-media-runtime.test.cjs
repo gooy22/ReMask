@@ -28,8 +28,12 @@ function targetingFixture(){
       if(url==='ajax/metaTemplateTargetingSearch.php'&&body.cache_only==='1')
         return {data:[],checked_live:false,account_scope_verified:false,availability:'NOT_LOADED',
           source:'private_meta_template_reference',template_account_bound:false};
-      return {...{data:[{id:'6003277229371'}],profile:body.profile,account_id:body.account_id,resource:body.type,
-        checked_live:true,account_scope_verified:true},...ctx.response};
+      const live={data:[{id:'6003277229371'}],profile:body.profile,account_id:body.account_id,
+        resource:body.type,checked_live:true,account_scope_verified:true};
+      if(url==='ajax/metaTemplateTargetingSearch.php')Object.assign(live,{
+        business_id:'445566',transport:'private_http_h2',source_context_discovered:true
+      });
+      return {...live,...ctx.response};
     }};
   vm.createContext(ctx);vm.runInContext(targetingCode,ctx);
   return {ctx,calls,search:(type='interests',url='ajax/metaTargetingSearch.php')=>ctx.apiJson(url,
@@ -67,10 +71,20 @@ test('selected RK accepts unbound local language reference data without account 
   ctx.mode='PUBLISH';await search('languages');
   assert.deepEqual(calls[1],calls[0]);
 });
-test('installed picker reference URL also uses the selected RK live read',async()=>{
-  const {calls,search}=targetingFixture();await search('interests','ajax/metaTemplateTargetingSearch.php');
-  assert.equal(calls[0].url,'ajax/metaTemplateTargetingSearch.php');assert.equal(calls[0].body.cache_only,'1');
-  assert.equal(calls[1].url,'ajax/metaTargetingSearch.php');assert.equal(calls[1].body.profile,'38');
+test('installed picker reference URL keeps the selected RK scope for its live read',async()=>{
+  const {calls,search}=targetingFixture();
+  const result=await search('interests','ajax/metaTemplateTargetingSearch.php');
+  assert.deepEqual(calls.map(call=>call.url),[
+    'ajax/metaTemplateTargetingSearch.php','ajax/metaTemplateTargetingSearch.php'
+  ]);
+  assert.equal(calls[0].body.cache_only,'1');
+  assert.equal(calls[1].body.cache_only,undefined);
+  assert.equal(calls[1].body.type,'interests');
+  assert.equal(calls[1].body.profile,'38');
+  assert.equal(calls[1].body.account_id,'120249912222240685');
+  assert.equal(calls[1].body.execution_mode,undefined);
+  assert.equal(result.transport,'private_http_h2');
+  assert.equal(result.account_scope_verified,true);
 });
 test('single bulk target uses its owning profile, never the current unrelated profile',async()=>{
   const {ctx,calls,search}=targetingFixture();ctx.state.profile='16';
