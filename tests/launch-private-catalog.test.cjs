@@ -794,11 +794,11 @@ console.log('Private Launch catalog and funding truth checks passed');
     };
     vm.createContext(pageCtx);
     await vm.runInContext('(async()=>{\n'+pageLoader+'\n})()',pageCtx);
-    assert.match(pageCtx.status.textContent,/Meta остановила доступ/);
-    assert.doesNotMatch(pageCtx.status.textContent,/BUSINESS_LOGIN_GATE|SESSION_EXPIRED/);
+    assert.equal(pageCtx.status.textContent,'Страницы не загружены: 1 из 1.');
+    assert.doesNotMatch(pageCtx.status.textContent,/BUSINESS_LOGIN_GATE|SESSION_EXPIRED|Meta остановила доступ/);
     assert.equal(Object.hasOwn(pageCtx.state.targetBindingAssets.pages,targetKey),false,
       'a rejected live read must not leave stale Pages selectable for this exact RK');
-    assert.match(pageCtx.state.targetBindingAssets.pageReadErrors[targetKey],/Meta остановила доступ/);
+    assert.equal(pageCtx.state.targetBindingAssets.pageReadErrors[targetKey],'Доступ к аккаунту остановлен. Страницы не загружены.');
     assert.doesNotMatch(pageCtx.state.targetBindingAssets.pageReadErrors[targetKey],/BUSINESS_LOGIN_GATE|SESSION_EXPIRED/);
     assert.equal(pageRenderCount,1);
   }
