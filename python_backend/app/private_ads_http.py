@@ -373,6 +373,22 @@ class AdsManagerPrivateHttp:
         )
         gate_recovered = False
         if gate and not business_gate_continuation:
+            # Preserve the typed bootstrap evidence for rejected gates without
+            # exporting response text, credentials, or the redirect URL.
+            account_matches = parse_qs(final.query).get("act") == [account_id]
+            log.info("ads_bootstrap profile=%s status=%s bytes=%d host_reviewed=%s path_matches=%s account_matches=%s business_matches=%s gate=%s",
+                getattr(web.profile, "name", ""), status, len(body.encode()),
+                final.hostname in {"adsmanager.facebook.com", "business.facebook.com"},
+                final.path == "/adsmanager/manage/campaigns",
+                account_matches,
+                parse_qs(final.query).get("business_id") == [business_id], gate or "none")
+            try:
+                evidence = json.dumps(_bootstrap_evidence(final_url, body, web.profile, actor_id),
+                    sort_keys=True, separators=(",", ":"))
+            except Exception:
+                evidence = '{"evidence_error":"unavailable"}'
+            log.info("ads_bootstrap_evidence profile=%s evidence=%s",
+                getattr(web.profile, "name", ""), evidence)
             error = fail(gate, "Ads Manager returned an authentication gate", True)
             # No GraphQL or advertising request was sent by this document GET.
             error.request_may_have_been_sent = False
