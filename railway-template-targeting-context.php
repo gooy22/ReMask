@@ -189,14 +189,14 @@ final class RemaskTemplateTargetingReference {
     }
     public function blocked(int $now): array {
         return $this->update(static function(array &$state) use ($now) {
-            $state['blocked']=array_filter((array)($state['blocked']??[]),static fn($until)=>(int)$until>$now);
+            $state['blocked']=array_filter((array)($state['blocked']??[]),static fn($until)=>$until==='terminal'||(int)$until>$now);
             return array_map('strval',array_keys($state['blocked']));
         });
     }
     public function block(string $profile, int $now, string $code = ''): void {
         $this->update(static function(array &$state) use ($profile,$now,$code) {
             $terminal=preg_match('/CHECKPOINT|PROFILE_META_BLOCKED/',$code)===1;
-            $state['blocked'][$profile]=$terminal ? PHP_INT_MAX : $now+600;
+            $state['blocked'][$profile]=$terminal ? 'terminal' : $now+600;
             unset($state['failures'][$profile]);
             if (preg_match('/^[A-Z][A-Z0-9_]{2,119}$/D',$code)
                 && RemaskTemplateTargetingContext::sourceFailure(new RuntimeException($code)))
@@ -208,7 +208,8 @@ final class RemaskTemplateTargetingReference {
             $available=[];$reason='TEMPLATE_LOOKUP_SOURCE_UNAVAILABLE';
             foreach ($candidates as $candidate) {
                 $profile=$candidate['profile'];
-                if ((int)($state['blocked'][$profile] ?? 0)<=$now) {$available[]=$candidate;continue;}
+                $until=$state['blocked'][$profile] ?? 0;
+                if ($until!=='terminal' && (int)$until<=$now) {$available[]=$candidate;continue;}
                 $code=$state['failures'][$profile] ?? '';
                 if (is_string($code) && preg_match('/^[A-Z][A-Z0-9_]{2,119}$/D',$code))$reason=$code;
             }
