@@ -289,11 +289,14 @@ class AdsManagerPrivateHttp:
 
     @classmethod
     async def open(cls, web, *, account_id, business_id, actor_id, reference_read=False,
-                   account_read_fields=None, allow_draft_gate_recovery=False):
+                   account_read_fields=None, allow_draft_gate_recovery=False,
+                   allow_saved_publication_gate_recovery=False):
         account_id, business_id, actor_id = map(identity, (account_id, business_id, actor_id))
-        if type(reference_read) is not bool or type(allow_draft_gate_recovery) is not bool:
+        if (type(reference_read) is not bool or type(allow_draft_gate_recovery) is not bool
+                or type(allow_saved_publication_gate_recovery) is not bool):
             raise fail("INVALID_RESOURCE_ROUTE", "Advertising bootstrap mode must be explicit")
-        allow_business_gate_renewal = reference_read or allow_draft_gate_recovery
+        allow_business_gate_renewal = (reference_read or allow_draft_gate_recovery
+                                        or allow_saved_publication_gate_recovery)
         if account_read_fields is not None:
             allowed_fields = {"id", "account_id", "business", "account_status",
                               "ad_account_promotable_objects", "currency"}
