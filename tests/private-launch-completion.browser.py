@@ -954,19 +954,29 @@ class InstalledLaunchTests(unittest.TestCase):
         self.prepare_single_page_launch()
         self.assertEqual(self.page.locator('#remaskPrivateExecutionMode').input_value(), 'DRAFT')
         self.assertIn('Без публикации и проверки карты', self.page.locator('#remaskPrivateExecutionNote').inner_text())
-        with self.page.expect_request(lambda request:request.url.endswith('/ajax/pythonWorkerJobs.php')
-                and request.post_data_json.get('action')=='private_launch_review') as draft_request:
+        self.worker_requests.clear()
+        with self.offline_php_job_bridge() as received:
             self.page.locator('#launchButton').click()
-        self.page.wait_for_function('document.querySelector("#launchResult").textContent.includes("Проверка не подтвердила готовность")')
-        draft = draft_request.value.post_data_json
-        self.assertEqual(draft['launch']['base']['execution_mode'], 'DRAFT')
+            self.page.wait_for_function('document.querySelector("#launchResult").textContent.includes("Задача запущена")')
+            self.assertEqual(len(received),1)
+        self.assertEqual([row['action'] for row in self.worker_requests],
+            ['private_launch_plan','create'],
+            'Draft uses one offline plan and sends one job; it does not run a separate Meta review')
+        plan=self.worker_requests[0]['plan'] if 'plan' in self.worker_requests[0] else None
+        self.assertIsNotNone(plan)
+        self.assertFalse(plan['checked_live'])
+        self.assertEqual(plan['execution_mode'],'DRAFT')
+        task=self.worker_requests[1]['profiles'][0]['tasks'][0]
+        self.assertEqual(task['action'],'private_launch')
+        self.assertEqual(task['payload']['launch']['base']['execution_mode'],'DRAFT')
         self.page.locator('#remaskPrivateExecutionMode').select_option('PUBLISH')
         self.assertIn('Публикация требует', self.page.locator('#remaskPrivateExecutionNote').inner_text())
+        self.worker_requests.clear()
         with self.page.expect_request(lambda request:request.url.endswith('/ajax/pythonWorkerJobs.php')
                 and request.post_data_json.get('action')=='private_launch_review') as publication_request:
             self.page.locator('#launchButton').click()
         published = publication_request.value.post_data_json
-        self.assertNotIn('execution_mode', published['launch']['base'])
+        self.assertEqual(published['launch']['base']['execution_mode'],'PUBLISH')
         self.assertFalse(any(row['action']=='create' for row in self.worker_requests))
 
     def test_installed_video_ui_native_draft_publish_recovery(self):
