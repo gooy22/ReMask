@@ -781,7 +781,7 @@ class ReadOnlyReferenceBootstrapReuseTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ProvisioningError) as caught:
             await AdsManagerPrivateHttp.open(self.web, account_id="111111",
                 business_id="222222", actor_id="123456", allow_draft_gate_recovery=True)
-        self.assertEqual(caught.exception.code, "BOOTSTRAP_SCOPE_UNVERIFIED")
+        self.assertEqual(caught.exception.code, "PRIVATE_ADS_DRAFT_BOOTSTRAP_SCOPE_UNVERIFIED")
         self.assertEqual([row[0] for row in calls], ["POST", "GET"])
 
     async def test_business_loginpage_still_blocks_calls_without_draft_or_read_intent(self):
@@ -790,7 +790,7 @@ class ReadOnlyReferenceBootstrapReuseTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ProvisioningError) as caught:
             await AdsManagerPrivateHttp.open(self.web, account_id="111111",
                 business_id="222222", actor_id="123456")
-        self.assertEqual(caught.exception.code, "BUSINESS_LOGIN_GATE")
+        self.assertEqual(caught.exception.code, "PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE")
         self.assertEqual(self.web.session.calls, [])
 
     async def test_two_reference_reads_open_one_document_and_never_refresh_cdn(self):
