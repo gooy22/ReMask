@@ -27,6 +27,7 @@ if (typeof creativeTargetSearchConfig !== 'function') {
         if(/TIMEOUT|TIMED_OUT/.test(raw))return 'Meta отвечает слишком долго. Список не загружен.';
         return 'Список сейчас недоступен. Выбранные настройки не изменены.';
     };
+    const TARGETING_LOOKUP_TIMEOUT_MS = 75_000;
     const runPicker = async (type, offset=0) => {
         const cfg=pickerConfig[type], input=cfg&&$(cfg.input), box=cfg&&$(cfg.results);
         if(!input||!box)return;
@@ -49,7 +50,7 @@ if (typeof creativeTargetSearchConfig !== 'function') {
                 const error=Object.assign(new Error('TARGETING_LOOKUP_TIMEOUT'),{code:'TIMEOUT'});
                 reject(error);
                 controller.abort();
-            },8000);
+            },TARGETING_LOOKUP_TIMEOUT_MS);
         });
         if(!offset) {delete pickerPages[type];box.textContent='Загружаю варианты Meta…';}
         try {
