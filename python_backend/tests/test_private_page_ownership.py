@@ -16,7 +16,7 @@ from app.facebook_business_browser import _extract_business_inventory_rows
 from app.provisioning.page_access_handler import _browser_full_control_requested, _private_http_page_access, _browser_auth_fallback_allowed
 
 class PageAccessTransportRoutingTests(unittest.TestCase):
-    def test_private_http_remains_primary_and_browser_fallback_is_auth_only(self):
+    def test_private_http_remains_primary_and_blocks_browser_auth_fallback(self):
         session = SimpleNamespace(private_only=True)
         prepare_params = {'access_mode': 'existing_page_full_control'}
 
@@ -24,8 +24,10 @@ class PageAccessTransportRoutingTests(unittest.TestCase):
         self.assertTrue(_private_http_page_access(session, prepare_params))
         self.assertFalse(_browser_auth_fallback_allowed(
             prepare_params, ProvisioningError('PRIVATE_ASSET_READ_INCONCLUSIVE', 'read failed'), {}))
-        self.assertTrue(_browser_auth_fallback_allowed(
-            prepare_params, ProvisioningError('SESSION_EXPIRED', 'expired'), {}))
+        auth_error = ProvisioningError('SESSION_EXPIRED', 'expired')
+        self.assertTrue(_browser_auth_fallback_allowed(prepare_params, auth_error, {}))
+        self.assertFalse(_browser_auth_fallback_allowed(
+            prepare_params, auth_error, {}, private_only=True))
         self.assertFalse(_browser_auth_fallback_allowed(
             {'access_mode': 'shared_ads_access'},
             ProvisioningError('SESSION_EXPIRED', 'expired'), {}))

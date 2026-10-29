@@ -74,8 +74,10 @@ def _private_page_access_has_pending_submit(prior: Any) -> bool:
     return False
 
 
-def _browser_auth_fallback_allowed(params: Any, error: Any, prior: Any) -> bool:
-    """Use Business Suite only after a pre-mutation auth failure with no retained submit."""
+def _browser_auth_fallback_allowed(params: Any, error: Any, prior: Any, *, private_only: bool = False) -> bool:
+    """Allow Business Suite fallback only outside an HTTP-only PAGE_ACCESS run."""
+    if private_only:
+        return False
     return (
         _browser_full_control_requested(params)
         and str(getattr(error, "code", "") or "").upper() in _PRIVATE_AUTH_FALLBACK_CODES
@@ -1270,11 +1272,15 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
         elif _private_http_page_access(session, params):
             from .private_create_handlers import _rk_inventory
             try:
-                proof = await _rk_inventory(await session.facebook_web(), business, rk_name, account)
+                web = await session.facebook_web()
+                web.private_only = True
+                proof = await _rk_inventory(web, business, rk_name, account)
             except ProvisioningError as exc:
                 fallback_state = await _rk_access_fallback_state(
                     state, profile, business, account, session, prior)
-                if not _browser_auth_fallback_allowed(params, exc, fallback_state):
+                if not _browser_auth_fallback_allowed(
+                        params, exc, fallback_state,
+                        private_only=_private_http_page_access(session, params)):
                     raise
                 browser_full_control_fallback = True
                 verified = True
@@ -1352,7 +1358,7 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
             retained = ((await state.step(item, ProvisioningStep.PAGE_ACCESS)) or {}).get('result') or {}
             safe_prior = await _rk_access_fallback_state(
                 state, profile, business, account, session, {**prior, **retained})
-            if not _browser_auth_fallback_allowed(params, exc, safe_prior):
+            if not _browser_auth_fallback_allowed(params, exc, safe_prior, private_only=True):
                 raise
             browser_full_control_fallback = True
             log.info('PAGE_ACCESS RK precheck fallback=business_suite code=%s', exc.code)
@@ -1431,7 +1437,8 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
             except ProvisioningError as exc:
                 fallback_state = await _rk_access_fallback_state(
                     state, profile, business, account, session, resume_state)
-                if not _browser_auth_fallback_allowed(params, exc, fallback_state):
+                if not _browser_auth_fallback_allowed(
+                        params, exc, fallback_state, private_only=private_http):
                     raise
                 browser_full_control_fallback = True
                 private_http = False
