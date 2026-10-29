@@ -177,7 +177,9 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
             ['SprinkleConfig',[],{'param_name':'jazoest','version':2,'should_randomize':False}]])
         async def missing(url, **kwargs):return 200, json.dumps(payload), url
         self.web.fetch_text = missing
-        async def bootstrap():return SimpleNamespace(actor_id='123456',fb_dtsg='synthetic-csrf',lsd='synthetic-lsd')
+        async def bootstrap():return SimpleNamespace(actor_id='123456',fb_dtsg='synthetic-csrf',lsd='synthetic-lsd',
+            request_context={'__aaid':'0','__bid':'synthetic-bid','__hblp':'synthetic-hblp',
+                '__hsdp':'synthetic-hsdp','__jssesw':'1','__crn':'synthetic-crn'})
         self.web.bootstrap = bootstrap
         self.web._extract_request_context = lambda body: {'__rev':'12345','__hs':'synthetic-page-revision'}
         calls = []
@@ -198,6 +200,9 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls[0][2]['data']['lsd'],'synthetic-fresh-lsd')
         self.assertEqual(calls[0][2]['data']['jazoest'],'2'+str(sum(map(ord,'synthetic-fresh-csrf'))))
         self.assertEqual(calls[0][2]['data']['__rev'],'12345')
+        for name,value in {'__aaid':'0','__bid':'synthetic-bid','__hblp':'synthetic-hblp',
+            '__hsdp':'synthetic-hsdp','__jssesw':'1','__crn':'synthetic-crn'}.items():
+            self.assertEqual(calls[0][2]['data'][name],value)
         self.assertEqual(calls[0][2]["headers"]["Referer"], "https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=111111&business_id=222222")
         self.assertTrue(calls[1][1].endswith('/act_111111'))
         self.assertFalse(client.read_only)

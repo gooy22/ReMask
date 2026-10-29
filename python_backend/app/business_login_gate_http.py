@@ -88,6 +88,7 @@ def _score(label: str) -> tuple[int, str]:
     text = re.sub(r"\s+", " ", str(label or "")).strip()
     if re.fullmatch(
         r"Continue with Facebook|Log in with Facebook|Войти через Facebook|"
+        r"Продолжить с аккаунтом Facebook|Продолжить через Facebook|"
         r"Увійти через Facebook|Mit Facebook anmelden|Se connecter avec Facebook|"
         r"Đăng nhập bằng Facebook",
         text,
