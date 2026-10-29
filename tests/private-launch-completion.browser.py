@@ -1224,6 +1224,12 @@ class InstalledLaunchTests(unittest.TestCase):
             self.page.locator('#page option[value="555555"]').wait_for(state='attached')
             self.page.locator('#page').select_option('555555')
             self.page.evaluate('fixtureLaunch.geo()')
+            self.page.locator('#interestQuery').fill('Fixture')
+            self.page.locator('#interestQuery').press('Enter')
+            self.page.locator('#interestResults').get_by_role('button',name='Fixture interests',exact=False).click()
+            self.page.locator('#behaviorQuery').fill('Fixture')
+            self.page.locator('#behaviorQuery').press('Enter')
+            self.page.locator('#behaviorResults').get_by_role('button',name='Fixture behaviors',exact=False).click()
             self.page.locator('#launchDeliverySelect').select_option('PAUSED')
             self.review_ready=True
             self.page.locator('#launchButton').click()
@@ -1241,6 +1247,11 @@ class InstalledLaunchTests(unittest.TestCase):
             self.assertEqual(target['launch']['base']['execution_mode'],'DRAFT')
             self.assertEqual(target['launch']['base']['delivery'],
                 {'campaign':'PAUSED','adset':'PAUSED','ad':'PAUSED'})
+            targeting=target['launch']['base']['adset']['targeting']
+            self.assertEqual(targeting['flexible_spec'][0]['interests'],
+                [{'id':'123456','name':'Fixture interests'}])
+            self.assertEqual(targeting['flexible_spec'][0]['behaviors'],
+                [{'id':'654321','name':'Fixture behaviors'}])
 
             async def through_python():
                 case=launch_fixtures.LaunchTests(
@@ -1264,6 +1275,11 @@ class InstalledLaunchTests(unittest.TestCase):
                         self.assertEqual(len(case.client.posts),4)
                         self.assertEqual(case.client.uploads,1)
                         self.assertEqual(case.payload,source_intent)
+                        ad_set=next(row for row in case.client.fragments.values()
+                                    if row['ad_object_type']=='ad_set')
+                        ad_set_values={row['field']:row['new_value'] for row in ad_set['values']}
+                        self.assertEqual(ad_set_values['targeting'],
+                                         source_intent['launch']['base']['adset']['targeting'])
                         self.assertEqual(set(row['ad_object_type'] for row in case.client.fragments.values()),
                             {'campaign','ad_set','ad'})
                         ad=next(row for row in case.client.fragments.values()
