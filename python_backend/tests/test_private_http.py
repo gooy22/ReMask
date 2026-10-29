@@ -966,3 +966,73 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
                 other = client._client._transport_for_url(httpx.URL('https://' + host))
                 self.assertTrue(other._pool._http1)
                 self.assertEqual(other._pool._retries, 0)
+
+
+    async def test_targeting_read_uses_verified_profile_bootstrap_without_business_preflight(self):
+        web = FacebookWebSession(WebProfile(
+            "fixture", {"c_user": "123", "xs": "fixture-xs"},
+            "http://127.0.0.1:1", "fixture-UA",
+        ))
+        self.addAsyncCleanup(web.close)
+        client = await web._ensure_session()
+        web.bootstrap = AsyncMock(return_value=FacebookBootstrap(
+            "fresh-dtsg", "123", source_url="https://www.facebook.com/me",
+            profile_actor_verified=True,
+        ))
+        web._business_bootstrap = AsyncMock(side_effect=AssertionError(
+            "read-only targeting must rely on its exact scoped response"
+        ))
+        requests = []
+
+        async def handler(request):
+            requests.append(request)
+            form = dict(httpx.QueryParams((await request.aread()).decode()))
+            self.assertEqual(form["fb_dtsg"], "fresh-dtsg")
+            self.assertEqual(form["av"], "123")
+            self.assertEqual(form["__user"], "123")
+            self.assertEqual(form["doc_id"], "123456789")
+            return httpx.Response(200, json={"data": {"result": True}})
+
+        await self.mock(client, handler)
+        with patch("app.contract_maintenance.module_refresh.effective_doc_id",
+                   side_effect=lambda _web, _name, doc_id: doc_id):
+            result = await web.graphql(
+                "123456789", {"businessID": "456", "adAccountID": "789"},
+                friendly_name="InterestsSearchQuery",
+                endpoint_url="https://business.facebook.com/api/graphql/",
+                business_context_id="456",
+                profile_bootstrap_read_only=True,
+            )
+        self.assertEqual(result, {"data": {"result": True}})
+        web.bootstrap.assert_awaited_once_with(
+            allow_business_loginpage_probe=True, require_actor_match=True,
+        )
+        web._business_bootstrap.assert_not_awaited()
+        self.assertEqual(len(requests), 1)
+
+    async def test_targeting_profile_bootstrap_rejects_write_hooks_before_dispatch(self):
+        web = FacebookWebSession(WebProfile(
+            "fixture", {"c_user": "123", "xs": "fixture-xs"},
+            "http://127.0.0.1:1", "fixture-UA",
+        ))
+        self.addAsyncCleanup(web.close)
+        client = await web._ensure_session()
+        web.bootstrap = AsyncMock(return_value=FacebookBootstrap(
+            "fresh-dtsg", "123", source_url="https://www.facebook.com/me",
+            profile_actor_verified=True,
+        ))
+        handler = AsyncMock()
+        await self.mock(client, handler)
+        with patch("app.contract_maintenance.module_refresh.effective_doc_id",
+                   side_effect=lambda _web, _name, doc_id: doc_id):
+            with self.assertRaises(RemoteRequestError):
+                await web.graphql(
+                    "123456789", {"businessID": "456", "adAccountID": "789"},
+                    friendly_name="InterestsSearchQuery",
+                    endpoint_url="https://business.facebook.com/api/graphql/",
+                    business_context_id="456",
+                    before_submit=AsyncMock(),
+                    profile_bootstrap_read_only=True,
+                )
+        web.bootstrap.assert_not_awaited()
+        handler.assert_not_awaited()
