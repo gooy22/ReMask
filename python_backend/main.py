@@ -3977,6 +3977,8 @@ async def private_template_reference(profile_id: str, operation: str, payload: d
                     callback=refresh_targeting_suggestions)
                 result = {**result, '_cache':{**cache_meta, 'refresh_pending':started}}
             return result
+        # The private targeting read has a 65-second inner limit; leave room for
+        # the bounded same-actor refresh and retry within the PHP bridge budget.
         result = await asyncio.wait_for(
             read_with_saved_auth_refresh(pool.resolver, context, read), timeout=75)
         return {'ok': True, **result}
