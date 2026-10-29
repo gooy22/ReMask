@@ -401,7 +401,10 @@ class AdsManagerPrivateHttp:
             seed = AdsManagerContext(account_id, business_id, actor_id,
                 "https://adsmanager-graph.facebook.com", "v22.0", "119211728144504", "")
             bootstrap_client = cls(web, seed)
-            bootstrap_client.document_origin = final.scheme + "://" + final.hostname
+            # XAdsCMRenewAccessTokenController is served by the Ads Manager app.
+            # The Business login redirect is only bootstrap evidence and must not
+            # change the controller origin or its Origin/Referer headers.
+            bootstrap_client.document_origin = "https://adsmanager.facebook.com"
             bootstrap_client.read_only = True
             context = await bootstrap_client._renew_session(body)
             account_matches = False
