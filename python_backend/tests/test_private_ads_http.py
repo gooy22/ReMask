@@ -776,6 +776,17 @@ class ReadOnlyReferenceBootstrapReuseTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(calls[0][1].endswith("/ads/manager/ajax/renew_access_token/"))
         self.web.refresh_reviewed_modules.assert_not_awaited()
 
+    async def test_saved_publication_gate_recovery_uses_exact_scope(self):
+        calls = await self._mock_business_gate_session()
+        client = await AdsManagerPrivateHttp.open(self.web, account_id="111111",
+            business_id="222222", actor_id="123456",
+            allow_saved_publication_gate_recovery=True)
+        self.assertFalse(client.read_only)
+        self.assertEqual(client.context.actor_id, "123456")
+        self.assertEqual(client.context.business_id, "222222")
+        self.assertEqual([row[0] for row in calls], ["POST", "GET"])
+        self.web.refresh_reviewed_modules.assert_not_awaited()
+
     async def test_draft_gate_refresh_rejects_another_business_before_writes(self):
         calls = await self._mock_business_gate_session(account_business="999999")
         with self.assertRaises(ProvisioningError) as caught:
