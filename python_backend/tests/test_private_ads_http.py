@@ -198,6 +198,7 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls[0][2]['data']['lsd'],'synthetic-fresh-lsd')
         self.assertEqual(calls[0][2]['data']['jazoest'],'2'+str(sum(map(ord,'synthetic-fresh-csrf'))))
         self.assertEqual(calls[0][2]['data']['__rev'],'12345')
+        self.assertEqual(calls[0][2]["headers"]["Referer"], "https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=111111&business_id=222222")
         self.assertTrue(calls[1][1].endswith('/act_111111'))
         self.assertFalse(client.read_only)
         self.assertNotIn('synthetic-renewed-session',repr(client.context))
@@ -764,7 +765,7 @@ class ReadOnlyReferenceBootstrapReuseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([row[0] for row in calls], ["POST", "GET"])
         self.assertTrue(calls[0][1].startswith("https://adsmanager.facebook.com/ads/manager/ajax/renew_access_token/"))
         self.assertEqual(calls[0][2]["headers"]["Origin"], "https://adsmanager.facebook.com")
-        self.assertEqual(calls[0][2]["headers"]["Referer"], "https://adsmanager.facebook.com/")
+        self.assertEqual(calls[0][2]["headers"]["Referer"], "https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=111111&business_id=222222")
         self.assertTrue(calls[0][1].endswith("/ads/manager/ajax/renew_access_token/"))
         self.assertTrue(calls[1][1].endswith("/v22.0/act_111111"))
         self.web.refresh_reviewed_modules.assert_not_awaited()
@@ -778,7 +779,7 @@ class ReadOnlyReferenceBootstrapReuseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([row[0] for row in calls], ["POST", "GET"])
         self.assertTrue(calls[0][1].startswith("https://adsmanager.facebook.com/ads/manager/ajax/renew_access_token/"))
         self.assertEqual(calls[0][2]["headers"]["Origin"], "https://adsmanager.facebook.com")
-        self.assertEqual(calls[0][2]["headers"]["Referer"], "https://adsmanager.facebook.com/")
+        self.assertEqual(calls[0][2]["headers"]["Referer"], "https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=111111&business_id=222222")
         self.assertTrue(calls[0][1].endswith("/ads/manager/ajax/renew_access_token/"))
         self.web.refresh_reviewed_modules.assert_not_awaited()
 
@@ -793,7 +794,7 @@ class ReadOnlyReferenceBootstrapReuseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([row[0] for row in calls], ["POST", "GET"])
         self.assertTrue(calls[0][1].startswith("https://adsmanager.facebook.com/ads/manager/ajax/renew_access_token/"))
         self.assertEqual(calls[0][2]["headers"]["Origin"], "https://adsmanager.facebook.com")
-        self.assertEqual(calls[0][2]["headers"]["Referer"], "https://adsmanager.facebook.com/")
+        self.assertEqual(calls[0][2]["headers"]["Referer"], "https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=111111&business_id=222222")
         self.web.refresh_reviewed_modules.assert_not_awaited()
 
     async def test_draft_gate_refresh_rejects_another_business_before_writes(self):
@@ -805,7 +806,7 @@ class ReadOnlyReferenceBootstrapReuseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([row[0] for row in calls], ["POST", "GET"])
         self.assertTrue(calls[0][1].startswith("https://adsmanager.facebook.com/ads/manager/ajax/renew_access_token/"))
         self.assertEqual(calls[0][2]["headers"]["Origin"], "https://adsmanager.facebook.com")
-        self.assertEqual(calls[0][2]["headers"]["Referer"], "https://adsmanager.facebook.com/")
+        self.assertEqual(calls[0][2]["headers"]["Referer"], "https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=111111&business_id=222222")
 
     async def test_business_loginpage_still_blocks_calls_without_draft_or_read_intent(self):
         self.web.fetch_text = AsyncMock(return_value=(200, "<html>Business login route</html>",
