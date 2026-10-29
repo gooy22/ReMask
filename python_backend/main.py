@@ -3937,9 +3937,9 @@ async def private_template_reference(profile_id: str, operation: str, payload: d
     if operation not in REFERENCE_TYPES | {'audience_estimate', 'placements'}:
         raise HTTPException(status_code=400, detail={'code':'TEMPLATE_HELPER_UNAVAILABLE'})
     try:
+        with measure_phase('resolver'):
+            context = await _resolve_read_profile(profile)
         async def read():
-            with measure_phase('resolver'):
-                context = await _resolve_read_profile(profile)
             with measure_phase('profile_session'):
                 async with ProfileSession(context) as session:
                     web = await session.facebook_web()
@@ -3977,7 +3977,8 @@ async def private_template_reference(profile_id: str, operation: str, payload: d
                     callback=refresh_targeting_suggestions)
                 result = {**result, '_cache':{**cache_meta, 'refresh_pending':started}}
             return result
-        result = await asyncio.wait_for(read(), timeout=32)
+        result = await asyncio.wait_for(
+            read_with_saved_auth_refresh(pool.resolver, context, read), timeout=32)
         return {'ok': True, **result}
     except AuthenticationError as error:
         normalized = private_auth_error(error)
