@@ -104,6 +104,9 @@ try {
         }
         $reference->put($type, $query, $result, time());
         MetaEndpoint::ok(['data'=>array_slice($result['data'] ?? [],$offset,100), 'checked_live'=>true,
+            'account_scope_verified'=>true, 'profile'=>$selectedProfile, 'account_id'=>$selectedAccount,
+            'business_id'=>(string)($result['business_id'] ?? ''), 'resource'=>$type,
+            'transport'=>'private_http_h2', 'source_context_discovered'=>true,
             'offset'=>$offset, 'next_offset'=>count($result['data'] ?? [])>$offset+100 ? $offset+100 : null,
             'truncated'=>($result['truncated'] ?? false) === true || count($result['data'] ?? [])>100,
             'catalog_count'=>(int)($result['catalog_count'] ?? count($result['data'] ?? [])),
