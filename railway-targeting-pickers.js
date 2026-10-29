@@ -17,15 +17,14 @@ if (typeof creativeTargetSearchConfig !== 'function') {
     const targetingFailureMessage = error => {
         const raw=String(error?.code||error?.payload?.error?.code||error?.payload?.code||
             error?.payload?.error||error?.payload?.message||error?.message||'').toUpperCase();
-        if(/CHECKPOINT|PROFILE_META_BLOCKED/.test(raw))return 'Профиль заблокирован Meta. Новые запросы остановлены.';
-        if(/TWO_FACTOR_REQUIRED/.test(raw))return 'Meta запросила подтверждение входа. Список недоступен.';
-        if(/TARGETING_META_ACCESS_STOPPED|SESSION_EXPIRED|BUSINESS_LOGIN_GATE|LOGIN/.test(raw))return 'Meta не подтвердила вход. Список недоступен.';
-        if(/TEMPLATE_LOOKUP_SOURCE_UNAVAILABLE/.test(raw))return 'Для выбранного РК не подтверждена связь с BM. Список недоступен.';
-        if(/TEMPLATE_LOOKUP_ACCESS_UNVERIFIED|TARGETING_SOURCE_SCOPE_UNVERIFIED/.test(raw))return 'Meta не подтвердила доступ к выбранному РК.';
-        if(/RESOURCE_READ_INCOMPLETE/.test(raw))return 'Meta не вернула список для выбранного РК. Доступ не подтверждён.';
-        if(/TEMPLATE_LOOKUP_UNAVAILABLE/.test(raw))return 'Справочник Meta недоступен. Попробуйте позже.';
-        if(/TIMEOUT|TIMED_OUT/.test(raw))return 'Meta отвечает слишком долго. Список не загружен.';
-        return 'Список сейчас недоступен. Выбранные настройки не изменены.';
+        if(/CHECKPOINT|PROFILE_META_BLOCKED/.test(raw))return 'Чекпоинт. Аккаунт остановлен; новые действия запрещены.';
+        if(/TWO_FACTOR_REQUIRED/.test(raw))return 'Нужно подтвердить вход.';
+        if(/TARGETING_META_ACCESS_STOPPED|SESSION_EXPIRED|BUSINESS_LOGIN_GATE|LOGIN/.test(raw))return 'Сессия завершена. Список недоступен.';
+        if(/TEMPLATE_LOOKUP_SOURCE_UNAVAILABLE/.test(raw))return 'Не удалось загрузить варианты.';
+        if(/TEMPLATE_LOOKUP_ACCESS_UNVERIFIED|TARGETING_SOURCE_SCOPE_UNVERIFIED/.test(raw))return 'Нет доступа к выбранному кабинету.';
+        if(/RESOURCE_READ_INCOMPLETE|TEMPLATE_LOOKUP_UNAVAILABLE/.test(raw))return 'Список временно недоступен.';
+        if(/TIMEOUT|TIMED_OUT/.test(raw))return 'Загрузка затянулась. Попробуйте ещё раз.';
+        return 'Список временно недоступен.';
     };
     const runPicker = async (type, offset=0) => {
         const cfg=pickerConfig[type], input=cfg&&$(cfg.input), box=cfg&&$(cfg.results);
@@ -51,7 +50,7 @@ if (typeof creativeTargetSearchConfig !== 'function') {
                 controller.abort();
             },8000);
         });
-        if(!offset) {delete pickerPages[type];box.textContent='Загружаю варианты Meta…';}
+        if(!offset) {delete pickerPages[type];box.textContent='Загружаю варианты…';}
         try {
             const lookup=apiJson('ajax/metaTemplateTargetingSearch.php',{
                 ...formPost({type:type==='locales'?'languages':type,q:query,limit:100,
