@@ -3978,7 +3978,7 @@ async def private_template_reference(profile_id: str, operation: str, payload: d
                 result = {**result, '_cache':{**cache_meta, 'refresh_pending':started}}
             return result
         result = await asyncio.wait_for(
-            read_with_saved_auth_refresh(pool.resolver, context, read), timeout=32)
+            read_with_saved_auth_refresh(pool.resolver, context, read), timeout=75)
         return {'ok': True, **result}
     except AuthenticationError as error:
         normalized = private_auth_error(error)
