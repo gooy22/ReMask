@@ -178,7 +178,7 @@ function fixture(){
   vm.runInContext(read('railway-targeting-pickers.js'),paged.ctx);
   paged.nodes.get('interestQuery').value='Travel';
   let first=paged.ctx.searchTargeting('interests');
-  const slowStatus=Array.from(paged.timers.values()).at(-1);
+  const slowStatus=Array.from(paged.timers.values())[0];
   slowStatus();
   const resultBox=paged.nodes.get('interestResults');
   assert.equal(resultBox.textContent,'Загрузка списка занимает дольше обычного…',
@@ -199,6 +199,25 @@ function fixture(){
   assert.equal(paged.ctx.state.interests[0].path[1],'Second','category hierarchy is preserved for the chosen ID');
   assert.equal(resultBox.children.length,0,'selection dismisses all remaining options');
   console.log('Launch category browser: paged discovery, exact ID choice and saved taxonomy passed.');
+
+  const timed=fixture(),timedRequests=[];
+  for(const id of ['interestQuery','interestResults','selectedInterests'])
+    timed.nodes.set(id,id.endsWith('Query')?new Input():new Element());
+  Object.assign(timed.ctx,{$:id=>timed.nodes.get(id),state:{interests:[]},formPost:body=>body,
+    apiJson:async(url,options)=>{timedRequests.push({url,options});return new Promise(()=>{});},
+    renderPills(){},invalidateLaunchReview(){},validateReady(){}});
+  vm.runInContext(read('railway-targeting-pickers.js'),timed.ctx);
+  timed.nodes.get('interestQuery').value='Travel';
+  const timedLookup=timed.ctx.searchTargeting('interests');
+  const timeoutCallbacks=Array.from(timed.timers.values());
+  assert.equal(timeoutCallbacks.length,2,'slow notice and hard timeout are both scheduled');
+  timeoutCallbacks[1]();
+  await timedLookup;
+  assert.equal(timedRequests[0].options.signal.aborted,true,'timed-out targeting request is aborted');
+  assert.equal(timed.nodes.get('interestResults').textContent,'Meta отвечает слишком долго. Список не загружен.',
+    'an unresolved request leaves the loading state and shows a short timeout message');
+  assert.equal(timed.timers.size,0,'both targeting timers are cleared after timeout');
+  console.log('Launch targeting: hard timeout aborts unresolved audience lookups.');
   const cleanUiSource=read('railway-targeting-autocomplete-overlay.php');
   assert.match(cleanUiSource,/remask-targeting-search-cleanup/,'legacy search controls stay hidden before first paint');
   assert.match(cleanUiSource,/#geoSearch,#interestSearch\{display:none!important;visibility:hidden!important\}/);

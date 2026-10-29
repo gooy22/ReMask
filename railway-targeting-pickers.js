@@ -42,12 +42,22 @@ if (typeof creativeTargetSearchConfig !== 'function') {
             if(pickerControllers[type]===controller && input.value.trim()===query)
                 box.textContent='Загрузка списка занимает дольше обычного…';
         },3000):0;
+        let timedOut=false,timeoutTimer=0;
+        const timeoutPromise=new Promise((_,reject)=>{
+            timeoutTimer=setTimeout(()=>{
+                timedOut=true;
+                const error=Object.assign(new Error('TARGETING_LOOKUP_TIMEOUT'),{code:'TIMEOUT'});
+                reject(error);
+                controller.abort();
+            },8000);
+        });
         if(!offset) {delete pickerPages[type];box.textContent='Загружаю варианты Meta…';}
         try {
-            const data=await apiJson('ajax/metaTemplateTargetingSearch.php',{
+            const lookup=apiJson('ajax/metaTemplateTargetingSearch.php',{
                 ...formPost({type:type==='locales'?'languages':type,q:query,limit:100,
                     ...(offset?{offset}: {})}),signal:controller.signal
             });
+            const data=await Promise.race([lookup,timeoutPromise]);
             if(pickerControllers[type]!==controller || input.value.trim()!==query)return;
             if(offset && (data?.offset!==offset || !Array.isArray(data?.data)))
                 throw new Error('Страница справочника устарела. Повторите поиск.');
@@ -100,12 +110,12 @@ if (typeof creativeTargetSearchConfig !== 'function') {
                 hint.textContent='Введите название, чтобы сузить список.';box.appendChild(hint);
             }
         } catch(error){
-            if(error?.name==='AbortError'||pickerControllers[type]!==controller)return;
-            if(offset){
-                box.textContent=targetingFailureMessage(error);
-            } else box.textContent=targetingFailureMessage(error);
+            if(pickerControllers[type]!==controller)return;
+            if(error?.name==='AbortError'&&!timedOut)return;
+            box.textContent=targetingFailureMessage(timedOut?{code:'TIMEOUT'}:error);
         } finally {
             if(slowStatusTimer)clearTimeout(slowStatusTimer);
+            if(timeoutTimer)clearTimeout(timeoutTimer);
             if(pickerControllers[type]===controller)delete pickerControllers[type];
         }
     };
