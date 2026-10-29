@@ -2255,18 +2255,16 @@ class FacebookWebSession:
                 if len(scoped_ids) > 1:
                     raise RemoteRequestError("Ambiguous Business context; no CREATE POST was sent.",
                                              request_may_have_been_sent=False, transport_stage="business_auth_precheck")
-                if profile_bootstrap_read_only:
-                    # Targeting suggestions are read-only and validate the exact
-                    # BM/RK identities in the response. Avoid the Ads Manager
-                    # document preflight that can stall on a cross-host redirect.
-                    pass
-                else:
+                if not profile_bootstrap_read_only:
                     bootstrap = await self._business_bootstrap(
                         bootstrap, business_id=next(iter(scoped_ids), ""),
                         business_create=friendly_name == "useBusinessCreationMutationMutation",
                         business_loginpage_probe=scoped_probe,
                         business_page_create_prechecked=page_create_prechecked,
                     )
+                # Targeting suggestions are read-only and validate the exact
+                # BM/RK identities in the response. Skip the Ads Manager
+                # document preflight that can stall on a cross-host redirect.
         except AuthenticationError as exc:
             if ((scoped_probe in {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS",
                     "READ_FP", "FP_CATEGORY", "FP_PRECHECK"}
