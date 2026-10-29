@@ -497,8 +497,11 @@ class AdsManagerPrivateHttp:
             metadata = dict(getattr(bootstrap, 'request_context', {}) or {})
             if callable(extract):
                 metadata.update(extract(document))
-            for name in ('__hs','__rev','__s','__hsi','__dyn','__csr','__comet_req',
-                         '__spin_r','__spin_b','__spin_t','dpr','__ccg'):
+            # Match the profile sender's current-page safe envelope. Keep the
+            # renewal request id fresh below; never replay a captured __req.
+            for name in ('__aaid','__bid','__hs','__hblp','__hsdp','__rev','__s','__hsi',
+                         '__dyn','__csr','__comet_req','__spin_r','__spin_b','__spin_t',
+                         '__jssesw','__crn','dpr','__ccg','server_timestamps','fb_api_caller_class'):
                 value = metadata.get(name)
                 if isinstance(value, (str, int)) and 0 < len(str(value)) <= 20000:
                     form[name] = str(value)
