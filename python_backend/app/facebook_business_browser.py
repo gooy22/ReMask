@@ -1843,9 +1843,11 @@ class FacebookBusinessBrowser:
     )
 
     def __init__(self, context: Any, *, timeout_seconds: int = 45,
-                 v8_old_space_mb: int | None = None) -> None:
+                 v8_old_space_mb: int | None = None,
+                 allow_private_http_fallback: bool = False) -> None:
         self._close_lock = asyncio.Lock()
         self.context = context
+        self.allow_private_http_fallback = bool(allow_private_http_fallback)
         self.timeout_seconds = max(15, int(timeout_seconds))
         self.timeout_ms = self.timeout_seconds * 1000
         self.v8_old_space_mb = (max(128,min(int(v8_old_space_mb),512))
@@ -1885,8 +1887,13 @@ class FacebookBusinessBrowser:
         return _clean(getattr(self.context, "profile_id", ""))
 
     async def open(self) -> None:
-        raise BrowserBusinessError('BROWSER_TRANSPORT_DISABLED',
-            'This service uses private HTTP/2 only; Chromium transport is disabled.', retryable=False)
+        if not self.allow_private_http_fallback:
+            raise BrowserBusinessError(
+                'BROWSER_TRANSPORT_DISABLED',
+                'This service uses private HTTP/2 only; Chromium transport requires an explicitly authorized fallback.',
+                retryable=False,
+                diagnostic={'transport': 'private_http', 'browser_started': False},
+            )
         if self.page is not None:
             return
 
