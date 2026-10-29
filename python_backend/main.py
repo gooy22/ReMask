@@ -4147,11 +4147,14 @@ async def private_launch_review(profile_id: str, payload: dict = Body(...)):
         raise HTTPException(status_code=400,detail='profile_id is required')
     try:
         context=await pool.resolver.resolve(clean_profile)
-        result=await pool.private_launch.review(
-            profile_id=clean_profile,
-            context=context,
-            payload=payload,
-        )
+        async def review_once():
+            # Review is read-only; retry only if this same profile has newer saved auth.
+            return await pool.private_launch.review(
+                profile_id=clean_profile,
+                context=context,
+                payload=payload,
+            )
+        result=await read_with_saved_auth_refresh(pool.resolver, context, review_once)
         result = {key:value for key,value in result.items() if not key.startswith('_')}
         return {'ok':True,**result}
     except ProvisioningError as exc:
