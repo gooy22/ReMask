@@ -140,30 +140,30 @@ function fixture(){
   launch.nodes.get('geoQuery').value='Ukraine';
   launchFailure=Object.assign(new Error('TEMPLATE_LOOKUP_SOURCE_UNAVAILABLE'),{code:'TEMPLATE_LOOKUP_SOURCE_UNAVAILABLE'});
   await launch.ctx.searchTargeting('locations');
-  assert.equal(launch.nodes.get('geoResults').textContent,'Для выбранного РК не подтверждена связь с BM. Список недоступен.');
+  assert.equal(launch.nodes.get('geoResults').textContent,'Не удалось загрузить варианты.');
   assert.doesNotMatch(launch.nodes.get('geoResults').textContent,/TEMPLATE_LOOKUP/,'internal Meta codes stay out of the UI');
   launchFailure=Object.assign(new Error('TEMPLATE_LOOKUP_ACCESS_UNVERIFIED'),{code:'TEMPLATE_LOOKUP_ACCESS_UNVERIFIED'});
   await launch.ctx.searchTargeting('locations');
-  assert.equal(launch.nodes.get('geoResults').textContent,'Meta не подтвердила доступ к выбранному РК.');
+  assert.equal(launch.nodes.get('geoResults').textContent,'Нет доступа к выбранному кабинету.');
   launchFailure=Object.assign(new Error('PRIVATE_ADS_DRAFT_RESOURCE_READ_INCOMPLETE'),{code:'PRIVATE_ADS_DRAFT_RESOURCE_READ_INCOMPLETE'});
   await launch.ctx.searchTargeting('locations');
-  assert.equal(launch.nodes.get('geoResults').textContent,'Meta не вернула список для выбранного РК. Доступ не подтверждён.');
+  assert.equal(launch.nodes.get('geoResults').textContent,'Список временно недоступен.');
   assert.doesNotMatch(launch.nodes.get('geoResults').textContent,/PRIVATE_ADS_DRAFT/,'internal Meta codes stay out of the UI');
   launchFailure=Object.assign(new Error('PRIVATE_HTTP_READ_TIMEOUT'),{code:'PRIVATE_HTTP_READ_TIMEOUT'});
   await launch.ctx.searchTargeting('locations');
-  assert.equal(launch.nodes.get('geoResults').textContent,'Meta отвечает слишком долго. Список не загружен.');
+  assert.equal(launch.nodes.get('geoResults').textContent,'Загрузка затянулась. Попробуйте ещё раз.');
   launchFailure=Object.assign(new Error('PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE'),{code:'PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE'});
   await launch.ctx.searchTargeting('locations');
-  assert.equal(launch.nodes.get('geoResults').textContent,'Meta не подтвердила вход. Список недоступен.');
+  assert.equal(launch.nodes.get('geoResults').textContent,'Сессия завершена. Список недоступен.');
   launchFailure=Object.assign(new Error('TARGETING_META_ACCESS_STOPPED'),{code:'TARGETING_META_ACCESS_STOPPED'});
   await launch.ctx.searchTargeting('locations');
-  assert.equal(launch.nodes.get('geoResults').textContent,'Meta не подтвердила вход. Список недоступен.');
+  assert.equal(launch.nodes.get('geoResults').textContent,'Сессия завершена. Список недоступен.');
   launchFailure=Object.assign(new Error('CHECKPOINT_REQUIRED'),{code:'CHECKPOINT_REQUIRED'});
   await launch.ctx.searchTargeting('locations');
-  assert.equal(launch.nodes.get('geoResults').textContent,'Профиль заблокирован Meta. Новые запросы остановлены.');
+  assert.equal(launch.nodes.get('geoResults').textContent,'Чекпоинт. Аккаунт остановлен; новые действия запрещены.');
   launchFailure=Object.assign(new Error('PROFILE_META_BLOCKED'),{code:'PROFILE_META_BLOCKED'});
   await launch.ctx.searchTargeting('locations');
-  assert.equal(launch.nodes.get('geoResults').textContent,'Профиль заблокирован Meta. Новые запросы остановлены.');
+  assert.equal(launch.nodes.get('geoResults').textContent,'Чекпоинт. Аккаунт остановлен; новые действия запрещены.');
   console.log('Launch choices: no extra search buttons, no blank catalog fetch, friendly errors and exact selection IDs passed.');
   for(const id of ['interestQuery','interestResults','selectedInterests'])launch.nodes.set(id,id.endsWith('Query')?new Input():new Element());
   launch.ctx.state.interests=[];
@@ -214,7 +214,7 @@ function fixture(){
   timeoutCallbacks[1]();
   await timedLookup;
   assert.equal(timedRequests[0].options.signal.aborted,true,'timed-out targeting request is aborted');
-  assert.equal(timed.nodes.get('interestResults').textContent,'Meta отвечает слишком долго. Список не загружен.',
+  assert.equal(timed.nodes.get('interestResults').textContent,'Загрузка затянулась. Попробуйте ещё раз.',
     'an unresolved request leaves the loading state and shows a short timeout message');
   assert.equal(timed.timers.size,0,'both targeting timers are cleared after timeout');
   console.log('Launch targeting: hard timeout aborts unresolved audience lookups.');

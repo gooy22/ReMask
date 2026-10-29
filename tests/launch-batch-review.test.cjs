@@ -27,6 +27,11 @@ function fixture(size=30) {
     requests.push(payload);
     if(payload.action==='private_launch_contracts')return {contracts:Object.fromEntries(
       ['CAMPAIGN','ADSET','CREATIVE','AD'].map(step=>[step,{configured:true,active:true,verification_configured:true}]))};
+    if(payload.action==='private_launch_plan')return {plan:{
+      configuration_valid:true,checked_live:false,execution_mode:'DRAFT',
+      target:{profile_id:payload.profile_id,business_id:payload.business_id,
+        ad_account_id:payload.ad_account_id,page_id:payload.page_id},
+      missing_fields:[],missing_contracts:[]}};
     if(payload.action==='private_launch_review')return await ctx.review(payload);
     if(payload.action==='create')return {job:{job_id:'fixture-job'}};
     throw Error('Unexpected operation');
@@ -173,7 +178,8 @@ function fixture(size=30) {
   }
 
   {
-    const {ctx,config,rows,requests,storage}=fixture();
+    const {ctx,config,rows,requests,storage,controls}=fixture();
+    controls.remaskPrivateExecutionMode={value:'PUBLISH'};
     ctx.review=async payload=>payload.ad_account_id===rows[0].ad_account_id
       ?{review:{ready:false,preflight:{payment_selection_required:true,payment_methods:[{type:'Visa',last4:'1111'}]}}}
       :{review:{ready:true,preflight:{}}};
@@ -191,6 +197,9 @@ function fixture(size=30) {
     const accepted=await ctx.remaskPrivateCreateJob();
     assert.equal(accepted.job.job_id,'fixture-job');
     const jobs=requests.filter(row=>row.action==='create');assert.equal(jobs.length,1);
+    assert.equal(requests.filter(row=>row.action==='private_launch_plan').length,30);
+    assert.equal(requests.filter(row=>row.action==='private_launch_review').length,0,
+      'saving drafts skips the duplicate Meta review pass; the worker performs its scoped preflight');
     assert.equal(jobs[0].profiles.length,30);
     assert.deepEqual(Array.from(jobs[0].profiles,row=>row.tasks[0].payload.page_id),rows.map(row=>row.page_id));
     assert.ok(jobs[0].profiles.every(row=>row.tasks[0].payload.launch.base.delivery.ad==='PAUSED'));

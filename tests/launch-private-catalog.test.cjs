@@ -53,9 +53,9 @@ assert.ok(completionSource.includes('status.textContent=remaskPrivatePageReadFai
     }};
   vm.createContext(ctx);vm.runInContext(source,ctx);
 assert.equal(ctx.remaskPrivateLaunchUserMessage({code:'PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE'}),
-  'Meta не подтвердила вход','draft errors use a short Russian message without internal codes');
+  'Сессия завершена. Войдите снова.','draft errors use a short Russian message without internal codes');
 assert.equal(ctx.remaskPrivateLaunchUserMessage({code:'CHECKPOINT_REQUIRED'}),
-  'Чекпоинт Meta: профиль остановлен; новые задачи запрещены','a checkpoint is terminal and clearly explained');
+  'Чекпоинт. Аккаунт остановлен; новые задачи запрещены.','a checkpoint is terminal and clearly explained');
 assert.ok(source.includes('const message=remaskPrivateLaunchUserMessage(error)'),
   'the actual draft-launch error path must use the short-message mapper');
   await ctx.remaskPrivateRestoreSourceJob();
@@ -190,18 +190,18 @@ const controls = Object.fromEntries(['preflight','syncMeta','loadFunding','fundi
 const context = {$:id=>controls[id],fundingState(){},fundingReviewLabel(){},loadFunding:async()=>{},validateReady(){}};
 vm.createContext(context); vm.runInContext(source,context);
 const label = data=>context.fundingState({data}).label;
-assert.equal(context.fundingState(null).label,'NOT LOADED');
-assert.equal(context.fundingState({error:'failed'}).label,'ERROR');
-assert.equal(label({funding_verified:false,account_status:1,funding_source:'123'}),'NOT CHECKED');
-assert.equal(label({verification_status:'NOT_CHECKED'}),'NOT CHECKED');
-assert.equal(label({account_status:1,_cache:{stale:true},funding_source:'123'}),'STALE');
-assert.equal(label({funding_source:'123'}),'UNKNOWN');
-assert.equal(label({account_status:2,funding_source:'123'}),'ACCOUNT 2');
-assert.equal(label({account_status:1,expired_funding_source_details:{id:'123'}}),'EXPIRED');
-assert.equal(label({account_status:1,is_prepay_account:true,balance:0}),'PREPAY EMPTY');
-assert.equal(label({account_status:1,is_prepay_account:true}),'PREPAY EMPTY');
-assert.equal(label({account_status:1,is_prepay_account:true,balance:100}),'PREPAY BALANCE');
-assert.equal(label({account_status:1,funding_source_details:{id:'123'}}),'SOURCE SAVED');
+assert.equal(context.fundingState(null).label,'Не загружено');
+assert.equal(context.fundingState({error:'failed'}).label,'Ошибка загрузки');
+assert.equal(label({funding_verified:false,account_status:1,funding_source:'123'}),'Не проверено');
+assert.equal(label({verification_status:'NOT_CHECKED'}),'Не проверено');
+assert.equal(label({account_status:1,_cache:{stale:true},funding_source:'123'}),'Данные устарели');
+assert.equal(label({funding_source:'123'}),'Нет данных');
+assert.equal(label({account_status:2,funding_source:'123'}),'Аккаунт недоступен');
+assert.equal(label({account_status:1,expired_funding_source_details:{id:'123'}}),'Оплата просрочена');
+assert.equal(label({account_status:1,is_prepay_account:true,balance:0}),'Нет предоплаты');
+assert.equal(label({account_status:1,is_prepay_account:true}),'Нет предоплаты');
+assert.equal(label({account_status:1,is_prepay_account:true,balance:100}),'Предоплата есть');
+assert.equal(label({account_status:1,funding_source_details:{id:'123'}}),'Способ оплаты добавлен');
 // Launch exposes one draft action. Intermediate review buttons and diagnostics
 // stay out of the operator UI; the save handler still runs validation internally.
 assert.equal(controls.launchButton.disabled,false);
@@ -213,9 +213,9 @@ assert.equal(Boolean(controls.reviewLaunch.title),false);
 assert.equal(Boolean(controls.reviewStatus.textContent),false);
 assert.equal(controls.preflight.textContent,'Загрузить сохранённые РК');
 assert.equal(context.remaskPrivatePageReadFailure({message:'Meta requires sign-in',payload:{code:'PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE',message:'Meta requires sign-in'}},'15','act_120249392950240046'),
-  'Профиль 15 / РК 120249392950240046: Meta остановила доступ. FP не загружены; новые действия запрещены.');
+  'Доступ к аккаунту остановлен. Страницы не загружены.');
 const safePageFailure=context.remaskPrivatePageReadFailure({message:'xs=PRIVATE_SECRET'},'15','act_120249392950240046');
-assert.match(safePageFailure,/не удалось загрузить FP из Meta/);
+assert.equal(safePageFailure,'Страницы не загрузились. Попробуйте позже.');
 assert.doesNotMatch(safePageFailure,/PAGE_READ_FAILED|BUSINESS_LOGIN_GATE|SESSION_EXPIRED/);
 assert.doesNotMatch(safePageFailure,/PRIVATE_SECRET/);
 console.log('Private Launch catalog and funding truth checks passed');
@@ -770,7 +770,7 @@ console.log('Private Launch catalog and funding truth checks passed');
   assert.match(overlay,/PRIVATE_LAUNCH_VERIFICATION_REQUIRED/);
   const pageLoader=overlay.match(/<<<'NEW_BULK_PAGES'\n([\s\S]*?)\nNEW_BULK_PAGES/)[1];
   assert.ok(pageLoader.includes('remaskPrivatePageReadFailure'));
-  assert.ok(pageLoader.includes('FP не загружены'));
+  assert.ok(pageLoader.includes('Страницы не загружены:'));
   assert.ok(pageLoader.includes('catch (error)'));
   {
     const targetKey='15|120249392950240046|DRAFT';
@@ -794,11 +794,11 @@ console.log('Private Launch catalog and funding truth checks passed');
     };
     vm.createContext(pageCtx);
     await vm.runInContext('(async()=>{\n'+pageLoader+'\n})()',pageCtx);
-    assert.match(pageCtx.status.textContent,/Meta остановила доступ/);
-    assert.doesNotMatch(pageCtx.status.textContent,/BUSINESS_LOGIN_GATE|SESSION_EXPIRED/);
+    assert.equal(pageCtx.status.textContent,'Страницы не загружены: 1 из 1.');
+    assert.doesNotMatch(pageCtx.status.textContent,/BUSINESS_LOGIN_GATE|SESSION_EXPIRED|Meta остановила доступ/);
     assert.equal(Object.hasOwn(pageCtx.state.targetBindingAssets.pages,targetKey),false,
       'a rejected live read must not leave stale Pages selectable for this exact RK');
-    assert.match(pageCtx.state.targetBindingAssets.pageReadErrors[targetKey],/Meta остановила доступ/);
+    assert.equal(pageCtx.state.targetBindingAssets.pageReadErrors[targetKey],'Доступ к аккаунту остановлен. Страницы не загружены.');
     assert.doesNotMatch(pageCtx.state.targetBindingAssets.pageReadErrors[targetKey],/BUSINESS_LOGIN_GATE|SESSION_EXPIRED/);
     assert.equal(pageRenderCount,1);
   }
