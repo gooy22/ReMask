@@ -2125,6 +2125,7 @@ class FacebookWebSession:
         read_timeout_seconds: float | None = None,
         business_loginpage_probe: str = "",
         private_inventory_query_contract: dict[str, Any] | None = None,
+        profile_bootstrap_read_only: bool = False,
     ) -> dict[str, Any]:
 
         if read_timeout_seconds is not None and (
@@ -2149,6 +2150,25 @@ class FacebookWebSession:
             str(endpoint_url or self.GRAPHQL_URL).strip()
             or self.GRAPHQL_URL
         )
+
+        if type(profile_bootstrap_read_only) is not bool:
+            raise RemoteRequestError(
+                "Invalid profile-bound read-only bootstrap mode.",
+                request_may_have_been_sent=False, transport_stage="business_auth_precheck",
+            )
+        if profile_bootstrap_read_only and (
+                urlsplit(endpoint).hostname not in {
+                    "business.facebook.com", "adsmanager.facebook.com", "www.facebook.com",
+                }
+                or not re.fullmatch(r"\d{5,40}", str(business_context_id or "").strip())
+                or not str(friendly_name or "").strip().endswith("Query")
+                or request_envelope is not None or before_submit is not None
+                or multipart_files is not None or business_loginpage_probe
+                or private_inventory_query_contract is not None):
+            raise RemoteRequestError(
+                "Profile-bound bootstrap is limited to scoped read-only Meta queries.",
+                request_may_have_been_sent=False, transport_stage="business_auth_precheck",
+            )
 
         scoped_probe = self._validate_business_loginpage_probe(
             business_loginpage_probe, effective_doc_id, variables,
@@ -2199,7 +2219,21 @@ class FacebookWebSession:
                         transport_stage="business_auth_precheck",
                     )
             else:
-                bootstrap = await self.bootstrap()
+                if profile_bootstrap_read_only:
+                    bootstrap = await self.bootstrap(
+                        allow_business_loginpage_probe=True,
+                        require_actor_match=True,
+                    )
+                    current_actor = str(self.profile.cookies.get("c_user") or "").strip()
+                    if (not current_actor.isdigit() or bootstrap.actor_id != current_actor
+                            or bootstrap.profile_actor_verified is not True):
+                        raise RemoteRequestError(
+                            "Targeting read profile identity does not match the selected actor.",
+                            request_may_have_been_sent=False,
+                            transport_stage="business_auth_precheck",
+                        )
+                else:
+                    bootstrap = await self.bootstrap()
             if urlsplit(endpoint).hostname == "business.facebook.com":
                 scoped_ids: set[str] = set()
                 if business_context_id:
@@ -2221,12 +2255,16 @@ class FacebookWebSession:
                 if len(scoped_ids) > 1:
                     raise RemoteRequestError("Ambiguous Business context; no CREATE POST was sent.",
                                              request_may_have_been_sent=False, transport_stage="business_auth_precheck")
-                bootstrap = await self._business_bootstrap(
-                    bootstrap, business_id=next(iter(scoped_ids), ""),
-                    business_create=friendly_name == "useBusinessCreationMutationMutation",
-                    business_loginpage_probe=scoped_probe,
-                    business_page_create_prechecked=page_create_prechecked,
-                )
+                if not profile_bootstrap_read_only:
+                    bootstrap = await self._business_bootstrap(
+                        bootstrap, business_id=next(iter(scoped_ids), ""),
+                        business_create=friendly_name == "useBusinessCreationMutationMutation",
+                        business_loginpage_probe=scoped_probe,
+                        business_page_create_prechecked=page_create_prechecked,
+                    )
+                # Targeting suggestions are read-only and validate the exact
+                # BM/RK identities in the response. Skip the Ads Manager
+                # document preflight that can stall on a cross-host redirect.
         except AuthenticationError as exc:
             if ((scoped_probe in {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS",
                     "READ_FP", "FP_CATEGORY", "FP_PRECHECK"}

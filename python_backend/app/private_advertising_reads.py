@@ -118,7 +118,8 @@ class AdvertisingReadCatalog:
         for _ in range(5):
             response = await web.graphql(row["doc_id"], _render(row["variables"], {"cursor": cursor, **values}),
                 friendly_name=row["friendly_name"], endpoint_url=PrivateLaunchContractStore._endpoint(row.get("endpoint_url")),
-                business_context_id=values["business_id"])
+                business_context_id=values["business_id"],
+                profile_bootstrap_read_only=name in (TARGETING_TYPES | {"locations", "locales"}))
             if not isinstance(response, dict) or not _complete(response):
                 raise fail("RESOURCE_READ_INCOMPLETE", "Advertising resource query is incomplete", True)
             account = _lookup(response, row["account_path"])
