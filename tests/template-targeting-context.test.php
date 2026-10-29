@@ -1,6 +1,8 @@
 <?php
 require dirname(__DIR__).'/railway-template-targeting-context.php';
+$contextSource=file_get_contents(dirname(__DIR__).'/railway-template-targeting-context.php');
 function expect($condition, $message) { if (!$condition) throw new RuntimeException($message); }
+expect(str_contains($contextSource,"'timeout'=>8"),'targeting worker lookup has a short hard timeout');
 $profiles=[['name'=>'16','proxy_configured'=>true,'cookies_ready'=>true],['name'=>'19','proxy_configured'=>true,'cookies_ready'=>true],['name'=>'20','proxy_configured'=>true,'cookies_ready'=>true]];
 $catalogs=['16'=>['profile'=>'16','ad_accounts'=>['data'=>[]]],
     '19'=>['profile'=>'19','ad_accounts'=>['data'=>[['profile'=>'19','account_id'=>'654321','business_id'=>'123456','account_status'=>null]]]],
@@ -92,12 +94,16 @@ foreach(['PRIVATE_ADS_DRAFT_CHECKPOINT_REQUIRED','PRIVATE_HTTP_PROXY_UNAVAILABLE
     expect($failure['settings_preserved']===true && $failure['template_account_bound']===false,'saving remains independent of lookup availability');
 }
 foreach(['PRIVATE_HTTP_CONNECTION_UNAVAILABLE','PRIVATE_HTTP_PROTOCOL_ERROR','PRIVATE_HTTP_READ_UNAVAILABLE',
-    'PRIVATE_HTTP_PROXY_UNAVAILABLE','PRIVATE_HTTP_READ_TIMEOUT','BUSINESS_LOGIN_GATE','TWO_FACTOR_REQUIRED'] as $code)
+    'PRIVATE_HTTP_PROXY_UNAVAILABLE','PRIVATE_HTTP_READ_TIMEOUT','BUSINESS_LOGIN_GATE','TWO_FACTOR_REQUIRED','PROFILE_META_BLOCKED'] as $code)
     expect(RemaskTemplateTargetingContext::sourceFailure(new RuntimeException($code)), 'transport failure must cool down its source: '.$code);
 foreach(['INVALID_TARGETING_QUERY','TARGETING_FIELDS_UNAVAILABLE','PRIVATE_ADS_DRAFT_REQUEST_REJECTED'] as $code)
     expect(!RemaskTemplateTargetingContext::sourceFailure(new RuntimeException($code)), 'a field/query error must not disable unrelated dictionaries');
 expect(str_contains(RemaskTemplateTargetingContext::failure(new RuntimeException('BUSINESS_LOGIN_GATE'))['message'],'страницу входа'),
     'a successful connection returning a login page must not be presented as a connection outage');
+foreach(['CHECKPOINT_REQUIRED','PROFILE_META_BLOCKED'] as $code)
+    expect(RemaskTemplateTargetingContext::failure(new RuntimeException($code))['message']
+        ==='Профиль заблокирован Meta. Новые запросы остановлены.',
+        'terminal Meta access failures get a short permanent-stop message');
 $secret=RemaskTemplateTargetingContext::failure(new RuntimeException('proxy http://secret:password@example.com cookie=xs-sensitive'),'19');
 expect(!str_contains(json_encode($secret),'password') && !str_contains(json_encode($secret),'xs-sensitive'),'transport secrets never reach UI');
 $file=sys_get_temp_dir().'/remask-template-reference-'.bin2hex(random_bytes(8)).'.json';
@@ -158,6 +164,15 @@ try {
     catch(RuntimeException $error){expect($error->getMessage()==='BUSINESS_LOGIN_GATE','cooldown preserves the actual login cause');}
     expect($reference->available([['profile'=>'30']],1701)===[['profile'=>'30']], 'stored reasons never select or leak an unrelated profile');
     expect($reference->available([['profile'=>'29']],2301)===[['profile'=>'29']], 'login cooldown remains bounded');
+    foreach(['31'=>'CHECKPOINT_REQUIRED','32'=>'PROFILE_META_BLOCKED'] as $profile=>$code) {
+        $reference->block($profile,1700,$code);
+        $persisted=new RemaskTemplateTargetingReference($file);
+        $terminalBlocked=false;
+        try {$persisted->available([['profile'=>$profile]],1000000);}
+        catch(RuntimeException $error) {$terminalBlocked=$error->getMessage()===$code;}
+        expect($terminalBlocked && in_array($profile,$persisted->blocked(1000000),true),
+            'checkpoint and stopped-access profiles remain blocked across reloads');
+    }
     expect($reference->search('interests','Fixture',1701)!==null,'login failure never hides genuine cached query results');
     $other=new RemaskTemplateTargetingReference($file.'-other');
     expect($other->get('interests','fixture',1001)===null,'workspaces do not share private reference stores');

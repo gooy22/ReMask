@@ -4,7 +4,7 @@ declare(strict_types=1);
 /** Read transport only. This context is never a template destination. */
 final class RemaskTemplateTargetingContext {
     public static function sourceFailure(Throwable $error): bool {
-        return preg_match('/SESSION|CHECKPOINT|LOGIN|TWO_FACTOR|AUTH|PROXY|TIMEOUT|ACCOUNT_INACTIVE|TEMPLATE_LOOKUP_NO_ACCOUNT|PRIVATE_HTTP_(?:CONNECTION|PROTOCOL|READ)_UNAVAILABLE|PRIVATE_HTTP_PROTOCOL_ERROR/', $error->getMessage())===1;
+        return preg_match('/SESSION|CHECKPOINT|PROFILE_META_BLOCKED|LOGIN|TWO_FACTOR|AUTH|PROXY|TIMEOUT|ACCOUNT_INACTIVE|TEMPLATE_LOOKUP_NO_ACCOUNT|PRIVATE_HTTP_(?:CONNECTION|PROTOCOL|READ)_UNAVAILABLE|PRIVATE_HTTP_PROTOCOL_ERROR/', $error->getMessage())===1;
     }
     public static function candidates(array $profiles, callable $loadCatalog, string $preferred = '', array $excluded = [], bool $discover = false): array {
         $candidates = [];
@@ -67,7 +67,7 @@ final class RemaskTemplateTargetingContext {
         $raw=json_encode($input,JSON_THROW_ON_ERROR);
         if (strlen($raw)>65536) throw new InvalidArgumentException('ADVERTISING_INPUT_TOO_LARGE');
         if (session_status()===PHP_SESSION_ACTIVE) session_write_close();
-        $context=stream_context_create(['http'=>['method'=>'POST','timeout'=>35,'ignore_errors'=>true,
+        $context=stream_context_create(['http'=>['method'=>'POST','timeout'=>8,'ignore_errors'=>true,
             'follow_location'=>0,'content'=>$raw,'header'=>"Content-Type: application/json\r\nAccept: application/json\r\nX-Remask-Worker-Key: ".$key."\r\n"]]);
         $body=@file_get_contents($base.'/api/v1/profiles/'.rawurlencode($profile).'/template-reference/'.rawurlencode($operation),false,$context,0,2097153);
         $data=is_string($body) && strlen($body)<=2097152 ? json_decode($body,true) : null;
@@ -113,10 +113,12 @@ final class RemaskTemplateTargetingContext {
         $message = in_array($code, ['UNKNOWN_TARGETING_TYPE','INVALID_TARGETING_QUERY'], true)
             ? 'Выберите тип справочника и введите не более 200 символов.'
             : 'Общий справочник Meta временно недоступен. Шаблон можно редактировать и сохранить без выбора профиля.';
-        if (preg_match('/LOGIN|SESSION_EXPIRED/', $code))
-            $message='Meta вернула страницу входа вместо данных. Обновите Facebook-сессию. Сохранённые варианты доступны из кэша; новые варианты и оценка аудитории требуют действующей сессии.';
-        elseif (preg_match('/CHECKPOINT|TWO_FACTOR/', $code))
-            $message='Meta требует подтверждения входа. Завершите проверку аккаунта и обновите Facebook-сессию. Сохранённые варианты доступны из кэша.';
+        if (preg_match('/CHECKPOINT|PROFILE_META_BLOCKED/', $code))
+            $message='Профиль заблокирован Meta. Новые запросы остановлены.';
+        elseif (preg_match('/TWO_FACTOR/', $code))
+            $message='Meta запросила подтверждение входа. Список из Meta недоступен.';
+        elseif (preg_match('/LOGIN|SESSION_EXPIRED/', $code))
+            $message='Meta вернула страницу входа вместо данных. Сохранённые варианты доступны из кэша.';
         elseif (preg_match('/PROXY|PRIVATE_HTTP_(?:CONNECTION|PROTOCOL|READ)_UNAVAILABLE|PRIVATE_HTTP_PROTOCOL_ERROR/', $code))
             $message='Не удалось соединиться с Meta. Проверьте разрешённое для аккаунта подключение. Сохранённые варианты доступны из кэша.';
         return ['code'=>$code,'message'=>$message,'settings_preserved'=>true,'template_account_bound'=>false];
@@ -193,7 +195,8 @@ final class RemaskTemplateTargetingReference {
     }
     public function block(string $profile, int $now, string $code = ''): void {
         $this->update(static function(array &$state) use ($profile,$now,$code) {
-            $state['blocked'][$profile]=$now+600;
+            $terminal=preg_match('/CHECKPOINT|PROFILE_META_BLOCKED/',$code)===1;
+            $state['blocked'][$profile]=$terminal ? PHP_INT_MAX : $now+600;
             unset($state['failures'][$profile]);
             if (preg_match('/^[A-Z][A-Z0-9_]{2,119}$/D',$code)
                 && RemaskTemplateTargetingContext::sourceFailure(new RuntimeException($code)))
