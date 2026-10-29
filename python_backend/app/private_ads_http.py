@@ -18,6 +18,7 @@ import logging
 import re
 from urllib.parse import parse_qs, urlsplit
 
+from .business_login_gate_http import continue_business_login_gate
 from .private_ads_draft import fail, flatten_params, identity
 from .private_ads_document import (_auth_gate, _json_payloads, _JSON_SCRIPT_RE,
                                    _response_only, _strict_json, _strict_json_decoder)
@@ -363,10 +364,64 @@ class AdsManagerPrivateHttp:
                f"?act={account_id}&business_id={business_id}")
         status, body, final_url = await web.fetch_text(url, max_bytes=5_000_001, document_navigation=True)
         final = urlsplit(final_url)
-        account_matches = parse_qs(final.query).get("act") == [account_id]
         gate = _auth_gate(final_url, body)
+        business_gate_continuation = (
+            gate == "BUSINESS_LOGIN_GATE" and allow_business_gate_renewal
+            and status == 200 and len(body.encode()) <= 5_000_000
+            and final.scheme == "https" and final.hostname == "business.facebook.com"
+            and final.path in {"/business/loginpage/", "/business/loginpage"}
+        )
+        gate_recovered = False
+        if gate and not business_gate_continuation:
+            # Preserve the typed bootstrap evidence for rejected gates without
+            # exporting response text, credentials, or the redirect URL.
+            account_matches = parse_qs(final.query).get("act") == [account_id]
+            log.info("ads_bootstrap profile=%s status=%s bytes=%d host_reviewed=%s path_matches=%s account_matches=%s business_matches=%s gate=%s",
+                getattr(web.profile, "name", ""), status, len(body.encode()),
+                final.hostname in {"adsmanager.facebook.com", "business.facebook.com"},
+                final.path == "/adsmanager/manage/campaigns",
+                account_matches,
+                parse_qs(final.query).get("business_id") == [business_id], gate or "none")
+            try:
+                evidence = json.dumps(_bootstrap_evidence(final_url, body, web.profile, actor_id),
+                    sort_keys=True, separators=(",", ":"))
+            except Exception:
+                evidence = '{"evidence_error":"unavailable"}'
+            log.info("ads_bootstrap_evidence profile=%s evidence=%s",
+                getattr(web.profile, "name", ""), evidence)
+            error = fail(gate, "Ads Manager returned an authentication gate", True)
+            # No GraphQL or advertising request was sent by this document GET.
+            error.request_may_have_been_sent = False
+            error.transport_stage = "bootstrap"
+            raise error
+        if business_gate_continuation:
+            # Complete only Meta's single unambiguous, credential-free handoff
+            # over this profile's HTTP/2 session. Never renew Ads Manager tokens
+            # from the login-page document; renewal requires a fresh Ads Manager
+            # document from the original exact account URL.
+            recovered = await continue_business_login_gate(
+                web, gate_url=final_url, body=body, return_url=url)
+            if not isinstance(recovered, dict):
+                outcome = str(getattr(web, "_business_login_gate_outcome", "unavailable"))
+                log.info("ads_business_login_gate profile=%s outcome=%s",
+                    getattr(web.profile, "name", ""), outcome)
+                error = fail("BUSINESS_LOGIN_GATE",
+                    "Meta Business handoff did not return a verified Ads Manager document", True)
+                error.transport_stage = "bootstrap"
+                raise error
+            status, body, final_url = recovered["status"], recovered["body"], recovered["url"]
+            final = urlsplit(final_url)
+            gate = _auth_gate(final_url, body)
+            if gate:
+                error = fail(gate, "Ads Manager returned an authentication gate after Business handoff", True)
+                error.transport_stage = "bootstrap"
+                raise error
+            gate_recovered = True
+
         # Only typed status and comparison results may leave this boundary.
         # Raw URLs, HTML, cookies and initialization values can contain secrets.
+        account_matches = (not gate_recovered and
+            parse_qs(final.query).get("act") == [account_id])
         log.info("ads_bootstrap profile=%s status=%s bytes=%d host_reviewed=%s path_matches=%s account_matches=%s business_matches=%s gate=%s",
             getattr(web.profile, "name", ""), status, len(body.encode()),
             final.hostname in {"adsmanager.facebook.com", "business.facebook.com"},
@@ -382,57 +437,29 @@ class AdsManagerPrivateHttp:
             evidence = '{"evidence_error":"unavailable"}'
         log.info("ads_bootstrap_evidence profile=%s evidence=%s",
             getattr(web.profile, "name", ""), evidence)
-        business_gate_refresh = (
-            gate == "BUSINESS_LOGIN_GATE" and allow_business_gate_renewal
-            and status == 200 and len(body.encode()) <= 5_000_000
-            and final.scheme == "https" and final.hostname == "business.facebook.com"
-            and final.path in {"/business/loginpage/", "/business/loginpage"}
-        )
-        if gate and not business_gate_refresh:
-            error = fail(gate, "Ads Manager returned an authentication gate", True)
-            # No GraphQL or advertising request was sent by this document GET.
-            error.request_may_have_been_sent = False
-            error.transport_stage = "bootstrap"
-            raise error
-        if business_gate_refresh:
-            # For targeting READs and an explicit DRAFT plan only, recover the
-            # reviewed Ads Manager client through the same profile's native
-            # cookie-authenticated refresh. The exact account + Business READ
-            # below remains mandatory before this sender can be used.
-            seed = AdsManagerContext(account_id, business_id, actor_id,
-                "https://adsmanager-graph.facebook.com", "v22.0", "119211728144504", "")
-            bootstrap_client = cls(web, seed)
-            # XAdsCMRenewAccessTokenController is served by the Ads Manager app.
-            # The Business login redirect is only bootstrap evidence and must not
-            # change the controller origin or its Origin/Referer headers.
-            bootstrap_client.document_origin = "https://adsmanager.facebook.com"
-            bootstrap_client.document_url = url
-            bootstrap_client.read_only = True
-            context = await bootstrap_client._renew_session(body)
+
+        if (status != 200 or len(body.encode()) > 5_000_000 or final.scheme != "https"
+                or final.hostname not in {"adsmanager.facebook.com", "business.facebook.com"}
+                or final.path != "/adsmanager/manage/campaigns"
+                or parse_qs(final.query).get("business_id") != [business_id]):
+            raise fail("BOOTSTRAP_SCOPE_UNVERIFIED", "Ads Manager did not confirm the requested account context", True)
+        try:
+            context = context_from_document(body, account_id=account_id,
+                        business_id=business_id, actor_id=actor_id)
+        except _MissingSessionInitialization as error:
+            client = cls(web, error.context)
+            client.document_origin = final.scheme + '://' + final.hostname
+            client.document_url = final_url
+            client.read_only = True
+            context = await client._renew_session(body)
+            # Every renewed session must independently confirm the selected
+            # account and BM, even if the document retained its act parameter.
             account_matches = False
-        else:
-            if (status != 200 or len(body.encode()) > 5_000_000 or final.scheme != "https"
-                    or final.hostname not in {"adsmanager.facebook.com", "business.facebook.com"}
-                    or final.path != "/adsmanager/manage/campaigns"
-                    or parse_qs(final.query).get("business_id") != [business_id]):
-                raise fail("BOOTSTRAP_SCOPE_UNVERIFIED", "Ads Manager did not confirm the requested account context", True)
-            try:
-                context = context_from_document(body, account_id=account_id,
-                            business_id=business_id, actor_id=actor_id)
-            except _MissingSessionInitialization as error:
-                client = cls(web, error.context)
-                client.document_origin = final.scheme + '://' + final.hostname
-                client.document_url = final_url
-                client.read_only = True
-                context = await client._renew_session(body)
-                # Every renewed session must independently confirm the selected
-                # account and BM, even if the document retained its act parameter.
-                account_matches = False
-            except ProvisioningError as error:
-                log.warning("ads_bootstrap rejected profile=%s code=%s", getattr(web.profile, "name", ""), error.code)
-                raise
+        except ProvisioningError as error:
+            log.warning("ads_bootstrap rejected profile=%s code=%s", getattr(web.profile, "name", ""), error.code)
+            raise
         refresh = getattr(web, 'refresh_reviewed_modules', None)
-        if refresh_modules and callable(refresh) and not business_gate_refresh:
+        if refresh_modules and callable(refresh) and not gate_recovered:
             await refresh(body, final_url)
         client = cls(web, context)
         client.document_origin = final.scheme + '://' + final.hostname
