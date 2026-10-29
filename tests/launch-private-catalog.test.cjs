@@ -52,6 +52,12 @@ assert.ok(completionSource.includes('status.textContent=remaskPrivatePageReadFai
       throw new Error('Unexpected write: '+request.action);
     }};
   vm.createContext(ctx);vm.runInContext(source,ctx);
+assert.equal(ctx.remaskPrivateLaunchUserMessage({code:'PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE'}),
+  'Meta не подтвердила вход','draft errors use a short Russian message without internal codes');
+assert.equal(ctx.remaskPrivateLaunchUserMessage({code:'CHECKPOINT_REQUIRED'}),
+  'Чекпоинт Meta: профиль остановлен; новые задачи запрещены','a checkpoint is terminal and clearly explained');
+assert.ok(source.includes('const message=remaskPrivateLaunchUserMessage(error)'),
+  'the actual draft-launch error path must use the short-message mapper');
   await ctx.remaskPrivateRestoreSourceJob();
   assert.match(controls.jobSummary.textContent,/Ошибка/);
   assert.doesNotMatch(controls.jobSummary.textContent,/FAILED/);
@@ -94,6 +100,10 @@ assert.ok(completionSource.includes('status.textContent=remaskPrivatePageReadFai
   controls.recentJobSelect.value='legacy';
   controls.recentJobSelect.events.change({});ctx.renderJob({id:'legacy',items:[]});
   assert.equal(legacyRenders,1,'explicitly selecting a legacy recent job still works');
+  calls.length=0;ctx.window.location.href='https://remask.fixture/launch.php';
+  await ctx.remaskPrivateRestoreSourceJob();
+  assert.equal(calls.length,0,'a fresh Launch must not restore an old job from local storage');
+  assert.equal(ctx.window.location.href,'https://remask.fixture/launch.php','a fresh Launch must stay on its own URL');
   calls.length=0;storage.clear();ctx.window.location.href='https://remask.fixture/launch.php?private_job=https://other.invalid';
   await ctx.remaskPrivateRestoreSourceJob();assert.equal(calls.length,0);
   console.log('Private Draft reopens from its exact handle; rejected Meta reads retain receipts without advertising writes.');

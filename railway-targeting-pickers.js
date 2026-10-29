@@ -17,8 +17,14 @@ if (typeof creativeTargetSearchConfig !== 'function') {
     const targetingFailureMessage = error => {
         const raw=String(error?.code||error?.payload?.error?.code||error?.payload?.code||
             error?.payload?.error||error?.payload?.message||error?.message||'').toUpperCase();
-        if(/CHECKPOINT|TWO_FACTOR|SESSION_EXPIRED|BUSINESS_LOGIN_GATE|LOGIN/.test(raw))
-            return 'Обновите Facebook-сессию.';
+        if(/CHECKPOINT|PROFILE_META_BLOCKED/.test(raw))return 'Профиль заблокирован Meta. Новые запросы остановлены.';
+        if(/TWO_FACTOR_REQUIRED/.test(raw))return 'Meta запросила подтверждение входа. Список недоступен.';
+        if(/TARGETING_META_ACCESS_STOPPED|SESSION_EXPIRED|BUSINESS_LOGIN_GATE|LOGIN/.test(raw))return 'Meta не подтвердила вход. Список недоступен.';
+        if(/TEMPLATE_LOOKUP_SOURCE_UNAVAILABLE/.test(raw))return 'Для выбранного РК не подтверждена связь с BM. Список недоступен.';
+        if(/TEMPLATE_LOOKUP_ACCESS_UNVERIFIED|TARGETING_SOURCE_SCOPE_UNVERIFIED/.test(raw))return 'Meta не подтвердила доступ к выбранному РК.';
+        if(/RESOURCE_READ_INCOMPLETE/.test(raw))return 'Meta не вернула список для выбранного РК. Доступ не подтверждён.';
+        if(/TEMPLATE_LOOKUP_UNAVAILABLE/.test(raw))return 'Справочник Meta недоступен. Попробуйте позже.';
+        if(/TIMEOUT|TIMED_OUT/.test(raw))return 'Meta отвечает слишком долго. Список не загружен.';
         return 'Список сейчас недоступен. Выбранные настройки не изменены.';
     };
     const runPicker = async (type, offset=0) => {
@@ -32,12 +38,26 @@ if (typeof creativeTargetSearchConfig !== 'function') {
         if(offset && (pickerPages[type]?.query!==query || pickerPages[type]?.next_offset!==offset))return;
         pickerControllers[type]?.abort();
         const controller=new AbortController(); pickerControllers[type]=controller;
+        const slowStatusTimer=!offset?setTimeout(()=>{
+            if(pickerControllers[type]===controller && input.value.trim()===query)
+                box.textContent='Загрузка списка занимает дольше обычного…';
+        },3000):0;
+        let timedOut=false,timeoutTimer=0;
+        const timeoutPromise=new Promise((_,reject)=>{
+            timeoutTimer=setTimeout(()=>{
+                timedOut=true;
+                const error=Object.assign(new Error('TARGETING_LOOKUP_TIMEOUT'),{code:'TIMEOUT'});
+                reject(error);
+                controller.abort();
+            },8000);
+        });
         if(!offset) {delete pickerPages[type];box.textContent='Загружаю варианты Meta…';}
         try {
-            const data=await apiJson('ajax/metaTemplateTargetingSearch.php',{
+            const lookup=apiJson('ajax/metaTemplateTargetingSearch.php',{
                 ...formPost({type:type==='locales'?'languages':type,q:query,limit:100,
                     ...(offset?{offset}: {})}),signal:controller.signal
             });
+            const data=await Promise.race([lookup,timeoutPromise]);
             if(pickerControllers[type]!==controller || input.value.trim()!==query)return;
             if(offset && (data?.offset!==offset || !Array.isArray(data?.data)))
                 throw new Error('Страница справочника устарела. Повторите поиск.');
@@ -90,11 +110,14 @@ if (typeof creativeTargetSearchConfig !== 'function') {
                 hint.textContent='Введите название, чтобы сузить список.';box.appendChild(hint);
             }
         } catch(error){
-            if(error?.name==='AbortError'||pickerControllers[type]!==controller)return;
-            if(offset){
-                box.textContent=targetingFailureMessage(error);
-            } else box.textContent=targetingFailureMessage(error);
-        } finally {if(pickerControllers[type]===controller)delete pickerControllers[type];}
+            if(pickerControllers[type]!==controller)return;
+            if(error?.name==='AbortError'&&!timedOut)return;
+            box.textContent=targetingFailureMessage(timedOut?{code:'TIMEOUT'}:error);
+        } finally {
+            if(slowStatusTimer)clearTimeout(slowStatusTimer);
+            if(timeoutTimer)clearTimeout(timeoutTimer);
+            if(pickerControllers[type]===controller)delete pickerControllers[type];
+        }
     };
     searchTargeting=type=>runPicker(type);
     searchAudienceLanguages=()=>runPicker('locales');

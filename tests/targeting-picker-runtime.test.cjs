@@ -138,10 +138,32 @@ function fixture(){
   launch.nodes.get('geoResults').children[0].fire('click');
   assert.equal(launch.ctx.state.geo[0].key,'UA','selection keeps the original country key');
   launch.nodes.get('geoQuery').value='Ukraine';
+  launchFailure=Object.assign(new Error('TEMPLATE_LOOKUP_SOURCE_UNAVAILABLE'),{code:'TEMPLATE_LOOKUP_SOURCE_UNAVAILABLE'});
+  await launch.ctx.searchTargeting('locations');
+  assert.equal(launch.nodes.get('geoResults').textContent,'Для выбранного РК не подтверждена связь с BM. Список недоступен.');
+  assert.doesNotMatch(launch.nodes.get('geoResults').textContent,/TEMPLATE_LOOKUP/,'internal Meta codes stay out of the UI');
+  launchFailure=Object.assign(new Error('TEMPLATE_LOOKUP_ACCESS_UNVERIFIED'),{code:'TEMPLATE_LOOKUP_ACCESS_UNVERIFIED'});
+  await launch.ctx.searchTargeting('locations');
+  assert.equal(launch.nodes.get('geoResults').textContent,'Meta не подтвердила доступ к выбранному РК.');
   launchFailure=Object.assign(new Error('PRIVATE_ADS_DRAFT_RESOURCE_READ_INCOMPLETE'),{code:'PRIVATE_ADS_DRAFT_RESOURCE_READ_INCOMPLETE'});
   await launch.ctx.searchTargeting('locations');
-  assert.equal(launch.nodes.get('geoResults').textContent,'Список сейчас недоступен. Выбранные настройки не изменены.');
+  assert.equal(launch.nodes.get('geoResults').textContent,'Meta не вернула список для выбранного РК. Доступ не подтверждён.');
   assert.doesNotMatch(launch.nodes.get('geoResults').textContent,/PRIVATE_ADS_DRAFT/,'internal Meta codes stay out of the UI');
+  launchFailure=Object.assign(new Error('PRIVATE_HTTP_READ_TIMEOUT'),{code:'PRIVATE_HTTP_READ_TIMEOUT'});
+  await launch.ctx.searchTargeting('locations');
+  assert.equal(launch.nodes.get('geoResults').textContent,'Meta отвечает слишком долго. Список не загружен.');
+  launchFailure=Object.assign(new Error('PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE'),{code:'PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE'});
+  await launch.ctx.searchTargeting('locations');
+  assert.equal(launch.nodes.get('geoResults').textContent,'Meta не подтвердила вход. Список недоступен.');
+  launchFailure=Object.assign(new Error('TARGETING_META_ACCESS_STOPPED'),{code:'TARGETING_META_ACCESS_STOPPED'});
+  await launch.ctx.searchTargeting('locations');
+  assert.equal(launch.nodes.get('geoResults').textContent,'Meta не подтвердила вход. Список недоступен.');
+  launchFailure=Object.assign(new Error('CHECKPOINT_REQUIRED'),{code:'CHECKPOINT_REQUIRED'});
+  await launch.ctx.searchTargeting('locations');
+  assert.equal(launch.nodes.get('geoResults').textContent,'Профиль заблокирован Meta. Новые запросы остановлены.');
+  launchFailure=Object.assign(new Error('PROFILE_META_BLOCKED'),{code:'PROFILE_META_BLOCKED'});
+  await launch.ctx.searchTargeting('locations');
+  assert.equal(launch.nodes.get('geoResults').textContent,'Профиль заблокирован Meta. Новые запросы остановлены.');
   console.log('Launch choices: no extra search buttons, no blank catalog fetch, friendly errors and exact selection IDs passed.');
   for(const id of ['interestQuery','interestResults','selectedInterests'])launch.nodes.set(id,id.endsWith('Query')?new Input():new Element());
   launch.ctx.state.interests=[];
@@ -156,10 +178,14 @@ function fixture(){
   vm.runInContext(read('railway-targeting-pickers.js'),paged.ctx);
   paged.nodes.get('interestQuery').value='Travel';
   let first=paged.ctx.searchTargeting('interests');
+  const slowStatus=Array.from(paged.timers.values())[0];
+  slowStatus();
+  const resultBox=paged.nodes.get('interestResults');
+  assert.equal(resultBox.textContent,'Загрузка списка занимает дольше обычного…',
+    'a slow catalog request shows progress instead of looking like an endless spinner');
   pageReplies.shift()({data:[{id:'100001',name:'First interest',path:['Category']}],
     next_offset:100,offset:0,truncated:true,source:'private_meta_template_reference'});
   await first;
-  const resultBox=paged.nodes.get('interestResults');
   assert.equal(resultBox.children.at(-1).textContent,'Показать ещё 100 вариантов',
     'template picker exposes next-page control instead of hiding all but 100 IDs');
   resultBox.children.at(-1).fire('click');
@@ -173,9 +199,51 @@ function fixture(){
   assert.equal(paged.ctx.state.interests[0].path[1],'Second','category hierarchy is preserved for the chosen ID');
   assert.equal(resultBox.children.length,0,'selection dismisses all remaining options');
   console.log('Launch category browser: paged discovery, exact ID choice and saved taxonomy passed.');
+
+  const timed=fixture(),timedRequests=[];
+  for(const id of ['interestQuery','interestResults','selectedInterests'])
+    timed.nodes.set(id,id.endsWith('Query')?new Input():new Element());
+  Object.assign(timed.ctx,{$:id=>timed.nodes.get(id),state:{interests:[]},formPost:body=>body,
+    apiJson:async(url,options)=>{timedRequests.push({url,options});return new Promise(()=>{});},
+    renderPills(){},invalidateLaunchReview(){},validateReady(){}});
+  vm.runInContext(read('railway-targeting-pickers.js'),timed.ctx);
+  timed.nodes.get('interestQuery').value='Travel';
+  const timedLookup=timed.ctx.searchTargeting('interests');
+  const timeoutCallbacks=Array.from(timed.timers.values());
+  assert.equal(timeoutCallbacks.length,2,'slow notice and hard timeout are both scheduled');
+  timeoutCallbacks[1]();
+  await timedLookup;
+  assert.equal(timedRequests[0].options.signal.aborted,true,'timed-out targeting request is aborted');
+  assert.equal(timed.nodes.get('interestResults').textContent,'Meta отвечает слишком долго. Список не загружен.',
+    'an unresolved request leaves the loading state and shows a short timeout message');
+  assert.equal(timed.timers.size,0,'both targeting timers are cleared after timeout');
+  console.log('Launch targeting: hard timeout aborts unresolved audience lookups.');
   const cleanUiSource=read('railway-targeting-autocomplete-overlay.php');
   assert.match(cleanUiSource,/remask-targeting-search-cleanup/,'legacy search controls stay hidden before first paint');
   assert.match(cleanUiSource,/#geoSearch,#interestSearch\{display:none!important;visibility:hidden!important\}/);
+  const targetingOverlayUi=cleanUiSource.match(/\$js = <<<'JS'\n([\s\S]*?)\nJS;/)?.[1];
+  assert.ok(targetingOverlayUi,'targeting overlay JavaScript remains embedded');
+  const ownershipFn=targetingOverlayUi.match(/function isLaunchTargetingInput\(input\) \{[\s\S]*?\n  \}/)?.[0];
+  assert.ok(ownershipFn,'Launch fields have an explicit owner guard');
+  const overlayContext=vm.createContext({});
+  vm.runInContext(ownershipFn+'\nthis.isLaunchTargetingInput=isLaunchTargetingInput;',overlayContext);
+  for(const id of ['geoQuery','interestQuery','behaviorQuery','languageQuery'])
+    assert.equal(overlayContext.isLaunchTargetingInput({id,dataset:{}}),true,'Launch field '+id+' must not start a duplicate global Meta request');
+  assert.equal(overlayContext.isLaunchTargetingInput({id:'creativeName',dataset:{}}),false);
+  assert.equal(overlayContext.isLaunchTargetingInput({id:'customField',dataset:{remaskLaunchTargetingPicker:'true'}}),true);
+  const errorMessageFn=targetingOverlayUi.match(/function targetingErrorMessage\(error\) \{[\s\S]*?\n  \}/)?.[0];
+  assert.ok(errorMessageFn,'targeting request failures are converted to user text');
+  vm.runInContext(errorMessageFn+'\nthis.targetingErrorMessage=targetingErrorMessage;',overlayContext);
+  assert.equal(overlayContext.targetingErrorMessage({payload:{error:{code:'BUSINESS_LOGIN_GATE'}}}),
+    'Meta не подтвердила вход для этого профиля.');
+  assert.equal(overlayContext.targetingErrorMessage({payload:{code:'CHECKPOINT_REQUIRED'}}),
+    'Профиль заблокирован Meta. Новые запросы остановлены.');
+  assert.equal(overlayContext.targetingErrorMessage({payload:{code:'TEMPLATE_LOOKUP_SOURCE_UNAVAILABLE'}}),
+    'Для выбранного РК не подтверждена связь с BM. Список недоступен.');
+  assert.equal(overlayContext.targetingErrorMessage({payload:{code:'PRIVATE_ADS_DRAFT_RESOURCE_READ_INCOMPLETE'}}),
+    'Meta не подтвердила доступ к выбранному РК.');
+  assert.equal(targetingOverlayUi.includes('Targeting endpoint error'),false);
+  assert.equal(targetingOverlayUi.includes('HTTP ${response.status}'),false);
   // Installed Launch API wrapper must retain the page offset. Previously it
   // forwarded type/query/limit but silently dropped offset from a template.
   const completion=fixture(),bridged=[];
@@ -197,18 +265,48 @@ function fixture(){
   // The wrapped source function is a closure over the original mock: replace
   // its returned value by constructing a fresh selected-account fixture.
   const selected=fixture(),selectedCalls=[];
+  const cacheMiss={data:[],checked_live:false,account_scope_verified:false,availability:'NOT_LOADED',
+    source:'private_meta_template_reference',offset:100,next_offset:null,template_account_bound:false};
   Object.assign(selected.ctx,{$:()=>null,URLSearchParams,state:{profile:'38'},
     selectedAccountIds:()=>['111111'],targetMode:()=>false,
-    apiJson:async(url,options)=>{selectedCalls.push({url,options});return scopedResponse;}});
+    apiJson:async(url,options)=>{
+      selectedCalls.push({url,options});
+      return new URLSearchParams(options.body).get('cache_only')==='1'?cacheMiss:scopedResponse;
+    }});
   vm.runInContext(completionSource.slice(0,completionSource.indexOf('// A selected RK needs')),selected.ctx);
   const selectedPage=await selected.ctx.apiJson('ajax/metaTemplateTargetingSearch.php',{
     body:'type=interests&q=&limit=100&offset=100'
   });
-  assert.equal(selectedCalls[0].url,'ajax/metaTargetingSearch.php',
-    'selected account routes paging through its own private Meta resource reader');
-  assert.equal(new URLSearchParams(selectedCalls[0].options.body).get('offset'),'100');
+  assert.equal(selectedCalls[0].url,'ajax/metaTemplateTargetingSearch.php',
+    'selected account checks the shared cache before opening a slow private Meta read');
+  assert.equal(new URLSearchParams(selectedCalls[0].options.body).get('cache_only'),'1');
+  assert.equal(selectedCalls[1].url,'ajax/metaTargetingSearch.php',
+    'a cache miss falls back to the exact selected account resource reader');
+  assert.equal(new URLSearchParams(selectedCalls[1].options.body).get('offset'),'100');
   assert.equal(selectedPage.next_offset,200);
-  console.log('Installed targeting API bridge: later page offset survives request routing.');
+
+  const cacheHit=fixture(),cacheHitCalls=[];
+  const cachedReference={data:[{id:'123456',name:'Cached interest'}],checked_live:false,
+    source:'private_meta_template_reference',template_account_bound:false,offset:0,next_offset:null,
+    reference_checked_at:1001,reference_stale:false};
+  Object.assign(cacheHit.ctx,{$:()=>null,URLSearchParams,state:{profile:'38'},
+    selectedAccountIds:()=>['111111'],targetMode:()=>false,
+    apiJson:async(url,options)=>{cacheHitCalls.push({url,options});return cachedReference;}});
+  vm.runInContext(completionSource.slice(0,completionSource.indexOf('// A selected RK needs')),cacheHit.ctx);
+  const suggestion=await cacheHit.ctx.apiJson('ajax/metaTemplateTargetingSearch.php',{
+    body:'type=interests&q=health&limit=100'
+  });
+  assert.equal(cacheHitCalls.length,1,'a shared cache hit bypasses the account-specific private read');
+  assert.equal(new URLSearchParams(cacheHitCalls[0].options.body).get('cache_only'),'1');
+  assert.equal(suggestion.checked_live,false,'suggestions are never returned as a live account permission check');
+  assert.equal(suggestion.account_scope_verified,false,'shared options never establish account access');
+  assert.equal(suggestion.profile,'38');
+  assert.equal(suggestion.account_id,'111111');
+  assert.equal(suggestion.resource,'interests');
+  assert.equal(suggestion.data[0].id,'123456');
+  assert.equal(suggestion._cache.shared_reference,true);
+  assert.equal(suggestion._cache.cached_only,true);
+  console.log('Installed targeting API bridge: cache hits are instant suggestions and misses retain exact-account routing.');
 
   // GEO countries/regions and languages must hit the installed Meta module
   // reference before a slow profile/account private search.
@@ -240,7 +338,8 @@ function fixture(){
   });
   assert.equal(localCalls.length,1,'known GEO values return without a private Meta request');
   assert.equal(localCalls[0].url,'ajax/metaTemplateTargetingSearch.php');
-  assert.match(localCalls[0].options.body,/module_only=1/);
+  assert.match(localCalls[0].options.body,/cache_only=1/);
+  assert.doesNotMatch(localCalls[0].options.body,/module_only=/);
   assert.doesNotMatch(localCalls[0].options.body,/account_id|profile=/,
     'shared IDs are suggestions, never represented as selected-account permission');
   assert.equal(country.data[0].key,'UA');

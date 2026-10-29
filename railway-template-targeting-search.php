@@ -29,6 +29,9 @@ try {
         throw new InvalidArgumentException('INVALID_TARGETING_MODE');
     if ($moduleOnly && !in_array($type,['locations','locales'],true))
         throw new InvalidArgumentException('INVALID_TARGETING_MODE');
+    $cacheOnly = (string)($input['cache_only'] ?? '') === '1';
+    if (array_key_exists('cache_only',$input) && !$cacheOnly)
+        throw new InvalidArgumentException('INVALID_TARGETING_MODE');
     $module = RemaskModuleTargetingReference::search($type,$query,
         __DIR__.'/../classes/meta-targeting-reference.json',$offset);
     if ($module !== null) { MetaEndpoint::ok($module); exit; }
@@ -44,60 +47,73 @@ try {
     if (($cached=$reference->search($type,$query,time(),$offset)) !== null) {
         MetaEndpoint::ok($cached); exit;
     }
-    $profiles = [];
+    if ($cacheOnly) {
+        MetaEndpoint::ok(['data'=>[],'checked_live'=>false,'account_scope_verified'=>false,
+            'availability'=>'NOT_LOADED','source'=>'private_meta_template_reference','offset'=>$offset,
+            'next_offset'=>null,'template_account_bound'=>false]);
+        exit;
+    }
+    $selectedProfile=trim((string)($input['profile'] ?? ''));
+    $selectedAccount=preg_replace('/^act_/i','',trim((string)($input['account_id'] ?? '')));
+    // A shared cache miss may use only the exact Launch selection. Unscoped
+    // editors and malformed selectors never probe another saved profile.
+    if ($selectedProfile === '' || strlen($selectedProfile)>160
+        || !preg_match('/^[0-9]{5,30}$/D',$selectedAccount)) {
+        MetaEndpoint::ok(['data'=>[],'checked_live'=>false,'account_scope_verified'=>false,
+            'availability'=>'NOT_LOADED','source'=>'private_meta_template_reference','offset'=>$offset,
+            'next_offset'=>null,'template_account_bound'=>false]);
+        exit;
+    }
+    $profileRow=null;
     foreach ((array)AccountStoreFactory::create(ACCOUNTSFILENAME)->deserialize() as $row) {
-        if (!$row instanceof FbAccount) continue;
+        if (!$row instanceof FbAccount || (string)$row->name !== $selectedProfile) continue;
         try { RemaskCookieProfile::validate((array)$row->cookies, $row->proxy, false); $cookiesReady = true; }
         catch (InvalidArgumentException $error) { $cookiesReady = false; }
-        $profiles[] = ['name'=>(string)$row->name, 'proxy_configured'=>$row->proxy !== null, 'cookies_ready'=>$cookiesReady,
+        $profileRow=['name'=>(string)$row->name,'proxy_configured'=>$row->proxy !== null,
+            'cookies_ready'=>$cookiesReady,
             'direct_ready'=>RemaskCookieProfile::directTestUntil((string)$row->name,(string)$row->userId)>time()];
+        break;
     }
-    $until = (int)(getenv('REMASK_DIRECT_TEST_UNTIL') ?: 0);
-    $preferred = $until > time() && $until <= time()+7200 ? trim((string)(getenv('REMASK_DIRECT_TEST_PROFILE') ?: '')) : '';
-    $excluded = array_values(array_filter(array_map('trim', explode(',', (string)(getenv('REMASK_TEMPLATE_LOOKUP_EXCLUDED_PROFILES') ?: '')))));
-    $candidates = $reference->available(RemaskTemplateTargetingContext::candidates($profiles,
-        [RemaskPrivateLaunchCatalog::class,'load'], $preferred, $excluded, true),time());
-    // Ignore all client profile/account selectors. Launch keeps its own explicit scope.
-    $attempted = []; $lastError = new RuntimeException('TEMPLATE_LOOKUP_SOURCE_UNAVAILABLE');
-    foreach ($candidates as $context) {
-        if (isset($attempted[$context['profile']])) continue;
-        if (count($attempted) >= 2) break; // bounded read fallback, never mutation retry
-        $attempted[$context['profile']] = true;
-        try {
-            // Complete bounded reference tree is cached; browser responses stay at 100 choices.
-            $result = RemaskTemplateTargetingContext::readReference($context['profile'],$type,
-                ['q'=>$query,'limit'=>$query==='' ? 20000 : 50]);
-            $cacheMeta=$result['_cache'] ?? [];
-            if (($cacheMeta['hit'] ?? false)===true && ($cacheMeta['cached_only'] ?? false)===true
-                && in_array($result['source'] ?? '',[
-                    'private_meta_targeting_option_index','ads_manager_private_http','private_meta_targetingbrowse'
-                ],true) && is_array($result['data'] ?? null) && count($result['data'])>0) {
-                MetaEndpoint::ok(['data'=>$result['data'], 'checked_live'=>false,
-                    'offset'=>$offset, 'next_offset'=>$result['next_offset'] ?? null,
-                    'truncated'=>($result['truncated'] ?? false) === true,
-                    'catalog_count'=>(int)($result['catalog_count'] ?? count($result['data'])),
-                    'source'=>$result['source'], 'template_account_bound'=>false,
-                    'reference_checked_at'=>(int)($result['checked_at'] ?? 0),
-                    'reference_stale'=>($cacheMeta['stale'] ?? false)===true]);
-                exit;
-            }
-            if (($result['checked_live'] ?? null) !== true || ($result['account_scope_verified'] ?? null) !== true)
-                throw new RuntimeException('TEMPLATE_LOOKUP_ACCESS_UNVERIFIED');
-            $reference->put($type, $query, $result, time());
-            MetaEndpoint::ok(['data'=>array_slice($result['data'] ?? [],$offset,100), 'checked_live'=>true,
-                'offset'=>$offset, 'next_offset'=>count($result['data'] ?? [])>$offset+100 ? $offset+100 : null,
-                'truncated'=>($result['truncated'] ?? false) === true || count($result['data'] ?? [])>100,
-                'catalog_count'=>(int)($result['catalog_count'] ?? count($result['data'] ?? [])),
-                'source'=>'private_meta_template_lookup', 'template_account_bound'=>false]);
+    if (!is_array($profileRow)) throw new RuntimeException('TEMPLATE_LOOKUP_SOURCE_UNAVAILABLE');
+    $excluded=array_values(array_filter(array_map('trim',
+        explode(',',(string)(getenv('REMASK_TEMPLATE_LOOKUP_EXCLUDED_PROFILES') ?: '')))));
+    $candidate=RemaskTemplateTargetingContext::exactCandidate($profileRow,
+        [RemaskPrivateLaunchCatalog::class,'load'],$selectedAccount,$excluded);
+    $context=$reference->available([$candidate],time())[0];
+    try {
+        // This single bounded read is scoped to the selected Launch profile/RK.
+        $result=RemaskTemplateTargetingContext::readReference($selectedProfile,$type,
+            ['q'=>$query,'limit'=>$query==='' ? 20000 : 50]);
+        $result=RemaskTemplateTargetingContext::referenceResponse($selectedProfile,$result);
+        $returnedAccount=preg_replace('/^act_/i','',trim((string)($result['account_id'] ?? '')));
+        if ($returnedAccount!==$selectedAccount)
+            throw new RuntimeException('TEMPLATE_LOOKUP_ACCOUNT_SCOPE_MISMATCH');
+        $cacheMeta=$result['_cache'] ?? [];
+        if (($cacheMeta['hit'] ?? false)===true && ($cacheMeta['cached_only'] ?? false)===true
+            && in_array($result['source'] ?? '',[
+                'private_meta_targeting_option_index','ads_manager_private_http','private_meta_targetingbrowse'
+            ],true) && is_array($result['data'] ?? null) && count($result['data'])>0) {
+            MetaEndpoint::ok(['data'=>$result['data'], 'checked_live'=>false,
+                'offset'=>$offset, 'next_offset'=>$result['next_offset'] ?? null,
+                'truncated'=>($result['truncated'] ?? false) === true,
+                'catalog_count'=>(int)($result['catalog_count'] ?? count($result['data'])),
+                'source'=>$result['source'], 'template_account_bound'=>false,
+                'reference_checked_at'=>(int)($result['checked_at'] ?? 0),
+                'reference_stale'=>($cacheMeta['stale'] ?? false)===true]);
             exit;
-        } catch (Throwable $error) {
-            $lastError = $error;
-            // A query/schema failure says nothing about unrelated resources.
-            if (RemaskTemplateTargetingContext::sourceFailure($error))
-                $reference->block($context['profile'], time(), $error->getMessage());
         }
+        $reference->put($type, $query, $result, time());
+        MetaEndpoint::ok(['data'=>array_slice($result['data'] ?? [],$offset,100), 'checked_live'=>true,
+            'offset'=>$offset, 'next_offset'=>count($result['data'] ?? [])>$offset+100 ? $offset+100 : null,
+            'truncated'=>($result['truncated'] ?? false) === true || count($result['data'] ?? [])>100,
+            'catalog_count'=>(int)($result['catalog_count'] ?? count($result['data'] ?? [])),
+            'source'=>'private_meta_template_lookup', 'template_account_bound'=>false]);
+        exit;
+    } catch (Throwable $error) {
+        if (RemaskTemplateTargetingContext::sourceFailure($error))
+            $reference->block($selectedProfile,time(),$error->getMessage());
+        throw $error;
     }
-    throw $lastError;
 } catch (Throwable $error) {
     http_response_code($error instanceof InvalidArgumentException ? 400 : 409);
     header('Content-Type: application/json; charset=utf-8');

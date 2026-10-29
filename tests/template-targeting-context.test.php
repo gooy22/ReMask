@@ -1,11 +1,29 @@
 <?php
 require dirname(__DIR__).'/railway-template-targeting-context.php';
+$contextSource=file_get_contents(dirname(__DIR__).'/railway-template-targeting-context.php');
 function expect($condition, $message) { if (!$condition) throw new RuntimeException($message); }
+expect(str_contains($contextSource,"'timeout'=>8"),'targeting worker lookup has a short hard timeout');
 $profiles=[['name'=>'16','proxy_configured'=>true,'cookies_ready'=>true],['name'=>'19','proxy_configured'=>true,'cookies_ready'=>true],['name'=>'20','proxy_configured'=>true,'cookies_ready'=>true]];
 $catalogs=['16'=>['profile'=>'16','ad_accounts'=>['data'=>[]]],
     '19'=>['profile'=>'19','ad_accounts'=>['data'=>[['profile'=>'19','account_id'=>'654321','business_id'=>'123456','account_status'=>null]]]],
     '20'=>['profile'=>'20','ad_accounts'=>['data'=>[['profile'=>'20','account_id'=>'222222','business_id'=>'333333','account_status'=>1]]]]];
 $load=static fn($name)=>$catalogs[$name];
+$exactLoaded=[];
+$exact=RemaskTemplateTargetingContext::exactCandidate($profiles[1],static function($name) use (&$exactLoaded,$catalogs) {
+    $exactLoaded[]=$name; return $catalogs[$name];
+},'act_654321');
+expect($exact['profile']==='19' && $exact['account_id']==='654321' && $exactLoaded===['19'],
+    'a live targeting fallback can read only the selected profile and exact RK');
+try { RemaskTemplateTargetingContext::exactCandidate($profiles[1],$load,'222222');
+    throw new LogicException('fallback borrowed another RK');
+} catch(RuntimeException $error) {
+    expect($error->getMessage()==='TEMPLATE_LOOKUP_SOURCE_UNAVAILABLE','a selected profile cannot borrow a different RK');
+}
+try { RemaskTemplateTargetingContext::exactCandidate($profiles[1],$load,'654321',['19']);
+    throw new LogicException('excluded profile supplied a targeting fallback');
+} catch(RuntimeException $error) {
+    expect($error->getMessage()==='TEMPLATE_LOOKUP_SOURCE_UNAVAILABLE','an excluded profile cannot supply live targeting');
+}
 $new=RemaskTemplateTargetingContext::candidates([$profiles[0]],$load,'',[],true);
 expect($new[0]['account_id']==='' && $new[0]['profile']==='16','empty catalogs remain eligible for read-only discovery');
 $newProfile=['name'=>'25','proxy_configured'=>false,'cookies_ready'=>true];
@@ -76,12 +94,16 @@ foreach(['PRIVATE_ADS_DRAFT_CHECKPOINT_REQUIRED','PRIVATE_HTTP_PROXY_UNAVAILABLE
     expect($failure['settings_preserved']===true && $failure['template_account_bound']===false,'saving remains independent of lookup availability');
 }
 foreach(['PRIVATE_HTTP_CONNECTION_UNAVAILABLE','PRIVATE_HTTP_PROTOCOL_ERROR','PRIVATE_HTTP_READ_UNAVAILABLE',
-    'PRIVATE_HTTP_PROXY_UNAVAILABLE','PRIVATE_HTTP_READ_TIMEOUT','BUSINESS_LOGIN_GATE','TWO_FACTOR_REQUIRED'] as $code)
+    'PRIVATE_HTTP_PROXY_UNAVAILABLE','PRIVATE_HTTP_READ_TIMEOUT','BUSINESS_LOGIN_GATE','TWO_FACTOR_REQUIRED','PROFILE_META_BLOCKED'] as $code)
     expect(RemaskTemplateTargetingContext::sourceFailure(new RuntimeException($code)), 'transport failure must cool down its source: '.$code);
 foreach(['INVALID_TARGETING_QUERY','TARGETING_FIELDS_UNAVAILABLE','PRIVATE_ADS_DRAFT_REQUEST_REJECTED'] as $code)
     expect(!RemaskTemplateTargetingContext::sourceFailure(new RuntimeException($code)), 'a field/query error must not disable unrelated dictionaries');
 expect(str_contains(RemaskTemplateTargetingContext::failure(new RuntimeException('BUSINESS_LOGIN_GATE'))['message'],'страницу входа'),
     'a successful connection returning a login page must not be presented as a connection outage');
+foreach(['CHECKPOINT_REQUIRED','PROFILE_META_BLOCKED'] as $code)
+    expect(RemaskTemplateTargetingContext::failure(new RuntimeException($code))['message']
+        ==='Профиль заблокирован Meta. Новые запросы остановлены.',
+        'terminal Meta access failures get a short permanent-stop message');
 $secret=RemaskTemplateTargetingContext::failure(new RuntimeException('proxy http://secret:password@example.com cookie=xs-sensitive'),'19');
 expect(!str_contains(json_encode($secret),'password') && !str_contains(json_encode($secret),'xs-sensitive'),'transport secrets never reach UI');
 $file=sys_get_temp_dir().'/remask-template-reference-'.bin2hex(random_bytes(8)).'.json';
@@ -142,6 +164,16 @@ try {
     catch(RuntimeException $error){expect($error->getMessage()==='BUSINESS_LOGIN_GATE','cooldown preserves the actual login cause');}
     expect($reference->available([['profile'=>'30']],1701)===[['profile'=>'30']], 'stored reasons never select or leak an unrelated profile');
     expect($reference->available([['profile'=>'29']],2301)===[['profile'=>'29']], 'login cooldown remains bounded');
+    foreach(['31'=>'CHECKPOINT_REQUIRED','32'=>'PROFILE_META_BLOCKED'] as $profile=>$code) {
+        $profile=(string)$profile;
+        $reference->block($profile,1700,$code);
+        $persisted=new RemaskTemplateTargetingReference($file);
+        $terminalBlocked=false;
+        try {$persisted->available([['profile'=>$profile]],1000000);}
+        catch(RuntimeException $error) {$terminalBlocked=$error->getMessage()===$code;}
+        expect($terminalBlocked && in_array($profile,$persisted->blocked(1000000),true),
+            'checkpoint and stopped-access profiles remain blocked across reloads');
+    }
     expect($reference->search('interests','Fixture',1701)!==null,'login failure never hides genuine cached query results');
     $other=new RemaskTemplateTargetingReference($file.'-other');
     expect($other->get('interests','fixture',1001)===null,'workspaces do not share private reference stores');
@@ -181,14 +213,34 @@ expect($unbound['targeting']['interests']===$builder['targeting']['interests'],'
 expect(!isset($unbound['targeting']['custom_audiences']) && $unbound['adset']['promoted_object']===['custom_event_type'=>'PURCHASE'],'account assets deferred, generic settings retained');
 expect(!str_contains(json_encode($unbound),'old-owned-hash'),'nested owned media cannot leak into reusable template');
 $endpoint=file_get_contents(dirname(__DIR__).'/railway-template-targeting-search.php');
-expect(!str_contains($endpoint,"\$input['profile']") && !str_contains($endpoint,"\$input['account_id']"),'client cannot choose destination through template lookup');
+$selectedProfileAt=strpos($endpoint,"\$selectedProfile=trim((string)(\$input['profile'] ?? ''))");
+$selectedAccountAt=strpos($endpoint,"\$selectedAccount=preg_replace('/^act_/i','',trim((string)(\$input['account_id'] ?? '')))");
+$exactScopeAt=strpos($endpoint,'RemaskTemplateTargetingContext::exactCandidate(');
+expect($selectedProfileAt!==false && $selectedAccountAt!==false && $exactScopeAt!==false
+    && $selectedProfileAt<$exactScopeAt && $selectedAccountAt<$exactScopeAt,
+    'live targeting fallback is constrained to the explicitly selected profile and exact RK');
 expect(str_contains($endpoint,"'checked_live'") && str_contains($endpoint,"'account_scope_verified'"),'actual Meta read proof remains required');
 $cachedIndexAt=strpos($endpoint,"\$cacheMeta=\$result['_cache'] ?? []");
-$liveProofAt=strpos($endpoint,"if ((\$result['checked_live'] ?? null) !== true");
-expect($cachedIndexAt!==false && $liveProofAt!==false && $cachedIndexAt<$liveProofAt,
-    'saved index values are returned as suggestions before the live-read proof gate');
+$cacheSuggestionAt=$cachedIndexAt===false ? false : strpos($endpoint,"'checked_live'=>false",$cachedIndexAt);
+$liveProofAt=$cachedIndexAt===false ? false : strpos($endpoint,"\$reference->put(\$type, \$query, \$result, time())",$cachedIndexAt);
+expect($cachedIndexAt!==false && $cacheSuggestionAt!==false && $liveProofAt!==false
+    && $cachedIndexAt<$cacheSuggestionAt && $cacheSuggestionAt<$liveProofAt,
+    'saved index values are returned as suggestions before the verified-only cache write');
 $moduleOnlyAt=strpos($endpoint,'if ($moduleOnly)');
-$profileLookupAt=strpos($endpoint,'$profiles = []');
+$profileLookupAt=strpos($endpoint,"\$selectedProfile=trim((string)(\$input['profile'] ?? ''))");
 expect($moduleOnlyAt!==false && $profileLookupAt!==false && $moduleOnlyAt<$profileLookupAt,
     'static GEO/language misses return before opening any profile or Meta context');
+$cacheOnlyAt=strpos($endpoint,'if ($cacheOnly)');
+expect($cacheOnlyAt!==false && $profileLookupAt!==false && $cacheOnlyAt<$profileLookupAt,
+    'shared-cache misses return before opening any profile or Meta context');
+expect(str_contains($endpoint,"'availability'=>'NOT_LOADED'") && str_contains($endpoint,"'template_account_bound'=>false"),
+    'cache-only misses remain suggestion-only and cannot authorize a draft');
+$catalogOverlay=file_get_contents(dirname(__DIR__).'/railway-launch-private-catalog-overlay.php');
+$seedGuardAt=strpos($catalogOverlay,"if (in_array(\$type,['interests','behaviors'],true)");
+$liveGuardAt=strpos($catalogOverlay,"\$result['checked_live']",$seedGuardAt);
+$scopeGuardAt=strpos($catalogOverlay,"\$result['account_scope_verified']",$seedGuardAt);
+$putAt=strpos($catalogOverlay,'$reference->put(',$seedGuardAt);
+expect($seedGuardAt!==false && $liveGuardAt!==false && $scopeGuardAt!==false
+    && $putAt!==false && $liveGuardAt<$putAt && $scopeGuardAt<$putAt,
+    'only verified exact-account interest and behavior reads seed the shared suggestion reference');
 echo "Template targeting uses automatic scoped reads without a publishing binding.\n";

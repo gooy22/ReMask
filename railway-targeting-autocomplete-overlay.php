@@ -40,7 +40,16 @@ $js = <<<'JS'
     return label ? String(label.textContent || '') : '';
   }
 
+  function isLaunchTargetingInput(input) {
+    /* REMASK_SKIP_NATIVE_LIVE_TARGETING_V1 */
+    return /^(geoQuery|interestQuery|behaviorQuery|languageQuery)$/.test(String(input?.id || ''))
+      || input?.dataset?.remaskLaunchTargetingPicker === 'true';
+  }
+
   function isTargetingInput(input) {
+    // Launch has its own scoped, cache-first picker. Do not attach a second
+    // autocomplete that sends a duplicate unscoped Meta request.
+    if (isLaunchTargetingInput(input)) return false;
     if (!(input instanceof HTMLInputElement) && !(input instanceof HTMLTextAreaElement)) return false;
     if (input.disabled || input.readOnly) return false;
     const type = (input.getAttribute('type') || 'text').toLowerCase();
@@ -204,6 +213,18 @@ $js = <<<'JS'
     if (add) setTimeout(() => add.click(), 0);
   }
 
+  function targetingErrorMessage(error) {
+    const raw = String(error?.payload?.error?.code || error?.payload?.code
+      || error?.payload?.error || error?.payload?.message || error?.message || '').toUpperCase();
+    if (/CHECKPOINT|PROFILE_META_BLOCKED/.test(raw)) return 'Профиль заблокирован Meta. Новые запросы остановлены.';
+    if (/SESSION|LOGIN|BUSINESS_LOGIN|TWO_FACTOR|AUTH/.test(raw)) return 'Meta не подтвердила вход для этого профиля.';
+    if (/TEMPLATE_LOOKUP_SOURCE_UNAVAILABLE/.test(raw)) return 'Для выбранного РК не подтверждена связь с BM. Список недоступен.';
+    if (/TEMPLATE_LOOKUP_ACCESS_UNVERIFIED|TARGETING_SOURCE_SCOPE_UNVERIFIED|RESOURCE_READ_INCOMPLETE/.test(raw)) return 'Meta не подтвердила доступ к выбранному РК.';
+    if (/TEMPLATE_LOOKUP_UNAVAILABLE/.test(raw)) return 'Справочник Meta недоступен. Попробуйте позже.';
+    if (/TIMEOUT|TIMED OUT/.test(raw)) return 'Meta не ответила вовремя. Попробуйте позже.';
+    return 'Не удалось загрузить варианты. Проверьте вход и доступ к выбранному РК.';
+  }
+
   async function directSearch(input, panel, query, seq) {
     const prev = inflight.get(input);
     if (prev && prev.abort) prev.abort.abort();
@@ -226,6 +247,11 @@ $js = <<<'JS'
     }
     if (ctx.locale) params.set('locale', ctx.locale);
 
+    const slowStatus = window.setTimeout(() => {
+      const state = inflight.get(input);
+      if (state && state.seq === seq) setPanel(panel, '<div class="remask-targeting-empty">Загрузка занимает дольше обычного…</div>');
+    }, 3000);
+
     try {
       const response = await fetch(endpoint, {
         method: 'POST',
@@ -239,10 +265,15 @@ $js = <<<'JS'
       try { payload = JSON.parse(text); } catch (_) { payload = null; }
       const state = inflight.get(input);
       if (!state || state.seq !== seq) return;
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      if (!response.ok || payload?.ok === false || payload?.error) {
+        const error = new Error('TARGETING_SEARCH_FAILED');
+        error.payload = payload;
+        error.status = response.status;
+        throw error;
+      }
       const results = normalizeResponse(payload);
       if (!results.length) {
-        setPanel(panel, '<div class="remask-targeting-empty">No matching interests/behaviors</div>');
+        setPanel(panel, '<div class="remask-targeting-empty">Ничего не найдено. Попробуйте изменить запрос.</div>');
         return;
       }
       panel.innerHTML = '';
@@ -261,7 +292,9 @@ $js = <<<'JS'
       panel.hidden = false;
     } catch (e) {
       if (e && e.name === 'AbortError') return;
-      setPanel(panel, `<div class="remask-targeting-empty">Targeting endpoint error: ${String(e.message || e)}</div>`);
+      setPanel(panel, `<div class="remask-targeting-empty">${targetingErrorMessage(e)}</div>`);
+    } finally {
+      window.clearTimeout(slowStatus);
     }
   }
 
@@ -280,7 +313,7 @@ $js = <<<'JS'
         return;
       }
       const currentSeq = ++seq;
-      setPanel(panel, '<div class="remask-targeting-empty">Searching Meta targeting…</div>');
+      setPanel(panel, '<div class="remask-targeting-empty">Загружаю варианты…</div>');
       timer = window.setTimeout(() => directSearch(input, panel, query, currentSeq), DEBOUNCE_MS);
     };
 

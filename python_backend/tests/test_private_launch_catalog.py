@@ -202,6 +202,7 @@ function renderTargetBindings() {
         (root/'ajax/metaAssetManager.php').write_text(re.search(r"<<<'ASSET_MANAGER'\n(.*?)\nASSET_MANAGER",source,re.S).group(1))
         (root/'ajax/metaTargetingSearch.php').write_text(re.search(r"<<<'TARGETING'\n(.*?)\nTARGETING",source,re.S).group(1))
         (root/'classes/RemaskAdvertisingAssetBridge.php').write_text(re.search(r"<<<'ASSET_BRIDGE'\n(.*?)\nASSET_BRIDGE",source,re.S).group(1))
+        (root/'classes/RemaskTemplateTargetingContext.php').write_text((ROOT/'railway-template-targeting-context.php').read_text())
         from app.editor_modules import installed_editor
         (root/'classes/meta-editor-modules.json').write_text(json.dumps(installed_editor()))
         (root/'settings.php').write_text('<?php // isolated endpoint configuration')

@@ -16,7 +16,7 @@ apiJson = async function(url, options = {}) {
             && (typeof options.body === 'string' || typeof options.body?.get === 'function')) {
         const input = typeof options.body === 'string' ? new URLSearchParams(options.body) : options.body;
         const body = new URLSearchParams();
-        for (const key of ['type','q','limit','offset','force']) {
+        for (const key of ['type','q','limit','offset','force','cache_only']) {
             const value = input.get(key);
             if (value !== null) body.set(key, value);
         }
@@ -26,35 +26,56 @@ apiJson = async function(url, options = {}) {
             || (typeof remaskModuleControls!=='undefined' && remaskModuleControls.isTargetingType(type) ? type : null);
         const scope=resource ? remaskPrivateTargetingScope() : null;
         if(scope){
-            // Country, region and language IDs are stable Meta reference data.
-            // Use the installed local Meta module map first; it carries no
-            // account permission and cannot authorize a draft mutation.
-            if(['locations','locales'].includes(resource) && input.get('force')!=='1'){
-                const moduleBody=new URLSearchParams();
+            // One cache-only request checks static GEO/language references
+            // and the shared suggestion catalog. It cannot open a profile;
+            // cache entries never authorize the later draft POST.
+            if(input.get('force')!=='1'){
+                const cacheBody=new URLSearchParams();
                 for(const key of ['type','q','limit','offset']){
-                    const value=input.get(key);if(value!==null)moduleBody.set(key,value);
+                    const value=input.get(key);if(value!==null)cacheBody.set(key,value);
                 }
-                moduleBody.set('type',resource);
-                moduleBody.set('module_only','1');
+                cacheBody.set('type',resource);
+                cacheBody.set('cache_only','1');
                 try{
-                    const moduleResult=await remaskPrivateOriginalTargetingApiJson(
-                        'ajax/metaTemplateTargetingSearch.php',{...options,body:moduleBody.toString()});
+                    const cached=await remaskPrivateOriginalTargetingApiJson(
+                        'ajax/metaTemplateTargetingSearch.php',{...options,body:cacheBody.toString()});
                     const current=remaskPrivateTargetingScope();
                     if(JSON.stringify(current)!==JSON.stringify(scope))throw new Error('TARGETING_SELECTION_CHANGED');
-                    const moduleSuggestion=moduleResult?.checked_live===false
-                        && moduleResult?.source==='private_meta_module_reference'
-                        && moduleResult?.template_account_bound===false
-                        && Array.isArray(moduleResult?.data)
-                        && (moduleResult.data.length>0 || resource==='locales');
-                    if(moduleSuggestion)return moduleResult;
+                    const moduleSuggestion=cached?.checked_live===false
+                        && cached?.source==='private_meta_module_reference'
+                        && cached?.template_account_bound===false
+                        && Array.isArray(cached?.data)
+                        && (cached.data.length>0 || resource==='locales');
+                    if(moduleSuggestion)return cached;
+                    const usable=cached?.checked_live===false
+                        && cached?.source==='private_meta_template_reference'
+                        && cached?.template_account_bound===false
+                        && Array.isArray(cached?.data) && cached.data.length>0
+                        && cached?.availability!=='NOT_LOADED';
+                    if(usable)return {...cached,profile:scope.profile,account_id:scope.account_id,
+                        resource,checked_live:false,account_scope_verified:false,
+                        _cache:{...(cached._cache||{}),hit:true,cached_only:true,shared_reference:true}};
                 }catch(error){
                     if(error?.message==='TARGETING_SELECTION_CHANGED' || options.signal?.aborted)throw error;
-                    // Missing city or postal data continues through the exact-account Meta search.
+                    // Cache failure must not change the established exact-account fallback.
                 }
             }
+            const scopeKey=JSON.stringify([scope.profile,scope.account_id]);
+            const blockedScopes=globalThis.remaskMetaStoppedScopes instanceof Set
+                ? globalThis.remaskMetaStoppedScopes : (globalThis.remaskMetaStoppedScopes=new Set());
+            if(blockedScopes.has(scopeKey))throw new Error('TARGETING_META_ACCESS_STOPPED');
             for(const [key,value] of Object.entries(scope))body.set(key,value);
             body.set('type',resource);
-            const result=await remaskPrivateOriginalTargetingApiJson('ajax/metaTargetingSearch.php',{...options,body:body.toString()});
+            let result;
+            try {
+                result=await remaskPrivateOriginalTargetingApiJson('ajax/metaTargetingSearch.php',{...options,body:body.toString()});
+            } catch(error) {
+                const failure=String(error?.meta?.code||error?.code||error?.payload?.error?.code||
+                    error?.payload?.code||error?.message||'').toUpperCase();
+                if(/CHECKPOINT|TWO_FACTOR_REQUIRED|SESSION_EXPIRED|BUSINESS_LOGIN_GATE|LOGIN_REQUIRED|PROFILE_META_BLOCKED/.test(failure))
+                    blockedScopes.add(scopeKey);
+                throw error;
+            }
             const current=remaskPrivateTargetingScope();
             if(JSON.stringify(current)!==JSON.stringify(scope))throw new Error('TARGETING_SELECTION_CHANGED');
             const liveRead=result?.checked_live===true && result?.account_scope_verified===true;
