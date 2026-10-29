@@ -165,6 +165,7 @@ try {
     expect($reference->available([['profile'=>'30']],1701)===[['profile'=>'30']], 'stored reasons never select or leak an unrelated profile');
     expect($reference->available([['profile'=>'29']],2301)===[['profile'=>'29']], 'login cooldown remains bounded');
     foreach(['31'=>'CHECKPOINT_REQUIRED','32'=>'PROFILE_META_BLOCKED'] as $profile=>$code) {
+        $profile=(string)$profile;
         $reference->block($profile,1700,$code);
         $persisted=new RemaskTemplateTargetingReference($file);
         $terminalBlocked=false;
