@@ -16,6 +16,9 @@ class TemplateTargetingSavedAuthRouteTests(unittest.IsolatedAsyncioTestCase):
                     if isinstance(node, ast.AsyncFunctionDef)
                     and node.name == "private_template_reference")
         node.decorator_list = []
+        node.body = [statement for statement in node.body
+                     if not (isinstance(statement, ast.ImportFrom)
+                             and statement.module == "app.private_template_reads")]
 
         class HTTPError(Exception):
             def __init__(self, status_code, detail):
@@ -34,6 +37,7 @@ class TemplateTargetingSavedAuthRouteTests(unittest.IsolatedAsyncioTestCase):
             "private_transport_error": lambda error: (502, str(error)),
             "measure_phase": lambda _name: nullcontext(),
             "log": SimpleNamespace(info=lambda *args, **kwargs: None),
+            "REFERENCE_TYPES": {"interests"},
             "Body": lambda value: value,
         }
         exec(compile(ast.fix_missing_locations(ast.Module(body=[node], type_ignores=[])),
