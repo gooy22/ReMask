@@ -69,6 +69,7 @@ class MetaTransportRouter:
         self.private_only = private_only
         self._context = context if context is not None else getattr(session, "context", None)
         self._shared_browser: Any = None
+        self._page_access_browser_fallback_authorized = False
 
     @property
     def context(self) -> Any:
@@ -118,6 +119,11 @@ class MetaTransportRouter:
         )
         return code in allowed
 
+    def authorize_page_access_browser_fallback(self) -> None:
+        """Permit one scoped browser lease after PAGE_ACCESS private auth fallback."""
+        if self.private_only:
+            self._page_access_browser_fallback_authorized = True
+
     def private_controller_available(self) -> bool:
         return callable(getattr(self.session, "facebook_controller", None))
 
@@ -126,7 +132,7 @@ class MetaTransportRouter:
 
     def browser_available(self) -> bool:
         if self.private_only:
-            return False
+            return self._page_access_browser_fallback_authorized
         return bool(
             callable(getattr(self.session, "facebook_business_browser", None))
             or self.context is not None
@@ -190,6 +196,9 @@ class MetaTransportRouter:
         )
 
     def _require_browser_allowed(self) -> None:
+        if self.private_only and self._page_access_browser_fallback_authorized:
+            self._page_access_browser_fallback_authorized = False
+            return
         if self.private_only:
             from ..facebook_business_browser import BrowserBusinessError
             raise BrowserBusinessError(
