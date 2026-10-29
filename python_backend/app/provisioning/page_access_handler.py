@@ -1468,6 +1468,10 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
                 config={**config,'target_business_identity':target_business_identity}
                 saved_grant=(config.get('grants') or {}).get(business) or {}
                 resume_state={**saved_grant,**prior}
+                if browser_full_control_fallback:
+                    authorize_fallback=getattr(session,'authorize_page_access_browser_fallback',None)
+                    if callable(authorize_fallback):
+                        authorize_fallback()
                 async with _browser_lease(session,v8_old_space_mb=256) as browser:
                     try:
                         # Verify the exact BM/RK pair in Business Suite before

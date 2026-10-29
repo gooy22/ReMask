@@ -95,6 +95,30 @@ class MetaTransportRouterTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(handler.await_count,2)
             session.facebook_business_browser.assert_not_awaited()
 
+    def test_page_access_browser_fallback_is_explicit_and_one_shot(self):
+        lease = object()
+        session = SimpleNamespace(
+            context=SimpleNamespace(profile_id="27"),
+            browser_lease=Mock(return_value=lease),
+        )
+        router = MetaTransportRouter(session, private_only=True)
+
+        self.assertFalse(router.browser_available())
+        self.assertEqual(router.policy("PAGE_ACCESS").fallback, "none_private_only")
+        with self.assertRaises(Exception) as blocked:
+            router.browser_lease(timeout_seconds=45)
+        self.assertEqual(getattr(blocked.exception, "code", ""), "PRIVATE_CAPABILITY_UNAVAILABLE")
+        session.browser_lease.assert_not_called()
+
+        router.authorize_page_access_browser_fallback()
+        self.assertTrue(router.browser_available())
+        self.assertIs(router.browser_lease(timeout_seconds=45), lease)
+        self.assertFalse(router.browser_available())
+        with self.assertRaises(Exception) as blocked_again:
+            router.browser_lease(timeout_seconds=45)
+        self.assertEqual(getattr(blocked_again.exception, "code", ""), "PRIVATE_CAPABILITY_UNAVAILABLE")
+        session.browser_lease.assert_called_once_with(timeout_seconds=45)
+
     async def test_business_policy_is_private_first(self):
         session = SimpleNamespace(context=SimpleNamespace(profile_id="7"))
         router = MetaTransportRouter(session)
