@@ -63,7 +63,9 @@ function remaskPrivateLaunchUserMessage(error) {
         return 'Чекпоинт Meta: профиль остановлен; новые задачи запрещены';
     if(/TWO_FACTOR_REQUIRED/.test(raw))
         return 'Meta запросила подтверждение входа';
-    if(/BUSINESS_LOGIN_GATE|SESSION_EXPIRED/.test(raw))
+    if(/SESSION_EXPIRED/.test(raw))
+        return 'Сессия Meta профиля истекла. Обновите FB-сессию выбранного профиля в ReMask и повторите проверку.';
+    if(/BUSINESS_LOGIN_GATE/.test(raw))
         return 'Meta не подтвердила вход';
     if(/PAGE_ACCESS_UNVERIFIED|PAGE_UNVERIFIED|PAGE_ACCESS_REQUIRED/.test(raw))
         return 'Meta не подтвердила доступ к выбранной странице';
