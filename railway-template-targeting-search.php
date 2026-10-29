@@ -94,6 +94,10 @@ try {
                 'private_meta_targeting_option_index','ads_manager_private_http','private_meta_targetingbrowse'
             ],true) && is_array($result['data'] ?? null) && count($result['data'])>0) {
             MetaEndpoint::ok(['data'=>$result['data'], 'checked_live'=>false,
+                'account_scope_verified'=>false, 'profile'=>$selectedProfile,
+                'account_id'=>$selectedAccount, 'business_id'=>(string)($result['business_id'] ?? ''),
+                'resource'=>$type, 'transport'=>'private_http_h2', 'source_context_discovered'=>true,
+                '_cache'=>['hit'=>true, 'cached_only'=>true, 'stale'=>($cacheMeta['stale'] ?? false)===true],
                 'offset'=>$offset, 'next_offset'=>$result['next_offset'] ?? null,
                 'truncated'=>($result['truncated'] ?? false) === true,
                 'catalog_count'=>(int)($result['catalog_count'] ?? count($result['data'])),
