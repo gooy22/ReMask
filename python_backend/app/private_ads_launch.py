@@ -335,9 +335,12 @@ class AdsManagerLaunch:
                                 creative_format=launch['creative'].get('format', 'SINGLE'))})
         web = await session.facebook_web()
         from fb_worker import RemoteRequestError
+        draft_only = (not publication_required
+                      and launch.get("execution_mode") == "DRAFT")
         try:
             client = await AdsManagerPrivateHttp.open(web, account_id=target["ad_account_id"],
-                business_id=target["business_id"], actor_id=actor)
+                business_id=target["business_id"], actor_id=actor,
+                allow_draft_gate_recovery=draft_only)
         except RemoteRequestError:
             raise fail("TRANSPORT_UNAVAILABLE", "Profile HTTP connection did not reach Ads Manager", True) from None
         if expected_creative is not None:
