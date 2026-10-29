@@ -122,7 +122,7 @@ class NativeBatchWorkerTests(unittest.IsolatedAsyncioTestCase):
                     'idempotency_key':payload['launch_key'],'payload':payload}]})
             async def opened(web,**target):
                 profile=web.profile_name;peer=peers[profile]
-                assert target=={'account_id':peer.account,'business_id':peer.business,'actor_id':peer.actor}
+                assert target=={'account_id':peer.account,'business_id':peer.business,'actor_id':peer.actor,'allow_draft_gate_recovery':True}
                 assert contexts[profile].proxy=='fixture-proxy-'+profile
                 assert web.context is contexts[profile]
                 assert web.context.cookies['c_user']==peer.actor
