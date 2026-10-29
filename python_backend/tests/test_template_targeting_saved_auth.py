@@ -24,8 +24,19 @@ class TemplateTargetingSavedAuthRouteTests(unittest.IsolatedAsyncioTestCase):
             def __init__(self, status_code, detail):
                 self.status_code, self.detail = status_code, detail
 
+        asyncio_module = __import__("asyncio")
+        timeouts = []
+
+        class Asyncio:
+            TimeoutError = asyncio_module.TimeoutError
+
+            @staticmethod
+            async def wait_for(awaitable, timeout):
+                timeouts.append(timeout)
+                return await asyncio_module.wait_for(awaitable, timeout=timeout)
+
         namespace = {
-            "asyncio": __import__("asyncio"),
+            "asyncio": Asyncio,
             "os": os,
             "HTTPException": HTTPError,
             "ProvisioningError": ProvisioningError,
@@ -42,7 +53,7 @@ class TemplateTargetingSavedAuthRouteTests(unittest.IsolatedAsyncioTestCase):
         }
         exec(compile(ast.fix_missing_locations(ast.Module(body=[node], type_ignores=[])),
                      "template-targeting-route-fixture", "exec"), namespace)
-        return namespace["private_template_reference"], HTTPError, namespace
+        return namespace["private_template_reference"], HTTPError, namespace, timeouts
 
     def fixture(self, *, refresh_auth=True, successful_read=True):
         context = SimpleNamespace(profile_id="27",
@@ -81,7 +92,7 @@ class TemplateTargetingSavedAuthRouteTests(unittest.IsolatedAsyncioTestCase):
                 resources=SimpleNamespace(TARGETING_OPTION_TYPES=()),
             ),
         )
-        route, HTTPError, namespace = self.route()
+        route, HTTPError, namespace, timeouts = self.route()
         namespace.update(
             pool=pool,
             ProfileSession=FakeSession,
@@ -91,14 +102,15 @@ class TemplateTargetingSavedAuthRouteTests(unittest.IsolatedAsyncioTestCase):
         namespace["read_with_saved_auth_refresh"] = __import__(
             "app.session_auth_refresh", fromlist=["read_with_saved_auth_refresh"]
         ).read_with_saved_auth_refresh
-        return route, HTTPError, context, resolver, sessions, read_template_reference
+        return route, HTTPError, context, resolver, sessions, read_template_reference, timeouts
 
     async def test_targeting_read_retries_once_with_new_auth_for_profile_27(self):
-        route, _, context, resolver, sessions, read = self.fixture()
+        route, _, context, resolver, sessions, read, timeouts = self.fixture()
         payload = {"q": "Travel", "limit": 50}
         result = await route("27", "interests", payload)
         self.assertTrue(result["ok"])
         self.assertEqual(result["data"][0]["id"], "456")
+        self.assertEqual(timeouts, [75])
         self.assertEqual(resolver.resolve.await_count, 1)
         self.assertEqual(read.await_count, 2)
         self.assertEqual(len(sessions), 2)
@@ -110,22 +122,24 @@ class TemplateTargetingSavedAuthRouteTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(call.args[4], payload)
 
     async def test_targeting_read_does_not_retry_without_new_auth(self):
-        route, HTTPError, _, resolver, sessions, read = self.fixture(
+        route, HTTPError, _, resolver, sessions, read, timeouts = self.fixture(
             refresh_auth=False, successful_read=False)
         with self.assertRaises(HTTPError) as caught:
             await route("27", "interests", {"q": "Travel", "limit": 50})
         self.assertEqual(caught.exception.status_code, 409)
         self.assertEqual(caught.exception.detail["code"], "SESSION_EXPIRED")
+        self.assertEqual(timeouts, [75])
         self.assertEqual(resolver.resolve.await_count, 1)
         self.assertEqual(read.await_count, 1)
         self.assertEqual(len(sessions), 1)
 
     async def test_targeting_read_never_retries_with_a_different_actor(self):
-        route, HTTPError, _, resolver, sessions, read = self.fixture()
+        route, HTTPError, _, resolver, sessions, read, timeouts = self.fixture()
         resolver.resolve.return_value.cookies["c_user"] = "987654321"
         with self.assertRaises(HTTPError) as caught:
             await route("27", "interests", {"q": "Travel", "limit": 50})
         self.assertEqual(caught.exception.detail["code"], "SESSION_EXPIRED")
+        self.assertEqual(timeouts, [75])
         self.assertEqual(resolver.resolve.await_count, 1)
         self.assertEqual(read.await_count, 1)
         self.assertEqual(len(sessions), 1)
