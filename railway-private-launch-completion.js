@@ -12,7 +12,9 @@ function remaskPrivateTargetingScope() {
 }
 const remaskPrivateOriginalTargetingApiJson = apiJson;
 apiJson = async function(url, options = {}) {
-    if (['ajax/metaTargetingSearch.php','ajax/metaTemplateTargetingSearch.php'].some(path=>String(url).split('?')[0].endsWith(path))
+    const targetingPath=String(url).split('?')[0];
+    const templateTargetingRequest=targetingPath.endsWith('ajax/metaTemplateTargetingSearch.php');
+    if (['ajax/metaTargetingSearch.php','ajax/metaTemplateTargetingSearch.php'].some(path=>targetingPath.endsWith(path))
             && (typeof options.body === 'string' || typeof options.body?.get === 'function')) {
         const input = typeof options.body === 'string' ? new URLSearchParams(options.body) : options.body;
         const body = new URLSearchParams();
@@ -29,7 +31,7 @@ apiJson = async function(url, options = {}) {
             // One cache-only request checks static GEO/language references
             // and the shared suggestion catalog. It cannot open a profile;
             // cache entries never authorize the later draft POST.
-            if(input.get('force')!=='1'){
+            if(input.get('force')!=='1' || input.get('cache_only')==='1'){
                 const cacheBody=new URLSearchParams();
                 for(const key of ['type','q','limit','offset']){
                     const value=input.get(key);if(value!==null)cacheBody.set(key,value);
@@ -55,6 +57,7 @@ apiJson = async function(url, options = {}) {
                     if(usable)return {...cached,profile:scope.profile,account_id:scope.account_id,
                         resource,checked_live:false,account_scope_verified:false,
                         _cache:{...(cached._cache||{}),hit:true,cached_only:true,shared_reference:true}};
+                    if(input.get('cache_only')==='1')return cached;
                 }catch(error){
                     if(error?.message==='TARGETING_SELECTION_CHANGED' || options.signal?.aborted)throw error;
                     // Cache failure must not change the established exact-account fallback.
@@ -64,11 +67,15 @@ apiJson = async function(url, options = {}) {
             const blockedScopes=globalThis.remaskMetaStoppedScopes instanceof Set
                 ? globalThis.remaskMetaStoppedScopes : (globalThis.remaskMetaStoppedScopes=new Set());
             if(blockedScopes.has(scopeKey))throw new Error('TARGETING_META_ACCESS_STOPPED');
-            for(const [key,value] of Object.entries(scope))body.set(key,value);
+            const liveScope=templateTargetingRequest
+                ? {profile:scope.profile,account_id:scope.account_id} : scope;
+            for(const [key,value] of Object.entries(liveScope))body.set(key,value);
             body.set('type',resource);
             let result;
             try {
-                result=await remaskPrivateOriginalTargetingApiJson('ajax/metaTargetingSearch.php',{...options,body:body.toString()});
+                const liveEndpoint=templateTargetingRequest
+                    ? 'ajax/metaTemplateTargetingSearch.php' : 'ajax/metaTargetingSearch.php';
+                result=await remaskPrivateOriginalTargetingApiJson(liveEndpoint,{...options,body:body.toString()});
             } catch(error) {
                 const failure=String(error?.meta?.code||error?.code||error?.payload?.error?.code||
                     error?.payload?.code||error?.message||'').toUpperCase();
@@ -84,7 +91,9 @@ apiJson = async function(url, options = {}) {
                 && result?.availability!=='NOT_LOADED';
             if((!liveRead && !cachedSuggestion)
                     || String(result.profile)!==scope.profile || String(result.account_id)!==scope.account_id
-                    || result.resource!==resource)throw new Error('TARGETING_SOURCE_SCOPE_UNVERIFIED');
+                    || result.resource!==resource
+                    || (templateTargetingRequest && liveRead && result.transport!=='private_http_h2'))
+                throw new Error('TARGETING_SOURCE_SCOPE_UNVERIFIED');
             return result;
         }
         return remaskPrivateOriginalTargetingApiJson('ajax/metaTemplateTargetingSearch.php', {...options, body:body.toString()});
