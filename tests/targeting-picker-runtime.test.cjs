@@ -40,7 +40,7 @@ function fixture(){
   const ctx={document:doc,HTMLInputElement:Input,HTMLTextAreaElement:TextArea,
     Event:class {constructor(type){this.type=type;}},CustomEvent:class{constructor(type,options){this.type=type;Object.assign(this,options);}},
     AbortController,URLSearchParams,queueMicrotask,MutationObserver:class{observe(){}},
-    setTimeout:fn=>{timers.set(++timerId,fn);return timerId;},clearTimeout:id=>timers.delete(id)};
+    setTimeout:(fn,delay)=>{timers.set(++timerId,{fn,delay});return timerId;},clearTimeout:id=>timers.delete(id)};
   vm.createContext(ctx);return {ctx,nodes,doc,timers};
 }
 
@@ -179,7 +179,7 @@ function fixture(){
   paged.nodes.get('interestQuery').value='Travel';
   let first=paged.ctx.searchTargeting('interests');
   const slowStatus=Array.from(paged.timers.values())[0];
-  slowStatus();
+  slowStatus.fn();
   const resultBox=paged.nodes.get('interestResults');
   assert.equal(resultBox.textContent,'Загрузка списка занимает дольше обычного…',
     'a slow catalog request shows progress instead of looking like an endless spinner');
@@ -211,7 +211,8 @@ function fixture(){
   const timedLookup=timed.ctx.searchTargeting('interests');
   const timeoutCallbacks=Array.from(timed.timers.values());
   assert.equal(timeoutCallbacks.length,2,'slow notice and hard timeout are both scheduled');
-  timeoutCallbacks[1]();
+  assert.equal(timeoutCallbacks[1].delay,75_000,'Launch allows the bounded 65-second private Meta read to finish');
+  timeoutCallbacks[1].fn();
   await timedLookup;
   assert.equal(timedRequests[0].options.signal.aborted,true,'timed-out targeting request is aborted');
   assert.equal(timed.nodes.get('interestResults').textContent,'Meta отвечает слишком долго. Список не загружен.',

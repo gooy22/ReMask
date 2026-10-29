@@ -67,7 +67,8 @@ final class RemaskTemplateTargetingContext {
         $raw=json_encode($input,JSON_THROW_ON_ERROR);
         if (strlen($raw)>65536) throw new InvalidArgumentException('ADVERTISING_INPUT_TOO_LARGE');
         if (session_status()===PHP_SESSION_ACTIVE) session_write_close();
-        $context=stream_context_create(['http'=>['method'=>'POST','timeout'=>8,'ignore_errors'=>true,
+        if (function_exists('set_time_limit')) @set_time_limit(80);
+        $context=stream_context_create(['http'=>['method'=>'POST','timeout'=>75,'ignore_errors'=>true,
             'follow_location'=>0,'content'=>$raw,'header'=>"Content-Type: application/json\r\nAccept: application/json\r\nX-Remask-Worker-Key: ".$key."\r\n"]]);
         $body=@file_get_contents($base.'/api/v1/profiles/'.rawurlencode($profile).'/template-reference/'.rawurlencode($operation),false,$context,0,2097153);
         $data=is_string($body) && strlen($body)<=2097152 ? json_decode($body,true) : null;

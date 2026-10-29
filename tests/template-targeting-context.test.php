@@ -2,7 +2,8 @@
 require dirname(__DIR__).'/railway-template-targeting-context.php';
 $contextSource=file_get_contents(dirname(__DIR__).'/railway-template-targeting-context.php');
 function expect($condition, $message) { if (!$condition) throw new RuntimeException($message); }
-expect(str_contains($contextSource,"'timeout'=>8"),'targeting worker lookup has a short hard timeout');
+expect(str_contains($contextSource,"'timeout'=>75"),'targeting bridge covers the worker private-read budget');
+expect(str_contains($contextSource,'set_time_limit(80)'),'PHP request budget exceeds the 65-second worker read budget');
 $profiles=[['name'=>'16','proxy_configured'=>true,'cookies_ready'=>true],['name'=>'19','proxy_configured'=>true,'cookies_ready'=>true],['name'=>'20','proxy_configured'=>true,'cookies_ready'=>true]];
 $catalogs=['16'=>['profile'=>'16','ad_accounts'=>['data'=>[]]],
     '19'=>['profile'=>'19','ad_accounts'=>['data'=>[['profile'=>'19','account_id'=>'654321','business_id'=>'123456','account_status'=>null]]]],
