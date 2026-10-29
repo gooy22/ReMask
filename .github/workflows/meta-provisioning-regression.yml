@@ -182,3 +182,5 @@ jobs:
         run: PYTHONPATH=python_backend /tmp/remask-browser-regression/bin/python tests/meta-ad-account-dialogs.browser.py
       - name: Reopen a retained private Draft and reject Meta auth without another create
         run: PYTHONPATH=python_backend /tmp/remask-browser-regression/bin/python tests/private-launch-completion.browser.py InstalledLaunchTests.test_saved_private_draft_read_failure_preserves_receipts
+      - name: Verify Launch targeting reaches the saved native Draft
+        run: PYTHONPATH=python_backend /tmp/remask-browser-regression/bin/python tests/private-launch-completion.browser.py InstalledLaunchTests.test_installed_ui_php_python_draft_publish_and_sqlite_restart
