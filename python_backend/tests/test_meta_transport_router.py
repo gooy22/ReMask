@@ -112,12 +112,15 @@ class MetaTransportRouterTests(unittest.IsolatedAsyncioTestCase):
 
         router.authorize_page_access_browser_fallback()
         self.assertTrue(router.browser_available())
-        self.assertIs(router.browser_lease(timeout_seconds=45), lease)
+        from app.facebook_business_browser import FacebookBusinessBrowser
+        browser = router.browser_lease(timeout_seconds=45)
+        self.assertIsInstance(browser, FacebookBusinessBrowser)
+        self.assertTrue(browser.allow_private_http_fallback)
         self.assertFalse(router.browser_available())
         with self.assertRaises(Exception) as blocked_again:
             router.browser_lease(timeout_seconds=45)
         self.assertEqual(getattr(blocked_again.exception, "code", ""), "PRIVATE_CAPABILITY_UNAVAILABLE")
-        session.browser_lease.assert_called_once_with(timeout_seconds=45)
+        session.browser_lease.assert_not_called()
 
     async def test_authorized_page_access_fallback_reaches_browser_but_default_stays_blocked(self):
         from app.facebook_business_browser import FacebookBusinessBrowser
