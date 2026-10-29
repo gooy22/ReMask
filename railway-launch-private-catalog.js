@@ -1177,15 +1177,54 @@ async function remaskPrivateCreateJob() {
     try{
         const config=await remaskPrivatePrepareConfig();
         remaskPrivateAssertCurrentConfig(config);
-        const reviewed=await remaskPrivateReviewConfig(config,{render:true,
-            assertCurrent:()=>remaskPrivateAssertCurrentConfig(config)});
+        const executionMode=remaskPrivateExecutionMode(config);
+        let reviewed;
+        if(executionMode==='DRAFT'){
+            // Draft creation is one job. Run only the deterministic, offline
+            // planner here; the worker performs the one authoritative scoped
+            // Meta preflight immediately before its no-replay draft writes.
+            const rows=remaskPrivateTargetRows(config);
+            if(!rows.length)throw new Error('Выберите рекламный кабинет.');
+            const assertCurrent=()=>remaskPrivateAssertCurrentConfig(config);
+            reviewed=[];
+            for(let index=0;index<rows.length;index++){
+                assertCurrent();
+                const row=rows[index];
+                remaskPrivateShow('Готовлю черновик '+(index+1)+'/'+rows.length+'…');
+                const response=await remaskPrivateWorker({
+                    action:'private_launch_plan',
+                    profile_id:row.profile,
+                    business_id:row.business_id,
+                    ad_account_id:row.ad_account_id,
+                    page_id:row.page_id,
+                    launch:row.launch
+                });
+                assertCurrent();
+                const plan=response?.plan||{};
+                const target=plan.target||{};
+                if(plan.configuration_valid!==true||plan.checked_live!==false||
+                    plan.execution_mode!=='DRAFT'||
+                    String(target.profile_id||'')!==String(row.profile)||
+                    String(target.business_id||'')!==String(row.business_id)||
+                    remaskPrivateAccountId(target.ad_account_id)!==remaskPrivateAccountId(row.ad_account_id)||
+                    String(target.page_id||'')!==String(row.page_id))
+                    throw new Error('Не удалось подготовить черновик для выбранного РК.');
+                if((Array.isArray(plan.missing_fields)&&plan.missing_fields.length)||
+                    (Array.isArray(plan.missing_contracts)&&plan.missing_contracts.length))
+                    throw new Error('Черновик пока не настроен для этих параметров.');
+                reviewed.push({row,review:{ready:true},status:'PLAN_READY'});
+            }
+        }else{
+            reviewed=await remaskPrivateReviewConfig(config,{render:true,
+                assertCurrent:()=>remaskPrivateAssertCurrentConfig(config)});
+        }
         remaskPrivateAssertCurrentConfig(config);
         if(!reviewed?.length)return null;
         const blocked=reviewed.filter(entry=>entry.review?.ready!==true);
         if(blocked.length)throw new Error('Черновик не сохранён для РК '+
             blocked.map(entry=>entry.row.ad_account_id+': '+entry.error).join(' · ')+'.');
         const planned=remaskPrivateJobRequest(config,reviewed);
-        remaskPrivateShow(remaskPrivateExecutionMode()==='DRAFT'?'Сохраняю черновик…':'Отправляю рекламу…');
+        remaskPrivateShow(executionMode==='DRAFT'?'Сохраняю черновик…':'Отправляю рекламу…');
         submitting=true;
         const accepted=await remaskPrivateWorker(planned.request);
         const jobId=String(accepted?.job?.job_id||'').trim();
