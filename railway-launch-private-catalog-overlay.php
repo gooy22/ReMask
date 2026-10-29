@@ -699,7 +699,7 @@ if (strpos($js,'REMASK_PRIVATE_LAUNCH_CATALOG_V1')===false) {
 OLD_BULK_PAGES;
     $newPages=<<<'NEW_BULK_PAGES'
         const executionMode = remaskPrivateExecutionMode();
-        status.textContent = `Загружаем страницы для ${targets.length} РК...`;
+        status.textContent = 'Загружаем страницы…';
         const pageReadErrors = [];
         state.targetBindingAssets.pageReadErrors = state.targetBindingAssets.pageReadErrors || {};
         await runPool(targets, 4, async (target) => {
@@ -719,7 +719,7 @@ OLD_BULK_PAGES;
             renderTargetBindings();
         });
         if (pageReadErrors.length) {
-            status.textContent = 'FP не загружены: ' + pageReadErrors.join(' | ');
+            status.textContent = `Страницы не загружены: ${pageReadErrors.length} из ${targets.length}.`;
             status.classList?.add('text-warning');
             return;
         }
