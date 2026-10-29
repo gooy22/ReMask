@@ -4,41 +4,38 @@ function remaskPrivatePageReadFailure(error, profile, accountId) {
     const rawCode=String(error?.code||error?.payload?.code||error?.payload?.error?.code||error?.error?.code||error?.data?.error?.code||'');
     const rawMessage=String(error?.message||error?.payload?.message||error?.payload?.error?.message||error||'');
     const gate=(rawCode+' '+rawMessage).match(/(?:\b|_)(CHECKPOINT_REQUIRED|TWO_FACTOR_REQUIRED|SESSION_EXPIRED|BUSINESS_LOGIN_GATE)\b/)?.[1];
-    const profileLabel=String(profile||'?').replace(/[^0-9]/g,'').slice(0,12)||'?';
-    const accountLabel=String(accountId||'').replace(/^act_/,'').replace(/[^0-9]/g,'').slice(0,30)||'?';
-    const scope=`Профиль ${profileLabel} / РК ${accountLabel}`;
     if(gate==='BUSINESS_LOGIN_GATE')
-        return `${scope}: Meta остановила доступ. FP не загружены; новые действия запрещены.`;
+        return 'Доступ к аккаунту остановлен. Страницы не загружены.';
     if(gate==='CHECKPOINT_REQUIRED')
-        return `${scope}: чекпоинт Meta. Аккаунт остановлен, новые задачи запрещены.`;
+        return 'Чекпоинт. Аккаунт остановлен; новые задачи запрещены.';
     if(gate==='TWO_FACTOR_REQUIRED')
-        return `${scope}: Meta запросила подтверждение 2FA. FP не загружены.`;
+        return 'Нужно подтвердить вход в аккаунт.';
     if(gate==='SESSION_EXPIRED')
-        return `${scope}: Meta не подтвердила вход. FP не загружены.`;
-    return `${scope}: не удалось загрузить FP из Meta. Попробуйте позже.`;
+        return 'Сессия завершена. Страницы не загружены.';
+    return 'Страницы не загрузились. Попробуйте позже.';
 }
 function remaskFundingState(info) {
-    if (!info) return {label:'NOT LOADED',cls:'muted'};
-    if (info.error) return {label:'ERROR',cls:'job-failed'};
+    if (!info) return {label:'Не загружено',cls:'muted'};
+    if (info.error) return {label:'Ошибка загрузки',cls:'job-failed'};
     const data=info.data||{};
     if (data.funding_verified === false || data.verification_status === 'NOT_CHECKED')
-        return {label:'NOT CHECKED',cls:'muted'};
-    if (data._cache?.stale) return {label:'STALE',cls:'muted'};
+        return {label:'Не проверено',cls:'muted'};
+    if (data._cache?.stale) return {label:'Данные устарели',cls:'muted'};
     const accountStatus=data.account_status;
     if (accountStatus === undefined || accountStatus === null || accountStatus === '')
-        return {label:'UNKNOWN',cls:'muted'};
-    if (Number(accountStatus)!==1) return {label:'ACCOUNT '+accountStatus,cls:'job-failed'};
+        return {label:'Нет данных',cls:'muted'};
+    if (Number(accountStatus)!==1) return {label:'Аккаунт недоступен',cls:'job-failed'};
     if (data.expired_funding_source_details && Object.keys(data.expired_funding_source_details).length)
-        return {label:'EXPIRED',cls:'job-failed'};
+        return {label:'Оплата просрочена',cls:'job-failed'};
     if (data.is_prepay_account) {
         const balance=Number(data.balance);
         return Number.isFinite(balance) && balance>0
-            ? {label:'PREPAY BALANCE',cls:'muted'}
-            : {label:'PREPAY EMPTY',cls:'muted'};
+            ? {label:'Предоплата есть',cls:'muted'}
+            : {label:'Нет предоплаты',cls:'muted'};
     }
     if (data.funding_source_details?.id || data.funding_source)
-        return {label:'SOURCE SAVED',cls:'muted'};
-    return {label:'UNKNOWN',cls:'muted'};
+        return {label:'Способ оплаты добавлен',cls:'muted'};
+    return {label:'Нет данных',cls:'muted'};
 }
 fundingState=remaskFundingState;
 fundingReviewLabel=function(funding) {
@@ -47,12 +44,23 @@ fundingReviewLabel=function(funding) {
 $('preflight').textContent='Загрузить сохранённые РК';
 $('syncMeta').textContent='Обновить список';
 const remaskFundingButton=$('loadFunding');
-if (remaskFundingButton) remaskFundingButton.textContent='Показать состояние оплаты';
+if (remaskFundingButton) remaskFundingButton.textContent='Проверить состояние оплаты';
 const remaskOriginalLoadFunding=loadFunding;
 loadFunding=async function(force=false) {
     await remaskOriginalLoadFunding(force);
-    $('fundingStatus').textContent='Оплата считается готовой после проверки выбранного РК в Meta.';
+    if($('fundingStatus'))$('fundingStatus').textContent='Состояние оплаты обновлено. Статус указан в таблице.';
 };
+if(typeof document!=='undefined'&&document.querySelectorAll){
+    const launchHead=document.querySelector('.app-page-head');
+    const subtitle=launchHead?.querySelector('.app-subtitle');
+    if(subtitle)subtitle.textContent='Создавайте кампанию, группу и объявление и сохраняйте их в черновиках. Для завершения выберите доступную страницу.';
+    const pills=launchHead?.querySelectorAll('.app-page-actions .app-pill');
+    if(pills?.[0])pills[0].textContent='РЕЖИМ: ЧЕРНОВИК';
+    if(pills?.[1])pills[1].textContent='ПОСЛЕ СОЗДАНИЯ: НА ПАУЗЕ';
+    const fundingHint=[...document.querySelectorAll('.launch-card .muted')]
+        .find(node=>node.textContent.includes('Платёжная привязка'));
+    if(fundingHint)fundingHint.textContent='Проверка оплаты нужна только перед публикацией. Для черновика её можно пропустить.';
+}
 
 function remaskPrivateLaunchUserMessage(error) {
     const code=String(error?.code||error?.payload?.code||error?.payload?.error?.code||
@@ -60,18 +68,19 @@ function remaskPrivateLaunchUserMessage(error) {
     const message=String(error?.message||error?.payload?.message||error?.payload?.error?.message||error||'').trim();
     const raw=(code+' '+message).toUpperCase();
     if(/CHECKPOINT_REQUIRED/.test(raw))
-        return 'Чекпоинт Meta: профиль остановлен; новые задачи запрещены';
+        return 'Чекпоинт. Аккаунт остановлен; новые задачи запрещены.';
     if(/TWO_FACTOR_REQUIRED/.test(raw))
-        return 'Meta запросила подтверждение входа';
+        return 'Нужно подтвердить вход.';
     if(/BUSINESS_LOGIN_GATE|SESSION_EXPIRED/.test(raw))
-        return 'Meta не подтвердила вход';
+        return 'Сессия завершена. Войдите снова.';
     if(/PAGE_ACCESS_UNVERIFIED|PAGE_UNVERIFIED|PAGE_ACCESS_REQUIRED/.test(raw))
-        return 'Meta не подтвердила доступ к выбранной странице';
+        return 'Нет доступа к выбранной странице.';
     if(/PAYMENT_SELECTION_REQUIRED|PAYMENT_UNVERIFIED/.test(raw))
-        return 'Не удалось выполнить проверку выбранного режима';
+        return 'Выберите способ оплаты.';
     if(/^[A-Z][A-Z0-9_]{2,}$/.test(message)||/\b(?:PRIVATE_ADS|BUSINESS|SESSION|CHECKPOINT)_[A-Z0-9_]+\b/.test(message))
-        return 'Не удалось завершить проверку';
-    return message ? message.slice(0,240) : 'Не удалось завершить проверку';
+        return 'Не удалось сохранить черновик.';
+    const plain=message.replace(/\s+/g,' ').trim();
+    return plain && /[А-Яа-яЁё]/.test(plain) ? plain.slice(0,140) : 'Не удалось сохранить черновик.';
 }
 const remaskPrivateLaunchNotice='Подготовьте план рекламы. Выберите сохранение черновика или публикацию.';
 let remaskPrivateLaunchBusy=false;
@@ -1258,6 +1267,18 @@ if(typeof document!=='undefined'&&document.createElement&&$('launchButton')?.par
 }
 
 remaskPrivateInstallExecutionMode();
+function remaskPrivateSyncLaunchButtonLabel(){
+    const button=$('launchButton');
+    if(!button)return;
+    const label=remaskPrivateExecutionMode()==='DRAFT'?'Сохранить черновик':'Создать рекламу';
+    if(button.textContent!==label)button.textContent=label;
+    button.setAttribute?.('aria-label',label);
+}
+remaskPrivateSyncLaunchButtonLabel();
+if(typeof MutationObserver!=='undefined'&&$('launchButton')){
+    new MutationObserver(remaskPrivateSyncLaunchButtonLabel)
+        .observe($('launchButton'),{childList:true,characterData:true,subtree:true});
+}
 
 // Media compatibility runs automatically in the save flow. The manual
 // inspection/crop/pad panel is kept out of Launch; it is not a Meta action.
