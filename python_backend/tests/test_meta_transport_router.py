@@ -119,6 +119,44 @@ class MetaTransportRouterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(getattr(blocked_again.exception, "code", ""), "PRIVATE_CAPABILITY_UNAVAILABLE")
         session.browser_lease.assert_called_once_with(timeout_seconds=45)
 
+    async def test_authorized_page_access_fallback_reaches_browser_but_default_stays_blocked(self):
+        from app.facebook_business_browser import FacebookBusinessBrowser
+
+        context = SimpleNamespace(profile_id="27", cookies={})
+        disabled = FacebookBusinessBrowser(context)
+        disabled.page = object()
+        with self.assertRaises(Exception) as blocked:
+            await disabled.open()
+        self.assertEqual(
+            getattr(blocked.exception, "code", ""),
+            "BROWSER_TRANSPORT_DISABLED",
+        )
+
+        router = MetaTransportRouter(
+            SimpleNamespace(context=context),
+            private_only=True,
+        )
+        with self.assertRaises(Exception) as blocked_by_router:
+            router.browser_lease(timeout_seconds=15)
+        self.assertEqual(
+            getattr(blocked_by_router.exception, "code", ""),
+            "PRIVATE_CAPABILITY_UNAVAILABLE",
+        )
+
+        router.authorize_page_access_browser_fallback()
+        browser = router.browser_lease(timeout_seconds=15)
+        self.assertIsInstance(browser, FacebookBusinessBrowser)
+        self.assertTrue(browser.allow_private_http_fallback)
+        browser.page = object()
+        await browser.open()
+
+        with self.assertRaises(Exception) as blocked_again:
+            router.browser_lease(timeout_seconds=15)
+        self.assertEqual(
+            getattr(blocked_again.exception, "code", ""),
+            "PRIVATE_CAPABILITY_UNAVAILABLE",
+        )
+
     async def test_business_policy_is_private_first(self):
         session = SimpleNamespace(context=SimpleNamespace(profile_id="7"))
         router = MetaTransportRouter(session)
