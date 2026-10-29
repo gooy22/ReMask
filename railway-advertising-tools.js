@@ -130,22 +130,33 @@
             const code=String(errorCode||error?.meta?.code||error?.payload?.error?.code||error?.payload?.code||'').toUpperCase();
             const message=String(error?.message||'').trim();
             const raw=(code+' '+message).toUpperCase();
-            if(/CHECKPOINT/.test(raw))return 'Чекпоинт Meta: профиль остановлен; проверка прекращена.';
-            if(/TWO_FACTOR_REQUIRED/.test(raw))return 'Meta запросила подтверждение входа.';
-            if(/SESSION_EXPIRED|LOGIN_REQUIRED|BUSINESS_LOGIN_GATE|BOOTSTRAP_SCOPE_UNVERIFIED/.test(raw))return 'Meta не подтвердила вход.';
-            if(/PAGE_ACCESS_UNVERIFIED|PAGE_UNVERIFIED|PAGE_ACCESS_REQUIRED/.test(raw))return 'Meta не подтвердила доступ к выбранной странице.';
-            if(/TEMPLATE_LOOKUP_SOURCE_UNAVAILABLE|PRIVATE_HTTP_(?:PROXY|CONNECTION|PROTOCOL|READ)_UNAVAILABLE|PRIVATE_HTTP_PROTOCOL_ERROR|HTTP_UNAVAILABLE/.test(raw))return 'Не удалось связаться с Meta.';
+            if(/CHECKPOINT/.test(raw))return 'Чекпоинт. Аккаунт остановлен; новые задачи запрещены.';
+            if(/TWO_FACTOR_REQUIRED/.test(raw))return 'Нужно подтвердить вход.';
+            if(/SESSION_EXPIRED|LOGIN_REQUIRED|BUSINESS_LOGIN_GATE|BOOTSTRAP_SCOPE_UNVERIFIED/.test(raw))return 'Сессия завершена. Оценка недоступна.';
+            if(/PAGE_ACCESS_UNVERIFIED|PAGE_UNVERIFIED|PAGE_ACCESS_REQUIRED/.test(raw))return 'Нет доступа к выбранной странице.';
+            if(/TEMPLATE_LOOKUP_SOURCE_UNAVAILABLE|PRIVATE_HTTP_(?:PROXY|CONNECTION|PROTOCOL|READ)_UNAVAILABLE|PRIVATE_HTTP_PROTOCOL_ERROR|HTTP_UNAVAILABLE/.test(raw))return 'Оценка аудитории временно недоступна.';
             if(!message||/^[A-Z][A-Z0-9_]{2,}$/.test(message)||/\b(?:PRIVATE_ADS|BUSINESS|SESSION|CHECKPOINT)_[A-Z0-9_]+\b/.test(message))
-                return 'Meta не подтвердила запрос.';
-            return message.replace(/\s+/g,' ').slice(0,180);
+                return 'Не удалось получить оценку аудитории.';
+            const plain=message.replace(/\s+/g,' ').trim();
+            return /[А-Яа-яЁё]/.test(plain) ? plain.slice(0,120) : 'Не удалось получить оценку аудитории.';
         };
         if(document.hidden||(creative&&!byId('creativeModal')?.classList.contains('open')))return;
         let current;
-        try{current=snapshot();if(!current.spec.targeting.geo_locations||!Object.keys(current.spec.targeting.geo_locations).length)throw new Error('Выберите географию аудитории.');}
+        try{
+            current=snapshot();
+            const geo=current.spec.targeting.geo_locations;
+            const hasGeo=!!geo&&Object.entries(geo).some(([key,value])=>{
+                if(key==='location_types')return false;
+                if(Array.isArray(value))return value.length>0;
+                if(value&&typeof value==='object')return Object.keys(value).length>0;
+                return value!==null&&value!==undefined&&String(value).trim()!=='';
+            });
+            if(!hasGeo)throw new Error('Добавьте страну, регион или город.');
+        }
         catch(error){invalidate(error.message);needsRefresh=false;return;}
         if(!current.targets.length){invalidate('Выберите рекламный кабинет для оценки аудитории.');needsRefresh=false;return;}
         if(!force&&current.fingerprint===lastFingerprint)return;
-        invalidate('Получаем оценку Meta…');lastFingerprint=current.fingerprint;
+        invalidate('Считаем размер аудитории…');lastFingerprint=current.fingerprint;
         const seq=generation;controller=new AbortController();const signal=controller.signal;
         let success=0, pending=false, failed=false, blocked=false, sourceUnavailable=false, loginRequired=false, checkpointRequired=false, twoFactorRequired=false;lastReadAt=Date.now();
         // Bound concurrent profile reads; never reuse one account's numbers for another.
@@ -174,7 +185,7 @@
         }
         if(seq!==generation)return;
         needsRefresh=!blocked&&attempt<2&&(pending||failed);
-        status.textContent=checkpointRequired?'Чекпоинт Meta: профиль остановлен. Новые проверки запрещены.':twoFactorRequired?'Meta запросила подтверждение входа.':loginRequired?'Meta не подтвердила вход для выбранного РК. Оценка недоступна.':sourceUnavailable?'Нет доступного соединения с источником оценки аудитории.':blocked?'Meta не подтвердила доступ к РК. Оценка остановлена.':pending?'Meta готовит размер аудитории…':failed?'Данные Meta временно недоступны. Шаблон можно сохранить.':'Размер аудитории получен из Meta.';
+        status.textContent=checkpointRequired?'Чекпоинт. Аккаунт остановлен; новые задачи запрещены.':twoFactorRequired?'Нужно подтвердить вход.':loginRequired?'Сессия завершена. Оценка недоступна.':sourceUnavailable?'Оценка аудитории временно недоступна.':blocked?'Нет доступа к выбранному рекламному кабинету.':pending?'Считаем размер аудитории…':failed?'Оценка временно недоступна. План можно сохранить.':'Оценка аудитории готова.';
         if(current.targets.length>20)status.textContent+=' Показаны первые 20 выбранных РК.';
         // Stop at authentication/scope gates; bound transient reads to three attempts.
         if(needsRefresh)timer=setTimeout(()=>{
