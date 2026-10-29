@@ -997,10 +997,10 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
         with patch("app.contract_maintenance.module_refresh.effective_doc_id",
                    side_effect=lambda _web, _name, doc_id: doc_id):
             result = await web.graphql(
-                "123456789", {"businessID": "456", "adAccountID": "789"},
+                "123456789", {"businessID": "456789", "adAccountID": "789"},
                 friendly_name="InterestsSearchQuery",
                 endpoint_url="https://business.facebook.com/api/graphql/",
-                business_context_id="456",
+                business_context_id="456789",
                 profile_bootstrap_read_only=True,
             )
         self.assertEqual(result, {"data": {"result": True}})
@@ -1027,10 +1027,10 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
                    side_effect=lambda _web, _name, doc_id: doc_id):
             with self.assertRaises(RemoteRequestError):
                 await web.graphql(
-                    "123456789", {"businessID": "456", "adAccountID": "789"},
+                    "123456789", {"businessID": "456789", "adAccountID": "789"},
                     friendly_name="InterestsSearchQuery",
                     endpoint_url="https://business.facebook.com/api/graphql/",
-                    business_context_id="456",
+                    business_context_id="456789",
                     before_submit=AsyncMock(),
                     profile_bootstrap_read_only=True,
                 )
