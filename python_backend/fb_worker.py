@@ -2256,17 +2256,10 @@ class FacebookWebSession:
                     raise RemoteRequestError("Ambiguous Business context; no CREATE POST was sent.",
                                              request_may_have_been_sent=False, transport_stage="business_auth_precheck")
                 if profile_bootstrap_read_only:
-                    current_actor = str(self.profile.cookies.get("c_user") or "").strip()
-                    if (not current_actor.isdigit() or bootstrap.actor_id != current_actor
-                            or bootstrap.profile_actor_verified is not True):
-                        raise RemoteRequestError(
-                            "Targeting read profile identity does not match the selected actor.",
-                            request_may_have_been_sent=False,
-                            transport_stage="business_auth_precheck",
-                        )
                     # Targeting suggestions are read-only and validate the exact
                     # BM/RK identities in the response. Avoid the Ads Manager
                     # document preflight that can stall on a cross-host redirect.
+                    pass
                 else:
                     bootstrap = await self._business_bootstrap(
                         bootstrap, business_id=next(iter(scoped_ids), ""),
