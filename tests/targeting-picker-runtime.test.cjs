@@ -313,7 +313,27 @@ function fixture(){
   assert.equal(suggestion.data[0].id,'123456');
   assert.equal(suggestion._cache.shared_reference,true);
   assert.equal(suggestion._cache.cached_only,true);
-  console.log('Installed targeting API bridge: cache hits are instant suggestions and misses retain exact-account routing.');
+  const privateCache=fixture(),privateCacheCalls=[];
+  const privateSuggestion={data:[{id:'543210',name:'Saved scoped interest'}],
+    checked_live:false,account_scope_verified:false,profile:'38',account_id:'111111',
+    business_id:'222222',resource:'interests',transport:'private_http_h2',
+    source:'private_meta_targeting_option_index',
+    _cache:{hit:true,cached_only:true,stale:false}};
+  Object.assign(privateCache.ctx,{$:()=>null,URLSearchParams,state:{profile:'38'},
+    selectedAccountIds:()=>['111111'],targetMode:()=>false,
+    apiJson:async(url,options)=>{privateCacheCalls.push({url,options});return privateSuggestion;}});
+  vm.runInContext(completionSource.slice(0,completionSource.indexOf('// A selected RK needs')),privateCache.ctx);
+  const privateSaved=await privateCache.ctx.apiJson('ajax/metaTemplateTargetingSearch.php',{
+    body:'type=interests&q=health&limit=100&force=1'
+  });
+  assert.equal(privateCacheCalls.length,1,'exact-account private cache is checked in one scoped read');
+  assert.equal(privateCacheCalls[0].url,'ajax/metaTemplateTargetingSearch.php');
+  assert.equal(new URLSearchParams(privateCacheCalls[0].options.body).get('profile'),'38');
+  assert.equal(new URLSearchParams(privateCacheCalls[0].options.body).get('account_id'),'111111');
+  assert.equal(privateSaved.checked_live,false,'saved options remain suggestions, not live access proof');
+  assert.equal(privateSaved.data[0].id,'543210');
+
+  console.log('Installed targeting API bridge: cache hits are instant suggestions and misses use the exact template-reference reader.');
 
   // GEO countries/regions and languages must hit the installed Meta module
   // reference before a slow profile/account private search.
