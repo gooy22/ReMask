@@ -743,52 +743,100 @@ class ReadOnlyReferenceBootstrapReuseTests(unittest.IsolatedAsyncioTestCase):
             business_id="222222", actor_id="123456", reference_read=True)
 
     async def _mock_business_gate_session(self, account_business="222222"):
-        self.web.fetch_text = AsyncMock(return_value=(200, "<html>Business login route</html>",
-            "https://business.facebook.com/business/loginpage/"))
+        gate_url = "https://business.facebook.com/business/loginpage/"
+        return_url = ("https://adsmanager.facebook.com/adsmanager/manage/campaigns"
+            "?act=111111&business_id=222222")
+        gate_body = """
+            <form id="handoff" action="/business/loginpage/continue" method="post">
+              <input type="hidden" name="fb_dtsg" value="synthetic-gate-csrf">
+              <button type="submit" name="continue" value="1">
+                Продолжить с аккаунтом Facebook
+              </button>
+            </form>
+        """
+        self.web.fetch_text = AsyncMock(return_value=(200, gate_body, gate_url))
+        self.web.profile.cookies["xs"] = "synthetic-xs"
+        ads_document = json.loads(document())
+        ads_document["require"] = []
+        ads_document["define"].extend([
+            ["DTSGInitialData", [], {"token": "synthetic-fresh-csrf"}],
+            ["LSD", [], {"token": "synthetic-fresh-lsd"}],
+            ["SprinkleConfig", [], {"param_name": "jazoest", "version": 2,
+                                    "should_randomize": False}],
+        ])
+        ads_document = json.dumps(ads_document)
         self.web.bootstrap = AsyncMock(return_value=SimpleNamespace(
             actor_id="123456", fb_dtsg="synthetic-fresh-csrf", lsd="synthetic-fresh-lsd",
-            jazoest="", request_context={"__rev":"12345"}))
+            jazoest="", request_context={"__rev": "12345"}))
+        self.web.session.facebook_cookie_snapshot = lambda: dict(self.web.profile.cookies)
         calls = []
+
         @asynccontextmanager
         async def request(method, url, **options):
             calls.append((method, url, options))
-            payload = ({"payload":{"access_token":"synthetic-renewed-session",
-                                   "client_id":"119211728144504"}}
-                if method == "POST" else
-                {"id":"act_111111","account_id":"111111","business":{"id":account_business}})
-            yield SimpleNamespace(http_version="HTTP/2", status=200,
-                                  content=Body(json.dumps(payload).encode()))
+            headers = {}
+            if url == "https://business.facebook.com/business/loginpage/continue":
+                status, headers, raw = 302, {"Location": "/latest/home"}, b""
+            elif url == "https://business.facebook.com/latest/home":
+                status, raw = 200, b"continued"
+            elif url == return_url:
+                status, raw = 200, ads_document.encode()
+            elif url == "https://adsmanager.facebook.com/ads/manager/ajax/renew_access_token/":
+                status = 200
+                raw = ("for (;;);" + json.dumps({"payload": {
+                    "access_token": "synthetic-renewed-session",
+                    "client_id": "119211728144504"}})).encode()
+            elif url.startswith("https://adsmanager-graph.facebook.com/v22.0/act_111111"):
+                status, raw = 200, json.dumps({
+                    "id": "act_111111", "account_id": "111111",
+                    "business": {"id": account_business}}).encode()
+            else:
+                raise AssertionError("Unexpected profile HTTP request: " + method + " " + url)
+            yield SimpleNamespace(http_version="HTTP/2", status=status, content=Body(raw),
+                                  url=url, headers=headers)
+
         self.web.session.calls = []
         self.web.session.request = request
         return calls
 
-    async def test_reference_business_loginpage_uses_profile_refresh_and_exact_scope(self):
+    async def _assert_business_gate_http_flow(self, calls):
+        self.assertEqual([row[0] for row in calls], ["POST", "GET", "GET", "POST", "GET"])
+        self.assertEqual(calls[0][1],
+            "https://business.facebook.com/business/loginpage/continue")
+        self.assertEqual(calls[0][2]["content"],
+            "fb_dtsg=synthetic-gate-csrf&continue=1")
+        self.assertEqual(calls[1][1], "https://business.facebook.com/latest/home")
+        self.assertEqual(calls[2][1],
+            "https://adsmanager.facebook.com/adsmanager/manage/campaigns"
+            "?act=111111&business_id=222222")
+        self.assertEqual(calls[3][1],
+            "https://adsmanager.facebook.com/ads/manager/ajax/renew_access_token/")
+        self.assertEqual(calls[3][2]["headers"]["Origin"],
+            "https://adsmanager.facebook.com")
+        self.assertEqual(calls[3][2]["headers"]["Referer"],
+            "https://adsmanager.facebook.com/adsmanager/manage/campaigns"
+            "?act=111111&business_id=222222")
+        self.assertEqual(calls[4][1].split("?", 1)[0],
+            "https://adsmanager-graph.facebook.com/v22.0/act_111111")
+
+    async def test_reference_business_loginpage_uses_http_handoff_then_fresh_document(self):
         calls = await self._mock_business_gate_session()
         client = await self.open_reference()
         self.assertTrue(client.read_only)
         self.assertEqual(client.context.actor_id, "123456")
-        self.assertEqual([row[0] for row in calls], ["POST", "GET"])
-        self.assertTrue(calls[0][1].startswith("https://adsmanager.facebook.com/ads/manager/ajax/renew_access_token/"))
-        self.assertEqual(calls[0][2]["headers"]["Origin"], "https://adsmanager.facebook.com")
-        self.assertEqual(calls[0][2]["headers"]["Referer"], "https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=111111&business_id=222222")
-        self.assertTrue(calls[0][1].endswith("/ads/manager/ajax/renew_access_token/"))
-        self.assertTrue(calls[1][1].endswith("/v22.0/act_111111"))
+        await self._assert_business_gate_http_flow(calls)
         self.web.refresh_reviewed_modules.assert_not_awaited()
 
-    async def test_paused_draft_gate_refresh_stays_unwritable_until_exact_account_proof(self):
+    async def test_paused_draft_gate_uses_http_handoff_and_exact_account_proof(self):
         calls = await self._mock_business_gate_session()
         client = await AdsManagerPrivateHttp.open(self.web, account_id="111111",
             business_id="222222", actor_id="123456", allow_draft_gate_recovery=True)
         self.assertFalse(client.read_only)
         self.assertEqual(client.context.business_id, "222222")
-        self.assertEqual([row[0] for row in calls], ["POST", "GET"])
-        self.assertTrue(calls[0][1].startswith("https://adsmanager.facebook.com/ads/manager/ajax/renew_access_token/"))
-        self.assertEqual(calls[0][2]["headers"]["Origin"], "https://adsmanager.facebook.com")
-        self.assertEqual(calls[0][2]["headers"]["Referer"], "https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=111111&business_id=222222")
-        self.assertTrue(calls[0][1].endswith("/ads/manager/ajax/renew_access_token/"))
+        await self._assert_business_gate_http_flow(calls)
         self.web.refresh_reviewed_modules.assert_not_awaited()
 
-    async def test_saved_publication_gate_recovery_uses_exact_scope(self):
+    async def test_saved_publication_gate_uses_http_handoff_and_exact_account_proof(self):
         calls = await self._mock_business_gate_session()
         client = await AdsManagerPrivateHttp.open(self.web, account_id="111111",
             business_id="222222", actor_id="123456",
@@ -796,22 +844,21 @@ class ReadOnlyReferenceBootstrapReuseTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(client.read_only)
         self.assertEqual(client.context.actor_id, "123456")
         self.assertEqual(client.context.business_id, "222222")
-        self.assertEqual([row[0] for row in calls], ["POST", "GET"])
-        self.assertTrue(calls[0][1].startswith("https://adsmanager.facebook.com/ads/manager/ajax/renew_access_token/"))
-        self.assertEqual(calls[0][2]["headers"]["Origin"], "https://adsmanager.facebook.com")
-        self.assertEqual(calls[0][2]["headers"]["Referer"], "https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=111111&business_id=222222")
+        await self._assert_business_gate_http_flow(calls)
         self.web.refresh_reviewed_modules.assert_not_awaited()
 
-    async def test_draft_gate_refresh_rejects_another_business_before_writes(self):
+    async def test_draft_gate_rejects_another_business_before_writes(self):
         calls = await self._mock_business_gate_session(account_business="999999")
         with self.assertRaises(ProvisioningError) as caught:
             await AdsManagerPrivateHttp.open(self.web, account_id="111111",
                 business_id="222222", actor_id="123456", allow_draft_gate_recovery=True)
         self.assertEqual(caught.exception.code, "PRIVATE_ADS_DRAFT_BOOTSTRAP_SCOPE_UNVERIFIED")
-        self.assertEqual([row[0] for row in calls], ["POST", "GET"])
-        self.assertTrue(calls[0][1].startswith("https://adsmanager.facebook.com/ads/manager/ajax/renew_access_token/"))
-        self.assertEqual(calls[0][2]["headers"]["Origin"], "https://adsmanager.facebook.com")
-        self.assertEqual(calls[0][2]["headers"]["Referer"], "https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=111111&business_id=222222")
+        self.assertEqual([row[0] for row in calls], ["POST", "GET", "GET", "POST", "GET"])
+        self.assertTrue(calls[3][1].startswith(
+            "https://adsmanager.facebook.com/ads/manager/ajax/renew_access_token/"))
+        self.assertEqual(calls[3][2]["headers"]["Referer"],
+            "https://adsmanager.facebook.com/adsmanager/manage/campaigns"
+            "?act=111111&business_id=222222")
 
     async def test_business_loginpage_still_blocks_calls_without_draft_or_read_intent(self):
         self.web.fetch_text = AsyncMock(return_value=(200, "<html>Business login route</html>",
