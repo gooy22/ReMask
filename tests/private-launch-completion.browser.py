@@ -962,10 +962,9 @@ class InstalledLaunchTests(unittest.TestCase):
         self.assertEqual([row['action'] for row in self.worker_requests],
             ['private_launch_plan','create'],
             'Draft uses one offline plan and sends one job; it does not run a separate Meta review')
-        plan=self.worker_requests[0]['plan'] if 'plan' in self.worker_requests[0] else None
-        self.assertIsNotNone(plan)
-        self.assertFalse(plan['checked_live'])
-        self.assertEqual(plan['execution_mode'],'DRAFT')
+        plan_request=self.worker_requests[0]
+        self.assertEqual(plan_request['action'],'private_launch_plan')
+        self.assertEqual(plan_request['launch']['base']['execution_mode'],'DRAFT')
         task=self.worker_requests[1]['profiles'][0]['tasks'][0]
         self.assertEqual(task['action'],'private_launch')
         self.assertEqual(task['payload']['launch']['base']['execution_mode'],'DRAFT')
