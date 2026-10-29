@@ -770,7 +770,7 @@ console.log('Private Launch catalog and funding truth checks passed');
   assert.match(overlay,/PRIVATE_LAUNCH_VERIFICATION_REQUIRED/);
   const pageLoader=overlay.match(/<<<'NEW_BULK_PAGES'\n([\s\S]*?)\nNEW_BULK_PAGES/)[1];
   assert.ok(pageLoader.includes('remaskPrivatePageReadFailure'));
-  assert.ok(pageLoader.includes('Страницы не загружены'));
+  assert.ok(pageLoader.includes('Страницы не загружены:'));
   assert.ok(pageLoader.includes('catch (error)'));
   {
     const targetKey='15|120249392950240046|DRAFT';
