@@ -24,8 +24,10 @@ class PageAccessTransportRoutingTests(unittest.TestCase):
         self.assertTrue(_private_http_page_access(session, prepare_params))
         self.assertFalse(_browser_auth_fallback_allowed(
             prepare_params, ProvisioningError('PRIVATE_ASSET_READ_INCONCLUSIVE', 'read failed'), {}))
-        self.assertTrue(_browser_auth_fallback_allowed(
-            prepare_params, ProvisioningError('SESSION_EXPIRED', 'expired'), {}))
+        auth_error = ProvisioningError('SESSION_EXPIRED', 'expired')
+        self.assertTrue(_browser_auth_fallback_allowed(prepare_params, auth_error, {}))
+        self.assertFalse(_browser_auth_fallback_allowed(
+            prepare_params, auth_error, {}, private_only=True))
         self.assertFalse(_browser_auth_fallback_allowed(
             {'access_mode': 'shared_ads_access'},
             ProvisioningError('SESSION_EXPIRED', 'expired'), {}))
