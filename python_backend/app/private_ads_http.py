@@ -255,6 +255,7 @@ class AdsManagerPrivateHttp:
         # Ads Manager scope; only the read-only catalog path can populate it.
         self._verified_account_read = None
         self.document_origin = 'https://adsmanager.facebook.com'
+        self.document_url = self.document_origin + '/'
         # Settings calls business_object_id the admarketID and returns the
         # advertising/UI ID separately. This alias is usable only after fresh
         # exact-Business inventory independently proves the pair below.
@@ -405,6 +406,7 @@ class AdsManagerPrivateHttp:
             # The Business login redirect is only bootstrap evidence and must not
             # change the controller origin or its Origin/Referer headers.
             bootstrap_client.document_origin = "https://adsmanager.facebook.com"
+            bootstrap_client.document_url = url
             bootstrap_client.read_only = True
             context = await bootstrap_client._renew_session(body)
             account_matches = False
@@ -420,6 +422,7 @@ class AdsManagerPrivateHttp:
             except _MissingSessionInitialization as error:
                 client = cls(web, error.context)
                 client.document_origin = final.scheme + '://' + final.hostname
+                client.document_url = final_url
                 client.read_only = True
                 context = await client._renew_session(body)
                 # Every renewed session must independently confirm the selected
@@ -530,7 +533,7 @@ class AdsManagerPrivateHttp:
                 total = sum(units[i] + 256 * units[i+1] for i in range(0,len(units),2))
                 form['jazoest'] = ('' if sprinkle['should_randomize'] else str(version)) + str(total)
             headers = {"Accept":"application/json", "Origin":self.document_origin,
-                       "Referer":self.document_origin + "/", "Sec-Fetch-Dest":"empty",
+                       "Referer":self.document_url, "Sec-Fetch-Dest":"empty",
                        "Sec-Fetch-Mode":"cors", "Sec-Fetch-Site":"same-origin"}
             if form.get("lsd"):
                 headers["X-FB-LSD"] = form["lsd"]
