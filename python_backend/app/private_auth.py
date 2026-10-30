@@ -27,24 +27,25 @@ def private_auth_error(exc):
     elif "META_LOGIN_REQUIRED" in route_gates or "meta_login_redirect" in reasons:
         code = "META_LOGIN_REQUIRED"
     elif "SESSION_EXPIRED" in route_gates:
-        code = "SESSION_EXPIRED"
+        code = "META_LOGIN_REQUIRED"
     elif identity_unconfirmed:
         code = "PROFILE_IDENTITY_UNCONFIRMED"
     elif isinstance(payload, dict) and payload.get("bootstrap_fallback_exhausted") is True:
-        code = "SESSION_EXPIRED"
+        code = "META_AUTH_TOKEN_UNAVAILABLE"
     elif "BUSINESS_LOGIN_GATE" in route_gates:
         code = "BUSINESS_LOGIN_GATE"
     elif not reasons and getattr(exc, 'transport_stage', '') == 'bootstrap':
         code = 'META_AUTH_TOKEN_UNAVAILABLE'
     else:
-        code = "SESSION_EXPIRED"
+        code = "META_AUTH_TOKEN_UNAVAILABLE"
     unsent = getattr(exc, "request_may_have_been_sent", None) is False
     message = ("Meta redirected the selected profile to its Ads Manager login flow; cookie age was not checked."
         if code == "META_LOGIN_REQUIRED" else
         "Meta's read-only page did not confirm the selected profile identity."
         if code == "PROFILE_IDENTITY_UNCONFIRMED" else
-        "The worker's Meta Business HTTP session requires restoration."
-        if code == "BUSINESS_LOGIN_GATE" else "The selected profile's Meta HTTP session requires restoration.")
+        "Meta returned the Business login gate; cookie age was not checked."
+        if code == "BUSINESS_LOGIN_GATE" else
+        "Meta did not provide a verified authentication context; cookie age was not checked.")
     message += (" No GraphQL POST was sent." if unsent else " Any retained submit must be verified before retry.")
     error = ProvisioningError(code, message, retryable=True)
     error.inventory_diagnostics = [{"auth_gate": code,
