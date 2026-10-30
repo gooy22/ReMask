@@ -932,6 +932,74 @@ class AdsManagerPrivateHttp:
                             self._profile_name)
             if not isinstance(result, dict) or "error" in result or "errors" in result:
                 code = result.get("error") if isinstance(result, dict) else None
+                if code == 1357001 and self.document_origin != "https://www.facebook.com":
+                    # The profile homepage confirms the same actor on www.facebook.com.
+                    # Try Meta's native renewal there once; this still grants only a
+                    # session token, and the exact account + Business READ below stays
+                    # mandatory before the client can send any advertising CREATE.
+                    www_origin = "https://www.facebook.com"
+                    saved = getattr(session, "_profile_cookies", None)
+                    restore = getattr(session, "restore_profile_cookies", None)
+                    saved_xs = (str(saved.get("xs") or "").strip()
+                                if isinstance(saved, dict) else "")
+                    if (not callable(restore) or not isinstance(saved, dict)
+                            or str(saved.get("c_user") or "") != self.context.actor_id
+                            or not saved_xs or getattr(session, "proxy", None) != self._profile_proxy):
+                        raise fail("PROFILE_CONTEXT_UNAVAILABLE",
+                            "www-host renewal requires the same saved profile session")
+                    restore()
+                    current = session.facebook_cookie_snapshot()
+                    if (str(current.get("c_user") or "") != self.context.actor_id
+                            or str(current.get("xs") or "").strip() != saved_xs
+                            or not self._profile_matches()):
+                        raise fail("PROFILE_CONTEXT_UNAVAILABLE",
+                            "www-host renewal profile changed before dispatch")
+                    counter = getattr(self.web, "_next_graphql_req", None)
+                    if callable(counter):
+                        form["__req"] = counter()
+                    www_headers = dict(headers)
+                    document_query = parse_qs(urlsplit(self.document_url).query)
+                    www_referer = (
+                        www_origin + "/adsmanager/manage/campaigns?act="
+                        + self.context.account_id
+                    )
+                    if (document_query.get("act") == [self.context.account_id]
+                            and document_query.get("business_id") == [self.context.business_id]):
+                        www_referer += "&business_id=" + self.context.business_id
+                    www_headers.update({
+                        "Origin": www_origin,
+                        "Referer": www_referer,
+                        "Sec-Fetch-Site": "same-origin",
+                    })
+                    log.info("ads_session_renewal_retry profile=%s host=www.facebook.com reason=meta_not_logged_in",
+                        self._profile_name)
+                    async with session.request("POST",
+                            www_origin + "/ads/manager/ajax/renew_access_token/",
+                            data=form, headers=www_headers, allow_redirects=False,
+                            request_timeout_seconds=30) as response:
+                        if response.http_version != "HTTP/2":
+                            raise fail("PROTOCOL_UNAVAILABLE",
+                                "www-host session renewal requires HTTP/2")
+                        www_raw = await response.content.read(2_000_001)
+                        if response.status != 200 or len(www_raw) > 2_000_000:
+                            log.warning("ads_session_renewal_www_host unavailable profile=%s status=%s",
+                                self._profile_name, int(response.status))
+                            raise fail("SESSION_RENEWAL_UNAVAILABLE",
+                                "Meta did not return a usable www-host session renewal")
+                    www_text = www_raw.decode("utf-8").strip()
+                    if www_text.startswith("for (;;);"):
+                        www_text = www_text[len("for (;;);"):].lstrip()
+                    result = _strict_response_json(www_text)
+                    if (not isinstance(result, dict) or "error" in result or "errors" in result):
+                        www_code = (result.get("error") if isinstance(result, dict) else None)
+                        log.warning("ads_session_renewal_www_host rejected profile=%s code=%s",
+                            self._profile_name,
+                            www_code if type(www_code) is int else "unavailable")
+                    else:
+                        log.info("ads_session_renewal_www_host accepted profile=%s",
+                            self._profile_name)
+            if not isinstance(result, dict) or "error" in result or "errors" in result:
+                code = result.get("error") if isinstance(result, dict) else None
                 log.warning("ads_session_renewal rejected profile=%s code=%s",
                     self._profile_name, code if type(code) is int else "unavailable")
                 if code == 1357001:
