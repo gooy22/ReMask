@@ -18,6 +18,30 @@ SOURCE_GB = 'https://static.xx.fbcdn.net/rsrc.php/v4iEB24/y1/l/en_GB-j/Ok9Q1EXGe
 SOURCES = {SOURCE, SOURCE_GB}
 
 
+def _reviewed_native_bundle_url(value):
+    """Accept Meta's versioned static login bundle without pinning its rotating hash."""
+    try:
+        parts = urlsplit(str(value or "").strip())
+    except ValueError:
+        return False
+    if (
+        parts.scheme != 'https'
+        or str(parts.hostname or '').casefold() != 'static.xx.fbcdn.net'
+        or parts.username is not None or parts.password is not None
+        or parts.port not in (None, 443)
+        or parts.query or parts.fragment
+    ):
+        return False
+    # The bundle hash changes as Meta ships new releases. Its shape and source
+    # remain constrained; the server-rendered ROOT/props below still have to
+    # match the exact no-credential Facebook continuation and account scope.
+    return bool(re.fullmatch(
+        r'/rsrc\.php/v[0-9A-Za-z]+/y[A-Za-z0-9]{1,8}/l/'
+        r'[a-z]{2,3}_[A-Z]{2}-j/[A-Za-z0-9_-]+\.js',
+        parts.path,
+    ))
+
+
 def native_business_login_continuation(body, return_url, *, diagnostic=None):
     from .private_contract_discovery import Parser, _LANGUAGE, _walk, _pairs, _literal, _script_urls
     from .private_ads_document import _JSON_SCRIPT_RE
@@ -45,7 +69,9 @@ def native_business_login_continuation(body, return_url, *, diagnostic=None):
         report['reason'] = 'credential_controls'
         return None
     report['reason'] = 'source_unreviewed'
-    if not SOURCES.intersection(_script_urls(body, 'https://business.facebook.com/', limit=200)):
+    script_urls = _script_urls(body, 'https://business.facebook.com/', limit=200)
+    if not (SOURCES.intersection(script_urls)
+            or any(_reviewed_native_bundle_url(url) for url in script_urls)):
         return None
     report['reason'] = 'root_missing'
     candidates = []

@@ -137,9 +137,29 @@ class GateContinuationParserTests(unittest.TestCase):
                 body.replace(SOURCE, SOURCE_GB), ADS_MANAGER_RETURN_URL,
             )
         )
+        # Meta rotates the immutable CDN bundle hash. Preserve the exact host,
+        # path family, server-rendered props, and destination checks.
+        rotated_source = SOURCE.replace("Ok9Q1EXGe9g.js", "NewHash20261030.js")
+        self.assertIsNotNone(
+            native_business_login_continuation(
+                body.replace(SOURCE, rotated_source), ADS_MANAGER_RETURN_URL,
+            )
+        )
         self.assertIsNone(
             native_business_login_continuation(
                 body.replace(SOURCE, SOURCE + "?changed=1"),
+                ADS_MANAGER_RETURN_URL,
+            )
+        )
+        self.assertIsNone(
+            native_business_login_continuation(
+                body.replace(SOURCE, "https://evil.example/rsrc.php/v4/yI/l/en_US-j/NewHash.js"),
+                ADS_MANAGER_RETURN_URL,
+            )
+        )
+        self.assertIsNone(
+            native_business_login_continuation(
+                body.replace(SOURCE, "https://static.xx.fbcdn.net/assets/login.js"),
                 ADS_MANAGER_RETURN_URL,
             )
         )
