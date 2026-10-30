@@ -362,7 +362,8 @@ class AdsManagerPrivateHttp:
             raise fail("ACTOR_MISMATCH", "Advertising request belongs to another profile")
         url = ("https://adsmanager.facebook.com/adsmanager/manage/campaigns"
                f"?act={account_id}&business_id={business_id}")
-        status, body, final_url = await web.fetch_text(url, max_bytes=5_000_001, document_navigation=True)
+        status, body, final_url = await web.fetch_text(
+            url, max_bytes=5_000_001, document_navigation=True, retry_timeout=True)
         final = urlsplit(final_url)
         gate = _auth_gate(final_url, body)
         business_gate_continuation = (
