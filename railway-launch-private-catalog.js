@@ -61,6 +61,10 @@ function remaskPrivateLaunchUserMessage(error) {
     const raw=(code+' '+message).toUpperCase();
     if(/CHECKPOINT_REQUIRED/.test(raw))
         return 'Чекпоинт Meta: профиль остановлен; новые задачи запрещены';
+    if(/META_LOGIN_REQUIRED/.test(raw))
+        return 'Meta ответила «Not Logged In» на проверку Ads Manager; Campaign CREATE не отправлялся';
+    if(/SESSION_RENEWAL_REJECTED/.test(raw))
+        return 'Meta отклонила проверку Ads Manager; Campaign CREATE не отправлялся';
     if(/TWO_FACTOR_REQUIRED/.test(raw))
         return 'Meta запросила подтверждение входа';
     if(/SESSION_EXPIRED/.test(raw))
@@ -846,6 +850,9 @@ function remaskPrivateStepLabel(value) {
 function remaskPrivateErrorLabel(code) {
     const key=String(code||'').trim().toUpperCase();
     const labels={
+        PRIVATE_ADS_DRAFT_META_LOGIN_REQUIRED:'Meta ответила «Not Logged In» на проверку Ads Manager. Campaign CREATE не отправлен.',
+        META_LOGIN_REQUIRED:'Meta ответила «Not Logged In» на проверку Ads Manager. Campaign CREATE не отправлен.',
+        PRIVATE_ADS_DRAFT_SESSION_RENEWAL_REJECTED:'Meta отклонила проверку Ads Manager. Campaign CREATE не отправлен.',
         PRIVATE_ADS_DRAFT_READ_SPEC_MISMATCH:'Настройки черновика в Meta отличаются от сохранённых.',
         PRIVATE_ADS_DRAFT_TRANSPORT_UNAVAILABLE:'Не удалось связаться с Meta. Черновик не создан.',
         PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE:'Meta остановила доступ. Новые действия запрещены.',
