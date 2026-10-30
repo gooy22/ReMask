@@ -121,13 +121,15 @@ class LaunchReviewSavedAuthRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(caught.exception.status_code, 409)
         self.assertEqual(caught.exception.detail["code"], "CHECKPOINT_REQUIRED")
 
-    def test_review_route_uses_read_only_revalidation_guard(self):
+    def test_read_only_launch_routes_use_revalidation_guard(self):
         source = Path(__file__).resolve().parents[1].joinpath("main.py").read_text()
-        route = next(node for node in ast.parse(source).body
-                     if isinstance(node, ast.AsyncFunctionDef) and node.name == "private_launch_review")
-        dependencies = [node.id for decorator in route.decorator_list
-                        for node in ast.walk(decorator) if isinstance(node, ast.Name)]
-        self.assertIn("_require_profile_not_checkpoint_for_revalidation", dependencies)
+        module = ast.parse(source)
+        for route_name in ("private_launch_review", "private_advertising_resources"):
+            route = next(node for node in module.body
+                         if isinstance(node, ast.AsyncFunctionDef) and node.name == route_name)
+            dependencies = [node.id for decorator in route.decorator_list
+                            for node in ast.walk(decorator) if isinstance(node, ast.Name)]
+            self.assertIn("_require_profile_not_checkpoint_for_revalidation", dependencies)
 
     async def test_store_clears_business_gate_but_preserves_checkpoint(self):
         with tempfile.TemporaryDirectory() as tmp:
