@@ -145,20 +145,29 @@ class PrivateHttpClient:
         return self._client.is_closed
 
     def facebook_cookie_snapshot(self) -> dict[str, str]:
-        """Return the current Facebook cookie jar without exposing it to logs."""
+        """Return shared-scope cookies only when scoped auth cookies agree."""
         result: dict[str, str] = {}
+        scoped_auth: list[tuple[str, str]] = []
         for cookie in self._client.cookies.jar:
             domain = str(cookie.domain or "").lstrip(".").casefold()
-            # The flat stored profile cannot represent host/path-specific
-            # cookies safely. Only persist the reviewed shared root scope.
-            if domain != "facebook.com" or cookie.path != "/":
+            if domain != "facebook.com" and not domain.endswith(".facebook.com"):
                 continue
             if not cookie.name or cookie.value is None or cookie.is_expired():
                 continue
             name, value = str(cookie.name), str(cookie.value)
-            if name in result and result[name] != value:
-                return {}  # Ambiguous cookies must never overwrite a profile.
-            result[name] = value
+            if domain == "facebook.com" and cookie.path == "/":
+                if name in result and result[name] != value:
+                    return {}  # Ambiguous cookies must never overwrite a profile.
+                result[name] = value
+            elif name in {"c_user", "xs"}:
+                # A Business host/path cookie can shadow the shared cookie in
+                # the next HTTP request. Force callers to restore the imported
+                # profile jar instead of treating the root snapshot as valid.
+                scoped_auth.append((name, value))
+        for name, value in scoped_auth:
+            shared_value = result.get(name)
+            if shared_value is not None and shared_value != value:
+                return {}
         return result
 
     def restore_profile_cookies(self) -> None:
