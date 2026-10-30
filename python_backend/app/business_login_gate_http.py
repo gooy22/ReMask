@@ -480,6 +480,18 @@ async def continue_business_login_gate(
             str(before.get("c_user") or "") != actor_id
             or not str(before.get("xs") or "").strip()
         ):
+            # Meta can clear or shadow root-scope cookies during the Ads
+            # Manager -> Business gate redirect. Restore only this session's
+            # original profile snapshot, then recheck the same actor before
+            # sending the read-only continuation.
+            restore_profile_cookies = getattr(session, "restore_profile_cookies", None)
+            if callable(restore_profile_cookies):
+                restore_profile_cookies()
+                before = session.facebook_cookie_snapshot()
+        if (
+            str(before.get("c_user") or "") != actor_id
+            or not str(before.get("xs") or "").strip()
+        ):
             set_outcome("profile_session_mismatch")
             return None
 
