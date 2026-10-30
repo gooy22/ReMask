@@ -241,6 +241,8 @@ class _FakeSession:
         self.snapshots = list(snapshots or [
             {"c_user": "123", "xs": "same-session"},
         ])
+        self.profile_cookie_snapshot = {"c_user": "123", "xs": "same-session"}
+        self.restore_count = 0
         self.request_calls = []
 
     def request(self, method, url, **kwargs):
@@ -251,6 +253,10 @@ class _FakeSession:
         if len(self.snapshots) > 1:
             return dict(self.snapshots.pop(0))
         return dict(self.snapshots[0])
+
+    def restore_profile_cookies(self):
+        self.restore_count += 1
+        self.snapshots = [dict(self.profile_cookie_snapshot)]
 
 
 class _FakeWeb:
@@ -314,6 +320,23 @@ class GateContinuationTransportTests(unittest.IsolatedAsyncioTestCase):
             "native_request_scope",
         )
         self.assertEqual(session.request_calls, [])
+
+    async def test_gate_redirect_restores_only_the_same_profile_cookie_snapshot(self):
+        body = _native_gate_body()
+        session = _FakeSession([
+            _Response(200, native_business_login_continuation(body, ADS_MANAGER_RETURN_URL)),
+            _Response(200, ADS_MANAGER_RETURN_URL, b"fresh scoped document"),
+        ], snapshots=[{"c_user": "123", "xs": ""}])
+        web = _FakeWeb(session)
+        result = await continue_business_login_gate(
+            web,
+            gate_url="https://business.facebook.com/business/loginpage/",
+            body=body,
+            return_url=ADS_MANAGER_RETURN_URL,
+        )
+        self.assertEqual(result["url"], ADS_MANAGER_RETURN_URL)
+        self.assertEqual(session.restore_count, 1)
+        self.assertEqual(web._business_login_gate_outcome, "recovered")
 
     async def test_native_js_only_gate_uses_same_profile_http_get_and_exact_scope(self):
         from app.private_business_login import native_business_login_continuation
