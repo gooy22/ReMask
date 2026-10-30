@@ -421,8 +421,8 @@ class AdsManagerPrivateHttp:
             raise error
         business_gate_token_renewed = False
         if business_gate_continuation:
-            # First try a single unambiguous Business handoff. If Meta provides
-            # no safe, non-interactive control, use the selected profile's
+            # First try a single unambiguous Business handoff. If it cannot
+            # return a verified document on these non-interactive paths, use the selected profile's
             # cookie-authenticated Ads Manager renewal endpoint. The renewal is
             # read-only; an exact account+Business READ below remains mandatory.
             recovered = await continue_business_login_gate(
@@ -441,7 +441,7 @@ class AdsManagerPrivateHttp:
                 log.info("ads_business_login_gate profile=%s outcome=%s",
                     getattr(web.profile, "name", ""), outcome)
                 safe_refresh_fallback = (
-                    outcome in {"no_supported_continuation_control", "native_request_scope"}
+                    outcome in {"no_supported_continuation_control", "native_request_scope", "native_root_missing", "continuation_redirected_to_auth"}
                     and not has_login_form(body)
                 )
                 if not safe_refresh_fallback:
