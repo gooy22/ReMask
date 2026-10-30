@@ -157,10 +157,12 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         body = ('<script>CurrentUserInitialData = {"USER_ID":"123456789"};</script>'
                 '["DTSGInitialData",[],{"token":"login-page-token"}]')
         session, client = self.session(body, url)
-        with self.assertRaises(AuthenticationError):
+        with self.assertRaises(AuthenticationError) as caught:
             await session.bootstrap()
         self.assertGreater(len(client.calls), 1)
         self.assertFalse(session._profile_session_identity_verified)
+        from app.private_auth import private_auth_error
+        self.assertEqual(private_auth_error(caught.exception).code, "META_LOGIN_REQUIRED")
         session._fetch_dtsg_refresh_token.assert_awaited_once()
 
     async def test_bundle_bootstrap_follows_native_business_handoff_before_profile_fallback(self):
