@@ -101,6 +101,33 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls[0], calls[1])
         self.assertEqual(self.claims, 0)
 
+    async def test_timed_out_account_read_retries_once_on_same_session(self):
+        calls = []
+        @asynccontextmanager
+        async def request(method, url, **options):
+            calls.append((method, url, options))
+            if len(calls) == 1:
+                raise TimeoutError('synthetic response timeout')
+            yield SimpleNamespace(http_version='HTTP/2',status=200,content=Body(b'{"data":[]}'))
+        self.web.session.request = request
+        self.assertEqual(await self.client.get('/act_111111/campaigns', {'fields':['id']}), {'data':[]})
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0], calls[1])
+        self.assertEqual(self.claims, 0)
+
+    async def test_timed_out_advertising_post_is_not_replayed_and_claims_once(self):
+        calls = []
+        @asynccontextmanager
+        async def request(method, url, **options):
+            calls.append(method)
+            raise TimeoutError('synthetic response timeout')
+            yield
+        self.web.session.request = request
+        with self.assertRaises(ProvisioningError) as caught:
+            await self.client.post('/act_111111/addrafts', {'name':'fixture'}, before_submit=self.claim)
+        self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_HTTP_UNAVAILABLE')
+        self.assertEqual((calls, self.claims), (['POST'], 1))
+
     async def test_interrupted_advertising_post_is_not_replayed_and_claims_once(self):
         calls = []
         @asynccontextmanager
