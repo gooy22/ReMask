@@ -415,8 +415,11 @@ class ProfileResolver:
                     and candidate_xs
                     and (candidate_xs != current_xs or same_xs_variant)):
                 fingerprint = (
-                    candidate_xs,
-                    *(str(candidate.get(key) or "") for key in AUTH_COOKIE_KEYS),
+                    (
+                        candidate_xs,
+                        *(str(candidate.get(key) or "") for key in AUTH_COOKIE_KEYS),
+                    )
+                    if same_xs_variant else (candidate_xs,)
                 )
                 if fingerprint in seen_candidate_fingerprints:
                     continue
