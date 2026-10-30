@@ -510,7 +510,11 @@ class AdsManagerPrivateHttp:
         if refresh_modules and callable(refresh) and not gate_recovered:
             await refresh(body, final_url)
         client = cls(web, context)
-        client.document_origin = final.scheme + '://' + final.hostname
+        if business_gate_token_renewed:
+            client.document_origin = "https://adsmanager.facebook.com"
+            client.document_url = url
+        else:
+            client.document_origin = final.scheme + '://' + final.hostname
         if not account_matches:
             # Meta may select a default account during document navigation.
             # Before returning a usable sender, prove the requested account
