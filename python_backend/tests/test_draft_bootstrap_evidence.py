@@ -133,7 +133,7 @@ class BootstrapEvidenceTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ProvisioningError) as caught:
                 await AdsManagerPrivateHttp.open(web, account_id="111111", business_id="222222", actor_id="123456")
         self.assertEqual(caught.exception.code, "PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE")
-        web.fetch_text.assert_awaited_once_with("https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=111111&business_id=222222", max_bytes=5_000_001, document_navigation=True)
+        web.fetch_text.assert_awaited_once_with("https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=111111&business_id=222222", max_bytes=5_000_001, document_navigation=True, retry_timeout=True)
         web._ensure_session.assert_not_called()
         web.refresh_reviewed_modules.assert_not_called()
         self.assertEqual(web.profile.cookies, before)

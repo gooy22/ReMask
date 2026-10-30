@@ -209,7 +209,7 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
         await self.mock(client, handler)
         with self.assertRaises(httpx.ReadError):
             await buffered_response('POST', lambda: client.post('https://www.facebook.com/api/graphql/',
-                data={'input':'single submission'}), 100, retry_read=True)
+                data={'input':'single submission'}), 100, retry_read=True, retry_timeout=True)
         self.assertEqual(len(calls), 1)
 
     async def test_buffered_get_does_not_retry_timeout_proxy_auth_or_application_errors(self):
@@ -224,6 +224,21 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
                 await buffered_response('GET', lambda: client.get('https://www.facebook.com/'),
                     100, retry_read=True)
             self.assertEqual(len(calls), 1)
+
+    async def test_buffered_get_retries_timeout_only_with_explicit_flag(self):
+        client = self.make()
+        calls = []
+        def handler(request):
+            calls.append(request)
+            if len(calls) == 1:
+                raise httpx.ReadTimeout('SECRET', request=request)
+            return httpx.Response(200, content=b'ok')
+        await self.mock(client, handler)
+        response, raw = await buffered_response('GET',
+            lambda: client.get('https://www.facebook.com/'), 100,
+            retry_read=True, retry_timeout=True)
+        self.assertEqual((response.status, raw, len(calls)), (200, b'ok', 2))
+        self.assertEqual(calls[0].url, calls[1].url)
 
     async def test_buffered_get_returns_http_rejections_without_retry(self):
         for status in (302, 400, 401, 403, 429, 500):
@@ -266,6 +281,38 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
         await self.mock(client, handler)
         result = await web.fetch_text('https://adsmanager.facebook.com/', document_navigation=True)
         self.assertEqual((result[0], result[1], len(calls)), (200, 'complete', 2))
+
+    async def test_ads_manager_bootstrap_document_timeout_retries_once_when_opted_in(self):
+        url = ('https://adsmanager.facebook.com/adsmanager/manage/campaigns'
+               '?act=111111&business_id=222222')
+        web = FacebookWebSession(WebProfile('fixture', {'c_user':'123456'},
+            'http://127.0.0.1:1', 'fixture-UA'))
+        self.addAsyncCleanup(web.close)
+        client = await web._ensure_session()
+        calls = []
+        def handler(request):
+            calls.append(request)
+            if len(calls) == 1:
+                raise httpx.ReadTimeout('SECRET timeout', request=request)
+            return httpx.Response(200, text='complete')
+        await self.mock(client, handler)
+        result = await web.fetch_text(url, document_navigation=True, retry_timeout=True)
+        self.assertEqual((result[0], result[1], len(calls)), (200, 'complete', 2))
+
+    async def test_timeout_retry_flag_is_ignored_for_other_document_urls(self):
+        web = FacebookWebSession(WebProfile('fixture', {'c_user':'123456'},
+            'http://127.0.0.1:1', 'fixture-UA'))
+        self.addAsyncCleanup(web.close)
+        client = await web._ensure_session()
+        calls = []
+        def handler(request):
+            calls.append(request)
+            raise httpx.ReadTimeout('SECRET timeout', request=request)
+        await self.mock(client, handler)
+        with self.assertRaises(RemoteRequestError):
+            await web.fetch_text('https://business.facebook.com/business/loginpage/',
+                document_navigation=True, retry_timeout=True)
+        self.assertEqual(len(calls), 1)
 
     async def test_library_info_logging_does_not_expose_session_or_redirect_url(self):
         client = self.make()

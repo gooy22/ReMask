@@ -10,7 +10,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 import aiohttp
 import httpx
@@ -1256,6 +1256,7 @@ class FacebookWebSession:
         max_bytes: int = 4_000_000,
         referer: str | None = None,
         document_navigation: bool = False,
+        retry_timeout: bool = False,
     ) -> tuple[int, str, str, dict[str, str]]:
         """
         Fetch one Facebook HTML/document response through the profile proxy.
@@ -1293,6 +1294,14 @@ class FacebookWebSession:
             parts.path.lower().endswith((".js", ".css", ".json"))
             or "/api/" in parts.path.lower()
         )
+        if type(retry_timeout) is not bool:
+            raise TypeError("retry_timeout must be a boolean")
+        ads_manager_bootstrap = (
+            hostname == "adsmanager.facebook.com"
+            and parts.path == "/adsmanager/manage/campaigns"
+            and {"act", "business_id"}.issubset(parse_qs(parts.query))
+        )
+        retry_timeout = document_request and retry_timeout and ads_manager_bootstrap
         if document_request:
             request_headers.update({
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -1310,7 +1319,7 @@ class FacebookWebSession:
                 target, proxy=self.profile.proxy, headers=request_headers,
                 allow_redirects=True, **({'request_timeout_seconds':max(30, self.timeout_seconds)}
                     if document_request else {})), max(1, int(max_bytes)) + 1,
-                retry_read=document_request)
+                retry_read=document_request, retry_timeout=retry_timeout)
             if len(raw) > max_bytes:
                 raw = raw[:max_bytes]
 
@@ -1353,12 +1362,14 @@ class FacebookWebSession:
         max_bytes: int = 4_000_000,
         referer: str | None = None,
         document_navigation: bool = False,
+        retry_timeout: bool = False,
     ) -> tuple[int, str, str]:
         status, body, final_url, _ = await self.fetch_text_with_headers(
             url,
             max_bytes=max_bytes,
             referer=referer,
             document_navigation=document_navigation,
+            retry_timeout=retry_timeout,
         )
         return status, body, final_url
 

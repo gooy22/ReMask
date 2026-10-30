@@ -71,11 +71,14 @@ class Session:
 class Web:
     def __init__(self):
         self.session = Session();self.session.calls = []
+        self.fetch_calls = []
         self.profile = SimpleNamespace(proxy=self.session.proxy, cookies={"c_user": "123456"})
 
     async def _ensure_session(self):return self.session
 
-    async def fetch_text(self, url, **kwargs):return 200, document(), url
+    async def fetch_text(self, url, **kwargs):
+        self.fetch_calls.append((url, kwargs))
+        return 200, document(), url
 
 
 class TransportTests(unittest.IsolatedAsyncioTestCase):
@@ -86,6 +89,17 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.claims = 0
 
     async def claim(self):self.claims += 1
+
+    async def test_ads_manager_bootstrap_opts_into_exact_document_timeout_retry(self):
+        self.assertEqual(len(self.web.fetch_calls), 1)
+        url, kwargs = self.web.fetch_calls[0]
+        self.assertEqual(url,
+            "https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=111111&business_id=222222")
+        self.assertEqual(kwargs, {
+            "max_bytes": 5_000_001,
+            "document_navigation": True,
+            "retry_timeout": True,
+        })
 
     async def test_interrupted_account_read_retries_once_on_same_session(self):
         calls = []
@@ -100,6 +114,19 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(calls), 2)
         self.assertEqual(calls[0], calls[1])
         self.assertEqual(self.claims, 0)
+
+    async def test_timed_out_advertising_post_is_not_replayed_and_claims_once(self):
+        calls = []
+        @asynccontextmanager
+        async def request(method, url, **options):
+            calls.append(method)
+            raise TimeoutError('synthetic response timeout')
+            yield
+        self.web.session.request = request
+        with self.assertRaises(ProvisioningError) as caught:
+            await self.client.post('/act_111111/addrafts', {'name':'fixture'}, before_submit=self.claim)
+        self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_HTTP_UNAVAILABLE')
+        self.assertEqual((calls, self.claims), (['POST'], 1))
 
     async def test_interrupted_advertising_post_is_not_replayed_and_claims_once(self):
         calls = []
