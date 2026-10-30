@@ -12,8 +12,13 @@ from app.store import JobStore
 class LaunchReviewSavedAuthRouteTests(unittest.IsolatedAsyncioTestCase):
     def route(self):
         source = Path(__file__).resolve().parents[1].joinpath("main.py").read_text()
-        node = next(node for node in ast.parse(source).body
+        module = ast.parse(source)
+        helper = next(node for node in module.body
+                      if isinstance(node, ast.AsyncFunctionDef)
+                      and node.name == "_clear_business_login_gate_after_profile_review")
+        node = next(node for node in module.body
                     if isinstance(node, ast.AsyncFunctionDef) and node.name == "private_launch_review")
+        helper.decorator_list = []
         node.decorator_list = []
         class HTTPError(Exception):
             def __init__(self, status_code, detail):
@@ -23,8 +28,9 @@ class LaunchReviewSavedAuthRouteTests(unittest.IsolatedAsyncioTestCase):
             "HTTPException": HTTPError,
             "ProvisioningError": ProvisioningError,
             "ProfileContextError": type("ProfileContextError", (Exception,), {}),
+            "Any": object,
         }
-        exec(compile(ast.fix_missing_locations(ast.Module(body=[node], type_ignores=[])),
+        exec(compile(ast.fix_missing_locations(ast.Module(body=[helper, node], type_ignores=[])),
                      "launch-review-route-fixture", "exec"), namespace)
         return namespace["private_launch_review"], HTTPError
 
