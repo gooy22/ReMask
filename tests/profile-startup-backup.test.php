@@ -24,6 +24,8 @@ try {
     $current = file_get_contents($path);
     $previous = file_get_contents($path.'.previous');
 
+    require_once $runtime.'/classes/RemaskCookieSession.php';
+
     // A damaged encrypted row for another profile must not block the exact
     // profile snapshot reader used by the internal worker resolver.
     $archivePath = $dir.'/account-snapshot.json';
@@ -43,7 +45,6 @@ try {
     assertStartup(file_get_contents($path) === $current, 'encrypted profile rewritten at startup');
     assertStartup(file_get_contents($path.'.previous') === $previous, 'prior session overwritten at startup');
 
-    require_once $runtime.'/classes/RemaskCookieSession.php';
     $previousAccount = $store->getPreviousAccountByName('4');
     $currentAccount = $store->getAccountByName('4');
     assertStartup($previousAccount instanceof FbAccount && $currentAccount instanceof FbAccount,
