@@ -390,13 +390,86 @@ class AdsManagerPrivateHttp:
                 document_navigation=True, retry_timeout=False)
         final = urlsplit(final_url)
         gate = _auth_gate(final_url, body)
+        gate_recovered = False
+        if (gate == "BUSINESS_LOGIN_GATE" and allow_business_gate_renewal
+                and urlsplit(request_url).hostname == "adsmanager.facebook.com"):
+            # Ads Manager can redirect to a Business login gate even when the
+            # same saved profile still has a usable Business-host session. Probe
+            # the identical act/BM-scoped document there once, without following
+            # the gate redirect or sending any advertising mutation.
+            business_url = request_url.replace(
+                "https://adsmanager.facebook.com/",
+                "https://business.facebook.com/", 1)
+            outcome = "profile_snapshot_unavailable"
+            try:
+                session = await web._ensure_session()
+                saved = getattr(session, "_profile_cookies", None)
+                restore = getattr(session, "restore_profile_cookies", None)
+                saved_xs = str(saved.get("xs") or "").strip() if isinstance(saved, dict) else ""
+                if (callable(restore) and isinstance(saved, dict)
+                        and str(saved.get("c_user") or "") == actor_id and saved_xs
+                        and getattr(session, "proxy", None) == web.profile.proxy):
+                    restore()
+                    current = session.facebook_cookie_snapshot()
+                    if (str(current.get("c_user") or "") == actor_id
+                            and str(current.get("xs") or "").strip() == saved_xs):
+                        headers = {
+                            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                            "Accept-Language": "en-US,en;q=0.9",
+                            "Cache-Control": "no-cache",
+                            "Pragma": "no-cache",
+                            "Sec-Fetch-Dest": "document",
+                            "Sec-Fetch-Mode": "navigate",
+                            "Sec-Fetch-Site": "none",
+                            "Sec-Fetch-User": "?1",
+                            "Upgrade-Insecure-Requests": "1",
+                        }
+                        async with session.get(
+                                business_url, proxy=web.profile.proxy, headers=headers,
+                                allow_redirects=False, request_timeout_seconds=15) as response:
+                            probe_status = int(response.status)
+                            probe_url = str(response.url)
+                            raw = await response.content.read(5_000_001)
+                            probe_parts = urlsplit(probe_url)
+                            probe_body = ""
+                            if len(raw) <= 5_000_000:
+                                charset = str(getattr(response, "charset", "") or "utf-8")
+                                try:
+                                    probe_body = raw.decode(charset, errors="replace")
+                                except LookupError:
+                                    probe_body = raw.decode("utf-8", errors="replace")
+                            scoped_document = (
+                                response.http_version == "HTTP/2" and probe_status == 200
+                                and len(raw) <= 5_000_000 and probe_parts.scheme == "https"
+                                and probe_parts.hostname == "business.facebook.com"
+                                and probe_parts.path == "/adsmanager/manage/campaigns"
+                                and parse_qs(probe_parts.query).get("act") == [account_id]
+                                and parse_qs(probe_parts.query).get("business_id") == [business_id]
+                                and not _auth_gate(probe_url, probe_body)
+                            )
+                            if scoped_document:
+                                status, body, final_url = probe_status, probe_body, probe_url
+                                final = probe_parts
+                                gate = None
+                                gate_recovered = True
+                                request_url = business_url
+                                outcome = "verified_scoped_document"
+                            else:
+                                outcome = "business_document_not_verified"
+                    else:
+                        outcome = "profile_session_mismatch"
+                else:
+                    outcome = "profile_snapshot_unavailable"
+            except Exception as exc:
+                outcome = "transport_" + type(exc).__name__
+            log.info("ads_business_host_probe profile=%s outcome=%s",
+                getattr(web.profile, "name", ""), outcome)
         business_gate_continuation = (
             gate == "BUSINESS_LOGIN_GATE" and allow_business_gate_renewal
             and status == 200 and len(body.encode()) <= 5_000_000
             and final.scheme == "https" and final.hostname == "business.facebook.com"
             and final.path in {"/business/loginpage/", "/business/loginpage"}
         )
-        gate_recovered = False
         if gate and not business_gate_continuation:
             # Preserve the typed bootstrap evidence for rejected gates without
             # exporting response text, credentials, or the redirect URL.
