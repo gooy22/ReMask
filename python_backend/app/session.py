@@ -438,6 +438,9 @@ class ProfileResolver:
                 for key in diagnostic_keys
                 if isinstance(scan_diagnostics.get(key, 0), (int, float))
             }
+            safe_counts["same_xs_auth_cookie_variants"] = max(
+                0, min(1000000, same_xs_auth_cookie_variants)
+            )
             allowed_error_kinds = {
                 "invalid_json", "credential_decryption", "credential_envelope_unknown",
                 "credential_envelope_malformed", "credential_key", "credential_context",
