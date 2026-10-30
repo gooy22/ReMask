@@ -849,25 +849,38 @@ class AdsManagerPrivateHttp:
             if not self._profile_matches():
                 raise fail("PROFILE_CONTEXT_UNAVAILABLE", "Session renewal profile changed before dispatch")
             log.info('ads_session_renewal envelope profile=%s fields=%s',self._profile_name,sorted(form))
-            async with session.request("POST", self.document_origin + "/ads/manager/ajax/renew_access_token/",
-                    data=form, headers=headers, allow_redirects=False, request_timeout_seconds=30) as response:
-                if response.http_version != "HTTP/2":
-                    raise fail("PROTOCOL_UNAVAILABLE", "Session renewal requires HTTP/2")
-                raw = await response.content.read(2_000_001)
-                if response.status != 200 or len(raw) > 2_000_000:
-                    raise fail("SESSION_RENEWAL_UNAVAILABLE", "Meta did not return a usable session renewal")
-            text = raw.decode("utf-8").strip()
-            if text.startswith("for (;;);"):
-                text = text[len("for (;;);"):].lstrip()
-            result = _strict_response_json(text)
+            primary_transport_failure = False
+            renewal_transport_failure = ""
+            try:
+                async with session.request("POST", self.document_origin + "/ads/manager/ajax/renew_access_token/",
+                        data=form, headers=headers, allow_redirects=False, request_timeout_seconds=30) as response:
+                    if response.http_version != "HTTP/2":
+                        raise fail("PROTOCOL_UNAVAILABLE", "Session renewal requires HTTP/2")
+                    raw = await response.content.read(2_000_001)
+                    if response.status != 200 or len(raw) > 2_000_000:
+                        raise fail("SESSION_RENEWAL_UNAVAILABLE", "Meta did not return a usable session renewal")
+            except ProvisioningError:
+                raise
+            except Exception as exc:
+                # A transport failure before a usable response is not a Meta auth
+                # rejection. Retry the same read-only renewal on Business, then www.
+                primary_transport_failure = True
+                renewal_transport_failure = "primary_transport_failure"
+                result = {"error": 1357001}
+                log.warning("ads_session_renewal primary_transport_unavailable profile=%s kind=%s",
+                    self._profile_name, type(exc).__name__)
+            else:
+                text = raw.decode("utf-8").strip()
+                if text.startswith("for (;;);"):
+                    text = text[len("for (;;);"):].lstrip()
+                result = _strict_response_json(text)
             if not isinstance(result, dict) or "error" in result or "errors" in result:
                 initial_code = result.get("error") if isinstance(result, dict) else None
-                if (initial_code == 1357001
+                if ((primary_transport_failure or initial_code == 1357001)
                         and self.document_origin != "https://business.facebook.com"):
-                    # Meta may accept the saved profile on Business while the
-                    # Ads Manager origin rejects its renewal. Retry only this
-                    # read-only token renewal once on the Business host; the
-                    # exact account + Business READ below remains mandatory.
+                    # Retry the same read-only renewal on Business when the
+                    # selected Ads Manager host rejects it or the profile proxy
+                    # cannot reach it. Exact account + Business READ stays mandatory.
                     business_origin = "https://business.facebook.com"
                     saved = getattr(session, "_profile_cookies", None)
                     restore = getattr(session, "restore_profile_cookies", None)
@@ -902,34 +915,44 @@ class AdsManagerPrivateHttp:
                         "Referer": business_referer,
                         "Sec-Fetch-Site": "same-origin",
                     })
-                    log.info("ads_session_renewal_retry profile=%s host=business.facebook.com reason=meta_not_logged_in",
-                        self._profile_name)
-                    async with session.request("POST",
-                            business_origin + "/ads/manager/ajax/renew_access_token/",
-                            data=form, headers=business_headers, allow_redirects=False,
-                            request_timeout_seconds=30) as response:
-                        if response.http_version != "HTTP/2":
-                            raise fail("PROTOCOL_UNAVAILABLE",
-                                "Business-host session renewal requires HTTP/2")
-                        business_raw = await response.content.read(2_000_001)
-                        if response.status != 200 or len(business_raw) > 2_000_000:
-                            log.warning("ads_session_renewal_business_host unavailable profile=%s status=%s",
-                                self._profile_name, int(response.status))
-                            raise fail("SESSION_RENEWAL_UNAVAILABLE",
-                                "Meta did not return a usable Business-host session renewal")
-                    business_text = business_raw.decode("utf-8").strip()
-                    if business_text.startswith("for (;;);"):
-                        business_text = business_text[len("for (;;);"):].lstrip()
-                    result = _strict_response_json(business_text)
-                    if (not isinstance(result, dict) or "error" in result or "errors" in result):
-                        business_code = (result.get("error")
-                            if isinstance(result, dict) else None)
-                        log.warning("ads_session_renewal_business_host rejected profile=%s code=%s",
-                            self._profile_name,
-                            business_code if type(business_code) is int else "unavailable")
+                    log.info("ads_session_renewal_retry profile=%s host=business.facebook.com reason=%s",
+                        self._profile_name,
+                        renewal_transport_failure or "meta_not_logged_in")
+                    try:
+                        async with session.request("POST",
+                                business_origin + "/ads/manager/ajax/renew_access_token/",
+                                data=form, headers=business_headers, allow_redirects=False,
+                                request_timeout_seconds=30) as response:
+                            if response.http_version != "HTTP/2":
+                                raise fail("PROTOCOL_UNAVAILABLE",
+                                    "Business-host session renewal requires HTTP/2")
+                            business_raw = await response.content.read(2_000_001)
+                            if response.status != 200 or len(business_raw) > 2_000_000:
+                                log.warning("ads_session_renewal_business_host unavailable profile=%s status=%s",
+                                    self._profile_name, int(response.status))
+                                raise fail("SESSION_RENEWAL_UNAVAILABLE",
+                                    "Meta did not return a usable Business-host session renewal")
+                    except ProvisioningError:
+                        raise
+                    except Exception as exc:
+                        renewal_transport_failure = "business_transport_failure"
+                        result = {"error": 1357001}
+                        log.warning("ads_session_renewal_business_host transport_unavailable profile=%s kind=%s",
+                            self._profile_name, type(exc).__name__)
                     else:
-                        log.info("ads_session_renewal_business_host accepted profile=%s",
-                            self._profile_name)
+                        business_text = business_raw.decode("utf-8").strip()
+                        if business_text.startswith("for (;;);"):
+                            business_text = business_text[len("for (;;);"):].lstrip()
+                        result = _strict_response_json(business_text)
+                        if (not isinstance(result, dict) or "error" in result or "errors" in result):
+                            business_code = (result.get("error")
+                                if isinstance(result, dict) else None)
+                            log.warning("ads_session_renewal_business_host rejected profile=%s code=%s",
+                                self._profile_name,
+                                business_code if type(business_code) is int else "unavailable")
+                        else:
+                            log.info("ads_session_renewal_business_host accepted profile=%s",
+                                self._profile_name)
             if not isinstance(result, dict) or "error" in result or "errors" in result:
                 code = result.get("error") if isinstance(result, dict) else None
                 if code == 1357001 and self.document_origin != "https://www.facebook.com":
@@ -971,8 +994,9 @@ class AdsManagerPrivateHttp:
                         "Referer": www_referer,
                         "Sec-Fetch-Site": "same-origin",
                     })
-                    log.info("ads_session_renewal_retry profile=%s host=www.facebook.com reason=meta_not_logged_in",
-                        self._profile_name)
+                    log.info("ads_session_renewal_retry profile=%s host=www.facebook.com reason=%s",
+                        self._profile_name,
+                        renewal_transport_failure or "meta_not_logged_in")
                     async with session.request("POST",
                             www_origin + "/ads/manager/ajax/renew_access_token/",
                             data=form, headers=www_headers, allow_redirects=False,
