@@ -24,7 +24,7 @@ def private_auth_error(exc):
     # precedence over a Business-only gate from a later fallback route.
     if "CHECKPOINT_REQUIRED" in route_gates or "checkpoint_redirect" in reasons:
         code = "CHECKPOINT_REQUIRED"
-    elif "META_LOGIN_REQUIRED" in route_gates:
+    elif "META_LOGIN_REQUIRED" in route_gates or "meta_login_redirect" in reasons:
         code = "META_LOGIN_REQUIRED"
     elif "SESSION_EXPIRED" in route_gates or identity_unconfirmed:
         code = "SESSION_EXPIRED"
@@ -46,6 +46,6 @@ def private_auth_error(exc):
     error.inventory_diagnostics = [{"auth_gate": code,
         "transport_stage": str(getattr(exc, "transport_stage", "")),
         "observed_reasons": sorted(str(r) for r in reasons if r in
-            ('checkpoint_redirect', 'login_redirect', 'login_form', 'redirected_host', 'http_auth')),
+            ('checkpoint_redirect', 'meta_login_redirect', 'login_redirect', 'login_form', 'redirected_host', 'http_auth')),
         "post_not_sent": unsent}]
     return error
