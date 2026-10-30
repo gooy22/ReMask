@@ -392,6 +392,7 @@ class AdsManagerPrivateHttp:
         gate = _auth_gate(final_url, body)
         gate_recovered = False
         scoped_www_document = False
+        account_only_scope_recovered = False
         if (
             gate == "BUSINESS_LOGIN_GATE"
             and allow_business_gate_renewal
@@ -472,7 +473,60 @@ class AdsManagerPrivateHttp:
                             request_url = www_url
                             outcome = "verified_scoped_document"
                         else:
-                            outcome = "www_document_not_verified"
+                            # If the selected BM query triggers Meta's login gate,
+                            # try the same first-party account page with only the exact
+                            # selected act. The following Graph READ must still prove
+                            # both that account and its selected Business before writes.
+                            account_url = (
+                                "https://www.facebook.com/adsmanager/manage/campaigns?act="
+                                + account_id
+                            )
+                            restore()
+                            account_snapshot = session.facebook_cookie_snapshot()
+                            if (
+                                str(account_snapshot.get("c_user") or "") == actor_id
+                                and str(account_snapshot.get("xs") or "").strip() == saved_xs
+                            ):
+                                async with session.get(
+                                    account_url, proxy=web.profile.proxy, headers=headers,
+                                    allow_redirects=False, request_timeout_seconds=15
+                                ) as response:
+                                    account_status = int(response.status)
+                                    account_probe_url = str(response.url)
+                                    account_http2 = response.http_version == "HTTP/2"
+                                    account_raw = await response.content.read(5_000_001)
+                                    account_parts = urlsplit(account_probe_url)
+                                    account_body = ""
+                                    if len(account_raw) <= 5_000_000:
+                                        charset = str(getattr(response, "charset", "") or "utf-8")
+                                        try:
+                                            account_body = account_raw.decode(charset, errors="replace")
+                                        except LookupError:
+                                            account_body = account_raw.decode("utf-8", errors="replace")
+                                account_document = (
+                                    account_http2
+                                    and account_status == 200
+                                    and len(account_raw) <= 5_000_000
+                                    and account_parts.scheme == "https"
+                                    and account_parts.hostname == "www.facebook.com"
+                                    and account_parts.path == "/adsmanager/manage/campaigns"
+                                    and parse_qs(account_parts.query).get("act") == [account_id]
+                                    and not _auth_gate(account_probe_url, account_body)
+                                    and not has_login_form(account_body)
+                                )
+                                if account_document:
+                                    status, body, final_url = account_status, account_body, account_probe_url
+                                    final = account_parts
+                                    gate = None
+                                    gate_recovered = True
+                                    scoped_www_document = True
+                                    account_only_scope_recovered = True
+                                    request_url = account_url
+                                    outcome = "verified_account_only_document"
+                                else:
+                                    outcome = "account_only_document_not_verified"
+                            else:
+                                outcome = "profile_session_mismatch"
                     else:
                         outcome = "profile_session_mismatch"
                 else:
@@ -652,7 +706,8 @@ class AdsManagerPrivateHttp:
                     or not (final.hostname in {"adsmanager.facebook.com", "business.facebook.com"}
                     or (scoped_www_document and final.hostname == "www.facebook.com"))
                     or final.path != "/adsmanager/manage/campaigns"
-                    or parse_qs(final.query).get("business_id") != [business_id]):
+                    or (parse_qs(final.query).get("business_id") != [business_id]
+                        and not account_only_scope_recovered)):
                 raise fail("BOOTSTRAP_SCOPE_UNVERIFIED", "Ads Manager did not confirm the requested account context", True)
             try:
                 context = context_from_document(body, account_id=account_id,
@@ -834,11 +889,17 @@ class AdsManagerPrivateHttp:
                     if callable(counter):
                         form["__req"] = counter()
                     business_headers = dict(headers)
+                    document_query = parse_qs(urlsplit(self.document_url).query)
+                    business_referer = (
+                        business_origin + "/adsmanager/manage/campaigns?act="
+                        + self.context.account_id
+                    )
+                    if (document_query.get("act") == [self.context.account_id]
+                            and document_query.get("business_id") == [self.context.business_id]):
+                        business_referer += "&business_id=" + self.context.business_id
                     business_headers.update({
                         "Origin": business_origin,
-                        "Referer": business_origin
-                            + "/adsmanager/manage/campaigns?act="
-                            + self.context.account_id + "&business_id=" + self.context.business_id,
+                        "Referer": business_referer,
                         "Sec-Fetch-Site": "same-origin",
                     })
                     log.info("ads_session_renewal_retry profile=%s host=business.facebook.com reason=meta_not_logged_in",
