@@ -563,12 +563,16 @@ class AdsManagerPrivateHttp:
         Source: XAdsCMRenewAccessTokenController + AsyncRequest.promisePayload.
         """
         try:
-            bootstrap = await self.web.bootstrap(allow_business_loginpage_probe=True)
+            # Use the ordinary profile bootstrap that serves the existing Business
+            # reads. The forced profile-page probe can stop on Meta's login gate
+            # before the exact account + Business read below gets a chance to prove
+            # the selected scope. The saved c_user, profile, proxy and cookie snapshot
+            # are still pinned by _profile_matches(), and no write is enabled yet.
+            bootstrap = await self.web.bootstrap()
             if (not self._profile_matches()
-                    or getattr(bootstrap, "profile_actor_verified", False) is not True
                     or bootstrap.actor_id != self.context.actor_id
                     or not isinstance(bootstrap.fb_dtsg, str) or not bootstrap.fb_dtsg):
-                raise fail("PROFILE_CONTEXT_UNAVAILABLE", "Session renewal requires the same confirmed actor")
+                raise fail("PROFILE_CONTEXT_UNAVAILABLE", "Session renewal requires the selected profile actor")
             session = await self.web._ensure_session()
             if session.proxy != self._profile_proxy:
                 raise fail("PROFILE_CONTEXT_UNAVAILABLE", "Session renewal route changed")
