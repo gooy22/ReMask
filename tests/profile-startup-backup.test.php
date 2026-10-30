@@ -23,6 +23,20 @@ try {
     }
     $current = file_get_contents($path);
     $previous = file_get_contents($path.'.previous');
+
+    // A damaged encrypted row for another profile must not block the exact
+    // profile snapshot reader used by the internal worker resolver.
+    $archivePath = $dir.'/account-snapshot.json';
+    $archiveRows = json_decode($previous, true, 512, JSON_THROW_ON_ERROR);
+    array_unshift($archiveRows, ['name'=>'other-profile','credentials_encrypted'=>'not-a-valid-envelope']);
+    file_put_contents($archivePath, json_encode($archiveRows, JSON_THROW_ON_ERROR));
+    $archiveStore = new FbAccountSerializer($archivePath);
+    $archiveAccount = $archiveStore->getAccountByNameFromSnapshot('4');
+    assertStartup($archiveAccount instanceof FbAccount,
+        'target profile snapshot was hidden by another encrypted row');
+    $archiveCookies = RemaskCookieSession::map((array)$archiveAccount->cookies);
+    assertStartup(($archiveCookies['xs'] ?? '') === 'old-xs',
+        'target-only snapshot reader returned the wrong session');
     assertStartup($current !== $previous, 'fixture has no distinct backup');
     $store->ensureEncrypted();
     $store->ensureEncrypted();
