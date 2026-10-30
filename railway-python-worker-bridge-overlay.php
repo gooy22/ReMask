@@ -529,7 +529,7 @@ try {
             if ($leftTime !== $rightTime) return $rightTime <=> $leftTime;
             return strcmp((string)$right, (string)$left);
         });
-        foreach (array_slice($backupFiles, 0, 120) as $backupFile) {
+        foreach (array_slice($backupFiles, 0, 512) as $backupFile) {
             if (!is_string($backupFile) || !is_file($backupFile) || is_link($backupFile)) continue;
             $recoverySnapshotDiagnostics['archive_scanned']++;
             try {
