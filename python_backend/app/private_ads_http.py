@@ -362,8 +362,32 @@ class AdsManagerPrivateHttp:
             raise fail("ACTOR_MISMATCH", "Advertising request belongs to another profile")
         url = ("https://adsmanager.facebook.com/adsmanager/manage/campaigns"
                f"?act={account_id}&business_id={business_id}")
-        status, body, final_url = await web.fetch_text(
-            url, max_bytes=5_000_001, document_navigation=True, retry_timeout=True)
+        from fb_worker import RemoteRequestError
+        request_url = url
+        try:
+            status, body, final_url = await web.fetch_text(
+                request_url, max_bytes=5_000_001,
+                document_navigation=True, retry_timeout=True)
+        except RemoteRequestError as error:
+            transport_failure = error.meta_payload.get("transport_failure")
+            if (error.transport_stage != "fetch"
+                    or error.request_may_have_been_sent is not False
+                    or not isinstance(transport_failure, dict)
+                    or transport_failure.get("kind") != "TimeoutError"):
+                raise
+            # Keep the exact account/path while retrying this read-only document
+            # on Meta's shared Business host. The parser below still requires
+            # the reviewed Ads Manager path, actor, account and Business scope.
+            request_url = url.replace(
+                "https://adsmanager.facebook.com/",
+                "https://business.facebook.com/", 1)
+            if request_url == url:
+                raise
+            log.info("ads_bootstrap_host_fallback profile=%s reason=timeout",
+                getattr(web.profile, "name", ""))
+            status, body, final_url = await web.fetch_text(
+                request_url, max_bytes=5_000_001,
+                document_navigation=True, retry_timeout=False)
         final = urlsplit(final_url)
         gate = _auth_gate(final_url, body)
         business_gate_continuation = (
@@ -401,7 +425,7 @@ class AdsManagerPrivateHttp:
             # from the login-page document; renewal requires a fresh Ads Manager
             # document from the original exact account URL.
             recovered = await continue_business_login_gate(
-                web, gate_url=final_url, body=body, return_url=url)
+                web, gate_url=final_url, body=body, return_url=request_url)
             if not isinstance(recovered, dict):
                 outcome = str(getattr(web, "_business_login_gate_outcome", "unavailable"))
                 log.info("ads_business_login_gate profile=%s outcome=%s",
