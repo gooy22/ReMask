@@ -1899,8 +1899,11 @@ class FacebookWebSession:
                 last_reason = "same_xs"
                 continue
             fingerprint = (
-                candidate_xs,
-                *(str(candidate.get(name) or "") for name in ("fr", "sb", "datr", "ps_l", "ps_n")),
+                (
+                    candidate_xs,
+                    *(str(candidate.get(name) or "") for name in ("fr", "sb", "datr", "ps_l", "ps_n")),
+                )
+                if same_xs_auth_variant else (candidate_xs,)
             )
             if fingerprint in seen_cookie_fingerprints:
                 continue
