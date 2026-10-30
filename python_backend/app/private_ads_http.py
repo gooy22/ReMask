@@ -146,8 +146,10 @@ def _bootstrap_evidence(url, body, profile, actor_id):
                         and node[0] == "CurrentUserInitialData" and node[1] == []
                         and isinstance(node[2], dict)):
                     value = node[2].get("USER_ID")
-                    if isinstance(value, str) and value.isdigit():
-                        actors.add(value)
+                    if type(value) in (str, int):
+                        candidate = str(value)
+                        if re.fullmatch(r"[0-9]{1,30}", candidate):
+                            actors.add(candidate)
         if actors:
             actor_state = ("matches" if actors == {actor_id} else
                            "logged_out" if actors == {"0"} else "mismatch")
@@ -225,7 +227,10 @@ def context_from_document(body, *, account_id, business_id, actor_id):
     graph = _unique(configurations["GraphAPIConfig"], "BOOTSTRAP_CONFIG_UNAVAILABLE")
     url_map = _unique(configurations["UrlMapConfig"], "BOOTSTRAP_CONFIG_UNAVAILABLE")
     user = _unique(configurations["CurrentUserInitialData"], "ACTOR_UNVERIFIED")
-    if user.get("USER_ID") != actor_id:
+    raw_document_actor = user.get("USER_ID")
+    document_actor = (str(raw_document_actor) if type(raw_document_actor) in (str, int)
+                      and re.fullmatch(r"[0-9]{1,30}", str(raw_document_actor)) else "")
+    if document_actor != actor_id:
         raise fail("ACTOR_MISMATCH", "Ads Manager returned another Facebook actor")
     # These are observed configuration values, not guesses about SDK routing.
     # A changed origin/version needs a new source review before dispatch.

@@ -205,6 +205,25 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(context.application_id, "119211728144504")
         self.assertNotIn("synthetic-session-value", repr(context))
 
+    def test_numeric_adsmanager_actor_matches_only_exact_profile_identity(self):
+        from app.private_ads_http import _bootstrap_evidence
+
+        body = document(actor=123456)
+        context = context_from_document(body, account_id="111111", business_id="222222", actor_id="123456")
+        self.assertEqual(context.actor_id, "123456")
+
+        profile = SimpleNamespace(cookies={"c_user":"123456", "xs":"synthetic-xs"}, proxy=None)
+        url = "https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=111111"
+        evidence = _bootstrap_evidence(url, body, profile, "123456")
+        self.assertEqual(evidence["document_actor"], "matches")
+
+        wrong_actor = document(actor=123457)
+        wrong_evidence = _bootstrap_evidence(url, wrong_actor, profile, "123456")
+        self.assertEqual(wrong_evidence["document_actor"], "mismatch")
+        with self.assertRaises(ProvisioningError) as caught:
+            context_from_document(wrong_actor, account_id="111111", business_id="222222", actor_id="123456")
+        self.assertEqual(caught.exception.code, "PRIVATE_ADS_DRAFT_ACTOR_MISMATCH")
+
     def test_strict_http_decoder_accepts_bytes_and_rejects_ambiguous_bytes(self):
         from app.private_ads_http import _strict_response_json
         self.assertEqual(_strict_response_json(b'{"account_id":"111111"}'),
