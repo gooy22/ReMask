@@ -141,7 +141,7 @@ class PrivateHttpClient:
             event_hooks={'request': [self._log_auth_cookie_evidence, request_hook], 'response': [response_hook]},
         )
 
-    def _log_auth_cookie_evidence(self, request: httpx.Request) -> None:
+    async def _log_auth_cookie_evidence(self, request: httpx.Request) -> None:
         """Log whether the prepared Facebook request carries this profile's auth cookies.
 
         Never log cookie values or fingerprints. This distinguishes an absent or
@@ -162,7 +162,7 @@ class PrivateHttpClient:
             }:
                 path = "unreviewed"
             log.info(
-                "[%s] private_http_auth_header method=%s host=%s path=%s c_user_state=%s xs_present=%s cookie_count=%s",
+                "[%s] private_http_auth_header method=%s host=%s path=%s actor_cookie_state=%s xs_present=%s cookie_count=%s",
                 self.profile_name,
                 request.method,
                 host,
