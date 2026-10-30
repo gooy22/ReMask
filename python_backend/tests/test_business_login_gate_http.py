@@ -1,5 +1,7 @@
+import json
 import unittest
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlsplit
 
 from app.business_login_gate_http import (
     continue_business_login_gate,
@@ -10,6 +12,33 @@ from app.business_login_gate_http import (
 
 GATE_URL = "https://business.facebook.com/business/loginpage?next=%2Flatest%2Fhome"
 RETURN_URL = "https://business.facebook.com/latest/home"
+ADS_MANAGER_RETURN_URL = (
+    "https://adsmanager.facebook.com/adsmanager/manage/campaigns"
+    "?act=111111&business_id=222222"
+)
+
+
+def _native_gate_body(**overrides):
+    from app.private_business_login import ROOT, SOURCE
+
+    props = {
+        "loginOptions": ["FB", "SSO"],
+        "saveSession": False,
+        "referrerURI": ADS_MANAGER_RETURN_URL,
+        "requestId": "native-request-id",
+    }
+    props.update(overrides)
+    row = [
+        "react-xhp",
+        "constructAndRenderComponentIntoComment_DO_NOT_USE",
+        [ROOT],
+        [{"constructor": {"__m": ROOT}, "props": props}],
+    ]
+    return (
+        f'<script src="{SOURCE}"></script><script>server.handle('
+        + json.dumps({"require": [row]})
+        + ");</script>"
+    )
 
 
 class GateContinuationParserTests(unittest.TestCase):
@@ -79,6 +108,46 @@ class GateContinuationParserTests(unittest.TestCase):
         checkpoint = "<p>Enter security code</p><button>Continue with Facebook</button>"
         self.assertIsNone(extract_business_login_continuation(credential_form, GATE_URL))
         self.assertIsNone(extract_business_login_continuation(checkpoint, GATE_URL))
+
+    def test_extracts_reviewed_js_only_facebook_continuation(self):
+        from app.private_business_login import (
+            SOURCE, SOURCE_GB, native_business_login_continuation,
+        )
+
+        body = _native_gate_body()
+        self.assertIsNone(extract_business_login_continuation(body, GATE_URL))
+        continuation = native_business_login_continuation(body, ADS_MANAGER_RETURN_URL)
+        self.assertTrue(is_business_login_gate_url(GATE_URL))
+        self.assertEqual(
+            urlsplit(continuation).path,
+            "/business/loginrequest/fb/",
+        )
+        query = parse_qs(urlsplit(continuation).query)
+        next_url = query["next"][0]
+        next_query = parse_qs(urlsplit(next_url).query)
+        self.assertEqual(query["f3_request_id"], ["native-request-id"])
+        self.assertEqual(next_query["act"], ["111111"])
+        self.assertEqual(next_query["business_id"], ["222222"])
+        self.assertEqual(
+            next_query["biz_login_source"],
+            ["biz_unified_f3_fb_login_button"],
+        )
+        self.assertIsNotNone(
+            native_business_login_continuation(
+                body.replace(SOURCE, SOURCE_GB), ADS_MANAGER_RETURN_URL,
+            )
+        )
+        self.assertIsNone(
+            native_business_login_continuation(
+                body.replace(SOURCE, SOURCE + "?changed=1"),
+                ADS_MANAGER_RETURN_URL,
+            )
+        )
+        self.assertIsNone(
+            native_business_login_continuation(
+                body, ADS_MANAGER_RETURN_URL.replace("111111", "999999"),
+            )
+        )
 
     def test_refuses_new_consent_and_human_verification(self):
         for notice in ("By continuing, you agree to new terms.",
@@ -225,6 +294,57 @@ class GateContinuationTransportTests(unittest.IsolatedAsyncioTestCase):
             "no_supported_continuation_control",
         )
         self.assertEqual(session.request_calls, [])
+
+    async def test_native_js_only_gate_uses_same_profile_http_get_and_exact_scope(self):
+        from app.private_business_login import native_business_login_continuation
+
+        body = _native_gate_body()
+        native_url = native_business_login_continuation(
+            body, ADS_MANAGER_RETURN_URL,
+        )
+        session = _FakeSession([
+            _Response(200, native_url, b"native callback"),
+            _Response(200, ADS_MANAGER_RETURN_URL, b"fresh scoped document"),
+        ])
+        web = _FakeWeb(session)
+        result = await continue_business_login_gate(
+            web,
+            gate_url="https://business.facebook.com/business/loginpage/",
+            body=body,
+            return_url=ADS_MANAGER_RETURN_URL,
+        )
+
+        self.assertEqual(result["status"], 200)
+        self.assertEqual(result["url"], ADS_MANAGER_RETURN_URL)
+        self.assertEqual(result["body"], "fresh scoped document")
+        self.assertEqual(web._business_login_gate_outcome, "recovered")
+        self.assertEqual(len(session.request_calls), 2)
+        for method, _, _ in session.request_calls:
+            self.assertEqual(method, "GET")
+        self.assertEqual(session.request_calls[0][1], native_url)
+        params = parse_qs(urlsplit(native_url).query)
+        next_url = params["next"][0]
+        next_query = parse_qs(urlsplit(next_url).query)
+        self.assertEqual(next_query["act"], ["111111"])
+        self.assertEqual(next_query["business_id"], ["222222"])
+        self.assertNotIn("content", session.request_calls[0][2])
+
+    async def test_native_js_only_gate_refuses_terms_and_credentials(self):
+        body = _native_gate_body()
+        for rejected in (
+            "By continuing, you agree to new terms." + body,
+            '<input type="password" name="pass">' + body,
+        ):
+            session = _FakeSession([])
+            web = _FakeWeb(session)
+            result = await continue_business_login_gate(
+                web,
+                gate_url="https://business.facebook.com/business/loginpage/",
+                body=rejected,
+                return_url=ADS_MANAGER_RETURN_URL,
+            )
+            self.assertIsNone(result)
+            self.assertEqual(session.request_calls, [])
 
     async def test_stops_if_facebook_actor_changes_after_continuation(self):
         body = """
