@@ -322,6 +322,7 @@ class GateContinuationTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session.request_calls, [])
 
     async def test_gate_redirect_restores_only_the_same_profile_cookie_snapshot(self):
+        from app.private_business_login import native_business_login_continuation
         body = _native_gate_body()
         session = _FakeSession([
             _Response(200, native_business_login_continuation(body, ADS_MANAGER_RETURN_URL)),
