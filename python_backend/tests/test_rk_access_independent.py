@@ -124,17 +124,17 @@ class PrivateAuthTests(unittest.TestCase):
         error = AuthenticationError('actual login form on another route')
         error.meta_payload = {'business_precheck': [{'auth_reason':'login_form',
             'final_url':'https://www.facebook.com/?next=https://business.facebook.com/business/loginpage/'}]}
-        self.assertEqual(private_auth_error(error).code, 'SESSION_EXPIRED')
+        self.assertEqual(private_auth_error(error).code, 'META_AUTH_TOKEN_UNAVAILABLE')
 
     def test_generic_login_checkpoint_message_is_not_checkpoint_evidence(self):
         self.assertEqual(private_auth_error(AuthenticationError(
-            'Facebook GraphQL redirected to login/checkpoint')).code, 'SESSION_EXPIRED')
+            'Facebook GraphQL redirected to login/checkpoint')).code, 'META_AUTH_TOKEN_UNAVAILABLE')
 
     def test_business_checkpoint_and_profile_auth_errors_preserve_actionable_codes(self):
         for final_url, reason, code in (
             ('https://business.facebook.com/business/loginpage/', 'login_redirect', 'BUSINESS_LOGIN_GATE'),
             ('https://www.facebook.com/checkpoint/', 'checkpoint_redirect', 'CHECKPOINT_REQUIRED'),
-            ('https://www.facebook.com/login/', 'login_redirect', 'SESSION_EXPIRED')):
+            ('https://www.facebook.com/login/', 'login_redirect', 'META_LOGIN_REQUIRED')):
             with self.subTest(code=code):
                 error = AuthenticationError('auth precheck')
                 error.request_may_have_been_sent = False
