@@ -904,6 +904,39 @@ class ReadOnlyReferenceBootstrapReuseTests(unittest.IsolatedAsyncioTestCase):
         await self._assert_business_gate_http_flow(calls)
         self.web.refresh_reviewed_modules.assert_not_awaited()
 
+    async def test_paused_draft_gate_renews_after_noninteractive_handoff_redirect(self):
+        calls = await self._mock_business_gate_session()
+        self.web._business_login_gate_outcome = "native_root_missing"
+        with patch("app.private_ads_http.continue_business_login_gate",
+                   new=AsyncMock(return_value=None)):
+            client = await AdsManagerPrivateHttp.open(self.web, account_id="111111",
+                business_id="222222", actor_id="123456", allow_draft_gate_recovery=True)
+        self.assertFalse(client.read_only)
+        self.assertEqual(client.context.actor_id, "123456")
+        self.assertEqual(client.context.business_id, "222222")
+        self.assertEqual([row[0] for row in calls], ["POST", "GET"])
+        self.assertEqual(calls[0][1],
+            "https://adsmanager.facebook.com/ads/manager/ajax/renew_access_token/")
+        self.assertEqual(calls[0][2]["headers"]["Referer"],
+            "https://adsmanager.facebook.com/adsmanager/manage/campaigns"
+            "?act=111111&business_id=222222")
+        self.assertEqual(calls[1][1].split("?", 1)[0],
+            "https://adsmanager-graph.facebook.com/v22.0/act_111111")
+
+    async def test_paused_draft_gate_does_not_renew_when_business_gate_has_login_form(self):
+        await self._mock_business_gate_session()
+        gate_url = "https://business.facebook.com/business/loginpage/"
+        self.web.fetch_text.return_value = (200,
+            '<form id="login_form"><input type="password" name="pass"></form>', gate_url)
+        self.web._business_login_gate_outcome = "continuation_redirected_to_auth"
+        with patch("app.private_ads_http.continue_business_login_gate",
+                   new=AsyncMock(return_value=None)):
+            with self.assertRaises(ProvisioningError) as caught:
+                await AdsManagerPrivateHttp.open(self.web, account_id="111111",
+                    business_id="222222", actor_id="123456", allow_draft_gate_recovery=True)
+        self.assertEqual(caught.exception.code, "PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE")
+        self.assertEqual(self.web.session.calls, [])
+
     async def test_saved_publication_gate_uses_http_handoff_and_exact_account_proof(self):
         calls = await self._mock_business_gate_session()
         client = await AdsManagerPrivateHttp.open(self.web, account_id="111111",
