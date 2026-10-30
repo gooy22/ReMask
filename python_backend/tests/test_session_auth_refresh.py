@@ -49,6 +49,19 @@ class SavedAuthRefreshTests(unittest.IsolatedAsyncioTestCase):
         resolver=SimpleNamespace(resolve=AsyncMock(return_value=self.context()))
         self.assertFalse(await refresh_saved_auth_context(resolver,context))
 
+    async def test_same_xs_auth_cookie_variant_is_reloaded_for_same_actor(self):
+        context = self.context()
+        context.cookies["fr"] = "fixture-old"
+        fresh = self.context()
+        fresh.cookies["fr"] = "fixture-old"
+        fresh.recovery_cookie_candidates = [{
+            "c_user": "123456789", "xs": "fixture-old", "fr": "fixture-new",
+        }]
+        resolver = SimpleNamespace(resolve=AsyncMock(return_value=fresh))
+        self.assertTrue(await refresh_saved_auth_context(resolver, context))
+        self.assertEqual(context.cookies["xs"], "fixture-old")
+        self.assertEqual(context.cookies["fr"], "fixture-new")
+
     async def test_unrelated_cookie_change_is_not_new_authentication(self):
         context = self.context()
         fresh = self.context()
@@ -100,6 +113,25 @@ class SavedAuthReadRetryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(read.await_count, 2)
         resolver.resolve.assert_awaited_once_with('14')
         self.assertEqual(context.cookies['xs'], 'fixture-fresh')
+
+    async def test_same_xs_auth_cookie_variant_retries_once(self):
+        context = self.context()
+        context.cookies["fr"] = "fixture-old"
+        fresh = self.context()
+        fresh.cookies["fr"] = "fixture-old"
+        fresh.recovery_cookie_candidates = [{
+            "c_user": "123456789", "xs": "fixture-old", "fr": "fixture-new",
+        }]
+        gate = ProvisioningError("PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE", "fixture gate")
+        read = AsyncMock(side_effect=[gate, {"draft_id": "654321"}])
+        resolver = SimpleNamespace(resolve=AsyncMock(return_value=fresh))
+        self.assertEqual(
+            await read_with_saved_auth_refresh(resolver, context, read),
+            {"draft_id": "654321"},
+        )
+        self.assertEqual(read.await_count, 2)
+        self.assertEqual(context.cookies["xs"], "fixture-old")
+        self.assertEqual(context.cookies["fr"], "fixture-new")
 
     async def test_missing_fresh_authentication_preserves_the_original_gate(self):
         for fresh in (self.context(), self.context(uid='999999999', xs='fixture-fresh')):
@@ -303,6 +335,22 @@ class InternalCookieResolverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(context.recovery_cookies["c_user"], "123456789")
         self.assertEqual(context.recovery_cookies["xs"], "fixture-previous")
 
+    async def test_resolver_accepts_same_xs_snapshot_with_auth_cookie_variant(self):
+        payload = self.base_payload({})
+        payload["cookies"]["fr"] = "fixture-current"
+        payload["recovery_cookie_candidates"] = [
+            {"c_user": "123456789", "xs": "fixture-current", "fr": "fixture-current"},
+            {"c_user": "123456789", "xs": "fixture-current", "fr": "fixture-archive"},
+            {"c_user": "999999999", "xs": "fixture-current", "fr": "fixture-other"},
+        ]
+        resolver = ProfileResolver(None, None)
+        resolver._fetch = AsyncMock(return_value=payload)
+        context = await resolver.resolve("15")
+        self.assertEqual(
+            context.recovery_cookie_candidates,
+            [{"c_user": "123456789", "xs": "fixture-current", "fr": "fixture-archive"}],
+        )
+
     async def test_resolver_accepts_bounded_archive_candidates_for_same_actor(self):
         payload = self.base_payload({"c_user": "123456789", "xs": "fixture-legacy"})
         payload["recovery_cookie_candidates"] = [
@@ -325,6 +373,7 @@ class InternalCookieResolverTests(unittest.IsolatedAsyncioTestCase):
         for recovery in (
             {"c_user": "999999999", "xs": "fixture-previous"},
             {"c_user": "123456789", "xs": "fixture-current"},
+            {"c_user": "123456789", "xs": "fixture-current", "locale": "en_US"},
             {"c_user": "123456789", "xs": "fixture-previous", "bad key": "x"},
         ):
             with self.subTest(recovery=recovery):
@@ -370,6 +419,7 @@ class InternalCookieResolverTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("$store->compareAndSwapCookies($profile, $actor, $expectedXs, $cookies)", source)
         self.assertIn("new FbAccountSerializer($path)", source)
         self.assertIn("rmx_py_snapshot_account($previousFile, $profile)", source)
+        self.assertIn("same_xs_auth_cookie_variants", source)
         self.assertIn("realpath($accountsFile)", source)
         self.assertIn("glob($archiveBase . '.bak*')", source)
         self.assertIn("same actor", source)

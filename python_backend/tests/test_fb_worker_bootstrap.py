@@ -816,6 +816,23 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
 
 
 class PreviousSessionReadRecoveryTests(unittest.IsolatedAsyncioTestCase):
+    def test_same_xs_candidate_needs_a_changed_meta_auth_cookie(self):
+        actor = "123456789"
+        current = {"c_user": actor, "xs": "fixture-current", "fr": "fixture-old"}
+        allowed = {"c_user": actor, "xs": "fixture-current", "fr": "fixture-new"}
+        session = FacebookWebSession(WebProfile(
+            name="27", cookies=dict(current), proxy="http://fixture-proxy:80",
+            user_agent="Fixture",
+            recovery_cookie_candidates=[
+                dict(current),
+                {"c_user": actor, "xs": "fixture-current", "fr": "fixture-old", "locale": "en_US"},
+                dict(allowed),
+            ],
+        ))
+        candidates, reason = session._take_previous_session_candidates()
+        self.assertEqual(reason, "")
+        self.assertEqual(candidates, [allowed])
+
     class Client:
         def __init__(self, cookies):
             self.cookies = dict(cookies)

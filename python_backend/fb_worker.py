@@ -1856,7 +1856,7 @@ class FacebookWebSession:
             return [], "no_snapshot"
 
         accepted: list[dict[str, str]] = []
-        seen_xs: set[str] = set()
+        seen_cookie_fingerprints: set[tuple[str, ...]] = set()
         last_reason = "no_eligible_snapshot"
         for raw in rows:
             if not isinstance(raw, dict) or not raw or len(raw) > 500:
@@ -1888,12 +1888,26 @@ class FacebookWebSession:
             if not current_xs or not candidate_xs:
                 last_reason = "missing_xs"
                 continue
-            if candidate_xs == current_xs:
+            same_xs_auth_variant = (
+                candidate_xs == current_xs
+                and any(
+                    str(candidate.get(name) or "") != str(self.profile.cookies.get(name) or "")
+                    for name in ("fr", "sb", "datr", "ps_l", "ps_n")
+                )
+            )
+            if candidate_xs == current_xs and not same_xs_auth_variant:
                 last_reason = "same_xs"
                 continue
-            if candidate_xs in seen_xs:
+            fingerprint = (
+                (
+                    candidate_xs,
+                    *(str(candidate.get(name) or "") for name in ("fr", "sb", "datr", "ps_l", "ps_n")),
+                )
+                if same_xs_auth_variant else (candidate_xs,)
+            )
+            if fingerprint in seen_cookie_fingerprints:
                 continue
-            seen_xs.add(candidate_xs)
+            seen_cookie_fingerprints.add(fingerprint)
             accepted.append(candidate)
 
         if not accepted:
