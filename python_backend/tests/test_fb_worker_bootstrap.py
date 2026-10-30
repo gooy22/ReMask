@@ -19,6 +19,18 @@ class FacebookDtsgBootstrapParserTests(unittest.TestCase):
         for body in ('<form id="login_form">', '<FORM ID=login_form>',
                      '<form action="https://www.facebook.com/login.php?next=business">'):
             self.assertTrue(_has_login_form(body))
+    def test_facebook_login_route_and_form_do_not_claim_cookie_expiry(self):
+        from app.meta_auth_document import auth_gate
+
+        self.assertEqual(
+            auth_route_gate("https://www.facebook.com/login/"),
+            "META_LOGIN_REQUIRED",
+        )
+        self.assertEqual(
+            auth_gate("https://www.facebook.com/", '<form id="login_form">'),
+            "META_LOGIN_REQUIRED",
+        )
+
     def test_meta_index_adsmanager_return_redirect_is_an_auth_gate(self):
         url = ("https://www.facebook.com/index.php?next="
                "https%3A%2F%2Fwww.facebook.com%2Fadsmanager%2Fmanage%2Fcampaigns"
@@ -130,7 +142,7 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         session.refresh_reviewed_modules = AsyncMock()
         return session, client
 
-    async def test_business_login_redirect_falls_through_and_classifies_generic_failure_as_session_expired(self):
+    async def test_business_login_fallback_does_not_claim_cookie_expiry(self):
         session, client = self.session('<form id="login_form">',
             'https://business.facebook.com/business/loginpage/?secret=must-not-leak')
         with self.assertRaises(AuthenticationError) as caught:
@@ -139,7 +151,7 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         session._fetch_dtsg_refresh_token.assert_awaited_once()
         self.assertFalse(caught.exception.request_may_have_been_sent)
         from app.private_auth import private_auth_error
-        self.assertEqual(private_auth_error(caught.exception).code, 'SESSION_EXPIRED')
+        self.assertEqual(private_auth_error(caught.exception).code, 'META_AUTH_TOKEN_UNAVAILABLE')
         self.assertNotIn('must-not-leak', str(caught.exception.meta_payload))
 
         business_error = AuthenticationError("exact Business precheck failed")
