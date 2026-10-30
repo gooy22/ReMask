@@ -878,10 +878,9 @@ class AdsManagerPrivateHttp:
                 initial_code = result.get("error") if isinstance(result, dict) else None
                 if ((primary_transport_failure or initial_code == 1357001)
                         and self.document_origin != "https://business.facebook.com"):
-                    # Meta may accept the saved profile on Business while the
-                    # Ads Manager origin rejects its renewal. Retry only this
-                    # read-only token renewal once on the Business host; the
-                    # exact account + Business READ below remains mandatory.
+                    # Retry the same read-only renewal on Business when the
+                    # selected Ads Manager host rejects it or the profile proxy
+                    # cannot reach it. Exact account + Business READ stays mandatory.
                     business_origin = "https://business.facebook.com"
                     saved = getattr(session, "_profile_cookies", None)
                     restore = getattr(session, "restore_profile_cookies", None)
