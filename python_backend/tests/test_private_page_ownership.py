@@ -383,7 +383,7 @@ class PageActionTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ProvisioningError) as caught:
             await _discover_web_modules(self.meta, entry='https://business.facebook.com/latest/settings/pages/',
                 observed=AssetContracts(), label='PAGE_ACCESS')
-        self.assertEqual(caught.exception.code, 'SESSION_EXPIRED'); self.assertEqual(self.meta.posts, [])
+        self.assertEqual(caught.exception.code, 'META_LOGIN_REQUIRED'); self.assertEqual(self.meta.posts, [])
 
 class PrepareHTTPTests(unittest.IsolatedAsyncioTestCase):
     async def test_repeated_prepare_reuses_bm_rk_without_chromium(self):
