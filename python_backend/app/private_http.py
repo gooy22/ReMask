@@ -27,9 +27,9 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 async def buffered_response(method, open_response, size, *, retry_read=False, validate=None, reader=None):
     """Finish a bounded read before exposing bytes; retry an interrupted GET once.
 
-    Callers keep the same profile client and request arguments. HTTP rejection,
-    decoding, timeout, cancellation and application errors are never retried.
-    The method guard also prevents a caller from enabling a POST replay.
+    Read-only GETs may be repeated after transport timeouts because they cannot
+    mutate Meta state. HTTP rejection, decoding, cancellation and application
+    errors are never retried. POSTs always get exactly one attempt.
     """
     attempts = 2 if method == 'GET' and retry_read else 1
     for attempt in range(attempts):
@@ -39,10 +39,13 @@ async def buffered_response(method, open_response, size, *, retry_read=False, va
                     validate(response)
                 raw = await reader(response) if reader is not None else await response.content.read(size)
                 return response, raw
-        except (httpx.ConnectError, httpx.ReadError, httpx.RemoteProtocolError) as error:
+        except (httpx.ConnectError, httpx.ReadError, httpx.RemoteProtocolError,
+                httpx.TimeoutException, asyncio.TimeoutError) as error:
             kind = next(name for cls, name in (
                 (httpx.ConnectError, 'ConnectError'), (httpx.ReadError, 'ReadError'),
-                (httpx.RemoteProtocolError, 'RemoteProtocolError')) if isinstance(error, cls))
+                (httpx.RemoteProtocolError, 'RemoteProtocolError'),
+                (httpx.TimeoutException, 'HttpxTimeout'),
+                (asyncio.TimeoutError, 'RequestTimeout')) if isinstance(error, cls))
             log.warning('private_buffered_read interrupted method=%s kind=%s retry=%s',
                 'GET' if method == 'GET' else 'other', kind, attempt + 1 < attempts)
             if attempt + 1 == attempts:
