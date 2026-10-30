@@ -248,7 +248,7 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         bootstrap_options = []
         async def bootstrap(**kwargs):
             bootstrap_options.append(kwargs)
-            return SimpleNamespace(actor_id='123456',profile_actor_verified=True,
+            return SimpleNamespace(actor_id='123456',
                 fb_dtsg='synthetic-csrf',lsd='synthetic-lsd',
             request_context={'__aaid':'0','__bid':'synthetic-bid','__hblp':'synthetic-hblp',
                 '__hsdp':'synthetic-hsdp','__jssesw':'1','__crn':'synthetic-crn'})
@@ -265,7 +265,7 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.web.session.request = request
         client = await AdsManagerPrivateHttp.open(self.web,
             account_id='111111',business_id='222222',actor_id='123456')
-        self.assertEqual(bootstrap_options, [{"allow_business_loginpage_probe": True}])
+        self.assertEqual(bootstrap_options, [{}])
         self.assertEqual([row[0] for row in calls], ['POST','GET'])
         self.assertTrue(calls[0][1].endswith('/ads/manager/ajax/renew_access_token/'))
         self.assertEqual(calls[0][2]['data']['client_id'],'119211728144504')
@@ -285,7 +285,7 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         payload = json.loads(document());payload['require'] = []
         async def missing(url, **kwargs):return 200, json.dumps(payload), url
         self.web.fetch_text = missing
-        async def bootstrap(**kwargs):return SimpleNamespace(actor_id='123456',profile_actor_verified=True,fb_dtsg='synthetic-csrf')
+        async def bootstrap(**kwargs):return SimpleNamespace(actor_id='123456',fb_dtsg='synthetic-csrf')
         self.web.bootstrap = bootstrap
         for result in ({'error':1357001}, {'payload':{'client_id':'999999','access_token':'synthetic-renewed-session'}},
                        {'payload':{'client_id':'119211728144504','access_token':''}}):
@@ -306,7 +306,7 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
             return 200, json.dumps(payload), url
         self.web.fetch_text = missing
         async def bootstrap(**kwargs):
-            return SimpleNamespace(actor_id='123456', profile_actor_verified=True, fb_dtsg='synthetic-csrf')
+            return SimpleNamespace(actor_id='123456',  fb_dtsg='synthetic-csrf')
         self.web.bootstrap = bootstrap
         normal = {'payload': {'access_token': 'synthetic-renewed-session',
                               'client_id': '119211728144504'}}
@@ -330,7 +330,7 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         payload = json.loads(document());payload['require'] = []
         async def missing(url, **kwargs):return 200, json.dumps(payload), url
         self.web.fetch_text = missing
-        async def bootstrap(**kwargs):return SimpleNamespace(actor_id='999999',profile_actor_verified=True,fb_dtsg='synthetic-csrf')
+        async def bootstrap(**kwargs):return SimpleNamespace(actor_id='999999',fb_dtsg='synthetic-csrf')
         self.web.bootstrap = bootstrap
         with self.assertRaises(ProvisioningError):
             await AdsManagerPrivateHttp.open(self.web,
@@ -839,7 +839,7 @@ class ReadOnlyReferenceBootstrapReuseTests(unittest.IsolatedAsyncioTestCase):
         ])
         ads_document = json.dumps(ads_document)
         self.web.bootstrap = AsyncMock(return_value=SimpleNamespace(
-            actor_id="123456", profile_actor_verified=True,
+            actor_id="123456", 
             fb_dtsg="synthetic-fresh-csrf", lsd="synthetic-fresh-lsd",
             jazoest="", request_context={"__rev": "12345"}))
         self.web.session.facebook_cookie_snapshot = lambda: dict(self.web.profile.cookies)
