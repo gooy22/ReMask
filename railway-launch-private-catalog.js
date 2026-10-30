@@ -68,7 +68,7 @@ function remaskPrivateLaunchUserMessage(error) {
     if(/TWO_FACTOR_REQUIRED/.test(raw))
         return 'Meta запросила подтверждение входа';
     if(/SESSION_EXPIRED/.test(raw))
-        return 'Сессия Meta профиля истекла. Обновите FB-сессию выбранного профиля в ReMask и повторите проверку.';
+        return 'Meta не подтвердила вход для этого маршрута; срок cookies не проверялся. Campaign CREATE не отправлялся.';
     if(/BUSINESS_LOGIN_GATE/.test(raw))
         return 'Meta не подтвердила вход';
     if(/PAGE_ACCESS_UNVERIFIED|PAGE_UNVERIFIED|PAGE_ACCESS_REQUIRED/.test(raw))
