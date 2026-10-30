@@ -36,8 +36,8 @@ def _reviewed_native_bundle_url(value):
     # remain constrained; the server-rendered ROOT/props below still have to
     # match the exact no-credential Facebook continuation and account scope.
     return bool(re.fullmatch(
-        r'/rsrc\\.php/v[0-9A-Za-z]+/y[A-Za-z0-9]{1,8}/l/'
-        r'[a-z]{2,3}_[A-Z]{2}-j/[A-Za-z0-9_-]+\\.js',
+        r'/rsrc\.php/v[0-9A-Za-z]+/y[A-Za-z0-9]{1,8}/l/'
+        r'[a-z]{2,3}_[A-Z]{2}-j/[A-Za-z0-9_-]\.js',
         parts.path,
     ))
 
