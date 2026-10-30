@@ -55,8 +55,8 @@ assert.ok(completionSource.includes('status.textContent=remaskPrivatePageReadFai
 assert.equal(ctx.remaskPrivateLaunchUserMessage({code:'PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE'}),
   'Meta не подтвердила вход','draft errors use a short Russian message without internal codes');
 assert.equal(ctx.remaskPrivateLaunchUserMessage({code:'SESSION_EXPIRED'}),
-  'Сессия Meta профиля истекла. Обновите FB-сессию выбранного профиля в ReMask и повторите проверку.',
-  'an expired Launch session tells the operator which profile action restores it');
+  'Meta не подтвердила вход для этого маршрута; срок cookies не проверялся. Campaign CREATE не отправлялся.',
+  'a Meta login classification does not claim the cookie age was checked');
 assert.equal(ctx.remaskPrivateLaunchUserMessage({code:'CHECKPOINT_REQUIRED'}),
   'Чекпоинт Meta: профиль остановлен; новые задачи запрещены','a checkpoint is terminal and clearly explained');
 assert.ok(source.includes('const message=remaskPrivateLaunchUserMessage(error)'),
