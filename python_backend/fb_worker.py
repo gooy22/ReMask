@@ -10,7 +10,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
-from urllib.parse import parse_qs, unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urljoin, urlsplit
 
 import aiohttp
 import httpx
@@ -736,35 +736,94 @@ class FacebookWebSession:
             try:
                 from app.private_http import buffered_response
                 probe_timeout_seconds = 15.0 if target.startswith("https://adsmanager.facebook.com/") else 8.0
-                response, body = await asyncio.wait_for(
-                    buffered_response(
-                        "GET",
-                        lambda: session.get(
-                            target,
-                            proxy=self.profile.proxy,
-                            headers={
-                                "Accept": (
-                                    "text/html,application/xhtml+xml,"
-                                    "application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
-                                ),
-                                "Accept-Language": "en-US,en;q=0.9",
-                                "Cache-Control": "no-cache",
-                                "Pragma": "no-cache",
-                                "Sec-Fetch-Dest": "document",
-                                "Sec-Fetch-Mode": "navigate",
-                                "Sec-Fetch-Site": "none",
-                                "Sec-Fetch-User": "?1",
-                                "Upgrade-Insecure-Requests": "1",
-                            },
-                            allow_redirects=True,
-                            request_timeout_seconds=probe_timeout_seconds,
-                        ),
-                        16 * 1024 * 1024 + 1,
-                        retry_read=True,
-                        reader=lambda response: response.text(),
+                request_headers = {
+                    "Accept": (
+                        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
                     ),
-                    timeout=probe_timeout_seconds,
-                )
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "Cache-Control": "no-cache",
+                    "Pragma": "no-cache",
+                    "Sec-Fetch-Dest": "document",
+                    "Sec-Fetch-Mode": "navigate",
+                    "Sec-Fetch-Site": "none",
+                    "Sec-Fetch-User": "?1",
+                    "Upgrade-Insecure-Requests": "1",
+                }
+                current_url = target
+                visited_urls = set()
+                final_url_override = ""
+                response = None
+                body = ""
+                for redirect_count in range(6):
+                    if current_url in visited_urls:
+                        final_url_override = current_url
+                        break
+                    visited_urls.add(current_url)
+                    # Meta may clear root-scope cookies on a redirect response.
+                    # Each hop is a separate bounded GET from the exact saved
+                    # profile snapshot; never let an automatic redirect consume
+                    # the next request with a changed cookie jar.
+                    if callable(restore_cookies):
+                        restore_cookies()
+                    response, body = await asyncio.wait_for(
+                        buffered_response(
+                            "GET",
+                            lambda current_url=current_url: session.get(
+                                current_url,
+                                proxy=self.profile.proxy,
+                                headers=request_headers,
+                                allow_redirects=False,
+                                request_timeout_seconds=probe_timeout_seconds,
+                            ),
+                            16 * 1024 * 1024 + 1,
+                            retry_read=True,
+                            reader=lambda response: response.text(),
+                        ),
+                        timeout=probe_timeout_seconds,
+                    )
+                    self._restore_invalid_profile_cookie_snapshot(session, expected_actor)
+                    status = int(response.status)
+                    response_headers = getattr(response, "headers", {}) or {}
+                    try:
+                        location = str(
+                            response_headers.get("location")
+                            or response_headers.get("Location")
+                            or ""
+                        ).strip()
+                    except Exception:
+                        location = ""
+                    if status not in {301, 302, 303, 307, 308} or not location:
+                        break
+                    next_url = urljoin(str(response.url), location)
+                    next_parts = urlsplit(next_url)
+                    next_host = (next_parts.hostname or "").casefold()
+                    next_path = next_parts.path.casefold()
+                    next_gate = _auth_route_gate(next_url)
+                    safe_facebook_redirect = (
+                        next_parts.scheme == "https"
+                        and next_host in {
+                            "facebook.com", "www.facebook.com", "m.facebook.com",
+                            "mbasic.facebook.com", "adsmanager.facebook.com",
+                            "business.facebook.com",
+                        }
+                        and not next_parts.username
+                        and not next_parts.password
+                    )
+                    if (
+                        not safe_facebook_redirect
+                        or next_gate
+                        or "/login" in next_path
+                        or "/checkpoint" in next_path
+                        or next_url in visited_urls
+                        or redirect_count == 5
+                    ):
+                        # Keep auth redirects as evidence, but do not follow them.
+                        final_url_override = next_url
+                        break
+                    current_url = next_url
+                if response is None:
+                    raise asyncio.TimeoutError("profile probe returned no response")
+                final_url = final_url_override or str(response.url)
             except (asyncio.TimeoutError, aiohttp.ClientError, httpx.HTTPError) as exc:
                 attempts.append({
                     "requested_url": target, "auth_reason": "profile_probe_transport",
