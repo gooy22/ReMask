@@ -12,7 +12,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   launch_http:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
       REMASK_DATA_DIR: /tmp/remask-launch-http-state
@@ -32,7 +32,7 @@ jobs:
         run: /tmp/remask-launch-http/bin/python -m unittest tests.test_private_ads_launch tests.test_private_ads_draft tests.test_private_ads_inspect tests.test_private_ads_objective_repair tests.test_private_ads_objectives tests.test_private_ads_bidding tests.test_private_ads_objective_wire tests.test_private_ads_exact_settings tests.test_private_ads_http tests.test_private_launch_http tests.test_media_preflight.MediaBridgeErrorTests tests.test_media_preflight.NativeMediaPreflightTests tests.test_media_preflight.MediaInspectionEndpointTests tests.test_private_launch_bridge
 
   regression:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
       REMASK_DATA_DIR: /tmp/remask-regression-state
@@ -116,7 +116,7 @@ jobs:
         run: node tests/cookie-txt-import-ui.test.cjs
 
   payment_guards:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
@@ -150,7 +150,7 @@ jobs:
         run: php tests/sync-outcome.test.php
 
   browser_regression:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 6
     steps:
       - uses: actions/checkout@v4
