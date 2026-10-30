@@ -1493,6 +1493,32 @@ class JobStore:
     def _record_terminal_checkpoint_sync(self, profile_id: str) -> bool:
         return self._record_terminal_profile_status_sync(profile_id, "CHECKPOINT")
 
+    async def clear_terminal_business_login_gate(self, profile_id: str) -> bool:
+        """Clear only a Business Login Gate after a successful live read-only revalidation."""
+        clean = str(profile_id or "").strip()
+        if not clean:
+            return False
+        try:
+            return await asyncio.to_thread(
+                self._clear_terminal_business_login_gate_sync, clean
+            )
+        except sqlite3.OperationalError as exc:
+            if "no such table: profile_terminal_statuses" not in str(exc):
+                raise
+            await self.init()
+            return await asyncio.to_thread(
+                self._clear_terminal_business_login_gate_sync, clean
+            )
+
+    def _clear_terminal_business_login_gate_sync(self, profile_id: str) -> bool:
+        with self._connect() as con:
+            cursor = con.execute(
+                "DELETE FROM profile_terminal_statuses "
+                "WHERE profile_id=? AND status='BUSINESS_LOGIN_GATE'",
+                (profile_id,),
+            )
+        return cursor.rowcount > 0
+
     async def terminal_profile_statuses(self, profile_ids: list[str]) -> dict[str, dict[str, Any]]:
         clean = list(dict.fromkeys(
             str(value or "").strip() for value in profile_ids if str(value or "").strip()
