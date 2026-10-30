@@ -447,14 +447,22 @@ try {
             }
         }
 
-        // Candidates stay bound to the selected profile and exact actor.
+        // Candidates stay bound to the selected profile and same actor.
+        // The exact actor check above prevents cross-profile recovery.
         // Same-xs candidates need a changed Meta auth cookie and are probed
         // through this profile's proxy before the worker adopts them.
         $authCookieFingerprint = [];
-        foreach (['fr', 'sb', 'datr', 'ps_l', 'ps_n'] as $name) {
-            $authCookieFingerprint[] = (string)($candidateCookies[$name] ?? '');
+        if ($sameXs) {
+            foreach (['fr', 'sb', 'datr', 'ps_l', 'ps_n'] as $name) {
+                $authCookieFingerprint[] = (string)($candidateCookies[$name] ?? '');
+            }
         }
-        $fingerprint = hash('sha256', $candidateXs . "\0" . implode("\0", $authCookieFingerprint));
+        $fingerprint = hash(
+            'sha256',
+            $sameXs
+                ? $candidateXs . "\0" . implode("\0", $authCookieFingerprint)
+                : "xs\0" . $candidateXs
+        );
         if (isset($seenRecoveryCandidates[$fingerprint])) return false;
         $seenRecoveryCandidates[$fingerprint] = true;
         $recoveryCookieCandidates[] = $candidateCookies;
