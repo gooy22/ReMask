@@ -16,6 +16,7 @@ import httpx
 from .direct_test import direct_test_deadline
 from .private_http_metrics import begin_request, end_request, request_hook, response_hook, error_kind
 from .private_http_stages import PrivateRequestStages
+from .private_session_wire import cookie_evidence
 
 log = logging.getLogger("remask_worker")
 
@@ -137,8 +138,45 @@ class PrivateHttpClient:
             timeout=httpx.Timeout(timeout_seconds), cookies=jar,
             headers={"User-Agent": user_agent,
                      "Accept-Language": "en-US,en;q=0.9", "Accept": "*/*"},
-            event_hooks={'request': [request_hook], 'response': [response_hook]},
+            event_hooks={'request': [self._log_auth_cookie_evidence, request_hook], 'response': [response_hook]},
         )
+
+    async def _log_auth_cookie_evidence(self, request: httpx.Request) -> None:
+        """Log whether the prepared Facebook request carries this profile's auth cookies.
+
+        Never log cookie values or fingerprints. This distinguishes an absent or
+        shadowed Cookie header from a Meta-side identity rejection.
+        """
+        try:
+            host = request.url.host.lower()
+            if host != "facebook.com" and not host.endswith(".facebook.com"):
+                return
+            evidence = cookie_evidence(request.headers.get("cookie", ""), self._actor_id)
+            names = set(evidence.get("header_auth_cookie_names", []))
+            path = request.url.path
+            if path not in {
+                "/", "/me", "/settings", "/profile.php",
+                "/adsmanager/manage/campaigns", "/business/loginpage",
+                "/business/loginpage/", "/latest/home", "/login", "/login/",
+                "/login.php", "/checkpoint", "/checkpoint/",
+            }:
+                path = "unreviewed"
+            log.info(
+                "[%s] private_http_auth_header method=%s host=%s path=%s actor_cookie_state=%s xs_present=%s cookie_count=%s",
+                self.profile_name,
+                request.method,
+                host,
+                path,
+                evidence.get("header_auth_state", "unavailable"),
+                "xs" in names,
+                evidence.get("header_cookie_count", 0),
+            )
+        except Exception as exc:
+            log.info(
+                "[%s] private_http_auth_header state=unavailable kind=%s",
+                self.profile_name,
+                type(exc).__name__,
+            )
 
     @property
     def closed(self) -> bool:
