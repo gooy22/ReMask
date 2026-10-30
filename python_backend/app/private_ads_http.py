@@ -727,7 +727,9 @@ class AdsManagerPrivateHttp:
                 bootstrap_client.document_origin = "https://adsmanager.facebook.com"
                 bootstrap_client.document_url = url
                 bootstrap_client.read_only = True
-                context = await bootstrap_client._renew_session(body)
+                # The Business login gate is not an Ads Manager CSRF document.
+                # Use only the independently actor-verified profile bootstrap.
+                context = await bootstrap_client._renew_session("")
                 business_gate_token_renewed = True
                 gate_recovered = True
 
@@ -843,6 +845,7 @@ class AdsManagerPrivateHttp:
             bootstrap = await self.web.bootstrap()
             if (not self._profile_matches()
                     or bootstrap.actor_id != self.context.actor_id
+                    or not bootstrap.profile_actor_verified
                     or not isinstance(bootstrap.fb_dtsg, str) or not bootstrap.fb_dtsg):
                 raise fail("PROFILE_CONTEXT_UNAVAILABLE", "Session renewal requires the selected profile actor")
             session = await self.web._ensure_session()
