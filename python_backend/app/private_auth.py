@@ -26,8 +26,10 @@ def private_auth_error(exc):
         code = "CHECKPOINT_REQUIRED"
     elif "META_LOGIN_REQUIRED" in route_gates or "meta_login_redirect" in reasons:
         code = "META_LOGIN_REQUIRED"
-    elif "SESSION_EXPIRED" in route_gates or identity_unconfirmed:
+    elif "SESSION_EXPIRED" in route_gates:
         code = "SESSION_EXPIRED"
+    elif identity_unconfirmed:
+        code = "PROFILE_IDENTITY_UNCONFIRMED"
     elif isinstance(payload, dict) and payload.get("bootstrap_fallback_exhausted") is True:
         code = "SESSION_EXPIRED"
     elif "BUSINESS_LOGIN_GATE" in route_gates:
@@ -39,6 +41,8 @@ def private_auth_error(exc):
     unsent = getattr(exc, "request_may_have_been_sent", None) is False
     message = ("Meta redirected the selected profile to its Ads Manager login flow; cookie age was not checked."
         if code == "META_LOGIN_REQUIRED" else
+        "Meta's read-only page did not confirm the selected profile identity."
+        if code == "PROFILE_IDENTITY_UNCONFIRMED" else
         "The worker's Meta Business HTTP session requires restoration."
         if code == "BUSINESS_LOGIN_GATE" else "The selected profile's Meta HTTP session requires restoration.")
     message += (" No GraphQL POST was sent." if unsent else " Any retained submit must be verified before retry.")
@@ -46,6 +50,7 @@ def private_auth_error(exc):
     error.inventory_diagnostics = [{"auth_gate": code,
         "transport_stage": str(getattr(exc, "transport_stage", "")),
         "observed_reasons": sorted(str(r) for r in reasons if r in
-            ('checkpoint_redirect', 'meta_login_redirect', 'login_redirect', 'login_form', 'redirected_host', 'http_auth')),
+            ('checkpoint_redirect', 'meta_login_redirect', 'login_redirect', 'login_form', 'redirected_host', 'http_auth',
+             'actor_mismatch', 'actor_unobserved')),
         "post_not_sent": unsent}]
     return error

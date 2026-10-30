@@ -7,7 +7,7 @@ from typing import Any, Awaitable, Callable, TypeVar
 
 
 _READ_AUTH_CODES = frozenset({
-    "BUSINESS_LOGIN_GATE", "SESSION_EXPIRED",
+    "BUSINESS_LOGIN_GATE", "SESSION_EXPIRED", "PROFILE_IDENTITY_UNCONFIRMED",
     "PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE", "PRIVATE_ADS_DRAFT_SESSION_EXPIRED",
 })
 AUTH_COOKIE_KEYS = ("fr", "sb", "datr", "ps_l", "ps_n")
