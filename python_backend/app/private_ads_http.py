@@ -637,6 +637,9 @@ class AdsManagerPrivateHttp:
                 code = result.get("error") if isinstance(result, dict) else None
                 log.warning("ads_session_renewal rejected profile=%s code=%s",
                     self._profile_name, code if type(code) is int else "unavailable")
+                if code == 1357001:
+                    raise fail("META_LOGIN_REQUIRED",
+                        "Meta returned Not Logged In for the Ads Manager session renewal")
                 raise fail("SESSION_RENEWAL_REJECTED", "Meta rejected the cookie-authenticated advertising session renewal")
             payload = result.get("payload")
             if not isinstance(payload, dict):
