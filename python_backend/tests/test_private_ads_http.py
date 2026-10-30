@@ -927,7 +927,7 @@ class ReadOnlyReferenceBootstrapReuseTests(unittest.IsolatedAsyncioTestCase):
         await self._mock_business_gate_session()
         gate_url = "https://business.facebook.com/business/loginpage/"
         self.web.fetch_text.return_value = (200,
-            '<form><input type="password" name="pass"></form>', gate_url)
+            '<form id="login_form"><input type="password" name="pass"></form>', gate_url)
         self.web._business_login_gate_outcome = "continuation_redirected_to_auth"
         with patch("app.private_ads_http.continue_business_login_gate",
                    new=AsyncMock(return_value=None)):
