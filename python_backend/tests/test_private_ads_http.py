@@ -101,6 +101,47 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
             "retry_timeout": True,
         })
 
+    async def test_ads_manager_timeout_falls_back_to_exact_business_document(self):
+        from fb_worker import RemoteRequestError
+        web = Web()
+        calls = []
+
+        async def fetch(url, **kwargs):
+            calls.append((url, kwargs))
+            if len(calls) == 1:
+                raise RemoteRequestError("Facebook fetch timeout",
+                    meta_payload={"transport_failure": {"kind": "TimeoutError"}},
+                    request_may_have_been_sent=False, transport_stage="fetch")
+            return 200, document(), url
+
+        web.fetch_text = fetch
+        client = await AdsManagerPrivateHttp.open(web,
+            account_id="111111", business_id="222222", actor_id="123456")
+        self.assertEqual([row[0] for row in calls], [
+            "https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=111111&business_id=222222",
+            "https://business.facebook.com/adsmanager/manage/campaigns?act=111111&business_id=222222"])
+        self.assertEqual(calls[1][1], {
+            "max_bytes": 5_000_001, "document_navigation": True, "retry_timeout": False})
+        self.assertEqual(client.document_origin, "https://business.facebook.com")
+
+    async def test_ads_manager_non_timeout_does_not_switch_document_host(self):
+        from fb_worker import RemoteRequestError
+        web = Web()
+        calls = []
+
+        async def fetch(url, **kwargs):
+            calls.append(url)
+            raise RemoteRequestError("Facebook fetch network failure",
+                meta_payload={"transport_failure": {"kind": "ReadError"}},
+                request_may_have_been_sent=False, transport_stage="fetch")
+
+        web.fetch_text = fetch
+        with self.assertRaises(RemoteRequestError):
+            await AdsManagerPrivateHttp.open(web,
+                account_id="111111", business_id="222222", actor_id="123456")
+        self.assertEqual(calls, [
+            "https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=111111&business_id=222222"])
+
     async def test_interrupted_account_read_retries_once_on_same_session(self):
         calls = []
         @asynccontextmanager
