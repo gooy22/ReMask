@@ -713,6 +713,70 @@ class AdsManagerPrivateHttp:
                 text = text[len("for (;;);"):].lstrip()
             result = _strict_response_json(text)
             if not isinstance(result, dict) or "error" in result or "errors" in result:
+                initial_code = result.get("error") if isinstance(result, dict) else None
+                if (initial_code == 1357001
+                        and self.document_origin != "https://business.facebook.com"):
+                    # Meta may accept the saved profile on Business while the
+                    # Ads Manager origin rejects its renewal. Retry only this
+                    # read-only token renewal once on the Business host; the
+                    # exact account + Business READ below remains mandatory.
+                    business_origin = "https://business.facebook.com"
+                    saved = getattr(session, "_profile_cookies", None)
+                    restore = getattr(session, "restore_profile_cookies", None)
+                    saved_xs = (str(saved.get("xs") or "").strip()
+                                if isinstance(saved, dict) else "")
+                    if (not callable(restore) or not isinstance(saved, dict)
+                            or str(saved.get("c_user") or "") != self.context.actor_id
+                            or not saved_xs or getattr(session, "proxy", None) != self._profile_proxy):
+                        raise fail("PROFILE_CONTEXT_UNAVAILABLE",
+                            "Business-host renewal requires the same saved profile session")
+                    restore()
+                    current = session.facebook_cookie_snapshot()
+                    if (str(current.get("c_user") or "") != self.context.actor_id
+                            or str(current.get("xs") or "").strip() != saved_xs
+                            or not self._profile_matches()):
+                        raise fail("PROFILE_CONTEXT_UNAVAILABLE",
+                            "Business-host renewal profile changed before dispatch")
+                    counter = getattr(self.web, "_next_graphql_req", None)
+                    if callable(counter):
+                        form["__req"] = counter()
+                    business_headers = dict(headers)
+                    business_headers.update({
+                        "Origin": business_origin,
+                        "Referer": business_origin
+                            + "/adsmanager/manage/campaigns?act="
+                            + self.context.account_id + "&business_id=" + self.context.business_id,
+                        "Sec-Fetch-Site": "same-origin",
+                    })
+                    log.info("ads_session_renewal_retry profile=%s host=business.facebook.com reason=meta_not_logged_in",
+                        self._profile_name)
+                    async with session.request("POST",
+                            business_origin + "/ads/manager/ajax/renew_access_token/",
+                            data=form, headers=business_headers, allow_redirects=False,
+                            request_timeout_seconds=30) as response:
+                        if response.http_version != "HTTP/2":
+                            raise fail("PROTOCOL_UNAVAILABLE",
+                                "Business-host session renewal requires HTTP/2")
+                        business_raw = await response.content.read(2_000_001)
+                        if response.status != 200 or len(business_raw) > 2_000_000:
+                            log.warning("ads_session_renewal_business_host unavailable profile=%s status=%s",
+                                self._profile_name, int(response.status))
+                            raise fail("SESSION_RENEWAL_UNAVAILABLE",
+                                "Meta did not return a usable Business-host session renewal")
+                    business_text = business_raw.decode("utf-8").strip()
+                    if business_text.startswith("for (;;);"):
+                        business_text = business_text[len("for (;;);"):].lstrip()
+                    result = _strict_response_json(business_text)
+                    if (not isinstance(result, dict) or "error" in result or "errors" in result):
+                        business_code = (result.get("error")
+                            if isinstance(result, dict) else None)
+                        log.warning("ads_session_renewal_business_host rejected profile=%s code=%s",
+                            self._profile_name,
+                            business_code if type(business_code) is int else "unavailable")
+                    else:
+                        log.info("ads_session_renewal_business_host accepted profile=%s",
+                            self._profile_name)
+            if not isinstance(result, dict) or "error" in result or "errors" in result:
                 code = result.get("error") if isinstance(result, dict) else None
                 log.warning("ads_session_renewal rejected profile=%s code=%s",
                     self._profile_name, code if type(code) is int else "unavailable")
