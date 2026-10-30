@@ -297,10 +297,10 @@ class RKActionTests(unittest.IsolatedAsyncioTestCase):
         self.web.graphql = AsyncMock(side_effect=AuthenticationError('Meta Business login required'))
         with self.assertRaises(ProvisioningError) as error:
             await self.run_action()
-        self.assertEqual(error.exception.code, 'SESSION_EXPIRED')
+        self.assertEqual(error.exception.code, 'META_AUTH_TOKEN_UNAVAILABLE')
         self.assertEqual(self.meta.posts, [])
         saved = await self.state.step('job-1', ProvisioningStep.AD_ACCOUNT)
-        self.assertEqual(saved['result']['inventory_auth_error'], 'SESSION_EXPIRED')
+        self.assertEqual(saved['result']['inventory_auth_error'], 'META_AUTH_TOKEN_UNAVAILABLE')
 
     async def test_database_intent_failure_prevents_post(self):
         original = self.state.checkpoint
@@ -438,7 +438,7 @@ class BMActionTests(unittest.IsolatedAsyncioTestCase):
             "https://business.facebook.com/latest/home"))
         with self.assertRaises(ProvisioningError) as error:
             await self.run_action()
-        self.assertEqual(error.exception.code, "SESSION_EXPIRED")
+        self.assertEqual(error.exception.code, "META_LOGIN_REQUIRED")
         self.assertEqual(self.posts, [])
 
     async def test_missing_http_submit_does_not_fall_back_to_native_browser(self):
