@@ -839,7 +839,7 @@ class ReadOnlyReferenceBootstrapReuseTests(unittest.IsolatedAsyncioTestCase):
         ])
         ads_document = json.dumps(ads_document)
         self.web.bootstrap = AsyncMock(return_value=SimpleNamespace(
-            actor_id="123456", 
+            actor_id="123456", profile_actor_verified=True,
             fb_dtsg="synthetic-fresh-csrf", lsd="synthetic-fresh-lsd",
             jazoest="", request_context={"__rev": "12345"}))
         self.web.session.facebook_cookie_snapshot = lambda: dict(self.web.profile.cookies)
