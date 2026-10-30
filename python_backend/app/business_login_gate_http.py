@@ -476,14 +476,30 @@ async def continue_business_login_gate(
     try:
         session = await web._ensure_session()
         before = session.facebook_cookie_snapshot()
+        profile_snapshot = getattr(session, "_profile_cookies", None)
+        profile_xs = (
+            str(profile_snapshot.get("xs") or "").strip()
+            if isinstance(profile_snapshot, dict)
+            else ""
+        )
+        profile_snapshot_mismatch = (
+            isinstance(profile_snapshot, dict)
+            and (
+                str(profile_snapshot.get("c_user") or "") != actor_id
+                or not profile_xs
+                or str(before.get("c_user") or "") != actor_id
+                or str(before.get("xs") or "").strip() != profile_xs
+            )
+        )
         if (
-            str(before.get("c_user") or "") != actor_id
+            profile_snapshot_mismatch
+            or str(before.get("c_user") or "") != actor_id
             or not str(before.get("xs") or "").strip()
         ):
-            # Meta can clear or shadow root-scope cookies during the Ads
-            # Manager -> Business gate redirect. Restore only this session's
-            # original profile snapshot, then recheck the same actor before
-            # sending the read-only continuation.
+            # Meta can clear, shadow, or replace root-scope cookies during the
+            # Ads Manager -> Business gate redirect. Restore only this session's
+            # original profile snapshot, then recheck the same actor and xs
+            # before sending the read-only continuation.
             restore_profile_cookies = getattr(session, "restore_profile_cookies", None)
             if callable(restore_profile_cookies):
                 restore_profile_cookies()
@@ -491,6 +507,10 @@ async def continue_business_login_gate(
         if (
             str(before.get("c_user") or "") != actor_id
             or not str(before.get("xs") or "").strip()
+            or (
+                isinstance(profile_snapshot, dict)
+                and str(before.get("xs") or "").strip() != profile_xs
+            )
         ):
             set_outcome("profile_session_mismatch")
             return None
