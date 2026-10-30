@@ -432,6 +432,34 @@ async def continue_business_login_gate(
             pass
 
     continuation, outcome = _extract_business_login_continuation(body, gate_url)
+    if not continuation and outcome == "no_supported_continuation_control":
+        # Meta serves this same-profile handoff as a JS-rendered FB button on
+        # some Business login pages. Parse only the current document's reviewed
+        # immutable bundle and literal props; never execute that JavaScript.
+        diagnostic = {}
+        try:
+            from .private_business_login import native_business_login_continuation
+            native_url = native_business_login_continuation(
+                body, return_url, diagnostic=diagnostic,
+            )
+        except Exception as exc:
+            native_url = None
+            outcome = "native_parser_error_" + type(exc).__name__
+        if native_url:
+            continuation = {
+                "method": "GET",
+                "url": native_url,
+                "fields": [],
+                "label_kind": "native_fb",
+            }
+            outcome = "native_fb_continuation_ready"
+        elif outcome == "no_supported_continuation_control":
+            reason = str(diagnostic.get("reason") or "unavailable")
+            outcome = (
+                "native_" + reason
+                if re.fullmatch(r"[a-z_]{1,64}", reason)
+                else "native_continuation_unavailable"
+            )
     set_outcome(outcome)
     if not continuation:
         return None
