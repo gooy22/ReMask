@@ -794,8 +794,12 @@ class FacebookWebSession:
                         location = ""
                     if status not in {301, 302, 303, 307, 308} or not location:
                         break
-                    next_url = urljoin(str(response.url), location)
-                    next_parts = urlsplit(next_url)
+                    try:
+                        next_url = urljoin(str(response.url), location)
+                        next_parts = urlsplit(next_url)
+                    except ValueError:
+                        final_url_override = str(response.url)
+                        break
                     next_host = (next_parts.hostname or "").casefold()
                     next_path = next_parts.path.casefold()
                     next_gate = _auth_route_gate(next_url)
@@ -840,8 +844,6 @@ class FacebookWebSession:
                 )
                 continue
 
-            self._restore_invalid_profile_cookie_snapshot(session, expected_actor)
-            final_url = str(response.url)
             parts = urlsplit(final_url)
             path = parts.path.lower()
             users = self._profile_actor_ids(body)
