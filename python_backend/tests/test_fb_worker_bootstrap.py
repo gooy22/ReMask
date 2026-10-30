@@ -6,6 +6,7 @@ import httpx
 from unittest.mock import AsyncMock, Mock, patch
 
 from fb_worker import AuthenticationError, RemoteRequestError, FacebookBootstrap, FacebookWebSession, WebProfile, _has_login_form
+from app.meta_auth_document import auth_route_gate
 
 
 class FacebookDtsgBootstrapParserTests(unittest.TestCase):
@@ -18,6 +19,14 @@ class FacebookDtsgBootstrapParserTests(unittest.TestCase):
         for body in ('<form id="login_form">', '<FORM ID=login_form>',
                      '<form action="https://www.facebook.com/login.php?next=business">'):
             self.assertTrue(_has_login_form(body))
+    def test_meta_index_adsmanager_return_redirect_is_an_auth_gate(self):
+        url = ("https://www.facebook.com/index.php?next="
+               "https%3A%2F%2Fwww.facebook.com%2Fadsmanager%2Fmanage%2Fcampaigns"
+               "&deoia=1&no_universal_links=1")
+        self.assertEqual(auth_route_gate(url), "META_LOGIN_REQUIRED")
+        self.assertEqual(auth_route_gate(
+            "https://www.facebook.com/index.php?next=https%3A%2F%2Fwww.facebook.com%2Fme"), "")
+
     def extract(self, source: str) -> str:
         return FacebookWebSession._first_match(
             source,
@@ -140,6 +149,21 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         }]}
         business_error.transport_stage = "business_auth_precheck"
         self.assertEqual(private_auth_error(business_error).code, "BUSINESS_LOGIN_GATE")
+
+    async def test_adsmanager_login_return_is_not_accepted_as_profile_bootstrap(self):
+        url = ("https://www.facebook.com/index.php?next="
+               "https%3A%2F%2Fwww.facebook.com%2Fadsmanager%2Fmanage%2Fcampaigns"
+               "&deoia=1&no_universal_links=1")
+        body = ('<script>CurrentUserInitialData = {"USER_ID":"123456789"};</script>'
+                '["DTSGInitialData",[],{"token":"login-page-token"}]')
+        session, client = self.session(body, url)
+        with self.assertRaises(AuthenticationError) as caught:
+            await session.bootstrap()
+        self.assertGreater(len(client.calls), 1)
+        self.assertFalse(session._profile_session_identity_verified)
+        from app.private_auth import private_auth_error
+        self.assertEqual(private_auth_error(caught.exception).code, "META_LOGIN_REQUIRED")
+        session._fetch_dtsg_refresh_token.assert_awaited_once()
 
     async def test_bundle_bootstrap_follows_native_business_handoff_before_profile_fallback(self):
         session, client = self.session('<a href="/business/loginrequest/fb/">Log in with Facebook</a>',

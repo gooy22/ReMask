@@ -5,7 +5,7 @@ only classifies a received document; it cannot restore or submit a session.
 """
 from html.parser import HTMLParser
 import re
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 
 def _route(url):
@@ -30,6 +30,16 @@ def auth_route_gate(url):
         return "BUSINESS_LOGIN_GATE"
     if re.search(r"(?:^|/)login(?:page|\.php)?(?:/|$)", path):
         return "SESSION_EXPIRED"
+    if host == "www.facebook.com" and path == "/index.php":
+        try:
+            query = parse_qs(urlsplit(str(url or "")).query)
+        except ValueError:
+            query = {}
+        if "1" in query.get("deoia", []) and "1" in query.get("no_universal_links", []):
+            for target in query.get("next", []):
+                next_host, next_path = _route(target)
+                if next_host and next_path.startswith("/adsmanager/"):
+                    return "META_LOGIN_REQUIRED"
     return ""
 
 

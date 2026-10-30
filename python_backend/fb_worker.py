@@ -17,7 +17,7 @@ import httpx
 
 from app.private_http import PrivateHttpClient
 from app.business_login_gate_http import continue_business_login_gate, is_business_login_gate_url
-from app.meta_auth_document import has_login_form as _has_login_form
+from app.meta_auth_document import auth_route_gate as _auth_route_gate, has_login_form as _has_login_form
 
 
 log = logging.getLogger("remask_worker")
@@ -1036,13 +1036,17 @@ class FacebookWebSession:
 
                     parts = urlsplit(candidate_url)
                     route = parts.path.lower()
+                    route_gate = _auth_route_gate(candidate_url)
                     if (
-                        "/login" in route
+                        route_gate
+                        or "/login" in route
                         or "/checkpoint" in route
                         or _has_login_form(candidate_body)
                     ):
-                        auth_attempts.append({"auth_reason": "checkpoint_redirect" if "/checkpoint" in route
-                            else "login_redirect" if "/login" in route else "login_form",
+                        auth_attempts.append({"auth_reason": "checkpoint_redirect"
+                            if route_gate == "CHECKPOINT_REQUIRED" or "/checkpoint" in route
+                            else "meta_login_redirect" if route_gate == "META_LOGIN_REQUIRED"
+                            else "login_redirect" if route_gate or "/login" in route else "login_form",
                             "final_url": f"{parts.scheme}://{parts.hostname or ''}{parts.path}"})
                         business_loginpage = (
                             parts.hostname == "business.facebook.com"
@@ -1058,7 +1062,7 @@ class FacebookWebSession:
                         # A Business login page is not proof that the whole
                         # Facebook session is unusable. Match the prior bundle
                         # flow: try the remaining profile surfaces and use the
-                        # normal session-expired result only if none yields DTSG.
+                        # generic authentication result only if none yields DTSG.
                         attempts.append(f"{bootstrap_url}: login/checkpoint")
                         continue
 

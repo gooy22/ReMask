@@ -24,6 +24,8 @@ def private_auth_error(exc):
     # precedence over a Business-only gate from a later fallback route.
     if "CHECKPOINT_REQUIRED" in route_gates or "checkpoint_redirect" in reasons:
         code = "CHECKPOINT_REQUIRED"
+    elif "META_LOGIN_REQUIRED" in route_gates or "meta_login_redirect" in reasons:
+        code = "META_LOGIN_REQUIRED"
     elif "SESSION_EXPIRED" in route_gates or identity_unconfirmed:
         code = "SESSION_EXPIRED"
     elif isinstance(payload, dict) and payload.get("bootstrap_fallback_exhausted") is True:
@@ -35,13 +37,15 @@ def private_auth_error(exc):
     else:
         code = "SESSION_EXPIRED"
     unsent = getattr(exc, "request_may_have_been_sent", None) is False
-    message = ("The worker's Meta Business HTTP session requires restoration."
+    message = ("Meta redirected the selected profile to its Ads Manager login flow; cookie age was not checked."
+        if code == "META_LOGIN_REQUIRED" else
+        "The worker's Meta Business HTTP session requires restoration."
         if code == "BUSINESS_LOGIN_GATE" else "The selected profile's Meta HTTP session requires restoration.")
     message += (" No GraphQL POST was sent." if unsent else " Any retained submit must be verified before retry.")
     error = ProvisioningError(code, message, retryable=True)
     error.inventory_diagnostics = [{"auth_gate": code,
         "transport_stage": str(getattr(exc, "transport_stage", "")),
         "observed_reasons": sorted(str(r) for r in reasons if r in
-            ('checkpoint_redirect', 'login_redirect', 'login_form', 'redirected_host', 'http_auth')),
+            ('checkpoint_redirect', 'meta_login_redirect', 'login_redirect', 'login_form', 'redirected_host', 'http_auth')),
         "post_not_sent": unsent}]
     return error
