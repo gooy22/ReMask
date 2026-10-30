@@ -1196,6 +1196,7 @@ class FacebookWebSession:
                 jazoest=jazoest,
                 request_context=request_context,
                 source_url=final_url,
+                profile_actor_verified=self._profile_session_identity_verified,
             )
 
             self._bootstrap = bootstrap
