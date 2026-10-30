@@ -391,6 +391,96 @@ class AdsManagerPrivateHttp:
         final = urlsplit(final_url)
         gate = _auth_gate(final_url, body)
         gate_recovered = False
+        scoped_www_document = False
+        if (
+            gate == "BUSINESS_LOGIN_GATE"
+            and allow_business_gate_renewal
+            and urlsplit(url).hostname == "adsmanager.facebook.com"
+        ):
+            # The selected profile's regular bootstrap already uses this
+            # first-party Ads Manager route. Probe the same act/BM scope there
+            # with the imported cookie snapshot before treating a Business
+            # login redirect as a dead end.
+            outcome = "profile_snapshot_unavailable"
+            try:
+                session = await web._ensure_session()
+                saved = getattr(session, "_profile_cookies", None)
+                restore = getattr(session, "restore_profile_cookies", None)
+                saved_xs = str(saved.get("xs") or "").strip() if isinstance(saved, dict) else ""
+                if (
+                    callable(restore)
+                    and isinstance(saved, dict)
+                    and str(saved.get("c_user") or "") == actor_id
+                    and saved_xs
+                    and getattr(session, "proxy", None) == web.profile.proxy
+                ):
+                    restore()
+                    current = session.facebook_cookie_snapshot()
+                    if (
+                        str(current.get("c_user") or "") == actor_id
+                        and str(current.get("xs") or "").strip() == saved_xs
+                    ):
+                        www_url = url.replace(
+                            "https://adsmanager.facebook.com/",
+                            "https://www.facebook.com/", 1
+                        )
+                        headers = {
+                            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                            "Accept-Language": "en-US,en;q=0.9",
+                            "Cache-Control": "no-cache",
+                            "Pragma": "no-cache",
+                            "Sec-Fetch-Dest": "document",
+                            "Sec-Fetch-Mode": "navigate",
+                            "Sec-Fetch-Site": "none",
+                            "Sec-Fetch-User": "?1",
+                            "Upgrade-Insecure-Requests": "1",
+                        }
+                        async with session.get(
+                            www_url, proxy=web.profile.proxy, headers=headers,
+                            allow_redirects=False, request_timeout_seconds=15
+                        ) as response:
+                            probe_status = int(response.status)
+                            probe_url = str(response.url)
+                            probe_http2 = response.http_version == "HTTP/2"
+                            raw = await response.content.read(5_000_001)
+                            probe_parts = urlsplit(probe_url)
+                            probe_body = ""
+                            if len(raw) <= 5_000_000:
+                                charset = str(getattr(response, "charset", "") or "utf-8")
+                                try:
+                                    probe_body = raw.decode(charset, errors="replace")
+                                except LookupError:
+                                    probe_body = raw.decode("utf-8", errors="replace")
+                        scoped_document = (
+                            probe_http2
+                            and probe_status == 200
+                            and len(raw) <= 5_000_000
+                            and probe_parts.scheme == "https"
+                            and probe_parts.hostname == "www.facebook.com"
+                            and probe_parts.path == "/adsmanager/manage/campaigns"
+                            and parse_qs(probe_parts.query).get("act") == [account_id]
+                            and parse_qs(probe_parts.query).get("business_id") == [business_id]
+                            and not _auth_gate(probe_url, probe_body)
+                            and not has_login_form(probe_body)
+                        )
+                        if scoped_document:
+                            status, body, final_url = probe_status, probe_body, probe_url
+                            final = probe_parts
+                            gate = None
+                            gate_recovered = True
+                            scoped_www_document = True
+                            request_url = www_url
+                            outcome = "verified_scoped_document"
+                        else:
+                            outcome = "www_document_not_verified"
+                    else:
+                        outcome = "profile_session_mismatch"
+                else:
+                    outcome = "profile_snapshot_unavailable"
+            except Exception as exc:
+                outcome = "transport_" + type(exc).__name__
+            log.info("adsmanager_www_host_probe profile=%s outcome=%s",
+                getattr(web.profile, "name", ""), outcome)
         if (gate == "BUSINESS_LOGIN_GATE" and allow_business_gate_renewal
                 and urlsplit(request_url).hostname == "adsmanager.facebook.com"):
             # Ads Manager can redirect to a Business login gate even when the
@@ -476,7 +566,8 @@ class AdsManagerPrivateHttp:
             account_matches = parse_qs(final.query).get("act") == [account_id]
             log.info("ads_bootstrap profile=%s status=%s bytes=%d host_reviewed=%s path_matches=%s account_matches=%s business_matches=%s gate=%s",
                 getattr(web.profile, "name", ""), status, len(body.encode()),
-                final.hostname in {"adsmanager.facebook.com", "business.facebook.com"},
+                (final.hostname in {"adsmanager.facebook.com", "business.facebook.com"}
+             or (scoped_www_document and final.hostname == "www.facebook.com")),
                 final.path == "/adsmanager/manage/campaigns",
                 account_matches,
                 parse_qs(final.query).get("business_id") == [business_id], gate or "none")
@@ -541,7 +632,8 @@ class AdsManagerPrivateHttp:
             parse_qs(final.query).get("act") == [account_id])
         log.info("ads_bootstrap profile=%s status=%s bytes=%d host_reviewed=%s path_matches=%s account_matches=%s business_matches=%s gate=%s",
             getattr(web.profile, "name", ""), status, len(body.encode()),
-            final.hostname in {"adsmanager.facebook.com", "business.facebook.com"},
+            (final.hostname in {"adsmanager.facebook.com", "business.facebook.com"}
+             or (scoped_www_document and final.hostname == "www.facebook.com")),
             final.path == "/adsmanager/manage/campaigns",
             account_matches,
             parse_qs(final.query).get("business_id") == [business_id], gate or "none")
@@ -557,7 +649,8 @@ class AdsManagerPrivateHttp:
 
         if not business_gate_token_renewed:
             if (status != 200 or len(body.encode()) > 5_000_000 or final.scheme != "https"
-                    or final.hostname not in {"adsmanager.facebook.com", "business.facebook.com"}
+                    or not (final.hostname in {"adsmanager.facebook.com", "business.facebook.com"}
+                    or (scoped_www_document and final.hostname == "www.facebook.com"))
                     or final.path != "/adsmanager/manage/campaigns"
                     or parse_qs(final.query).get("business_id") != [business_id]):
                 raise fail("BOOTSTRAP_SCOPE_UNVERIFIED", "Ads Manager did not confirm the requested account context", True)
