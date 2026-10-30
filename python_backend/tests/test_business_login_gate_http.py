@@ -340,6 +340,24 @@ class GateContinuationTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session.restore_count, 1)
         self.assertEqual(web._business_login_gate_outcome, "recovered")
 
+    async def test_gate_redirect_restores_ambiguous_scoped_auth_cookies(self):
+        from app.private_business_login import native_business_login_continuation
+        body = _native_gate_body()
+        session = _FakeSession([
+            _Response(200, native_business_login_continuation(body, ADS_MANAGER_RETURN_URL)),
+            _Response(200, ADS_MANAGER_RETURN_URL, b"fresh scoped document"),
+        ], snapshots=[{}])
+        web = _FakeWeb(session)
+        result = await continue_business_login_gate(
+            web,
+            gate_url="https://business.facebook.com/business/loginpage/",
+            body=body,
+            return_url=ADS_MANAGER_RETURN_URL,
+        )
+        self.assertEqual(result["url"], ADS_MANAGER_RETURN_URL)
+        self.assertEqual(session.restore_count, 1)
+        self.assertEqual(web._business_login_gate_outcome, "recovered")
+
     async def test_gate_redirect_restores_nonempty_changed_xs_from_profile_snapshot(self):
         from app.private_business_login import native_business_login_continuation
         body = _native_gate_body()

@@ -631,6 +631,28 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
         await web.close()
         self.assertEqual(web.profile.cookies, {'c_user':'123','xs':'old-xs'})
 
+    async def test_shadowed_business_auth_cookie_invalidates_snapshot_and_restores_profile(self):
+        actor = "123456789"
+        original = {"c_user": actor, "xs": "imported-xs"}
+        client = PrivateHttpClient(profile_name="fixture", cookies=original,
+            proxy="http://127.0.0.1:1", user_agent="fixture-UA",
+            timeout_seconds=5, pool_size=2)
+        self.addAsyncCleanup(client.close)
+        client._client.cookies.set("xs", "business-shadow", domain="business.facebook.com", path="/")
+
+        self.assertEqual(client.facebook_cookie_snapshot(), {})
+        FacebookWebSession._restore_invalid_profile_cookie_snapshot(client, actor)
+        self.assertEqual(client.facebook_cookie_snapshot(), original)
+
+        seen = []
+        await self.mock(client, lambda request: (seen.append(request.headers.get("cookie", ""))
+            or httpx.Response(200, text="ok")))
+        async with client.get("https://business.facebook.com/business/loginrequest/fb/") as response:
+            self.assertEqual(await response.text(), "ok")
+        self.assertIn("c_user=" + actor, seen[-1])
+        self.assertIn("xs=imported-xs", seen[-1])
+        self.assertNotIn("business-shadow", seen[-1])
+
     async def test_graphql_multipart_stream_keeps_auth_and_claim_before_one_post(self):
         import io
         web = FacebookWebSession(WebProfile('fixture', {'c_user':'123'}, 'http://127.0.0.1:1', 'fixture-UA'))
