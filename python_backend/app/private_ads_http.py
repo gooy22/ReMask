@@ -563,8 +563,10 @@ class AdsManagerPrivateHttp:
         Source: XAdsCMRenewAccessTokenController + AsyncRequest.promisePayload.
         """
         try:
-            bootstrap = await self.web.bootstrap()
-            if (not self._profile_matches() or bootstrap.actor_id != self.context.actor_id
+            bootstrap = await self.web.bootstrap(allow_business_loginpage_probe=True)
+            if (not self._profile_matches()
+                    or getattr(bootstrap, "profile_actor_verified", False) is not True
+                    or bootstrap.actor_id != self.context.actor_id
                     or not isinstance(bootstrap.fb_dtsg, str) or not bootstrap.fb_dtsg):
                 raise fail("PROFILE_CONTEXT_UNAVAILABLE", "Session renewal requires the same confirmed actor")
             session = await self.web._ensure_session()
