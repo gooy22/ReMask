@@ -25,6 +25,7 @@ require_once __DIR__ . '/../settings.php';
 require_once __DIR__ . '/../classes/RemaskProxy.php';
 require_once __DIR__ . '/../classes/FbAccount.php';
 require_once __DIR__ . '/../classes/AccountStoreFactory.php';
+require_once __DIR__ . '/../classes/FbAccountSerializer.php';
 require_once __DIR__ . '/../classes/MetaEndpoint.php';
 
 header('Content-Type: application/json; charset=utf-8');
@@ -59,6 +60,30 @@ function rmx_py_cookie_map(mixed $raw): array {
         if ($name !== '' && $value !== '') $out[$name] = $value;
     }
     return $out;
+}
+
+function rmx_py_snapshot_account(string $path, string $profile): ?FbAccount {
+    if (!class_exists('FbAccountSerializer')) {
+        throw new RuntimeException('SNAPSHOT_READER_UNAVAILABLE');
+    }
+    $snapshot = new FbAccountSerializer($path);
+    if (!method_exists($snapshot, 'getAccountByNameFromSnapshot')) {
+        throw new RuntimeException('SNAPSHOT_READER_UNAVAILABLE');
+    }
+    return $snapshot->getAccountByNameFromSnapshot($profile);
+}
+
+function rmx_py_snapshot_error_kind(Throwable $error): string {
+    $message = trim($error->getMessage());
+    if (in_array($message, ['STORAGE_INVALID_JSON', 'SNAPSHOT_INVALID_JSON'], true)) return 'invalid_json';
+    if (str_contains($message, 'Credential decryption failed')) return 'credential_decryption';
+    if (str_contains($message, 'Unknown credential envelope version')) return 'credential_envelope_unknown';
+    if (str_contains($message, 'Credential envelope is malformed')) return 'credential_envelope_malformed';
+    if (str_starts_with($message, 'REMASK_CREDENTIALS_KEY')) return 'credential_key';
+    if (str_contains($message, 'PROFILE_CREDENTIAL_CONTEXT_INVALID')) return 'credential_context';
+    if (str_contains($message, 'STORAGE_LOCK_UNAVAILABLE')) return 'storage_lock';
+    if (str_contains($message, 'SNAPSHOT_READER_UNAVAILABLE')) return 'snapshot_reader';
+    return 'other';
 }
 
 function rmx_py_proxy_url(?RemaskProxy $proxy): ?string {
@@ -374,6 +399,9 @@ try {
         'distinct_xs' => 0,
         'eligible' => 0,
         'archive_read_errors' => 0,
+        'previous_files' => 0,
+        'previous_scanned' => 0,
+        'archive_error_kinds' => [],
     ];
     $actor = trim((string)($cookieMap['c_user'] ?? ''));
     $currentXs = trim((string)($cookieMap['xs'] ?? ''));
@@ -402,8 +430,8 @@ try {
         if ($candidateXs === '' || hash_equals($currentXs, $candidateXs)) return false;
         if ($source === 'archive') $recoverySnapshotDiagnostics['distinct_xs']++;
 
-        // All candidate cookies are probed through the selected profile's current
-        // proxy and are adopted only after Meta confirms the exact same actor.
+        // Candidates are probed through this selected profile's proxy and used
+        // only after Meta confirms the exact same actor.
         $xsFingerprint = hash('sha256', $candidateXs);
         if (isset($seenRecoveryXs[$xsFingerprint])) return false;
         $seenRecoveryXs[$xsFingerprint] = true;
@@ -411,17 +439,16 @@ try {
         $recoverySnapshotDiagnostics['eligible']++;
         return true;
     };
+    $recordSnapshotReadError = static function (Throwable $error) use (&$recoverySnapshotDiagnostics): void {
+        $recoverySnapshotDiagnostics['archive_read_errors']++;
+        $kind = rmx_py_snapshot_error_kind($error);
+        $recoverySnapshotDiagnostics['archive_error_kinds'][$kind] =
+            ($recoverySnapshotDiagnostics['archive_error_kinds'][$kind] ?? 0) + 1;
+    };
 
-    if (method_exists($store, 'getPreviousAccountByName')) {
-        try {
-            $appendRecoveryCandidate($store->getPreviousAccountByName($profile), 'previous');
-        } catch (Throwable $ignored) {
-            // A damaged optional snapshot must not prevent profile resolution.
-        }
-    }
-
-    // AtomicJsonFile resolves legacy webroot symlinks into the persistent volume.
-    // Search both names, but let realpath find archives beside the durable file.
+    // Keep both the configured path and the resolved volume path. Snapshot
+    // reads use FbAccountSerializer's target-only decoder so one damaged row
+    // cannot hide this profile's same-actor session.
     $accountsFile = defined('ACCOUNTSFILENAME') ? (string)ACCOUNTSFILENAME : '';
     $archiveBases = [];
     if ($accountsFile !== '') {
@@ -440,6 +467,25 @@ try {
         }
     }
     $archiveBases = array_values(array_unique(array_filter($archiveBases, static fn($path) => is_string($path) && $path !== '')));
+
+    $previousFiles = [];
+    foreach ($archiveBases as $archiveBase) {
+        $resolvedBase = realpath($archiveBase);
+        $previousFiles[] = (is_string($resolvedBase) && $resolvedBase !== '' ? $resolvedBase : $archiveBase) . '.previous';
+    }
+    $previousFiles = array_values(array_unique($previousFiles));
+    $recoverySnapshotDiagnostics['previous_files'] = count($previousFiles);
+    foreach ($previousFiles as $previousFile) {
+        if (count($recoveryCookieCandidates) >= 8) break;
+        if (!is_string($previousFile) || !is_file($previousFile) || is_link($previousFile)) continue;
+        $recoverySnapshotDiagnostics['previous_scanned']++;
+        try {
+            $appendRecoveryCandidate(rmx_py_snapshot_account($previousFile, $profile), 'archive');
+        } catch (Throwable $error) {
+            $recordSnapshotReadError($error);
+        }
+    }
+
     $backupFiles = [];
     foreach ($archiveBases as $archiveBase) {
         $backupFiles = array_merge($backupFiles, glob($archiveBase . '.bak*') ?: []);
@@ -457,15 +503,10 @@ try {
             if (!is_string($backupFile) || !is_file($backupFile) || is_link($backupFile)) continue;
             $recoverySnapshotDiagnostics['archive_scanned']++;
             try {
-                $backupStore = AccountStoreFactory::create($backupFile);
-                if (!is_object($backupStore) || !method_exists($backupStore, 'getAccountByName')) continue;
-                $archiveAccount = method_exists($backupStore, 'getAccountByNameFromSnapshot')
-                    ? $backupStore->getAccountByNameFromSnapshot($profile)
-                    : $backupStore->getAccountByName($profile);
-                $appendRecoveryCandidate($archiveAccount, 'archive');
-            } catch (Throwable $ignored) {
-                $recoverySnapshotDiagnostics['archive_read_errors']++;
-                // Ignore malformed, stale, or incompatible archive snapshots.
+                $appendRecoveryCandidate(rmx_py_snapshot_account($backupFile, $profile), 'archive');
+            } catch (Throwable $error) {
+                $recordSnapshotReadError($error);
+                // Ignore malformed, stale, or incompatible snapshots.
             }
             if (count($recoveryCookieCandidates) >= 8) break;
         }

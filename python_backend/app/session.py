@@ -417,15 +417,33 @@ class ProfileResolver:
             diagnostic_keys = (
                 "archive_files", "archive_scanned", "archive_profiles",
                 "actor_matches", "distinct_xs", "eligible", "archive_read_errors",
+                "previous_files", "previous_scanned",
             )
             safe_counts = {
                 key: max(0, min(1000000, int(scan_diagnostics.get(key) or 0)))
                 for key in diagnostic_keys
                 if isinstance(scan_diagnostics.get(key, 0), (int, float))
             }
+            allowed_error_kinds = {
+                "invalid_json", "credential_decryption", "credential_envelope_unknown",
+                "credential_envelope_malformed", "credential_key", "credential_context",
+                "storage_lock", "snapshot_reader", "other",
+            }
+            raw_error_kinds = scan_diagnostics.get("archive_error_kinds")
+            safe_error_kinds = {}
+            if isinstance(raw_error_kinds, dict):
+                safe_error_kinds = {
+                    key: max(0, min(1000000, int(value)))
+                    for key, value in raw_error_kinds.items()
+                    if key in allowed_error_kinds and isinstance(value, (int, float))
+                }
+            error_summary = ",".join(
+                f"{key}:{value}" for key, value in sorted(safe_error_kinds.items())
+            ) or "none"
             logging.getLogger("remask.profile_resolver").info(
-                "same_actor_snapshot_scan %s worker_candidates=%d",
+                "same_actor_snapshot_scan %s archive_error_kinds=%s worker_candidates=%d",
                 " ".join(f"{key}={value}" for key, value in safe_counts.items()),
+                error_summary,
                 len(recovery_cookie_candidates),
             )
         missing_auth_cookies = [
