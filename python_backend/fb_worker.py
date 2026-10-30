@@ -1045,6 +1045,7 @@ class FacebookWebSession:
                     ):
                         auth_attempts.append({"auth_reason": "checkpoint_redirect"
                             if route_gate == "CHECKPOINT_REQUIRED" or "/checkpoint" in route
+                            else "meta_login_redirect" if route_gate == "META_LOGIN_REQUIRED"
                             else "login_redirect" if route_gate or "/login" in route else "login_form",
                             "final_url": f"{parts.scheme}://{parts.hostname or ''}{parts.path}"})
                         business_loginpage = (
@@ -1061,7 +1062,7 @@ class FacebookWebSession:
                         # A Business login page is not proof that the whole
                         # Facebook session is unusable. Match the prior bundle
                         # flow: try the remaining profile surfaces and use the
-                        # normal session-expired result only if none yields DTSG.
+                        # generic authentication result only if none yields DTSG.
                         attempts.append(f"{bootstrap_url}: login/checkpoint")
                         continue
 
