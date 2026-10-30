@@ -390,13 +390,14 @@ try {
 
 
     $recoveryCookieCandidates = [];
-    $seenRecoveryXs = [];
+    $seenRecoveryCandidates = [];
     $recoverySnapshotDiagnostics = [
         'archive_files' => 0,
         'archive_scanned' => 0,
         'archive_profiles' => 0,
         'actor_matches' => 0,
         'distinct_xs' => 0,
+        'same_xs_auth_cookie_variants' => 0,
         'eligible' => 0,
         'archive_read_errors' => 0,
         'previous_files' => 0,
@@ -406,8 +407,8 @@ try {
     $actor = trim((string)($cookieMap['c_user'] ?? ''));
     $currentXs = trim((string)($cookieMap['xs'] ?? ''));
     $appendRecoveryCandidate = static function ($candidateAccount, string $source) use (
-        &$recoveryCookieCandidates, &$seenRecoveryXs, &$recoverySnapshotDiagnostics,
-        $profile, $actor, $currentXs
+        &$recoveryCookieCandidates, &$seenRecoveryCandidates, &$recoverySnapshotDiagnostics,
+        $profile, $actor, $currentXs, $cookieMap
     ): bool {
         if (count($recoveryCookieCandidates) >= 8
             || !($candidateAccount instanceof FbAccount)
@@ -427,14 +428,35 @@ try {
         $candidateXs = trim((string)($candidateCookies['xs'] ?? ''));
         if ($candidateActor !== $actor) return false;
         if ($source === 'archive') $recoverySnapshotDiagnostics['actor_matches']++;
-        if ($candidateXs === '' || hash_equals($currentXs, $candidateXs)) return false;
-        if ($source === 'archive') $recoverySnapshotDiagnostics['distinct_xs']++;
+        if ($candidateXs === '') return false;
 
-        // Candidates are probed through this selected profile's proxy and used
-        // only after Meta confirms the exact same actor.
-        $xsFingerprint = hash('sha256', $candidateXs);
-        if (isset($seenRecoveryXs[$xsFingerprint])) return false;
-        $seenRecoveryXs[$xsFingerprint] = true;
+        $sameXs = hash_equals($currentXs, $candidateXs);
+        $authCookieChanged = false;
+        foreach (['fr', 'sb', 'datr', 'ps_l', 'ps_n'] as $name) {
+            if ((string)($candidateCookies[$name] ?? '') !== (string)($cookieMap[$name] ?? '')) {
+                $authCookieChanged = true;
+                break;
+            }
+        }
+        if ($sameXs && !$authCookieChanged) return false;
+        if ($source === 'archive') {
+            if ($sameXs) {
+                $recoverySnapshotDiagnostics['same_xs_auth_cookie_variants']++;
+            } else {
+                $recoverySnapshotDiagnostics['distinct_xs']++;
+            }
+        }
+
+        // Candidates stay bound to the selected profile and exact actor.
+        // Same-xs candidates need a changed Meta auth cookie and are probed
+        // through this profile's proxy before the worker adopts them.
+        $authCookieFingerprint = [];
+        foreach (['fr', 'sb', 'datr', 'ps_l', 'ps_n'] as $name) {
+            $authCookieFingerprint[] = (string)($candidateCookies[$name] ?? '');
+        }
+        $fingerprint = hash('sha256', $candidateXs . "\0" . implode("\0", $authCookieFingerprint));
+        if (isset($seenRecoveryCandidates[$fingerprint])) return false;
+        $seenRecoveryCandidates[$fingerprint] = true;
         $recoveryCookieCandidates[] = $candidateCookies;
         $recoverySnapshotDiagnostics['eligible']++;
         return true;
