@@ -1135,6 +1135,38 @@ async def _require_profile_not_checkpoint(profile_id: str) -> None:
         })
 
 
+async def _require_profile_not_checkpoint_for_revalidation(profile_id: str) -> None:
+    """Let read-only checks revalidate a prior Business Login Gate, but never a checkpoint."""
+    clean = str(profile_id or '').strip()
+    if not clean:
+        return
+    terminal = (await _terminal_profile_statuses([clean])).get(clean)
+    status = str((terminal or {}).get('status') or '').upper()
+    if status == 'CHECKPOINT':
+        raise HTTPException(status_code=409, detail={
+            'code':'CHECKPOINT_REQUIRED',
+            'message':'Чекпоинт Meta: аккаунт остановлен. Запрос не отправлен.',
+        })
+
+
+async def _clear_business_login_gate_after_profile_review(
+    profile_id: str, review: dict[str, Any]
+) -> None:
+    """Clear the stale gate only after a scoped live draft review succeeds."""
+    clean = str(profile_id or '').strip()
+    if not clean or not isinstance(review, dict):
+        return
+    if (
+        str(review.get('profile_id') or '').strip() != clean
+        or review.get('checked_live') is not True
+        or review.get('api_preflight_ready') is not True
+        or not all(str(review.get(key) or '').strip()
+                   for key in ('business_id', 'ad_account_id', 'page_id'))
+    ):
+        return
+    await store.clear_terminal_business_login_gate(clean)
+
+
 async def _require_fp_auth_ready(profile_ids: list[str]) -> None:
     async def check(profile_id: str) -> tuple[str, dict[str, Any]]:
         cached = _cached_fp_auth_gate(profile_id)
@@ -3833,7 +3865,7 @@ async def private_launch_media_prepare(payload: dict = Body(...)):
     except ProvisioningError as exc:
         raise HTTPException(status_code=422, detail={'code':exc.code,'message':str(exc),'retryable':False}) from exc
 
-@app.get('/api/v1/profiles/{profile_id}/advertising-resources',dependencies=[Depends(require_key),Depends(_require_profile_not_checkpoint)])
+@app.get('/api/v1/profiles/{profile_id}/advertising-resources',dependencies=[Depends(require_key),Depends(_require_profile_not_checkpoint_for_revalidation)])
 @observe_profile_read
 async def private_advertising_resources(profile_id: str, resource: str, account_id: str,
                                         force: bool = False, query: str = '', limit: int = 100,
@@ -3910,6 +3942,9 @@ async def private_advertising_resources(profile_id: str, resource: str, account_
             # refresh. It remains explicitly non-live and never proves access.
             result = {**cached, 'checked_live':False, 'account_scope_verified':False,
                 '_cache':{**cached.get('_cache', {}), 'stale':True, 'refresh_failed':True}}
+        if (result.get('checked_live') is True
+                and result.get('account_scope_verified') is True):
+            await store.clear_terminal_business_login_gate(profile)
         return {'ok':True,'profile':profile,'resource':resource,**result}
     except AuthenticationError as exc:
         error = private_auth_error(exc)
@@ -4143,7 +4178,7 @@ async def private_draft_read(profile_id: str, payload: dict = Body(...)):
         raise HTTPException(status_code=409, detail='PRIVATE_DRAFT_READ_CONTEXT_UNAVAILABLE') from None
 
 
-@app.post('/api/v1/profiles/{profile_id}/private-launch-review',dependencies=[Depends(require_key),Depends(_require_profile_not_checkpoint)])
+@app.post('/api/v1/profiles/{profile_id}/private-launch-review',dependencies=[Depends(require_key),Depends(_require_profile_not_checkpoint_for_revalidation)])
 async def private_launch_review(profile_id: str, payload: dict = Body(...)):
     clean_profile=str(profile_id or '').strip()
     if not clean_profile:
@@ -4158,6 +4193,7 @@ async def private_launch_review(profile_id: str, payload: dict = Body(...)):
                 payload=payload,
             )
         result=await read_with_saved_auth_refresh(pool.resolver, context, review_once)
+        await _clear_business_login_gate_after_profile_review(clean_profile, result)
         result = {key:value for key,value in result.items() if not key.startswith('_')}
         return {'ok':True,**result}
     except ProvisioningError as exc:
