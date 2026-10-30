@@ -1871,7 +1871,7 @@ def _live_inventory_targets_ready(
     })
 
 
-@app.get('/api/v1/profiles/{profile_id}/live-inventory',dependencies=[Depends(require_key),Depends(_require_profile_not_checkpoint)])
+@app.get('/api/v1/profiles/{profile_id}/live-inventory',dependencies=[Depends(require_key),Depends(_require_profile_not_checkpoint_for_revalidation)])
 @observe_profile_inventory
 async def profile_live_inventory(
     profile_id: str,
