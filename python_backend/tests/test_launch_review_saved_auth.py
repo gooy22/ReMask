@@ -130,7 +130,7 @@ class LaunchReviewSavedAuthRouteTests(unittest.IsolatedAsyncioTestCase):
     def test_read_only_launch_routes_use_revalidation_guard(self):
         source = Path(__file__).resolve().parents[1].joinpath("main.py").read_text()
         module = ast.parse(source)
-        for route_name in ("private_launch_review", "private_advertising_resources"):
+        for route_name in ("private_launch_review", "private_advertising_resources", "profile_live_inventory"):
             route = next(node for node in module.body
                          if isinstance(node, ast.AsyncFunctionDef) and node.name == route_name)
             dependencies = [node.id for decorator in route.decorator_list
