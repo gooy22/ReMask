@@ -19,6 +19,7 @@ from fb_worker import (
 )
 from .facebook_graph_api import FacebookGraphApi
 from .direct_test import direct_test_deadline, direct_test_result
+from .session_auth_refresh import AUTH_COOKIE_KEYS, auth_cookie_variant
 
 
 class ProfileContextError(RuntimeError):
@@ -384,7 +385,8 @@ class ProfileResolver:
         if not candidate_rows and isinstance(legacy_recovery, dict):
             candidate_rows = [legacy_recovery]
 
-        seen_candidate_xs: set[str] = set()
+        seen_candidate_fingerprints: set[tuple[str, ...]] = set()
+        same_xs_auth_cookie_variants = 0
         for recovery_raw in candidate_rows:
             if not isinstance(recovery_raw, dict) or not recovery_raw or len(recovery_raw) > 500:
                 continue
@@ -404,11 +406,23 @@ class ProfileResolver:
                 candidate[key] = value
             candidate_actor = str(candidate.get("c_user") or "").strip()
             candidate_xs = str(candidate.get("xs") or "").strip()
+            same_xs_variant = (
+                candidate_xs == current_xs
+                and auth_cookie_variant(cookie_map, candidate)
+            )
             if (candidate_valid and expected_actor.isdigit()
                     and candidate_actor == expected_actor and current_xs
-                    and candidate_xs and candidate_xs != current_xs
-                    and candidate_xs not in seen_candidate_xs):
-                seen_candidate_xs.add(candidate_xs)
+                    and candidate_xs
+                    and (candidate_xs != current_xs or same_xs_variant)):
+                fingerprint = (
+                    candidate_xs,
+                    *(str(candidate.get(key) or "") for key in AUTH_COOKIE_KEYS),
+                )
+                if fingerprint in seen_candidate_fingerprints:
+                    continue
+                seen_candidate_fingerprints.add(fingerprint)
+                if same_xs_variant:
+                    same_xs_auth_cookie_variants += 1
                 recovery_cookie_candidates.append(candidate)
         if recovery_cookie_candidates:
             recovery_cookie_map = dict(recovery_cookie_candidates[0])
@@ -417,7 +431,7 @@ class ProfileResolver:
             diagnostic_keys = (
                 "archive_files", "archive_scanned", "archive_profiles",
                 "actor_matches", "distinct_xs", "eligible", "archive_read_errors",
-                "previous_files", "previous_scanned",
+                "previous_files", "previous_scanned", "same_xs_auth_cookie_variants",
             )
             safe_counts = {
                 key: max(0, min(1000000, int(scan_diagnostics.get(key) or 0)))
