@@ -291,7 +291,7 @@ class GateContinuationTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result)
         self.assertEqual(
             web._business_login_gate_outcome,
-            "no_supported_continuation_control",
+            "native_request_scope",
         )
         self.assertEqual(session.request_calls, [])
 
@@ -321,12 +321,18 @@ class GateContinuationTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(session.request_calls), 2)
         for method, _, _ in session.request_calls:
             self.assertEqual(method, "GET")
-        self.assertEqual(session.request_calls[0][1], native_url)
-        params = parse_qs(urlsplit(native_url).query)
+        actual_url = session.request_calls[0][1]
+        self.assertEqual(urlsplit(actual_url).path, "/business/loginrequest/fb/")
+        params = parse_qs(urlsplit(actual_url).query)
+        self.assertEqual(params["f3_request_id"], ["native-request-id"])
         next_url = params["next"][0]
         next_query = parse_qs(urlsplit(next_url).query)
         self.assertEqual(next_query["act"], ["111111"])
         self.assertEqual(next_query["business_id"], ["222222"])
+        self.assertEqual(
+            next_query["biz_login_source"],
+            ["biz_unified_f3_fb_login_button"],
+        )
         self.assertNotIn("content", session.request_calls[0][2])
 
     async def test_native_js_only_gate_refuses_terms_and_credentials(self):
