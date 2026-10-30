@@ -71,11 +71,14 @@ class Session:
 class Web:
     def __init__(self):
         self.session = Session();self.session.calls = []
+        self.fetch_calls = []
         self.profile = SimpleNamespace(proxy=self.session.proxy, cookies={"c_user": "123456"})
 
     async def _ensure_session(self):return self.session
 
-    async def fetch_text(self, url, **kwargs):return 200, document(), url
+    async def fetch_text(self, url, **kwargs):
+        self.fetch_calls.append((url, kwargs))
+        return 200, document(), url
 
 
 class TransportTests(unittest.IsolatedAsyncioTestCase):
@@ -87,6 +90,17 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
 
     async def claim(self):self.claims += 1
 
+    async def test_ads_manager_bootstrap_opts_into_exact_document_timeout_retry(self):
+        self.assertEqual(len(self.web.fetch_calls), 1)
+        url, kwargs = self.web.fetch_calls[0]
+        self.assertEqual(url,
+            "https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=111111&business_id=222222")
+        self.assertEqual(kwargs, {
+            "max_bytes": 5_000_001,
+            "document_navigation": True,
+            "retry_timeout": True,
+        })
+
     async def test_interrupted_account_read_retries_once_on_same_session(self):
         calls = []
         @asynccontextmanager
@@ -94,20 +108,6 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
             calls.append((method, url, options))
             if len(calls) == 1:
                 raise httpx.ReadError('synthetic interrupted read')
-            yield SimpleNamespace(http_version='HTTP/2',status=200,content=Body(b'{"data":[]}'))
-        self.web.session.request = request
-        self.assertEqual(await self.client.get('/act_111111/campaigns', {'fields':['id']}), {'data':[]})
-        self.assertEqual(len(calls), 2)
-        self.assertEqual(calls[0], calls[1])
-        self.assertEqual(self.claims, 0)
-
-    async def test_timed_out_account_read_retries_once_on_same_session(self):
-        calls = []
-        @asynccontextmanager
-        async def request(method, url, **options):
-            calls.append((method, url, options))
-            if len(calls) == 1:
-                raise TimeoutError('synthetic response timeout')
             yield SimpleNamespace(http_version='HTTP/2',status=200,content=Body(b'{"data":[]}'))
         self.web.session.request = request
         self.assertEqual(await self.client.get('/act_111111/campaigns', {'fields':['id']}), {'data':[]})
