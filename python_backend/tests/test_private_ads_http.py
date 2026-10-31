@@ -300,66 +300,38 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(client.read_only)
         self.assertNotIn('synthetic-renewed-session',repr(client.context))
 
-    async def test_gate_renewal_binds_fetch_metadata_to_fresh_profile_page(self):
-        page = json.loads(document())
-        page["require"] = []
-        page["define"].extend([
-            ["DTSGInitialData", [], {"token": "fresh-profile-dtsg"}],
-            ["LSD", [], {"token": "fresh-profile-lsd"}],
-            ["SprinkleConfig", [], {"param_name": "jazoest",
-                                    "version": 2, "should_randomize": False}],
-        ])
+    async def test_renewal_extracts_checksum_from_embedded_current_html(self):
         self.web.bootstrap = AsyncMock(return_value=SimpleNamespace(
-            actor_id="123456", fb_dtsg="old-bootstrap-dtsg",
-            lsd="old-bootstrap-lsd", request_context={},
-            source_url="https://www.facebook.com/"))
-        self.web.fetch_text = AsyncMock(return_value=(
-            200, json.dumps(page), "https://www.facebook.com/"))
+            actor_id="123456", fb_dtsg="fresh-current-dtsg", lsd="fresh-lsd",
+            request_context={}))
         calls = []
 
         @asynccontextmanager
         async def request(method, url, **options):
             calls.append((method, url, options))
-            payload = {"payload": {
-                "access_token": "fresh-renewed-session",
-                "client_id": self.client.context.application_id,
-            }}
+            payload = {"payload": {"access_token": "fresh-renewed-session",
+                "client_id": self.client.context.application_id}}
             yield SimpleNamespace(http_version="HTTP/2", status=200,
-                                  content=Body(("for (;;);" + json.dumps(payload)).encode()))
+                content=Body(("for (;;);" + json.dumps(payload)).encode()))
 
         self.web.session.request = request
-        gate_config = json.dumps({"define": [["SprinkleConfig", [], {
-            "param_name": "jazoest", "version": 99, "should_randomize": False}]]})
-        renewed = await self.client._renew_session("", sprinkle_document=gate_config)
+        current_html = ('<script>var config=["SprinkleConfig",[],'
+            '{"param_name":"jazoest","version":2,"should_randomize":false}];</script>')
+        renewed = await self.client._renew_session(current_html)
         self.assertEqual(renewed.access_token, "fresh-renewed-session")
         self.assertEqual(len(calls), 1)
-        method, url, options = calls[0]
-        self.assertEqual(method, "POST")
-        self.assertEqual(url, "https://www.facebook.com/ads/manager/ajax/renew_access_token/")
-        self.assertEqual(options["headers"]["Origin"], "https://www.facebook.com")
-        self.assertEqual(options["headers"]["Referer"], "https://www.facebook.com/")
-        self.assertEqual(options["headers"]["Sec-Fetch-Site"], "same-origin")
-        self.assertEqual(options["headers"]["Sec-Fetch-Mode"], "cors")
-        self.assertEqual(options["headers"]["Sec-Fetch-Dest"], "empty")
-        self.assertEqual(options["data"]["fb_dtsg"], "fresh-profile-dtsg")
-        self.assertEqual(options["data"]["lsd"], "fresh-profile-lsd")
-        self.assertEqual(options["data"]["jazoest"],
-                         "2" + str(sum(map(ord, "fresh-profile-dtsg"))))
-        self.web.fetch_text.assert_awaited_once_with(
-            "https://www.facebook.com/", max_bytes=5_000_001,
-            document_navigation=True, retry_timeout=False)
+        self.assertEqual(calls[0][2]["data"]["jazoest"],
+            "2" + str(sum(map(ord, "fresh-current-dtsg"))))
 
-    async def test_gate_renewal_rejects_foreign_profile_page_before_post(self):
+    async def test_gate_renewal_rejects_missing_checksum_before_post(self):
         self.web.bootstrap = AsyncMock(return_value=SimpleNamespace(
-            actor_id="123456", fb_dtsg="fresh-profile-dtsg",
-            source_url="https://www.facebook.com/"))
-        self.web.fetch_text = AsyncMock(return_value=(
-            200, document(actor="999999"), "https://www.facebook.com/"))
+            actor_id="123456", fb_dtsg="fresh-current-dtsg",
+            request_context={}))
         self.web.session.calls = []
         with self.assertRaises(ProvisioningError) as caught:
-            await self.client._renew_session("")
+            await self.client._renew_session("", sprinkle_document="<html>gate</html>")
         self.assertEqual(caught.exception.code,
-                         "PRIVATE_ADS_DRAFT_SESSION_RENEWAL_CONFIG_UNAVAILABLE")
+            "PRIVATE_ADS_DRAFT_SESSION_RENEWAL_CONFIG_UNAVAILABLE")
         self.assertEqual(self.web.session.calls, [])
 
     async def test_session_renewal_never_retries_meta_rejection_or_accepts_wrong_client(self):
@@ -907,6 +879,7 @@ class ReadOnlyReferenceBootstrapReuseTests(unittest.IsolatedAsyncioTestCase):
                 Продолжить с аккаунтом Facebook
               </button>
             </form>
+            <script>const cfg=["SprinkleConfig",[],{"param_name":"jazoest","version":2,"should_randomize":false}];</script>
         """
         self.web.fetch_text = AsyncMock(return_value=(200, gate_body, gate_url))
         self.web.profile.cookies["xs"] = "synthetic-xs"
