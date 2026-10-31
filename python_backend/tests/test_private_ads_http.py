@@ -341,6 +341,9 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
             source_url="https://www.facebook.com/"))
         self.web.fetch_text = AsyncMock(side_effect=AssertionError(
             "Renewal must use the primary response, not fetch another page"))
+        self.web._extract_request_context = lambda source: (
+            {'__aaid': 'gate-aaid', '__bid': 'gate-bid', '__rev': 'gate-revision'}
+            if 'fresh-gate-dtsg' in source else {})
         calls = []
 
         @asynccontextmanager
@@ -366,6 +369,9 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls[0][2]["data"]["fb_dtsg"], "fresh-gate-dtsg")
         self.assertEqual(calls[0][2]["data"]["lsd"], "fresh-gate-lsd")
         self.assertEqual(calls[0][2]["data"]["jazoest"], "212345")
+        self.assertEqual(calls[0][2]["data"]["__aaid"], "gate-aaid")
+        self.assertEqual(calls[0][2]["data"]["__bid"], "gate-bid")
+        self.assertEqual(calls[0][2]["data"]["__rev"], "gate-revision")
         self.assertEqual(calls[0][2]["headers"]["X-FB-LSD"], "fresh-gate-lsd")
         self.web.fetch_text.assert_not_awaited()
 
