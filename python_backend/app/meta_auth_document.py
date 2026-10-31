@@ -29,7 +29,7 @@ def auth_route_gate(url):
             path == "/business/loginpage" or path.startswith("/business/loginpage/")):
         return "BUSINESS_LOGIN_GATE"
     if re.search(r"(?:^|/)login(?:page|\.php)?(?:/|$)", path):
-        return "SESSION_EXPIRED"
+        return "META_LOGIN_REQUIRED"
     if host == "www.facebook.com" and path == "/index.php":
         try:
             query = parse_qs(urlsplit(str(url or "")).query)
@@ -84,4 +84,4 @@ def auth_gate(url, body):
     gate = auth_route_gate(url)
     if gate:
         return gate
-    return "SESSION_EXPIRED" if _route(url)[0] and has_login_form(body) else ""
+    return "META_LOGIN_REQUIRED" if _route(url)[0] and has_login_form(body) else ""

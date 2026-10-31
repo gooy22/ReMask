@@ -19,6 +19,18 @@ class FacebookDtsgBootstrapParserTests(unittest.TestCase):
         for body in ('<form id="login_form">', '<FORM ID=login_form>',
                      '<form action="https://www.facebook.com/login.php?next=business">'):
             self.assertTrue(_has_login_form(body))
+    def test_facebook_login_route_and_form_do_not_claim_cookie_expiry(self):
+        from app.meta_auth_document import auth_gate
+
+        self.assertEqual(
+            auth_route_gate("https://www.facebook.com/login/"),
+            "META_LOGIN_REQUIRED",
+        )
+        self.assertEqual(
+            auth_gate("https://www.facebook.com/", '<form id="login_form">'),
+            "META_LOGIN_REQUIRED",
+        )
+
     def test_meta_index_adsmanager_return_redirect_is_an_auth_gate(self):
         url = ("https://www.facebook.com/index.php?next="
                "https%3A%2F%2Fwww.facebook.com%2Fadsmanager%2Fmanage%2Fcampaigns"
@@ -130,7 +142,7 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         session.refresh_reviewed_modules = AsyncMock()
         return session, client
 
-    async def test_business_login_redirect_falls_through_and_classifies_generic_failure_as_session_expired(self):
+    async def test_business_login_fallback_does_not_claim_cookie_expiry(self):
         session, client = self.session('<form id="login_form">',
             'https://business.facebook.com/business/loginpage/?secret=must-not-leak')
         with self.assertRaises(AuthenticationError) as caught:
@@ -139,7 +151,7 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         session._fetch_dtsg_refresh_token.assert_awaited_once()
         self.assertFalse(caught.exception.request_may_have_been_sent)
         from app.private_auth import private_auth_error
-        self.assertEqual(private_auth_error(caught.exception).code, 'SESSION_EXPIRED')
+        self.assertEqual(private_auth_error(caught.exception).code, 'META_AUTH_TOKEN_UNAVAILABLE')
         self.assertNotIn('must-not-leak', str(caught.exception.meta_payload))
 
         business_error = AuthenticationError("exact Business precheck failed")
@@ -183,6 +195,58 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(client.calls), 1)
         handoff.assert_awaited_once()
         session._fetch_dtsg_refresh_token.assert_not_awaited()
+
+    async def test_profile_probe_restores_saved_cookies_before_same_facebook_redirect(self):
+        actor = "123456789"
+        saved = {"c_user": actor, "xs": "fixture-xs"}
+        profile_html = (
+            '<script>CurrentUserInitialData = {"USER_ID":"123456789"};</script>'
+            '["DTSGInitialData",[],{"token":"profile-token"}]'
+        )
+        calls = []
+
+        class Response:
+            def __init__(self, url, status, headers, body):
+                self.url, self.status, self.headers, self.body = url, status, headers, body
+            async def text(self): return self.body
+            async def __aenter__(self): return self
+            async def __aexit__(self, *args): return False
+
+        class Client:
+            def __init__(self):
+                self.current = dict(saved)
+            def restore_profile_cookies(self):
+                self.current = dict(saved)
+            def facebook_cookie_snapshot(self):
+                return dict(self.current)
+            def get(self, url, **kwargs):
+                calls.append((url, kwargs.get("allow_redirects"), dict(self.current)))
+                if url == "https://www.facebook.com/me":
+                    # Model Meta clearing root-scope cookies on the redirect response.
+                    self.current = {}
+                    return Response(url, 302, {"location": "/"}, "")
+                if url == "https://www.facebook.com/":
+                    return Response(url, 200, {}, profile_html)
+                raise AssertionError("profile bootstrap followed an unreviewed route")
+
+        client = Client()
+        session = FacebookWebSession(WebProfile(
+            name="15", cookies=dict(saved), proxy=None, user_agent="fixture"))
+        session._ensure_session = AsyncMock(return_value=client)
+        session._fetch_dtsg_refresh_token = AsyncMock(return_value=("", ""))
+        session.refresh_reviewed_modules = AsyncMock()
+
+        bootstrap = await session.bootstrap(allow_business_loginpage_probe=True)
+
+        self.assertTrue(bootstrap.profile_actor_verified)
+        self.assertEqual(bootstrap.actor_id, actor)
+        self.assertEqual(bootstrap.fb_dtsg, "profile-token")
+        self.assertEqual([call[0] for call in calls], [
+            "https://www.facebook.com/me",
+            "https://www.facebook.com/",
+        ])
+        self.assertEqual([call[1] for call in calls], [False, False])
+        self.assertEqual([call[2] for call in calls], [saved, saved])
 
     async def test_business_loginpage_probe_requires_same_actor_profile_document(self):
         expected_actor = "123456789"

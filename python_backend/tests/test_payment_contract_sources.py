@@ -180,7 +180,7 @@ class PaymentSourceTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ProvisioningError) as raised:
                 await payment_source_document(web,'https://business.facebook.com/billing_hub/payment_settings/')
         self.assertEqual(web.fetch_text.await_count,1)
-        self.assertEqual(raised.exception.code,'SESSION_EXPIRED')
+        self.assertEqual(raised.exception.code,'META_AUTH_TOKEN_UNAVAILABLE')
         self.assertNotIn('fixture-secret',str(raised.exception)+' '.join(logs.output))
 
     async def test_only_public_modules_are_exported_never_authenticated_html(self):

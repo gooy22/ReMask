@@ -79,5 +79,5 @@ class PrivateAdvertisingErrorTests(unittest.IsolatedAsyncioTestCase):
     async def test_direct_proxy_error_is_typed(self):
         await self.check_routes(ProxyError('SECRET'),502,'PRIVATE_HTTP_PROXY_UNAVAILABLE')
 
-    async def test_authentication_failure_retains_session_code(self):
-        await self.check_routes(AuthenticationError('SECRET'),409,'SESSION_EXPIRED')
+    async def test_authentication_failure_does_not_claim_cookie_expiry(self):
+        await self.check_routes(AuthenticationError('SECRET'),409,'META_AUTH_TOKEN_UNAVAILABLE')

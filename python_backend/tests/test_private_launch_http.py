@@ -57,7 +57,7 @@ class LaunchHttpReadTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(result["account_scope_verified"])
 
     async def test_only_actual_login_or_checkpoint_is_auth_gate(self):
-        for final, code in (("https://www.facebook.com/login/", "SESSION_EXPIRED"),
+        for final, code in (("https://www.facebook.com/login/", "META_LOGIN_REQUIRED"),
                             ("https://www.facebook.com/checkpoint/", "CHECKPOINT_REQUIRED")):
             with self.assertRaises(ProvisioningError) as caught:
                 await inspect_pages(self.web(final=final), account=ACCOUNT, business_id=BM)

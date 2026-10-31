@@ -150,8 +150,8 @@ class HttpInspectionTests(unittest.IsolatedAsyncioTestCase):
         checkpoint = AuthenticationError('checkpoint PRIVATE fixture')
         checkpoint.meta_payload = {'business_precheck': [{'auth_reason': 'checkpoint_redirect'}]}
         for error, code in ((RuntimeError('PRIVATE PAN fixture'), 'PAYMENT_HTTP_UNAVAILABLE'),
-                            (AuthenticationError('login PRIVATE fixture'), 'SESSION_EXPIRED'),
-                            (AuthenticationError('login/checkpoint PRIVATE fixture'), 'SESSION_EXPIRED'),
+                            (AuthenticationError('login PRIVATE fixture'), 'META_AUTH_TOKEN_UNAVAILABLE'),
+                            (AuthenticationError('login/checkpoint PRIVATE fixture'), 'META_AUTH_TOKEN_UNAVAILABLE'),
                             (checkpoint, 'CHECKPOINT_REQUIRED')):
             with self.subTest(code=code), self.assertRaises(BrowserBusinessError) as raised:
                 await self.run_inspection(error=error)

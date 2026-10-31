@@ -91,7 +91,7 @@ class PrivateInventoryTests(unittest.IsolatedAsyncioTestCase):
 
         mapped = private_auth_error(error)
 
-        self.assertEqual(mapped.code, "SESSION_EXPIRED")
+        self.assertEqual(mapped.code, "META_LOGIN_REQUIRED")
         self.assertTrue(mapped.inventory_diagnostics[0]["post_not_sent"])
 
     async def test_selector_auth_gate_stops_other_http_probes(self):

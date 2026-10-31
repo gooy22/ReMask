@@ -66,12 +66,12 @@ class BootstrapEvidenceTests(unittest.IsolatedAsyncioTestCase):
         cases = (
             ('https://business.facebook.com/business/loginpage/', '', 'BUSINESS_LOGIN_GATE'),
             ('https://BUSINESS.FACEBOOK.COM/business/loginpage?next=/checkpoint/', '', 'BUSINESS_LOGIN_GATE'),
-            ('https://www.facebook.com/login.php?next=/checkpoint/', '', 'SESSION_EXPIRED'),
-            ('https://www.facebook.com/business/loginpage/', '', 'SESSION_EXPIRED'),
-            ('https://m.facebook.com/login/device-based/regular/login/', '', 'SESSION_EXPIRED'),
+            ('https://www.facebook.com/login.php?next=/checkpoint/', '', 'META_LOGIN_REQUIRED'),
+            ('https://www.facebook.com/business/loginpage/', '', 'META_LOGIN_REQUIRED'),
+            ('https://m.facebook.com/login/device-based/regular/login/', '', 'META_LOGIN_REQUIRED'),
             ('https://www.facebook.com/checkpoint/?next=/login/', '', 'CHECKPOINT_REQUIRED'),
-            ('https://business.facebook.com/latest/home', '<FORM ID=login_form>', 'SESSION_EXPIRED'),
-            ('https://business.facebook.com/latest/home', '<form action="https://www.facebook.com/login/">', 'SESSION_EXPIRED'),
+            ('https://business.facebook.com/latest/home', '<FORM ID=login_form>', 'META_LOGIN_REQUIRED'),
+            ('https://business.facebook.com/latest/home', '<form action="https://www.facebook.com/login/">', 'META_LOGIN_REQUIRED'),
         )
         for url, body, expected in cases:
             with self.subTest(url=url, body=body):
@@ -94,7 +94,7 @@ class BootstrapEvidenceTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(_auth_gate('https://business.facebook.com/latest/home', body), '')
                 self.assertFalse(self.evidence('https://business.facebook.com/latest/home', body)['login_form'])
         body = '<template><form id="login_form"></form></template><form action="/login/">'
-        self.assertEqual(_auth_gate('https://business.facebook.com/latest/home', body), 'SESSION_EXPIRED')
+        self.assertEqual(_auth_gate('https://business.facebook.com/latest/home', body), 'META_LOGIN_REQUIRED')
 
     def test_request_echo_and_duplicate_json_cannot_confirm_actor(self):
         for body in (json.dumps({"request": json.loads(document())}),
