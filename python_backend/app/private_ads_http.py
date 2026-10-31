@@ -851,8 +851,8 @@ class AdsManagerPrivateHttp:
             await refresh(body, final_url)
         client = cls(web, context)
         if business_gate_token_renewed:
-            client.document_origin = "https://adsmanager.facebook.com"
-            client.document_url = url
+            client.document_origin = bootstrap_client.document_origin
+            client.document_url = bootstrap_client.document_url
         else:
             client.document_origin = final.scheme + '://' + final.hostname
         if not account_matches:
@@ -913,6 +913,38 @@ class AdsManagerPrivateHttp:
                     or bootstrap.actor_id != self.context.actor_id
                     or not isinstance(bootstrap.fb_dtsg, str) or not bootstrap.fb_dtsg):
                 raise fail("PROFILE_CONTEXT_UNAVAILABLE", "Session renewal requires the selected profile actor")
+            # A Business login gate is not an Ads Manager document. When the
+            # selected profile bootstraps from a different first-party page,
+            # bind AsyncRequest's Origin, Referer, Sec-Fetch and CSRF data to
+            # a fresh, actor-confirmed document from that actual page.
+            source_bound = False
+            if not document:
+                source_url = str(getattr(bootstrap, "source_url", "") or "")
+                source = urlsplit(source_url)
+                if (source.scheme == "https"
+                        and ((source.hostname == "www.facebook.com" and source.path == "/")
+                             or (source.hostname == "business.facebook.com"
+                                 and source.path in {"/latest/home", "/latest/home/"}))):
+                    status, fresh_document, final_url = await self.web.fetch_text(
+                        source_url, max_bytes=5_000_001, document_navigation=True,
+                        retry_timeout=False)
+                    final = urlsplit(final_url)
+                    evidence = _bootstrap_evidence(final_url, fresh_document,
+                        self.web.profile, self.context.actor_id)
+                    if (status != 200 or final.scheme != "https"
+                            or final.hostname != source.hostname
+                            or evidence["document_actor"] != "matches"
+                            or evidence["path_gate"] != "none"
+                            or evidence["login_form"]):
+                        raise fail("SESSION_RENEWAL_CONFIG_UNAVAILABLE",
+                            "The profile bootstrap source did not confirm its actor")
+                    document = fresh_document
+                    sprinkle_document = ""
+                    self.document_origin = final.scheme + "://" + final.hostname
+                    self.document_url = final_url
+                    source_bound = True
+                    log.info("ads_session_renewal source_confirmed profile=%s host=%s",
+                        self._profile_name, final.hostname)
             session = await self.web._ensure_session()
             if session.proxy != self._profile_proxy:
                 raise fail("PROFILE_CONTEXT_UNAVAILABLE", "Session renewal route changed")
@@ -1009,6 +1041,7 @@ class AdsManagerPrivateHttp:
             if not isinstance(result, dict) or "error" in result or "errors" in result:
                 initial_code = result.get("error") if isinstance(result, dict) else None
                 if ((primary_transport_failure or initial_code == 1357001)
+                        and not source_bound
                         and self.document_origin != "https://business.facebook.com"):
                     # Retry the same read-only renewal on Business when the
                     # selected Ads Manager host rejects it or the profile proxy
@@ -1087,7 +1120,8 @@ class AdsManagerPrivateHttp:
                                 self._profile_name)
             if not isinstance(result, dict) or "error" in result or "errors" in result:
                 code = result.get("error") if isinstance(result, dict) else None
-                if code == 1357001 and self.document_origin != "https://www.facebook.com":
+                if (code == 1357001 and not source_bound
+                        and self.document_origin != "https://www.facebook.com"):
                     # The profile homepage confirms the same actor on www.facebook.com.
                     # Try Meta's native renewal there once; this still grants only a
                     # session token, and the exact account + Business READ below stays
