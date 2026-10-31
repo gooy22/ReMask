@@ -996,7 +996,7 @@ class AdsManagerPrivateHttp:
                         self.web.profile, self.context.actor_id)
                     if (status != 200 or final.scheme != 'https'
                             or final.hostname != source.hostname
-                            or evidence['document_actor'] != 'matches'
+                            or evidence['document_actor'] not in {'matches', 'absent'}
                             or evidence['path_gate'] != 'none'
                             or evidence['login_form']):
                         raise fail('SESSION_RENEWAL_CONFIG_UNAVAILABLE',
