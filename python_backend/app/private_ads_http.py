@@ -978,8 +978,50 @@ class AdsManagerPrivateHttp:
                                 and node[0] == 'SprinkleConfig' and node[1] == []
                                 and isinstance(node[2], dict)):
                             configs['SprinkleConfig'].append(node[2])
+            checksum_source = "document" if document else "gate"
+            if (sprinkle_document and not configs['SprinkleConfig']
+                    and not form.get('jazoest')):
+                source_url = str(getattr(bootstrap, 'source_url', '') or '')
+                source = urlsplit(source_url)
+                reviewed_source = (source.scheme == 'https' and (
+                    (source.hostname == 'www.facebook.com' and source.path == '/')
+                    or (source.hostname == 'business.facebook.com'
+                        and source.path in {'/latest/home', '/latest/home/'})))
+                if reviewed_source:
+                    status, source_body, final_url = await self.web.fetch_text(
+                        source_url, max_bytes=5_000_001,
+                        document_navigation=True, retry_timeout=False)
+                    final = urlsplit(final_url)
+                    evidence = _bootstrap_evidence(final_url, source_body,
+                        self.web.profile, self.context.actor_id)
+                    if (status != 200 or final.scheme != 'https'
+                            or final.hostname != source.hostname
+                            or evidence['document_actor'] != 'matches'
+                            or evidence['path_gate'] != 'none'
+                            or evidence['login_form']):
+                        raise fail('SESSION_RENEWAL_CONFIG_UNAVAILABLE',
+                            'Current profile bootstrap page did not confirm its actor')
+                    for payload in _ads_document_payloads(source_body):
+                        for node in _walk(payload):
+                            if (isinstance(node, list) and len(node) >= 3
+                                    and isinstance(node[0], str)
+                                    and node[0] in configs and node[1] == []
+                                    and isinstance(node[2], dict)):
+                                configs[node[0]].append(node[2])
+                    for script_match in _JSON_SCRIPT_RE.finditer(source_body):
+                        script = unescape(script_match.group(1))
+                        for match in sprinkle_tuple.finditer(script):
+                            try:
+                                node, _ = decoder.raw_decode(script, match.start())
+                            except (ValueError, RecursionError):
+                                continue
+                            if (isinstance(node, list) and len(node) == 3
+                                    and node[0] == 'SprinkleConfig' and node[1] == []
+                                    and isinstance(node[2], dict)):
+                                configs['SprinkleConfig'].append(node[2])
+                    checksum_source = "profile_bootstrap"
             log.info("ads_session_renewal_checksum profile=%s source=%s config_present=%s",
-                self._profile_name, "document" if document else "gate",
+                self._profile_name, checksum_source,
                 bool(configs['SprinkleConfig']))
             for module, field in (('DTSGInitialData','fb_dtsg'),('DTSGInitData','fb_dtsg'),('LSD','lsd')):
                 if configs[module]:
