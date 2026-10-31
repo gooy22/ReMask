@@ -963,7 +963,7 @@ class AdsManagerPrivateHttp:
             from html import unescape
             decoder = _strict_json_decoder()
             sprinkle_tuple = re.compile(
-                r'\[\s*"SprinkleConfig"\s*,\s*\[\s*\]\s*,\s*\{'
+                r'\[\s*"SprinkleConfig"\s*,\s*\[\s*\]\s*,\s*\{')
             for source in (document, sprinkle_document):
                 if not source:
                     continue
