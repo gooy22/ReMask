@@ -654,6 +654,66 @@ class AdsManagerPrivateHttp:
                                         outcome = "verified_account_only_document"
                                     else:
                                         outcome = "account_only_document_not_verified"
+                                        # The initial Ads Manager URL was scoped to both act and BM.
+                                        # Try that same reviewed document on the same Ads Manager host
+                                        # with only the exact selected act; keep it read-only and require
+                                        # an exact account+Business READ before enabling any CREATE.
+                                        adsmanager_url = (
+                                            "https://adsmanager.facebook.com/adsmanager/manage/campaigns?act="
+                                            + account_id
+                                        )
+                                        adsmanager_outcome = "profile_snapshot_unavailable"
+                                        restore()
+                                        adsmanager_snapshot = session.facebook_cookie_snapshot()
+                                        if (str(adsmanager_snapshot.get("c_user") or "") == actor_id
+                                                and str(adsmanager_snapshot.get("xs") or "").strip() == saved_xs):
+                                            try:
+                                                async with session.get(
+                                                        adsmanager_url, proxy=web.profile.proxy, headers=headers,
+                                                        allow_redirects=False, request_timeout_seconds=15) as response:
+                                                    adsmanager_status = int(response.status)
+                                                    adsmanager_probe_url = str(response.url)
+                                                    adsmanager_http2 = response.http_version == "HTTP/2"
+                                                    adsmanager_raw = await response.content.read(5_000_001)
+                                                    adsmanager_parts = urlsplit(adsmanager_probe_url)
+                                                    adsmanager_body = ""
+                                                    if len(adsmanager_raw) <= 5_000_000:
+                                                        charset = str(getattr(response, "charset", "") or "utf-8")
+                                                        try:
+                                                            adsmanager_body = adsmanager_raw.decode(
+                                                                charset, errors="replace")
+                                                        except LookupError:
+                                                            adsmanager_body = adsmanager_raw.decode(
+                                                                "utf-8", errors="replace")
+                                            except Exception as exc:
+                                                adsmanager_outcome = "transport_" + type(exc).__name__
+                                            else:
+                                                adsmanager_document = (
+                                                    adsmanager_http2
+                                                    and adsmanager_status == 200
+                                                    and len(adsmanager_raw) <= 5_000_000
+                                                    and adsmanager_parts.scheme == "https"
+                                                    and adsmanager_parts.hostname == "adsmanager.facebook.com"
+                                                    and adsmanager_parts.path == "/adsmanager/manage/campaigns"
+                                                    and parse_qs(adsmanager_parts.query).get("act") == [account_id]
+                                                    and not _auth_gate(adsmanager_probe_url, adsmanager_body)
+                                                    and not has_login_form(adsmanager_body)
+                                                )
+                                                if adsmanager_document:
+                                                    status, body, final_url = (
+                                                        adsmanager_status, adsmanager_body, adsmanager_probe_url)
+                                                    final = adsmanager_parts
+                                                    gate = None
+                                                    gate_recovered = True
+                                                    account_only_scope_recovered = True
+                                                    request_url = adsmanager_url
+                                                    adsmanager_outcome = "verified_account_only_document"
+                                                else:
+                                                    adsmanager_outcome = "account_only_document_not_verified"
+                                        else:
+                                            adsmanager_outcome = "profile_session_mismatch"
+                                        log.info("adsmanager_account_only_probe profile=%s outcome=%s",
+                                            getattr(web.profile, "name", ""), adsmanager_outcome)
                                 else:
                                     outcome = "profile_session_mismatch"
                     else:
