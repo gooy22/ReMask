@@ -734,7 +734,7 @@ class AdsManagerPrivateHttp:
                 bootstrap_client.read_only = True
                 # The Business login gate is not an Ads Manager CSRF document.
                 # Use only the independently actor-verified profile bootstrap.
-                context = await bootstrap_client._renew_session("", require_profile_actor_verified=True)
+                context = await bootstrap_client._renew_session(body)
                 business_gate_token_renewed = True
                 gate_recovered = True
 
@@ -835,7 +835,7 @@ class AdsManagerPrivateHttp:
             log.info("ads_bootstrap scope_confirmed profile=%s source=exact_account_read", getattr(web.profile, "name", ""))
         return client
 
-    async def _renew_session(self, document, *, require_profile_actor_verified=False):
+    async def _renew_session(self, document):
         """One cookie-authenticated native refresh, as AdsMgmtNetworkRefreshToken.
 
         No advertising write, OAuth grant, alternate actor or configured token.
@@ -847,12 +847,9 @@ class AdsManagerPrivateHttp:
             # before the exact account + Business read below gets a chance to prove
             # the selected scope. The saved c_user, profile, proxy and cookie snapshot
             # are still pinned by _profile_matches(), and no write is enabled yet.
-            bootstrap = (await self.web.bootstrap(allow_business_loginpage_probe=True)
-                         if require_profile_actor_verified else await self.web.bootstrap())
+            bootstrap = await self.web.bootstrap()
             if (not self._profile_matches()
                     or bootstrap.actor_id != self.context.actor_id
-                    or (require_profile_actor_verified
-                        and getattr(bootstrap, "profile_actor_verified", False) is not True)
                     or not isinstance(bootstrap.fb_dtsg, str) or not bootstrap.fb_dtsg):
                 raise fail("PROFILE_CONTEXT_UNAVAILABLE", "Session renewal requires the selected profile actor")
             session = await self.web._ensure_session()
