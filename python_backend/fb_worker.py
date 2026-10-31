@@ -1057,28 +1057,90 @@ class FacebookWebSession:
             for bootstrap_url in bootstrap_urls:
                 try:
                     from app.private_http import buffered_response
-                    response, candidate_body = await buffered_response('GET', lambda: session.get(
-                        bootstrap_url,
-                        proxy=self.profile.proxy,
-                        headers={
-                            "Accept": (
-                                "text/html,application/xhtml+xml,"
-                                "application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+                    request_headers = {
+                        "Accept": (
+                            "text/html,application/xhtml+xml,"
+                            "application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+                        ),
+                        "Accept-Language": "en-US,en;q=0.9",
+                        "Cache-Control": "no-cache",
+                        "Pragma": "no-cache",
+                        "Sec-Fetch-Dest": "document",
+                        "Sec-Fetch-Mode": "navigate",
+                        "Sec-Fetch-Site": "none",
+                        "Sec-Fetch-User": "?1",
+                        "Upgrade-Insecure-Requests": "1",
+                    }
+                    current_url = bootstrap_url
+                    visited_urls = set()
+                    for redirect_count in range(6):
+                        if current_url in visited_urls:
+                            attempts.append(f"{bootstrap_url}: redirect loop")
+                            break
+                        visited_urls.add(current_url)
+                        restore_profile_cookies = getattr(
+                            session, "restore_profile_cookies", None
+                        )
+                        if callable(restore_profile_cookies):
+                            restore_profile_cookies()
+                        response, candidate_body = await buffered_response(
+                            "GET",
+                            lambda current_url=current_url: session.get(
+                                current_url,
+                                proxy=self.profile.proxy,
+                                headers=request_headers,
+                                allow_redirects=False,
+                                request_timeout_seconds=max(30, self.timeout_seconds),
                             ),
-                            "Accept-Language": "en-US,en;q=0.9",
-                            "Cache-Control": "no-cache",
-                            "Pragma": "no-cache",
-                            "Sec-Fetch-Dest": "document",
-                            "Sec-Fetch-Mode": "navigate",
-                            "Sec-Fetch-Site": "none",
-                            "Sec-Fetch-User": "?1",
-                            "Upgrade-Insecure-Requests": "1",
-                        },
-                        allow_redirects=True, request_timeout_seconds=max(30, self.timeout_seconds),
-                    ), 16 * 1024 * 1024 + 1, retry_read=True, reader=lambda response: response.text())
+                            16 * 1024 * 1024 + 1,
+                            retry_read=True,
+                            reader=lambda response: response.text(),
+                        )
+                        candidate_url = str(response.url)
+                        candidate_status = int(response.status)
+                        self._restore_invalid_profile_cookie_snapshot(
+                            session, actor_id
+                        )
+                        response_headers = getattr(response, "headers", {}) or {}
+                        location = str(
+                            response_headers.get("location")
+                            or response_headers.get("Location")
+                            or ""
+                        ).strip()
+                        if candidate_status not in {301, 302, 303, 307, 308} or not location:
+                            break
+                        try:
+                            next_url = urljoin(candidate_url, location)
+                            next_parts = urlsplit(next_url)
+                        except ValueError:
+                            attempts.append(f"{bootstrap_url}: invalid redirect")
+                            break
+                        next_host = str(next_parts.hostname or "").casefold()
+                        safe_facebook_redirect = (
+                            next_parts.scheme == "https"
+                            and (next_host == "facebook.com"
+                                 or next_host.endswith(".facebook.com"))
+                            and not next_parts.username
+                            and not next_parts.password
+                        )
+                        if not safe_facebook_redirect:
+                            attempts.append(f"{bootstrap_url}: non-Facebook redirect")
+                            break
+                        if next_url in visited_urls:
+                            attempts.append(f"{bootstrap_url}: redirect loop")
+                            break
+                        if redirect_count == 5:
+                            attempts.append(f"{bootstrap_url}: redirect limit")
+                            break
+                        # Restore the imported profile snapshot before each
+                        # first-party hop. Meta can shadow root auth cookies with
+                        # Set-Cookie on a redirect response.
+                        current_url = next_url
+                    else:
+                        attempts.append(f"{bootstrap_url}: redirect limit")
+                        continue
                     candidate_url = str(response.url)
                     candidate_status = int(response.status)
-                    self._restore_invalid_profile_cookie_snapshot(session, actor_id)
                     if is_business_login_gate_url(candidate_url):
                         recovered = await self._maybe_continue_business_login_gate(
                             gate_url=candidate_url, body=candidate_body,
