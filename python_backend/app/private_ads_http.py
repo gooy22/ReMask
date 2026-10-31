@@ -922,6 +922,8 @@ class AdsManagerPrivateHttp:
             metadata = dict(getattr(bootstrap, 'request_context', {}) or {})
             if callable(extract):
                 metadata.update(extract(document))
+                if sprinkle_document and not document:
+                    metadata.update(extract(sprinkle_document))
             # Match the profile sender's current-page safe envelope. Keep the
             # renewal request id fresh below; never replay a captured __req.
             for name in ('__aaid','__bid','__hs','__hblp','__hsdp','__rev','__s','__hsi',
