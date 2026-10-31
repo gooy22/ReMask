@@ -337,6 +337,8 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
     async def test_gate_renewal_uses_fresh_profile_checksum_in_ads_manager_post(self):
         page = json.loads(document())
         page["require"] = []
+        page["define"] = [row for row in page["define"]
+                          if row[0] != "CurrentUserInitialData"]
         page["define"].extend([
             ["DTSGInitialData", [], {"token": "fresh-home-dtsg"}],
             ["LSD", [], {"token": "fresh-home-lsd"}],
