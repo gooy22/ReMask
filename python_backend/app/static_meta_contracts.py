@@ -68,6 +68,14 @@ def command(operation, **bindings):
 
 
 async def execute(web, operation, *, before_submit=None, business='', variables=None, **bindings):
+    bootstrap_account_id = str(bindings.pop("bootstrap_account_id", "") or "").strip()
+    if bootstrap_account_id and (
+            operation != "READ_RK"
+            or not re.fullmatch(r"\d{5,30}", bootstrap_account_id)):
+        raise ProvisioningError(
+            'PRIVATE_STATIC_CONTRACT_ARGUMENT_INVALID',
+            'A bootstrap account hint is limited to an exact READ_RK identity.',
+        )
     if business:
         bindings["business"] = business
     row = command(operation, **bindings)
@@ -80,6 +88,8 @@ async def execute(web, operation, *, before_submit=None, business='', variables=
     log.info('[%s] static_contract operation=%s doc_id=%s revision=%s kind=%s browser_started=False',
         getattr(getattr(web, 'profile', None), 'name', ''), operation, row['doc_id'], _manifest()['revision'], row['operation_kind'])
     kwargs = {'friendly_name': row['friendly_name'], 'endpoint_url': row['endpoint_url'], 'business_context_id': business}
+    if bootstrap_account_id:
+        kwargs['business_loginpage_account_id'] = bootstrap_account_id
     if operation in {'READ_BM', 'READ_RK', 'CONFIG', 'PAGE', 'RIGHTS', 'CREATE_BM', 'CREATE_RK', 'CLAIM', 'ASSIGN'}:
         kwargs['business_loginpage_probe'] = operation
     if row['operation_kind'] == 'query' and before_submit is None:
