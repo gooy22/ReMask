@@ -733,9 +733,9 @@ class AdsManagerPrivateHttp:
                 bootstrap_client.document_url = url
                 bootstrap_client.read_only = True
                 # Keep renewal pinned to the selected Ads Manager origin and
-                # scoped Referer. The Business login-gate HTML is not an Ads Manager
-                # context document; _renew_session must use the fresh profile bootstrap.
-                context = await bootstrap_client._renew_session("")
+                # scoped Referer. Do not merge Business login-gate HTML into Ads Manager
+                # request metadata; pass it only to read the fresh SprinkleConfig checksum.
+                context = await bootstrap_client._renew_session("", sprinkle_document=body)
                 business_gate_token_renewed = True
                 gate_recovered = True
 
@@ -836,7 +836,7 @@ class AdsManagerPrivateHttp:
             log.info("ads_bootstrap scope_confirmed profile=%s source=exact_account_read", getattr(web.profile, "name", ""))
         return client
 
-    async def _renew_session(self, document):
+    async def _renew_session(self, document, *, sprinkle_document=""):
         """One cookie-authenticated native refresh, as AdsMgmtNetworkRefreshToken.
 
         No advertising write, OAuth grant, alternate actor or configured token.
@@ -883,6 +883,19 @@ class AdsManagerPrivateHttp:
                     if (isinstance(node, list) and len(node) >= 3 and isinstance(node[0], str)
                             and node[0] in configs and node[1] == [] and isinstance(node[2], dict)):
                         configs[node[0]].append(node[2])
+            # The Business login-gate response is not Ads Manager request
+            # context. Read only its fresh SprinkleConfig so jazoest can be
+            # computed from the selected profile's independently bootstrapped fb_dtsg.
+            if sprinkle_document:
+                if not isinstance(sprinkle_document, str):
+                    raise fail('SESSION_RENEWAL_CONFIG_UNAVAILABLE',
+                        'Fresh AsyncRequest checksum document is invalid')
+                for payload in _ads_document_payloads(sprinkle_document):
+                    for node in _walk(payload):
+                        if (isinstance(node, list) and len(node) >= 3
+                                and node[0] == 'SprinkleConfig' and node[1] == []
+                                and isinstance(node[2], dict)):
+                            configs['SprinkleConfig'].append(node[2])
             for module, field in (('DTSGInitialData','fb_dtsg'),('DTSGInitData','fb_dtsg'),('LSD','lsd')):
                 if configs[module]:
                     value = _unique(configs[module], 'SESSION_RENEWAL_CONFIG_UNAVAILABLE').get('token')
