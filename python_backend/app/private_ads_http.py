@@ -732,8 +732,9 @@ class AdsManagerPrivateHttp:
                 bootstrap_client.document_origin = "https://adsmanager.facebook.com"
                 bootstrap_client.document_url = url
                 bootstrap_client.read_only = True
-                # The Business login gate is not an Ads Manager CSRF document.
-                # Use only the independently actor-verified profile bootstrap.
+                # Keep the native renewal on Ads Manager's exact origin and
+                # scoped document Referer even though the document redirected
+                # to Business. Do not treat the login-page query as proof.
                 context = await bootstrap_client._renew_session(body)
                 business_gate_token_renewed = True
                 gate_recovered = True
