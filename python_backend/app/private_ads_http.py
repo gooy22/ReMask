@@ -981,7 +981,8 @@ class AdsManagerPrivateHttp:
                                 and isinstance(node[2], dict)):
                             configs['SprinkleConfig'].append(node[2])
             # Some first responses carry the already-computed AsyncRequest
-            # checksum as an HTML input instead of defining SprinkleConfig.
+            # checksum as an HTML input or literal JSON instead of defining
+            # SprinkleConfig.
             # Read it together with its CSRF token from that *same* response;
             # a checksum from a different page cannot describe this POST body.
             from html.parser import HTMLParser
@@ -1005,6 +1006,18 @@ class AdsManagerPrivateHttp:
                     continue
                 parser = _ResponseFields()
                 parser.feed(source)
+                for payload in _ads_document_payloads(source):
+                    for node in _walk(payload):
+                        if not isinstance(node, dict):
+                            continue
+                        csrf, checksum = node.get('fb_dtsg'), node.get('jazoest')
+                        if (isinstance(csrf, str) and 1 <= len(csrf) <= 4096
+                                and isinstance(checksum, str)
+                                and re.fullmatch(r'[0-9]{3,12}', checksum)):
+                            parser.values['fb_dtsg'].add(csrf)
+                            parser.values['jazoest'].add(checksum)
+                            if isinstance(node.get('lsd'), str) and node['lsd']:
+                                parser.values['lsd'].add(node['lsd'])
                 response_fields.append((label, parser.values))
             checksum_source = "document" if document else "gate"
             for module, field in (('DTSGInitialData','fb_dtsg'),('DTSGInitData','fb_dtsg'),('LSD','lsd')):
@@ -1039,13 +1052,15 @@ class AdsManagerPrivateHttp:
                         form['jazoest'] = next(iter(fields['jazoest']))
                         if len(fields['lsd']) == 1:
                             form['lsd'] = next(iter(fields['lsd']))
-                        checksum_source = label + '_input'
+                        checksum_source = label + '_literal'
                         break
             log.info("ads_session_renewal_checksum profile=%s source=%s config_present=%s "
-                "input_pair_present=%s checksum_present=%s",
+                "response_pair_present=%s checksum_marker_present=%s checksum_present=%s",
                 self._profile_name, checksum_source, bool(configs['SprinkleConfig']),
                 any(len(fields['fb_dtsg']) == len(fields['jazoest']) == 1
-                    for _, fields in response_fields), bool(form.get('jazoest')))
+                    for _, fields in response_fields),
+                any('jazoest' in source for source in (document, sprinkle_document) if source),
+                bool(form.get('jazoest')))
             if sprinkle_document and not form.get('jazoest'):
                 raise fail('SESSION_RENEWAL_CONFIG_UNAVAILABLE',
                     'Current Meta response did not provide a verified jazoest checksum')

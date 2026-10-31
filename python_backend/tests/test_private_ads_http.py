@@ -389,6 +389,31 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
             "PRIVATE_ADS_DRAFT_SESSION_RENEWAL_CONFIG_UNAVAILABLE")
         self.assertEqual(self.web.session.calls, [])
 
+    async def test_gate_renewal_uses_literal_json_pair_from_primary_response(self):
+        self.web.bootstrap = AsyncMock(return_value=SimpleNamespace(
+            actor_id="123456", fb_dtsg="older-bootstrap-dtsg",
+            request_context={}))
+        calls = []
+
+        @asynccontextmanager
+        async def request(method, url, **options):
+            calls.append((method, url, options))
+            payload = {'payload': {'access_token': 'fresh-renewed-session',
+                                   'client_id': self.client.context.application_id}}
+            yield SimpleNamespace(http_version='HTTP/2', status=200,
+                content=Body(('for (;;);' + json.dumps(payload)).encode()))
+
+        self.web.session.request = request
+        response = ('<script type="application/json">' + json.dumps({
+            'csrf': {'fb_dtsg': 'response-dtsg', 'jazoest': '212345',
+                     'lsd': 'response-lsd'}}) + '</script>')
+        renewed = await self.client._renew_session('', sprinkle_document=response)
+        self.assertEqual(renewed.access_token, 'fresh-renewed-session')
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][2]['data']['fb_dtsg'], 'response-dtsg')
+        self.assertEqual(calls[0][2]['data']['jazoest'], '212345')
+        self.assertEqual(calls[0][2]['headers']['X-FB-LSD'], 'response-lsd')
+
     async def test_session_renewal_never_retries_meta_rejection_or_accepts_wrong_client(self):
         payload = json.loads(document());payload['require'] = []
         async def missing(url, **kwargs):return 200, json.dumps(payload), url
