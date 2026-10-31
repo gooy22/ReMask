@@ -334,6 +334,48 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
             "PRIVATE_ADS_DRAFT_SESSION_RENEWAL_CONFIG_UNAVAILABLE")
         self.assertEqual(self.web.session.calls, [])
 
+    async def test_gate_renewal_uses_fresh_profile_checksum_in_ads_manager_post(self):
+        page = json.loads(document())
+        page["require"] = []
+        page["define"].extend([
+            ["DTSGInitialData", [], {"token": "fresh-home-dtsg"}],
+            ["LSD", [], {"token": "fresh-home-lsd"}],
+            ["SprinkleConfig", [], {"param_name": "jazoest",
+                                    "version": 2, "should_randomize": False}],
+        ])
+        self.web.bootstrap = AsyncMock(return_value=SimpleNamespace(
+            actor_id="123456", fb_dtsg="previous-home-dtsg",
+            lsd="previous-home-lsd", request_context={},
+            source_url="https://www.facebook.com/"))
+        self.web.fetch_text = AsyncMock(return_value=(
+            200, json.dumps(page), "https://www.facebook.com/"))
+        calls = []
+
+        @asynccontextmanager
+        async def request(method, url, **options):
+            calls.append((method, url, options))
+            payload = {"payload": {"access_token": "fresh-renewed-session",
+                "client_id": self.client.context.application_id}}
+            yield SimpleNamespace(http_version="HTTP/2", status=200,
+                content=Body(("for (;;);" + json.dumps(payload)).encode()))
+
+        self.web.session.request = request
+        renewed = await self.client._renew_session(
+            "", sprinkle_document="<html>Business login gate</html>")
+        self.assertEqual(renewed.access_token, "fresh-renewed-session")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][1],
+            "https://adsmanager.facebook.com/ads/manager/ajax/renew_access_token/")
+        self.assertEqual(calls[0][2]["headers"]["Origin"],
+            "https://adsmanager.facebook.com")
+        self.assertEqual(calls[0][2]["data"]["fb_dtsg"], "fresh-home-dtsg")
+        self.assertEqual(calls[0][2]["data"]["lsd"], "fresh-home-lsd")
+        self.assertEqual(calls[0][2]["data"]["jazoest"],
+            "2" + str(sum(map(ord, "fresh-home-dtsg"))))
+        self.web.fetch_text.assert_awaited_once_with(
+            "https://www.facebook.com/", max_bytes=5_000_001,
+            document_navigation=True, retry_timeout=False)
+
     async def test_session_renewal_never_retries_meta_rejection_or_accepts_wrong_client(self):
         payload = json.loads(document());payload['require'] = []
         async def missing(url, **kwargs):return 200, json.dumps(payload), url
