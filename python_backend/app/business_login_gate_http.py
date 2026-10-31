@@ -371,7 +371,37 @@ async def _request_facebook(
     last_url = url
     last_body = ""
     last_headers: dict[str, str] = {}
-    for _ in range(4):
+    restore_profile_cookies = getattr(session, "restore_profile_cookies", None)
+    profile_cookie_snapshot = getattr(session, "_profile_cookies", None)
+    profile_cookies = getattr(profile, "cookies", {})
+    expected_actor_id = str(profile_cookies.get("c_user") or "")
+    expected_xs = (
+        str(profile_cookie_snapshot.get("xs") or "").strip()
+        if isinstance(profile_cookie_snapshot, dict)
+        else str(profile_cookies.get("xs") or "").strip()
+    )
+    for hop in range(4):
+        # The caller checked the selected actor and xs before this first request.
+        # A same-profile Facebook response can change the cookie jar; before a
+        # subsequent redirect hop, restore only if that jar no longer matches
+        # the selected profile snapshot.
+        if hop > 0:
+            current_cookies = session.facebook_cookie_snapshot()
+            if (
+                not expected_actor_id
+                or not expected_xs
+                or str(current_cookies.get("c_user") or "") != expected_actor_id
+                or str(current_cookies.get("xs") or "").strip() != expected_xs
+            ):
+                if not callable(restore_profile_cookies):
+                    return 0, current_url, "", {}
+                restore_profile_cookies()
+                current_cookies = session.facebook_cookie_snapshot()
+                if (
+                    str(current_cookies.get("c_user") or "") != expected_actor_id
+                    or str(current_cookies.get("xs") or "").strip() != expected_xs
+                ):
+                    return 0, current_url, "", {}
         headers = {
             "User-Agent": str(profile.user_agent or ""),
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
