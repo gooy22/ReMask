@@ -851,8 +851,8 @@ class AdsManagerPrivateHttp:
             await refresh(body, final_url)
         client = cls(web, context)
         if business_gate_token_renewed:
-            client.document_origin = bootstrap_client.document_origin
-            client.document_url = bootstrap_client.document_url
+            client.document_origin = "https://adsmanager.facebook.com"
+            client.document_url = url
         else:
             client.document_origin = final.scheme + '://' + final.hostname
         if not account_matches:
@@ -913,38 +913,6 @@ class AdsManagerPrivateHttp:
                     or bootstrap.actor_id != self.context.actor_id
                     or not isinstance(bootstrap.fb_dtsg, str) or not bootstrap.fb_dtsg):
                 raise fail("PROFILE_CONTEXT_UNAVAILABLE", "Session renewal requires the selected profile actor")
-            # A Business login gate is not an Ads Manager document. When the
-            # selected profile bootstraps from a different first-party page,
-            # bind AsyncRequest's Origin, Referer, Sec-Fetch and CSRF data to
-            # a fresh, actor-confirmed document from that actual page.
-            source_bound = False
-            if not document:
-                source_url = str(getattr(bootstrap, "source_url", "") or "")
-                source = urlsplit(source_url)
-                if (source.scheme == "https"
-                        and ((source.hostname == "www.facebook.com" and source.path == "/")
-                             or (source.hostname == "business.facebook.com"
-                                 and source.path in {"/latest/home", "/latest/home/"}))):
-                    status, fresh_document, final_url = await self.web.fetch_text(
-                        source_url, max_bytes=5_000_001, document_navigation=True,
-                        retry_timeout=False)
-                    final = urlsplit(final_url)
-                    evidence = _bootstrap_evidence(final_url, fresh_document,
-                        self.web.profile, self.context.actor_id)
-                    if (status != 200 or final.scheme != "https"
-                            or final.hostname != source.hostname
-                            or evidence["document_actor"] != "matches"
-                            or evidence["path_gate"] != "none"
-                            or evidence["login_form"]):
-                        raise fail("SESSION_RENEWAL_CONFIG_UNAVAILABLE",
-                            "The profile bootstrap source did not confirm its actor")
-                    document = fresh_document
-                    sprinkle_document = ""
-                    self.document_origin = final.scheme + "://" + final.hostname
-                    self.document_url = final_url
-                    source_bound = True
-                    log.info("ads_session_renewal source_confirmed profile=%s host=%s",
-                        self._profile_name, final.hostname)
             session = await self.web._ensure_session()
             if session.proxy != self._profile_proxy:
                 raise fail("PROFILE_CONTEXT_UNAVAILABLE", "Session renewal route changed")
@@ -988,6 +956,31 @@ class AdsManagerPrivateHttp:
                                 and node[0] == 'SprinkleConfig' and node[1] == []
                                 and isinstance(node[2], dict)):
                             configs['SprinkleConfig'].append(node[2])
+            # ServerJS can embed module tuples inside a JavaScript script instead
+            # of exposing a standalone JSON script or s.handle(...) payload.
+            # Decode only the exact current-response SprinkleConfig tuple. The
+            # strict decoder rejects duplicate keys and non-finite values.
+            from html import unescape
+            decoder = _strict_json_decoder()
+            sprinkle_tuple = re.compile(
+                r'\[\s*"SprinkleConfig"\s*,\s*\[\s*\]\s*,\s*\{'
+            for source in (document, sprinkle_document):
+                if not source:
+                    continue
+                for script_match in _JSON_SCRIPT_RE.finditer(source):
+                    script = unescape(script_match.group(1))
+                    for match in sprinkle_tuple.finditer(script):
+                        try:
+                            node, _ = decoder.raw_decode(script, match.start())
+                        except (ValueError, RecursionError):
+                            continue
+                        if (isinstance(node, list) and len(node) == 3
+                                and node[0] == 'SprinkleConfig' and node[1] == []
+                                and isinstance(node[2], dict)):
+                            configs['SprinkleConfig'].append(node[2])
+            log.info("ads_session_renewal_checksum profile=%s source=%s config_present=%s",
+                self._profile_name, "document" if document else "gate",
+                bool(configs['SprinkleConfig']))
             for module, field in (('DTSGInitialData','fb_dtsg'),('DTSGInitData','fb_dtsg'),('LSD','lsd')):
                 if configs[module]:
                     value = _unique(configs[module], 'SESSION_RENEWAL_CONFIG_UNAVAILABLE').get('token')
@@ -1005,6 +998,9 @@ class AdsManagerPrivateHttp:
                 units = form['fb_dtsg'].encode('utf-16-le', errors='surrogatepass')
                 total = sum(units[i] + 256 * units[i+1] for i in range(0,len(units),2))
                 form['jazoest'] = ('' if sprinkle['should_randomize'] else str(version)) + str(total)
+            if sprinkle_document and not form.get('jazoest'):
+                raise fail('SESSION_RENEWAL_CONFIG_UNAVAILABLE',
+                    'Current Meta response did not provide a verified jazoest checksum')
             headers = {"Accept":"application/json", "Origin":self.document_origin,
                        "Referer":self.document_url, "Sec-Fetch-Dest":"empty",
                        "Sec-Fetch-Mode":"cors", "Sec-Fetch-Site":"same-origin"}
@@ -1041,7 +1037,6 @@ class AdsManagerPrivateHttp:
             if not isinstance(result, dict) or "error" in result or "errors" in result:
                 initial_code = result.get("error") if isinstance(result, dict) else None
                 if ((primary_transport_failure or initial_code == 1357001)
-                        and not source_bound
                         and self.document_origin != "https://business.facebook.com"):
                     # Retry the same read-only renewal on Business when the
                     # selected Ads Manager host rejects it or the profile proxy
@@ -1120,8 +1115,7 @@ class AdsManagerPrivateHttp:
                                 self._profile_name)
             if not isinstance(result, dict) or "error" in result or "errors" in result:
                 code = result.get("error") if isinstance(result, dict) else None
-                if (code == 1357001 and not source_bound
-                        and self.document_origin != "https://www.facebook.com"):
+                if code == 1357001 and self.document_origin != "https://www.facebook.com":
                     # The profile homepage confirms the same actor on www.facebook.com.
                     # Try Meta's native renewal there once; this still grants only a
                     # session token, and the exact account + Business READ below stays
