@@ -318,6 +318,19 @@ async def private_inventory_snapshot(
     """
 
     started = time.monotonic()
+
+    async def restore_invalid_profile_auth_snapshot():
+        # The bounded static READ can be cancelled while a response body is being
+        # read. Meta may already have applied Set-Cookie to this shared session;
+        # restore the selected profile before the read-only HTML fallback uses it.
+        profile = getattr(web, "profile", None)
+        cookies = getattr(profile, "cookies", {})
+        actor_id = str(cookies.get("c_user") or "").strip() if isinstance(cookies, dict) else ""
+        ensure_session = getattr(web, "_ensure_session", None)
+        restore_invalid = getattr(web, "_restore_invalid_profile_cookie_snapshot", None)
+        if actor_id.isdigit() and callable(ensure_session) and callable(restore_invalid):
+            restore_invalid(await ensure_session(), actor_id)
+
     diagnostics: list[dict[str, Any]] = []
     businesses: dict[str, str] = {}
     discovery_complete = False
@@ -353,6 +366,7 @@ async def private_inventory_snapshot(
     ) if discover_businesses and not fast_sync and not discovery_complete and not discovery_auth_blocked else ()
     for url in discovery_urls:
         try:
+            await restore_invalid_profile_auth_snapshot()
             payloads, diag = await _fetch_payloads(web, url, refresh_modules=not fast_sync)
         except Exception as exc:
             from .private_transport_error import private_transport_error
@@ -507,6 +521,7 @@ async def private_inventory_snapshot(
             ])
         for url in ([] if static_verified else urls):
             try:
+                await restore_invalid_profile_auth_snapshot()
                 payloads, diag = await _fetch_payloads(web, url, refresh_modules=not fast_sync)
             except Exception as exc:
                 from .private_transport_error import private_transport_error
