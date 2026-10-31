@@ -1467,7 +1467,9 @@ class FacebookWebSession:
         try:
             from app.private_http import buffered_response
             current_url = target
-            manual_facebook_redirects = ads_manager_bootstrap or document_request
+            manual_facebook_redirects = document_request or (
+                facebook_host and parts.path == "/adsmanager/manage/campaigns"
+            )
             redirect_limit = 5 if manual_facebook_redirects else 0
             for redirect_count in range(redirect_limit + 1):
                 response, raw = await buffered_response(
@@ -1516,10 +1518,9 @@ class FacebookWebSession:
                         transport_stage="fetch_redirect",
                     )
 
-                # HTTPX applies response Set-Cookie headers before its automatic
-                # redirect. A Business login gate can therefore clear/shadow the
-                # imported actor cookies before the next hop. Restore the same
-                # profile snapshot before each bounded Facebook-only redirect.
+                # Keep Facebook document redirects explicit: a response can change the
+                # shared cookie jar before an automatic next hop. Restore the
+                # selected profile snapshot before each bounded same-site request.
                 session.restore_profile_cookies()
                 current_url = next_url
 
