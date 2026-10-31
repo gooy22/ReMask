@@ -1380,11 +1380,62 @@ class FacebookWebSession:
 
         try:
             from app.private_http import buffered_response
-            response, raw = await buffered_response('GET', lambda: session.get(
-                target, proxy=self.profile.proxy, headers=request_headers,
-                allow_redirects=True, **({'request_timeout_seconds':max(30, self.timeout_seconds)}
-                    if document_request else {})), max(1, int(max_bytes)) + 1,
-                retry_read=document_request, retry_timeout=retry_timeout)
+            current_url = target
+            redirect_limit = 5 if ads_manager_bootstrap else 0
+            for redirect_count in range(redirect_limit + 1):
+                response, raw = await buffered_response(
+                    "GET",
+                    lambda: session.get(
+                        current_url,
+                        proxy=self.profile.proxy,
+                        headers=request_headers,
+                        allow_redirects=not ads_manager_bootstrap,
+                        **(
+                            {"request_timeout_seconds": max(30, self.timeout_seconds)}
+                            if document_request else {}
+                        ),
+                    ),
+                    max(1, int(max_bytes)) + 1,
+                    retry_read=document_request,
+                    retry_timeout=retry_timeout,
+                )
+                if not ads_manager_bootstrap or response.status not in {
+                    301, 302, 303, 307, 308,
+                }:
+                    break
+
+                location = str(response.headers.get("Location") or "").strip()
+                if not location:
+                    break
+                if redirect_count >= redirect_limit:
+                    raise RemoteRequestError(
+                        "Facebook document exceeded its redirect limit",
+                        meta_payload={"redirect_limit": redirect_limit},
+                        request_may_have_been_sent=True,
+                        transport_stage="fetch_redirect",
+                    )
+
+                next_url = urljoin(str(response.url), location)
+                next_parts = urlsplit(next_url)
+                next_host = str(next_parts.hostname or "").lower()
+                if (
+                    next_parts.scheme != "https"
+                    or (next_host != "facebook.com" and not next_host.endswith(".facebook.com"))
+                ):
+                    raise RemoteRequestError(
+                        "Facebook document redirect was blocked",
+                        meta_payload={"redirect_blocked": True},
+                        request_may_have_been_sent=True,
+                        transport_stage="fetch_redirect",
+                    )
+
+                # HTTPX applies response Set-Cookie headers before its automatic
+                # redirect. A Business login gate can therefore clear/shadow the
+                # imported actor cookies before the next hop. Restore the same
+                # profile snapshot before each bounded Facebook-only redirect.
+                session.restore_profile_cookies()
+                current_url = next_url
+
             if len(raw) > max_bytes:
                 raw = raw[:max_bytes]
 
