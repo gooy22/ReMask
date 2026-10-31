@@ -372,12 +372,33 @@ async def _request_facebook(
     last_body = ""
     last_headers: dict[str, str] = {}
     restore_profile_cookies = getattr(session, "restore_profile_cookies", None)
+    profile_cookie_snapshot = getattr(session, "_profile_cookies", None)
+    expected_actor_id = str(getattr(profile, "cookies", {}).get("c_user") or "")
+    expected_xs = (
+        str(profile_cookie_snapshot.get("xs") or "").strip()
+        if isinstance(profile_cookie_snapshot, dict)
+        else ""
+    )
     for _ in range(4):
-        # Meta can clear or shadow the imported actor cookies on a handoff
-        # redirect. Match the bootstrap redirect loop: every bounded hop uses
-        # the same selected profile snapshot and remains on Facebook.
-        if callable(restore_profile_cookies):
+        # A handoff redirect may clear or shadow the imported actor cookies.
+        # Restore the same selected profile snapshot only when this hop's
+        # current cookie jar no longer matches that snapshot.
+        current_cookies = session.facebook_cookie_snapshot()
+        if (
+            not expected_actor_id
+            or not expected_xs
+            or str(current_cookies.get("c_user") or "") != expected_actor_id
+            or str(current_cookies.get("xs") or "").strip() != expected_xs
+        ):
+            if not callable(restore_profile_cookies):
+                return 0, current_url, "", {}
             restore_profile_cookies()
+            current_cookies = session.facebook_cookie_snapshot()
+            if (
+                str(current_cookies.get("c_user") or "") != expected_actor_id
+                or str(current_cookies.get("xs") or "").strip() != expected_xs
+            ):
+                return 0, current_url, "", {}
         headers = {
             "User-Agent": str(profile.user_agent or ""),
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
