@@ -373,11 +373,12 @@ async def _request_facebook(
     last_headers: dict[str, str] = {}
     restore_profile_cookies = getattr(session, "restore_profile_cookies", None)
     profile_cookie_snapshot = getattr(session, "_profile_cookies", None)
-    expected_actor_id = str(getattr(profile, "cookies", {}).get("c_user") or "")
+    profile_cookies = getattr(profile, "cookies", {})
+    expected_actor_id = str(profile_cookies.get("c_user") or "")
     expected_xs = (
         str(profile_cookie_snapshot.get("xs") or "").strip()
         if isinstance(profile_cookie_snapshot, dict)
-        else ""
+        else str(profile_cookies.get("xs") or "").strip()
     )
     for _ in range(4):
         # A handoff redirect may clear or shadow the imported actor cookies.
