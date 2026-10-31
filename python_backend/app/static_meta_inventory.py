@@ -117,7 +117,10 @@ async def read_ad_account_inventory(web, business, name, expected=''):
     begin = getattr(web, 'begin_business_read_verification', None)
     if callable(begin):
         begin('READ_RK', business)
-    payload = await execute(web, 'READ_RK', business=business)
+    payload = await execute(
+        web, 'READ_RK', business=business,
+        bootstrap_account_id=identity(expected),
+    )
     diag = diagnostic('READ_RK', payload)
     normalized = _normalize_connected_inventory([payload], business)
     observations, accounts, conflicting_aliases = [], {}, set()
