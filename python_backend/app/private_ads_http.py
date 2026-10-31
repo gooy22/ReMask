@@ -732,10 +732,10 @@ class AdsManagerPrivateHttp:
                 bootstrap_client.document_origin = "https://adsmanager.facebook.com"
                 bootstrap_client.document_url = url
                 bootstrap_client.read_only = True
-                # Keep the native renewal on Ads Manager's exact origin and
-                # scoped document Referer even though the document redirected
-                # to Business. Do not treat the login-page query as proof.
-                context = await bootstrap_client._renew_session(body)
+                # Keep renewal pinned to the selected Ads Manager origin and
+                # scoped Referer. The Business login-gate HTML is not an Ads Manager
+                # context document; _renew_session must use the fresh profile bootstrap.
+                context = await bootstrap_client._renew_session("")
                 business_gate_token_renewed = True
                 gate_recovered = True
 
