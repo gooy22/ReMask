@@ -972,7 +972,31 @@ class FacebookWebSession:
         allow_business_loginpage_probe: bool = False,
         require_actor_match: bool = True,
         prefer_business_home: bool = False,
+        business_loginpage_return_url: str = "",
     ) -> FacebookBootstrap:
+
+        business_loginpage_return_url = str(business_loginpage_return_url or "").strip()
+        if business_loginpage_return_url:
+            parts = urlsplit(business_loginpage_return_url)
+            params = parse_qs(parts.query)
+            account_ids = params.get("act", [])
+            business_ids = params.get("business_id", [])
+            if (
+                parts.scheme != "https"
+                or parts.netloc != "adsmanager.facebook.com"
+                or parts.path != "/adsmanager/manage/campaigns"
+                or parts.fragment
+                or set(params) != {"act", "business_id"}
+                or len(account_ids) != 1
+                or len(business_ids) != 1
+                or not re.fullmatch(r"\d{5,30}", account_ids[0])
+                or not re.fullmatch(r"\d{5,30}", business_ids[0])
+            ):
+                raise RemoteRequestError(
+                    "Read-only Business handoff scope is invalid.",
+                    request_may_have_been_sent=False,
+                    transport_stage="business_auth_precheck",
+                )
 
         if (allow_business_loginpage_probe and self._bootstrap is not None
                 and not self._bootstrap.profile_actor_verified):
@@ -1144,7 +1168,7 @@ class FacebookWebSession:
                     if is_business_login_gate_url(candidate_url):
                         recovered = await self._maybe_continue_business_login_gate(
                             gate_url=candidate_url, body=candidate_body,
-                            return_url=bootstrap_url,
+                            return_url=business_loginpage_return_url or bootstrap_url,
                         )
                         if recovered:
                             candidate_status = int(recovered["status"])
@@ -2200,6 +2224,7 @@ class FacebookWebSession:
         business_context_id: str,
         business_loginpage_probe: str,
         read_timeout_seconds: float | None,
+        business_loginpage_account_id: str = "",
         before_submit: Any | None = None,
         private_inventory_query_contract: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
@@ -2257,6 +2282,7 @@ class FacebookWebSession:
                     business_context_id=business_context_id,
                     read_timeout_seconds=read_timeout_seconds,
                     business_loginpage_probe=business_loginpage_probe,
+                    business_loginpage_account_id=business_loginpage_account_id,
                     private_inventory_query_contract=private_inventory_query_contract,
                 )
                 client = previous.session
@@ -2327,6 +2353,7 @@ class FacebookWebSession:
         multipart_files: dict[str, Any] | None = None,
         read_timeout_seconds: float | None = None,
         business_loginpage_probe: str = "",
+        business_loginpage_account_id: str = "",
         private_inventory_query_contract: dict[str, Any] | None = None,
         profile_bootstrap_read_only: bool = False,
     ) -> dict[str, Any]:
@@ -2381,6 +2408,29 @@ class FacebookWebSession:
             read_timeout_seconds=read_timeout_seconds,
             private_inventory_query_contract=private_inventory_query_contract,
         )
+        business_loginpage_account_id = str(business_loginpage_account_id or "").strip()
+        scoped_ads_manager_return_url = ""
+        if business_loginpage_account_id:
+            scoped_business_id = str(business_context_id or "").strip()
+            if (
+                scoped_probe != "READ_RK"
+                or endpoint != self.GRAPHQL_URL
+                or not re.fullmatch(r"\d{5,30}", scoped_business_id)
+                or not re.fullmatch(r"\d{5,30}", business_loginpage_account_id)
+                or request_envelope is not None
+                or before_submit is not None
+                or multipart_files is not None
+                or not str(friendly_name or "").strip().endswith("Query")
+            ):
+                raise RemoteRequestError(
+                    "Exact account handoff scope is limited to a read-only READ_RK query.",
+                    request_may_have_been_sent=False,
+                    transport_stage="business_auth_precheck",
+                )
+            scoped_ads_manager_return_url = (
+                "https://adsmanager.facebook.com/adsmanager/manage/campaigns"
+                f"?act={business_loginpage_account_id}&business_id={scoped_business_id}"
+            )
         page_create_prechecked = False
         try:
             if scoped_probe:
@@ -2408,7 +2458,9 @@ class FacebookWebSession:
                     # Replacing it with a generic /me token before each exact
                     # Business request breaks the session context used by the
                     # successful prechecks and by the following CREATE.
-                    bootstrap = await self.bootstrap()
+                    bootstrap = await self.bootstrap(
+                        business_loginpage_return_url=scoped_ads_manager_return_url,
+                    )
                 else:
                     bootstrap = await self.bootstrap(
                         allow_business_loginpage_probe=True,
@@ -2484,6 +2536,7 @@ class FacebookWebSession:
                     business_context_id=business_context_id,
                     business_loginpage_probe=business_loginpage_probe,
                     read_timeout_seconds=read_timeout_seconds,
+                    business_loginpage_account_id=business_loginpage_account_id,
                     before_submit=before_submit,
                     private_inventory_query_contract=private_inventory_query_contract,
                 )
@@ -2760,6 +2813,7 @@ class FacebookWebSession:
                     business_context_id=business_context_id,
                     business_loginpage_probe=business_loginpage_probe,
                     read_timeout_seconds=read_timeout_seconds,
+                    business_loginpage_account_id=business_loginpage_account_id,
                     before_submit=before_submit,
                     private_inventory_query_contract=private_inventory_query_contract,
                 )
