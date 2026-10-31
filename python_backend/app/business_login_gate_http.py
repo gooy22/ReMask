@@ -371,7 +371,13 @@ async def _request_facebook(
     last_url = url
     last_body = ""
     last_headers: dict[str, str] = {}
+    restore_profile_cookies = getattr(session, "restore_profile_cookies", None)
     for _ in range(4):
+        # Meta can clear or shadow the imported actor cookies on a handoff
+        # redirect. Match the bootstrap redirect loop: every bounded hop uses
+        # the same selected profile snapshot and remains on Facebook.
+        if callable(restore_profile_cookies):
+            restore_profile_cookies()
         headers = {
             "User-Agent": str(profile.user_agent or ""),
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
