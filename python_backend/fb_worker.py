@@ -1467,7 +1467,8 @@ class FacebookWebSession:
         try:
             from app.private_http import buffered_response
             current_url = target
-            redirect_limit = 5 if ads_manager_bootstrap else 0
+            manual_facebook_redirects = ads_manager_bootstrap or document_request
+            redirect_limit = 5 if manual_facebook_redirects else 0
             for redirect_count in range(redirect_limit + 1):
                 response, raw = await buffered_response(
                     "GET",
@@ -1475,7 +1476,7 @@ class FacebookWebSession:
                         current_url,
                         proxy=self.profile.proxy,
                         headers=request_headers,
-                        allow_redirects=not ads_manager_bootstrap,
+                        allow_redirects=not manual_facebook_redirects,
                         **(
                             {"request_timeout_seconds": max(30, self.timeout_seconds)}
                             if document_request else {}
@@ -1485,7 +1486,7 @@ class FacebookWebSession:
                     retry_read=document_request,
                     retry_timeout=retry_timeout,
                 )
-                if not ads_manager_bootstrap or response.status not in {
+                if not manual_facebook_redirects or response.status not in {
                     301, 302, 303, 307, 308,
                 }:
                     break
