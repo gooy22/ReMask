@@ -2458,9 +2458,12 @@ class FacebookWebSession:
                     # Replacing it with a generic /me token before each exact
                     # Business request breaks the session context used by the
                     # successful prechecks and by the following CREATE.
-                    bootstrap = await self.bootstrap(
-                        business_loginpage_return_url=scoped_ads_manager_return_url,
-                    )
+                    if scoped_ads_manager_return_url:
+                        bootstrap = await self.bootstrap(
+                            business_loginpage_return_url=scoped_ads_manager_return_url,
+                        )
+                    else:
+                        bootstrap = await self.bootstrap()
                 else:
                     bootstrap = await self.bootstrap(
                         allow_business_loginpage_probe=True,
