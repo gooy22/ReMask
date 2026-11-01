@@ -997,8 +997,15 @@ class AdsManagerPrivateHttp:
             # are still pinned by _profile_matches(), and no write is enabled yet.
             bootstrap = await self.web.bootstrap()
             session = await self.web._ensure_session()
-            self.web._restore_profile_cookie_snapshot_if_lost(
-                session, stage="session_renewal_bootstrap")
+            restore_cookie_snapshot = getattr(
+                self.web, "_restore_profile_cookie_snapshot_if_lost", None)
+            if callable(restore_cookie_snapshot):
+                restore_cookie_snapshot(session, stage="session_renewal_bootstrap")
+            def response_cookie_guard(stage):
+                if not callable(restore_cookie_snapshot):
+                    return {}
+                return {"cookie_jar_guard": lambda: restore_cookie_snapshot(
+                    session, stage=stage)}
             if (not self._profile_matches()
                     or bootstrap.actor_id != self.context.actor_id
                     or not isinstance(bootstrap.fb_dtsg, str) or not bootstrap.fb_dtsg):
@@ -1166,8 +1173,7 @@ class AdsManagerPrivateHttp:
             try:
                 async with session.request("POST", self.document_origin + "/ads/manager/ajax/renew_access_token/",
                         data=form, headers=headers, allow_redirects=False, request_timeout_seconds=30,
-                        cookie_jar_guard=lambda: self.web._restore_profile_cookie_snapshot_if_lost(
-                            session, stage="session_renewal_response_headers")) as response:
+                        **response_cookie_guard("session_renewal_response_headers")) as response:
                     if response.http_version != "HTTP/2":
                         raise fail("PROTOCOL_UNAVAILABLE", "Session renewal requires HTTP/2")
                     raw = await response.content.read(2_000_001)
@@ -1238,8 +1244,7 @@ class AdsManagerPrivateHttp:
                                 business_origin + "/ads/manager/ajax/renew_access_token/",
                                 data=form, headers=business_headers, allow_redirects=False,
                                 request_timeout_seconds=30,
-                                cookie_jar_guard=lambda: self.web._restore_profile_cookie_snapshot_if_lost(
-                                    session, stage="business_renewal_response_headers")) as response:
+                                **response_cookie_guard("business_renewal_response_headers")) as response:
                             if response.http_version != "HTTP/2":
                                 raise fail("PROTOCOL_UNAVAILABLE",
                                     "Business-host session renewal requires HTTP/2")
@@ -1319,8 +1324,7 @@ class AdsManagerPrivateHttp:
                             www_origin + "/ads/manager/ajax/renew_access_token/",
                             data=form, headers=www_headers, allow_redirects=False,
                             request_timeout_seconds=30,
-                            cookie_jar_guard=lambda: self.web._restore_profile_cookie_snapshot_if_lost(
-                                session, stage="www_renewal_response_headers")) as response:
+                            **response_cookie_guard("www_renewal_response_headers")) as response:
                         if response.http_version != "HTTP/2":
                             raise fail("PROTOCOL_UNAVAILABLE",
                                 "www-host session renewal requires HTTP/2")
@@ -1422,13 +1426,17 @@ class AdsManagerPrivateHttp:
             def validate_protocol(response):
                 if response.http_version != "HTTP/2":
                     raise fail("PROTOCOL_UNAVAILABLE", "Advertising origin did not negotiate HTTP/2", True)
+            response_cookie_guard = getattr(
+                self.web, "_restore_profile_cookie_snapshot_if_lost", None)
             def open_response():
                 if not self._profile_matches() or session.proxy != self._profile_proxy:
                     raise fail("PROFILE_CONTEXT_UNAVAILABLE", "Advertising profile changed before dispatch", True)
+                request_options = {"request_timeout_seconds": 300 if files else 60}
+                if callable(response_cookie_guard):
+                    request_options["cookie_jar_guard"] = lambda: response_cookie_guard(
+                        session, stage="ads_api_response_headers")
                 return session.request(method, url, headers=headers, allow_redirects=False,
-                    request_timeout_seconds=300 if files else 60,
-                    cookie_jar_guard=lambda: self.web._restore_profile_cookie_snapshot_if_lost(
-                        session, stage="ads_api_response_headers"), **options)
+                    **request_options, **options)
             response, raw = await buffered_response(method, open_response,
                 2_000_001, retry_read=method == 'GET', validate=validate_protocol)
             if len(raw) > 2_000_000:

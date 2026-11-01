@@ -1406,21 +1406,13 @@ class FacebookWebSession:
         read_snapshot = getattr(session, "facebook_cookie_snapshot", None)
         restore = getattr(session, "restore_profile_cookies", None)
         if not isinstance(saved, dict) or not saved or not callable(read_snapshot):
-            raise RemoteRequestError(
-                "Facebook profile cookie snapshot is unavailable",
-                request_may_have_been_sent=True,
-                transport_stage="fetch_cookie_restore",
-            )
+            return False
         actor = str(saved.get("c_user") or "")
         xs = str(saved.get("xs") or "")
         # The persisted snapshot must contain both session identity cookies before
         # it can serve as a safe rollback point.
         if not actor or not xs:
-            raise RemoteRequestError(
-                "Facebook profile cookie snapshot is unavailable",
-                request_may_have_been_sent=True,
-                transport_stage="fetch_cookie_restore",
-            )
+            return False
         current = read_snapshot()
         if not isinstance(current, dict):
             current = {}
