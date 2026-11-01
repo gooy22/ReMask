@@ -242,6 +242,9 @@ class PrivateHttpClient:
         if requested_proxy != self.proxy:
             raise httpx.ProxyError("Private request cannot change profile proxy")
         redirects = kwargs.pop("allow_redirects", False)
+        cookie_jar_guard = kwargs.pop("cookie_jar_guard", None)
+        if cookie_jar_guard is not None and not callable(cookie_jar_guard):
+            raise TypeError("cookie_jar_guard must be callable")
         request_budget = kwargs.pop("request_timeout_seconds", self.timeout_seconds)
         request_budget = max(0.001, min(float(request_budget), 300.0))
         if request_budget != self.timeout_seconds:
@@ -276,6 +279,8 @@ class PrivateHttpClient:
                                 self.profile_name, method.upper(), response.url.host,
                                 response.status_code, response.http_version,
                             )
+                            if cookie_jar_guard is not None:
+                                cookie_jar_guard()
                             response_yielded = True
                             yield PrivateResponse(response, metric)
                     break

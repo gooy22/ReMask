@@ -1400,6 +1400,72 @@ class FacebookWebSession:
             # the reviewed snapshot and do not expose source/session values.
             log.warning('module_refresh unavailable type=%s', type(exc).__name__)
 
+    def _restore_profile_cookie_snapshot_if_lost(self, session, *, stage: str) -> bool:
+        """Restore the resolver-loaded profile snapshot before another request."""
+        saved = getattr(session, "_profile_cookies", None)
+        read_snapshot = getattr(session, "facebook_cookie_snapshot", None)
+        restore = getattr(session, "restore_profile_cookies", None)
+        if not isinstance(saved, dict) or not saved or not callable(read_snapshot):
+            raise RemoteRequestError(
+                "Facebook profile cookie snapshot is unavailable",
+                request_may_have_been_sent=True,
+                transport_stage="fetch_cookie_restore",
+            )
+        actor = str(saved.get("c_user") or "")
+        xs = str(saved.get("xs") or "")
+        # The persisted snapshot must contain both session identity cookies before
+        # it can serve as a safe rollback point.
+        if not actor or not xs:
+            raise RemoteRequestError(
+                "Facebook profile cookie snapshot is unavailable",
+                request_may_have_been_sent=True,
+                transport_stage="fetch_cookie_restore",
+            )
+        current = read_snapshot()
+        if not isinstance(current, dict):
+            current = {}
+        lost = (
+            len(current) < len(saved)
+            or any(name not in current for name in saved)
+            or str(current.get("c_user") or "") != actor
+            or str(current.get("xs") or "") != xs
+        )
+        if not lost:
+            return False
+        try:
+            if not callable(restore):
+                raise RuntimeError("profile snapshot restore is unavailable")
+            restore()
+            restored = read_snapshot()
+        except Exception as exc:
+            log.warning(
+                "[%s] profile_cookie_snapshot_restore failed stage=%s kind=%s",
+                self.profile.name, stage, type(exc).__name__,
+            )
+            raise RemoteRequestError(
+                "Facebook profile cookie snapshot could not be restored",
+                request_may_have_been_sent=True,
+                transport_stage="fetch_cookie_restore",
+            ) from None
+        valid = (
+            isinstance(restored, dict)
+            and len(restored) >= len(saved)
+            and all(name in restored for name in saved)
+            and str(restored.get("c_user") or "") == actor
+            and str(restored.get("xs") or "") == xs
+        )
+        if not valid:
+            raise RemoteRequestError(
+                "Facebook profile cookie snapshot could not be restored",
+                request_may_have_been_sent=True,
+                transport_stage="fetch_cookie_restore",
+            )
+        log.warning(
+            "[%s] profile_cookie_snapshot_restored stage=%s expected_count=%d restored_count=%d",
+            self.profile.name, stage, len(saved), len(restored),
+        )
+        return True
+
     async def fetch_text_with_headers(
         self,
         url: str,
@@ -1447,10 +1513,14 @@ class FacebookWebSession:
         )
         if type(retry_timeout) is not bool:
             raise TypeError("retry_timeout must be a boolean")
-        ads_manager_bootstrap = (
+        ads_manager_document = (
             hostname == "adsmanager.facebook.com"
             and parts.path == "/adsmanager/manage/campaigns"
-            and {"act", "business_id"}.issubset(parse_qs(parts.query))
+            and "act" in parse_qs(parts.query)
+        )
+        ads_manager_bootstrap = (
+            ads_manager_document
+            and "business_id" in parse_qs(parts.query)
         )
         retry_timeout = document_request and retry_timeout and ads_manager_bootstrap
         if document_request:
@@ -1472,22 +1542,33 @@ class FacebookWebSession:
             )
             redirect_limit = 5 if manual_facebook_redirects else 0
             for redirect_count in range(redirect_limit + 1):
-                response, raw = await buffered_response(
-                    "GET",
-                    lambda: session.get(
-                        current_url,
-                        proxy=self.profile.proxy,
-                        headers=request_headers,
-                        allow_redirects=not manual_facebook_redirects,
-                        **(
-                            {"request_timeout_seconds": max(30, self.timeout_seconds)}
-                            if document_request else {}
+                try:
+                    response, raw = await buffered_response(
+                        "GET",
+                        lambda: session.get(
+                            current_url,
+                            proxy=self.profile.proxy,
+                            headers=request_headers,
+                            allow_redirects=not manual_facebook_redirects,
+                            **(
+                                {"request_timeout_seconds": max(30, self.timeout_seconds)}
+                                if document_request else {}
+                            ),
+                            cookie_jar_guard=(
+                                lambda: self._restore_profile_cookie_snapshot_if_lost(
+                                    session, stage=f"response_headers_{redirect_count + 1}"
+                                )
+                            ) if ads_manager_document else None,
                         ),
-                    ),
-                    max(1, int(max_bytes)) + 1,
-                    retry_read=document_request,
-                    retry_timeout=retry_timeout,
-                )
+                        max(1, int(max_bytes)) + 1,
+                        retry_read=document_request,
+                        retry_timeout=retry_timeout,
+                    )
+                finally:
+                    if ads_manager_document:
+                        self._restore_profile_cookie_snapshot_if_lost(
+                            session, stage=f"response_body_{redirect_count + 1}"
+                        )
                 if not manual_facebook_redirects or response.status not in {
                     301, 302, 303, 307, 308,
                 }:
@@ -1518,10 +1599,11 @@ class FacebookWebSession:
                         transport_stage="fetch_redirect",
                     )
 
-                # Keep Facebook document redirects explicit: a response can change the
-                # shared cookie jar before an automatic next hop. Restore the
-                # selected profile snapshot before each bounded same-site request.
-                session.restore_profile_cookies()
+                # The response hook already restored any damaged profile snapshot.
+                # Follow only Meta's validated Location; pause after its first 302.
+                if (ads_manager_document and redirect_count == 0
+                        and response.status == 302):
+                    await asyncio.sleep(3)
                 current_url = next_url
 
             if len(raw) > max_bytes:

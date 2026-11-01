@@ -60,13 +60,21 @@ class AdsManagerLaunch:
             digest.update(name.encode() + b"\0" + Path(__file__).with_name(name).read_bytes())
         self.source_digest = digest.hexdigest()
 
-    def prepare(self, profile_id, payload):
+    def prepare(self, profile_id, payload, *, allow_business_discovery=False):
         from .private_launch import _effective_launch_payload, _launch_fingerprint
         from .private_launch_media import local_references
         if not isinstance(payload, dict) or not str(profile_id or "").strip():
             raise fail("INVALID_INPUT", "Advertising profile and configuration are required")
-        target = {"profile_id": str(profile_id), **{key: identity(payload.get(key))
-                  for key in ("business_id", "ad_account_id", "page_id")}}
+        target = {"profile_id": str(profile_id)}
+        for key in ("ad_account_id", "page_id"):
+            target[key] = identity(payload.get(key))
+        raw_business_id = str(payload.get("business_id") or "").strip()
+        if raw_business_id:
+            target["business_id"] = identity(raw_business_id)
+        elif allow_business_discovery:
+            target["business_id"] = ""
+        else:
+            target["business_id"] = identity(raw_business_id)
         raw_launch = payload.get("launch")
         # The legacy Launch UI adds this flag while composing Meta builder
         # fields. It is transport metadata only and is not part of the private
@@ -240,7 +248,14 @@ class AdsManagerLaunch:
         fields = ["id", "account_id", "account_status", "business"]
         if not draft_only:
             fields.append("ad_account_promotable_objects")
-        row = await client.get("/act_" + account, {"fields": fields})
+        verified_read = getattr(client, "_verified_account_read", None)
+        if (isinstance(verified_read, tuple) and len(verified_read) == 2
+                and isinstance(verified_read[0], (tuple, list))
+                and set(fields) <= set(verified_read[0])
+                and isinstance(verified_read[1], dict)):
+            row = verified_read[1]
+        else:
+            row = await client.get("/act_" + account, {"fields": fields})
         business = row.get("business") if isinstance(row, dict) else None
         secondary_id = row.get("account_id") if isinstance(row, dict) else None
         promotable = row.get("ad_account_promotable_objects") if isinstance(row, dict) else None
@@ -316,9 +331,11 @@ class AdsManagerLaunch:
             "selected_payment_method": selected, "payment_selection_source": source}
 
     async def _prepare_live(self, *, profile_id, context, session, payload, saved_media=None, expected_creative=None,
-                            publication_required=False):
-        target, launch, references, fingerprint = self.prepare(profile_id, payload)
-        if self.owner._inventory_row(context, target["business_id"], target["ad_account_id"]) is None:
+                            publication_required=False, read_only_review=False):
+        target, launch, references, fingerprint = self.prepare(
+            profile_id, payload, allow_business_discovery=read_only_review)
+        if (target["business_id"]
+                and self.owner._inventory_row(context, target["business_id"], target["ad_account_id"]) is None):
             raise fail("ACCOUNT_CONTEXT_UNAVAILABLE", "The selected account is absent from this profile inventory")
         actor = identity(str(context.cookies.get("c_user") or ""))
         from .private_launch_media import LaunchMediaResolver
@@ -339,13 +356,24 @@ class AdsManagerLaunch:
                       and launch.get("execution_mode") == "DRAFT")
         saved_publication_recovery = (publication_required
             and isinstance(payload, dict) and payload.get("publish_saved_draft") is True)
+        preflight_fields = ["id", "account_id", "business", "account_status"]
+        if not draft_only:
+            preflight_fields.append("ad_account_promotable_objects")
+        account_only_preflight = read_only_review and not target["business_id"]
         try:
             client = await AdsManagerPrivateHttp.open(web, account_id=target["ad_account_id"],
                 business_id=target["business_id"], actor_id=actor,
                 allow_draft_gate_recovery=draft_only,
-                allow_saved_publication_gate_recovery=saved_publication_recovery)
+                allow_saved_publication_gate_recovery=saved_publication_recovery,
+                account_read_fields=preflight_fields if account_only_preflight else None,
+                account_preflight=account_only_preflight)
         except RemoteRequestError:
             raise fail("TRANSPORT_UNAVAILABLE", "Profile HTTP connection did not reach Ads Manager", True) from None
+        if account_only_preflight:
+            resolved_business = str(getattr(client.context, "business_id", "") or "")
+            if not (resolved_business.isdigit() and 5 <= len(resolved_business) <= 30):
+                raise fail("ACCOUNT_SCOPE_UNVERIFIED", "Private account READ did not confirm its Business")
+            target["business_id"] = resolved_business
         if expected_creative is not None:
             client.read_only = True
             row = await client.get("/act_" + target["ad_account_id"], {"fields": ["id", "account_id", "business"]})
@@ -426,7 +454,8 @@ class AdsManagerLaunch:
                 return await self.review(profile_id=profile_id, context=context, payload=payload,
                                          transport=SimpleNamespace(session=session))
         target, launch, fingerprint, actor, client, media, proof = await self._prepare_live(
-            profile_id=profile_id, context=context, session=transport.session, payload=payload)
+            profile_id=profile_id, context=context, session=transport.session, payload=payload,
+            read_only_review=True)
         return {"ready": not proof["payment_selection_required"],
             "configuration_valid": True, "checked_live": True,
             "editor_state": "EDITOR_UNVERIFIED", "missing_fields": [], "missing_contracts": [],
