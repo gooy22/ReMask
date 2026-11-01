@@ -16,6 +16,9 @@ ADS_MANAGER_RETURN_URL = (
     "https://adsmanager.facebook.com/adsmanager/manage/campaigns"
     "?act=111111&business_id=222222"
 )
+ACCOUNT_ONLY_RETURN_URL = (
+    "https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=111111"
+)
 
 
 def _native_gate_body(**overrides):
@@ -83,6 +86,36 @@ class GateContinuationParserTests(unittest.TestCase):
                     ("lsd", "fresh-session-token"),
                     ("u_0_b", "Continue"),
                 ])
+
+    def test_gate_diagnostics_report_shape_without_values(self):
+        from app.business_login_gate_http import _extract_business_login_continuation
+
+        secret_value = "do-not-log-91e3"
+        body = f"""
+        <form id="g_form" action="https://www.facebook.com/login/device-based/validate/"
+              method="post">
+          <input type="hidden" name="display" value="{secret_value}">
+          <input type="hidden" name="next" value="https://business.facebook.com/latest/home">
+          <input type="submit" id="u_0_b" name="u_0_b" value="Continue">
+        </form>
+        """
+        diagnostic = {}
+        continuation, outcome = _extract_business_login_continuation(
+            body, GATE_URL, diagnostic=diagnostic,
+        )
+
+        self.assertIsNotNone(continuation)
+        self.assertEqual(outcome, "continuation_ready")
+        self.assertEqual(diagnostic["forms"], [{
+            "kind": "g_form",
+            "method": "POST",
+            "action": "device_validate",
+            "field_count": 2,
+            "interactive": False,
+            "hidden": False,
+        }])
+        self.assertEqual(diagnostic["hidden_field_names"], ["display", "next"])
+        self.assertNotIn(secret_value, json.dumps(diagnostic))
 
     def test_accepts_single_unnamed_submit_only_for_named_meta_form(self):
         body = """
@@ -211,6 +244,31 @@ class GateContinuationParserTests(unittest.TestCase):
         self.assertIsNone(
             native_business_login_continuation(
                 body, ADS_MANAGER_RETURN_URL.replace("111111", "999999"),
+            )
+        )
+
+    def test_native_continuation_supports_exact_account_only_preflight_scope(self):
+        from app.private_business_login import native_business_login_continuation
+
+        body = _native_gate_body(referrerURI=ACCOUNT_ONLY_RETURN_URL)
+        continuation = native_business_login_continuation(body, ACCOUNT_ONLY_RETURN_URL)
+        self.assertIsNotNone(continuation)
+        next_url = parse_qs(urlsplit(continuation).query)["next"][0]
+        next_query = parse_qs(urlsplit(next_url).query)
+        self.assertEqual(next_query["act"], ["111111"])
+        self.assertNotIn("business_id", next_query)
+
+        # A gate may not widen this act-only request by supplying an unverified BM.
+        self.assertIsNone(
+            native_business_login_continuation(
+                _native_gate_body(referrerURI=ADS_MANAGER_RETURN_URL),
+                ACCOUNT_ONLY_RETURN_URL,
+            )
+        )
+        self.assertIsNone(
+            native_business_login_continuation(
+                body,
+                ACCOUNT_ONLY_RETURN_URL.replace("111111", "999999"),
             )
         )
 
@@ -499,6 +557,34 @@ class GateContinuationTransportTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotIn("content", session.request_calls[0][2])
 
+    async def test_native_js_only_gate_returns_exact_account_only_document(self):
+        from app.private_business_login import native_business_login_continuation
+
+        body = _native_gate_body(referrerURI=ACCOUNT_ONLY_RETURN_URL)
+        native_url = native_business_login_continuation(body, ACCOUNT_ONLY_RETURN_URL)
+        session = _FakeSession([
+            _Response(200, native_url, b"native callback"),
+            _Response(200, ACCOUNT_ONLY_RETURN_URL, b"fresh account-scoped document"),
+        ])
+        web = _FakeWeb(session)
+        result = await continue_business_login_gate(
+            web,
+            gate_url="https://business.facebook.com/business/loginpage/",
+            body=body,
+            return_url=ACCOUNT_ONLY_RETURN_URL,
+        )
+
+        self.assertEqual(result["status"], 200)
+        self.assertEqual(result["url"], ACCOUNT_ONLY_RETURN_URL)
+        self.assertEqual(result["body"], "fresh account-scoped document")
+        self.assertEqual(web._business_login_gate_outcome, "recovered")
+        self.assertEqual(len(session.request_calls), 2)
+        self.assertTrue(all(method == "GET" for method, _, _ in session.request_calls))
+        next_url = parse_qs(urlsplit(session.request_calls[0][1]).query)["next"][0]
+        next_query = parse_qs(urlsplit(next_url).query)
+        self.assertEqual(next_query["act"], ["111111"])
+        self.assertNotIn("business_id", next_query)
+
     async def test_native_js_only_gate_refuses_terms_and_credentials(self):
         body = _native_gate_body()
         for rejected in (
@@ -538,3 +624,4 @@ class GateContinuationTransportTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
