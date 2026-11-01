@@ -6,9 +6,13 @@ are left for supported reauthentication.
 """
 from __future__ import annotations
 
+import json
+import logging
 import re
 from html.parser import HTMLParser
 from urllib.parse import urlencode, urljoin, urlsplit
+
+log = logging.getLogger("remask.business_login_gate")
 
 
 _FACEBOOK_HOST_SUFFIX = ".facebook.com"
@@ -238,6 +242,8 @@ class _BusinessGateParser(HTMLParser):
 def _extract_business_login_continuation(
     body: str,
     gate_url: str,
+    *,
+    diagnostic: dict | None = None,
 ) -> tuple[dict | None, str]:
     """Return a safe continuation plus a non-sensitive outcome code."""
     if not is_business_login_gate_url(gate_url):
@@ -262,6 +268,70 @@ def _extract_business_login_continuation(
     for form_id, fields in parser.external_fields.items():
         if form_id in parser.forms:
             parser.forms[form_id]["fields"].extend(fields)
+
+    if diagnostic is not None:
+        def form_kind(form_id: str, name: str) -> str:
+            names = {str(form_id or "").casefold(), str(name or "").casefold()}
+            if "g_form" in names:
+                return "g_form"
+            if "login_form" in names:
+                return "login_form"
+            return "named" if any(names) else "unnamed"
+
+        def action_kind(action_value: str) -> str:
+            action = urljoin(gate_url, str(action_value or gate_url))
+            if not _facebook_url(action):
+                return "other_origin"
+            path = str(urlsplit(action).path or "/").casefold().rstrip("/") or "/"
+            return {
+                "/login/device-based/validate": "device_validate",
+                "/business/loginpage/continue": "business_continue",
+                "/business/loginrequest/fb": "business_fb_handoff",
+                "/business/loginpage": "business_gate",
+            }.get(path, "facebook_other")
+
+        form_rows = []
+        field_names = set()
+        for form_id, form in parser.forms.items():
+            fields = form.get("fields") or []
+            names = [name for name, _ in fields if isinstance(name, str)]
+            field_names.update(
+                name for name in names
+                if re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", name)
+            )
+            form_rows.append({
+                "kind": form_kind(form_id, form.get("name", "")),
+                "method": str(form.get("method") or "get").upper(),
+                "action": action_kind(form.get("action", "")),
+                "field_count": len(fields),
+                "interactive": bool(form.get("interactive")),
+                "hidden": bool(form.get("hidden")),
+            })
+        label_kinds = set()
+        control_kinds = set()
+        for candidate in parser.candidates:
+            attrs = candidate["attrs"]
+            label = re.sub(
+                r"\s+", " ", str(candidate["text"] or attrs.get("aria-label") or "")
+            ).strip()
+            score, label_kind = _score(label)
+            if score:
+                label_kinds.add(label_kind)
+            control_kinds.add(
+                str(candidate["tag"]).casefold()
+                + ":"
+                + str(attrs.get("type") or "").casefold()
+            )
+        diagnostic.update({
+            "body_chars": len(body),
+            "form_count": len(form_rows),
+            "forms": form_rows[:20],
+            "hidden_field_names": sorted(field_names)[:40],
+            "control_kinds": sorted(control_kinds)[:20],
+            "continue_label_kinds": sorted(label_kinds),
+            "credential_input_present": parser.has_credentials,
+            "business_gate_root_marker_present": "BusinessToolsF3UnifiedLoginPageView.react" in body,
+        })
 
     ranked = []
     for candidate in parser.candidates:
@@ -493,7 +563,10 @@ async def continue_business_login_gate(
         except Exception:
             pass
 
-    continuation, outcome = _extract_business_login_continuation(body, gate_url)
+    gate_diagnostic = {}
+    continuation, outcome = _extract_business_login_continuation(
+        body, gate_url, diagnostic=gate_diagnostic,
+    )
     if not continuation and outcome == "no_supported_continuation_control":
         # Meta serves this same-profile handoff as a JS-rendered FB button on
         # some Business login pages. Parse only the current document's reviewed
@@ -517,11 +590,18 @@ async def continue_business_login_gate(
             outcome = "native_fb_continuation_ready"
         elif outcome == "no_supported_continuation_control":
             reason = str(diagnostic.get("reason") or "unavailable")
+            gate_diagnostic["native_reason"] = reason
             outcome = (
                 "native_" + reason
                 if re.fullmatch(r"[a-z_]{1,64}", reason)
                 else "native_continuation_unavailable"
             )
+        if native_url:
+            gate_diagnostic["native_reason"] = str(diagnostic.get("reason") or "native_fb_continuation")
+    profile_name = str(getattr(getattr(web, "profile", None), "name", "") or "unknown")
+    log.info("business_login_gate_parse profile=%s outcome=%s summary=%s",
+        profile_name, outcome,
+        json.dumps(gate_diagnostic, sort_keys=True, separators=(",", ":")))
     set_outcome(outcome)
     if not continuation:
         return None
