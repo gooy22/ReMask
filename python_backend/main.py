@@ -563,6 +563,84 @@ async def run_existing_business_repair_once(profile_id: str) -> None:
                 break
 
 
+async def run_one_shot_act_preflight() -> None:
+    """Run at most one read-only Ads Manager preflight for the reviewed profile-27 act."""
+    profile_id=str(os.getenv('REMASK_ACT_PREFLIGHT_PROFILE') or '').strip()
+    account_id=str(os.getenv('REMASK_ACT_PREFLIGHT_ACCOUNT_ID') or '').strip()
+    if not profile_id and not account_id:
+        return
+    if profile_id != '27' or account_id != '120250306658010101':
+        log.warning('private_act_preflight skipped reason=target_mismatch')
+        return
+
+    marker_path=os.path.join(
+        DATA_ROOT,'private_act_preflight_profile27_act120250306658010101.started'
+    )
+    try:
+        os.makedirs(DATA_ROOT,exist_ok=True)
+        marker_fd=os.open(marker_path,os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600)
+        os.close(marker_fd)
+    except FileExistsError:
+        log.info('private_act_preflight skipped profile=27 account=120250306658010101 reason=already_attempted')
+        return
+    except OSError as exc:
+        log.warning('private_act_preflight skipped profile=27 account=120250306658010101 reason=marker_unavailable type=%s',
+                    type(exc).__name__)
+        return
+
+    fields=['id','account_id','business','account_status']
+    try:
+        async with pool.profile_locks[profile_id]:
+            context=await pool.resolver.resolve(profile_id)
+            cookies=getattr(context,'cookies',{})
+            actor_id=str(cookies.get('c_user') or '').strip() if isinstance(cookies,dict) else ''
+            if not actor_id:
+                raise RuntimeError('profile_actor_unavailable')
+            async with ProfileSession(context) as session:
+                web=await session.facebook_web()
+                from app.private_ads_http import AdsManagerPrivateHttp
+                client=await AdsManagerPrivateHttp.open(
+                    web,
+                    account_id=account_id,
+                    business_id='',
+                    actor_id=actor_id,
+                    account_read_fields=fields,
+                    account_preflight=True,
+                )
+        verified=getattr(client,'_verified_account_read',None)
+        if (not isinstance(verified,tuple) or len(verified)!=2
+                or not isinstance(verified[0],(tuple,list))
+                or not set(fields).issubset(set(verified[0]))
+                or not isinstance(verified[1],dict)
+                or getattr(client,'read_only',False) is not True):
+            raise RuntimeError('account_read_not_verified')
+        account=verified[1]
+        observed_account=str(account.get('account_id') or account.get('id') or '').strip()
+        if observed_account.startswith('act_'):
+            observed_account=observed_account[4:]
+        business=account.get('business')
+        observed_business=str(business.get('id') or '').strip() if isinstance(business,dict) else ''
+        context_business=str(getattr(client.context,'business_id','') or '').strip()
+        if (observed_account != account_id
+                or not re.fullmatch(r'\\d{5,30}',observed_business)
+                or context_business != observed_business):
+            raise RuntimeError('account_scope_not_confirmed')
+        log.info(
+            'private_act_preflight profile=27 account=120250306658010101 '
+            'result=CONFIRMED business=confirmed read_only=true'
+        )
+    except Exception as exc:
+        raw_code=getattr(exc,'code','')
+        code=(raw_code if isinstance(raw_code,str)
+              and re.fullmatch(r'[A-Z0-9_]{1,80}',raw_code)
+              else type(exc).__name__)
+        log.warning(
+            'private_act_preflight profile=27 account=120250306658010101 '
+            'result=FAILED code=%s',
+            code,
+        )
+
+
 async def run_live_inventory_readonly_canary() -> None:
     """Optional one-shot startup proof for the live inventory path.
 
@@ -981,6 +1059,10 @@ async def lifespan(app: FastAPI):
         run_live_inventory_readonly_canary(),
         name='remask-live-inventory-readonly-canary',
     )
+    act_preflight_task=asyncio.create_task(
+        run_one_shot_act_preflight(),
+        name='remask-act-only-readonly-preflight',
+    )
     from app.contract_maintenance.launch_http_audit import run as run_launch_http_audit
     launch_http_audit_task=asyncio.create_task(run_launch_http_audit(pool), name='remask-launch-http-audit')
     verification_audit_task=asyncio.create_task(
@@ -989,12 +1071,14 @@ async def lifespan(app: FastAPI):
     smoke_task.cancel()
     bm_canary_task.cancel()
     live_inventory_canary_task.cancel()
+    act_preflight_task.cancel()
     verification_audit_task.cancel()
     launch_http_audit_task.cancel()
     await asyncio.gather(
         smoke_task,
         bm_canary_task,
         live_inventory_canary_task,
+        act_preflight_task,
         verification_audit_task,
         launch_http_audit_task,
         return_exceptions=True,
