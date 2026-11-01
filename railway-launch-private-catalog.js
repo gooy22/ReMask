@@ -275,7 +275,6 @@ function remaskPrivateTargetRows(config) {
         const businessId=String(target?.business_id||account?.business_id||account?.business?.id||'').trim();
         const pageId=String((perTarget?binding?.page_id:$('page')?.value)||'').trim();
         if(!profile)throw new Error('Для РК не выбран профиль Facebook: '+accountId+'.');
-        if(!/^\d{5,30}$/.test(businessId))throw new Error('Для РК не указан BM: '+accountId+'.');
         if(!/^\d{5,30}$/.test(pageId))throw new Error('Выберите страницу для РК '+accountId+'.');
         const selectedPaymentMethod=executionMode==='DRAFT'?null:remaskPrivateSelectedPayment(
             profile,accountId
@@ -651,6 +650,9 @@ async function remaskPrivateReviewConfig(config,{render=true,assertCurrent=null}
             });
             if(assertCurrent)assertCurrent();
             const review=response?.review||{};
+            const discoveredBusiness=String(review.business_id||'');
+            if(/^\d{5,30}$/.test(discoveredBusiness))
+                row.business_id=discoveredBusiness;
             const preflight=review?.preflight||{};
             if(
                 review.ready!==true

@@ -191,7 +191,11 @@ class _MissingSessionInitialization(ProvisioningError):
 
 def context_from_document(body, *, account_id, business_id, actor_id):
     """Read literal module data and source-supported initializers; never execute JS."""
-    account_id, business_id, actor_id = map(identity, (account_id, business_id, actor_id))
+    account_id = identity(account_id)
+    business_id = str(business_id or "").strip()
+    if business_id:
+        business_id = identity(business_id)
+    actor_id = identity(actor_id)
     configurations = {name: [] for name in ("GraphAPIConfig", "UrlMapConfig", "CurrentUserInitialData")}
     setters = {name: [] for name in ("setAccessToken", "setClientID")}
     initializers = []
@@ -297,17 +301,27 @@ class AdsManagerPrivateHttp:
     @classmethod
     async def open(cls, web, *, account_id, business_id, actor_id, reference_read=False,
                    account_read_fields=None, allow_draft_gate_recovery=False,
-                   allow_saved_publication_gate_recovery=False):
-        account_id, business_id, actor_id = map(identity, (account_id, business_id, actor_id))
+                   allow_saved_publication_gate_recovery=False, account_preflight=False):
+        account_id = identity(account_id)
+        actor_id = identity(actor_id)
+        business_id = str(business_id or "").strip()
+        if type(account_preflight) is not bool:
+            raise fail("INVALID_RESOURCE_ROUTE", "Advertising account preflight mode must be explicit")
+        if account_preflight:
+            if business_id or account_read_fields is None:
+                raise fail("INVALID_RESOURCE_ROUTE", "Account-only preflight requires no BM and reviewed READ fields")
+        else:
+            business_id = identity(business_id)
         if (type(reference_read) is not bool or type(allow_draft_gate_recovery) is not bool
                 or type(allow_saved_publication_gate_recovery) is not bool):
             raise fail("INVALID_RESOURCE_ROUTE", "Advertising bootstrap mode must be explicit")
-        allow_business_gate_renewal = (reference_read or allow_draft_gate_recovery
-                                        or allow_saved_publication_gate_recovery)
+        allow_business_gate_renewal = (not account_preflight and
+            (reference_read or allow_draft_gate_recovery or allow_saved_publication_gate_recovery))
         if account_read_fields is not None:
             allowed_fields = {"id", "account_id", "business", "account_status",
                               "ad_account_promotable_objects", "currency"}
-            if (not reference_read or not isinstance(account_read_fields, list)
+            if (not (reference_read or account_preflight)
+                    or not isinstance(account_read_fields, list)
                     or any(not isinstance(name, str) or name not in allowed_fields
                            for name in account_read_fields)):
                 raise fail("INVALID_RESOURCE_ROUTE", "Account proof fields differ from the reviewed read")
@@ -316,7 +330,8 @@ class AdsManagerPrivateHttp:
             # Mutation-capable paths keep their original fresh-document contract.
             return await cls._open_uncached(web, account_id=account_id,
                 business_id=business_id, actor_id=actor_id, refresh_modules=True,
-                allow_business_gate_renewal=allow_business_gate_renewal)
+                allow_business_gate_renewal=allow_business_gate_renewal,
+                account_preflight=account_preflight, account_read_fields=account_read_fields)
         profile = web.profile
         if str(profile.cookies.get("c_user") or "") != actor_id:
             raise fail("ACTOR_MISMATCH", "Advertising request belongs to another profile")
@@ -327,7 +342,8 @@ class AdsManagerPrivateHttp:
             client = await cls._open_uncached(web, account_id=account_id,
                 business_id=business_id, actor_id=actor_id, refresh_modules=False,
                 account_read_fields=account_read_fields,
-                allow_business_gate_renewal=allow_business_gate_renewal)
+                allow_business_gate_renewal=allow_business_gate_renewal,
+                account_preflight=account_preflight)
             client.read_only = True
             return client
         digest = hashlib.sha256(json.dumps([name, proxy,
@@ -349,7 +365,8 @@ class AdsManagerPrivateHttp:
             client = await cls._open_uncached(web, account_id=account_id,
                 business_id=business_id, actor_id=actor_id, refresh_modules=False,
                 account_read_fields=account_read_fields,
-                allow_business_gate_renewal=allow_business_gate_renewal)
+                allow_business_gate_renewal=allow_business_gate_renewal,
+                account_preflight=account_preflight)
             client.read_only = True
             _REFERENCE_CONTEXT_CACHE[digest] = (time.monotonic(),
                 client.context, client.document_origin)
@@ -360,13 +377,21 @@ class AdsManagerPrivateHttp:
 
     @classmethod
     async def _open_uncached(cls, web, *, account_id, business_id, actor_id, refresh_modules,
-                             account_read_fields=None, allow_business_gate_renewal=False):
-        account_id, business_id, actor_id = map(identity, (account_id, business_id, actor_id))
+                             account_read_fields=None, allow_business_gate_renewal=False,
+                             account_preflight=False):
+        account_id = identity(account_id)
+        actor_id = identity(actor_id)
+        business_id = str(business_id or "").strip()
+        if business_id:
+            business_id = identity(business_id)
+        elif not account_preflight:
+            raise fail("INVALID_RESOURCE_ROUTE", "Advertising Business scope is required")
         web.private_only = True
         if str(web.profile.cookies.get("c_user") or "") != actor_id:
             raise fail("ACTOR_MISMATCH", "Advertising request belongs to another profile")
-        url = ("https://adsmanager.facebook.com/adsmanager/manage/campaigns"
-               f"?act={account_id}&business_id={business_id}")
+        url = "https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=" + account_id
+        if business_id:
+            url += "&business_id=" + business_id
         from fb_worker import RemoteRequestError
         request_url = url
         try:
@@ -375,7 +400,8 @@ class AdsManagerPrivateHttp:
                 document_navigation=True, retry_timeout=True)
         except RemoteRequestError as error:
             transport_failure = error.meta_payload.get("transport_failure")
-            if (error.transport_stage != "fetch"
+            if (account_preflight
+                    or error.transport_stage != "fetch"
                     or error.request_may_have_been_sent is not False
                     or not isinstance(transport_failure, dict)
                     or transport_failure.get("kind") != "TimeoutError"):
@@ -730,7 +756,10 @@ class AdsManagerPrivateHttp:
             and final.scheme == "https" and final.hostname == "business.facebook.com"
             and final.path in {"/business/loginpage/", "/business/loginpage"}
         )
-        if gate and not business_gate_continuation:
+        account_preflight_login_gate = (
+            account_preflight and gate == "BUSINESS_LOGIN_GATE"
+        )
+        if gate and not business_gate_continuation and not account_preflight_login_gate:
             # Preserve the typed bootstrap evidence for rejected gates without
             # exporting response text, credentials, or the redirect URL.
             account_matches = parse_qs(final.query).get("act") == [account_id]
@@ -754,6 +783,20 @@ class AdsManagerPrivateHttp:
             error.transport_stage = "bootstrap"
             raise error
         business_gate_token_renewed = False
+        session_renewed = False
+        if account_preflight_login_gate:
+            seed = AdsManagerContext(account_id, business_id, actor_id,
+                "https://adsmanager-graph.facebook.com", "v22.0", "119211728144504", "")
+            bootstrap_client = cls(web, seed)
+            bootstrap_client.document_origin = "https://adsmanager.facebook.com"
+            bootstrap_client.document_url = url
+            bootstrap_client.read_only = True
+            context = await bootstrap_client._renew_session(
+                "", sprinkle_document=body, selected_account_id=account_id,
+                allow_host_fallback=False)
+            session_renewed = True
+            business_gate_token_renewed = True
+            gate_recovered = True
         if business_gate_continuation:
             # First try a single unambiguous Business handoff. If it cannot
             # return a verified document on these non-interactive paths, use the selected profile's
@@ -795,7 +838,9 @@ class AdsManagerPrivateHttp:
                 # Keep renewal pinned to the selected Ads Manager origin and
                 # scoped Referer. Do not merge Business login-gate HTML into Ads Manager
                 # request metadata; pass it only to read the fresh SprinkleConfig checksum.
-                context = await bootstrap_client._renew_session("", sprinkle_document=body)
+                context = await bootstrap_client._renew_session(
+                    "", sprinkle_document=body, selected_account_id=account_id)
+                session_renewed = True
                 business_gate_token_renewed = True
                 gate_recovered = True
 
@@ -803,6 +848,9 @@ class AdsManagerPrivateHttp:
         # Raw URLs, HTML, cookies and initialization values can contain secrets.
         account_matches = (not gate_recovered and
             parse_qs(final.query).get("act") == [account_id])
+        if account_preflight:
+            # URL state alone does not prove the account or its Business relation.
+            account_matches = False
         log.info("ads_bootstrap profile=%s status=%s bytes=%d host_reviewed=%s path_matches=%s account_matches=%s business_matches=%s gate=%s",
             getattr(web.profile, "name", ""), status, len(body.encode()),
             (final.hostname in {"adsmanager.facebook.com", "business.facebook.com"}
@@ -825,8 +873,10 @@ class AdsManagerPrivateHttp:
                     or not (final.hostname in {"adsmanager.facebook.com", "business.facebook.com"}
                     or (scoped_www_document and final.hostname == "www.facebook.com"))
                     or final.path != "/adsmanager/manage/campaigns"
-                    or (parse_qs(final.query).get("business_id") != [business_id]
-                        and not account_only_scope_recovered)):
+                    or (not account_only_scope_recovered
+                        and not (account_preflight
+                            and parse_qs(final.query).get("act") == [account_id])
+                        and parse_qs(final.query).get("business_id") != [business_id])):
                 raise fail("BOOTSTRAP_SCOPE_UNVERIFIED", "Ads Manager did not confirm the requested account context", True)
             try:
                 context = context_from_document(body, account_id=account_id,
@@ -836,7 +886,10 @@ class AdsManagerPrivateHttp:
                 client.document_origin = final.scheme + '://' + final.hostname
                 client.document_url = final_url
                 client.read_only = True
-                context = await client._renew_session(body)
+                context = await client._renew_session(
+                    body, selected_account_id=account_id,
+                    allow_host_fallback=not account_preflight)
+                session_renewed = True
                 # Every renewed session must independently confirm the selected
                 # account and BM, even if the document retained its act parameter.
                 account_matches = False
@@ -846,6 +899,18 @@ class AdsManagerPrivateHttp:
         else:
             # Cookie-authenticated session renewal is not account proof.
             account_matches = False
+        if account_preflight and not session_renewed:
+            # The selected act is the only scope selector available before the
+            # profile inventory supplies a BM. Renew directly from this document,
+            # then require the exact private account READ below before returning.
+            bootstrap_client = cls(web, context)
+            bootstrap_client.document_origin = final.scheme + '://' + final.hostname
+            bootstrap_client.document_url = final_url
+            bootstrap_client.read_only = True
+            context = await bootstrap_client._renew_session(
+                body, selected_account_id=account_id, allow_host_fallback=False)
+            session_renewed = True
+
         refresh = getattr(web, 'refresh_reviewed_modules', None)
         if refresh_modules and callable(refresh) and not gate_recovered:
             await refresh(body, final_url)
@@ -855,7 +920,7 @@ class AdsManagerPrivateHttp:
             client.document_url = url
         else:
             client.document_origin = final.scheme + '://' + final.hostname
-        if not account_matches:
+        if not account_matches or account_preflight:
             # Meta may select a default account during document navigation.
             # Before returning a usable sender, prove the requested account
             # and BM through the reviewed account READ on this same session.
@@ -883,8 +948,12 @@ class AdsManagerPrivateHttp:
             # account_id is authoritative; without it require the exact id.
             account_matches = (legacy_id == account_id if legacy is not None
                                else observed_id == account_id)
-            business_matches = (isinstance(account.get("business"), dict)
-                                and account["business"].get("id") == business_id)
+            business = account.get("business") if isinstance(account, dict) else None
+            observed_business = str(business.get("id") or "") if isinstance(business, dict) else ""
+            if not re.fullmatch(r"\d{5,30}", observed_business):
+                observed_business = ""
+            business_matches = bool(observed_business) and (
+                not business_id or observed_business == business_id)
             if not account_matches or not business_matches:
                 log.warning("ads_bootstrap scope_rejected profile=%s account_matches=%s business_matches=%s requested_account=%s observed_account=%s native_account=%s id_type=%s",
                     getattr(web.profile, "name", ""), account_matches,
@@ -892,28 +961,55 @@ class AdsManagerPrivateHttp:
                 raise fail("BOOTSTRAP_SCOPE_UNVERIFIED", "Ads Manager did not confirm the requested account and Business", True)
             if account_read_fields is not None:
                 client._verified_account_read = (account_read_fields, account)
-            client.read_only = False
+            if account_preflight:
+                client.context = replace(client.context, business_id=observed_business)
+                client.read_only = True
+            else:
+                client.read_only = False
             log.info("ads_bootstrap scope_confirmed profile=%s source=exact_account_read", getattr(web.profile, "name", ""))
         return client
 
-    async def _renew_session(self, document, *, sprinkle_document=""):
+    async def _renew_session(self, document, *, sprinkle_document="", selected_account_id="",
+                             allow_host_fallback=True):
         """One cookie-authenticated native refresh, as AdsMgmtNetworkRefreshToken.
 
         No advertising write, OAuth grant, alternate actor or configured token.
         Source: XAdsCMRenewAccessTokenController + AsyncRequest.promisePayload.
         """
         try:
+            if type(allow_host_fallback) is not bool:
+                raise fail("INVALID_RESOURCE_ROUTE", "Session renewal fallback mode must be explicit")
+            selected_account_id = identity(selected_account_id or self.context.account_id)
+            if selected_account_id != self.context.account_id:
+                raise fail("READ_SCOPE_MISMATCH", "Session renewal account differs from the selected RK")
+            document_query = parse_qs(urlsplit(self.document_url).query)
+            if document_query.get("act") not in (None, [], [selected_account_id]):
+                raise fail("READ_SCOPE_MISMATCH", "Session renewal document belongs to another RK")
+            # Keep the selected account directly bound to the native renewal's
+            # Referer, including the act-only preflight used while BM is unknown.
+            if not document_query.get("act"):
+                separator = "&" if "?" in self.document_url else "?"
+                self.document_url += separator + "act=" + selected_account_id
             # Use the ordinary profile bootstrap that serves the existing Business
             # reads. The forced profile-page probe can stop on Meta's login gate
             # before the exact account + Business read below gets a chance to prove
             # the selected scope. The saved c_user, profile, proxy and cookie snapshot
             # are still pinned by _profile_matches(), and no write is enabled yet.
             bootstrap = await self.web.bootstrap()
+            session = await self.web._ensure_session()
+            restore_cookie_snapshot = getattr(
+                self.web, "_restore_profile_cookie_snapshot_if_lost", None)
+            if callable(restore_cookie_snapshot):
+                restore_cookie_snapshot(session, stage="session_renewal_bootstrap")
+            def response_cookie_guard(stage):
+                if not callable(restore_cookie_snapshot):
+                    return {}
+                return {"cookie_jar_guard": lambda: restore_cookie_snapshot(
+                    session, stage=stage)}
             if (not self._profile_matches()
                     or bootstrap.actor_id != self.context.actor_id
                     or not isinstance(bootstrap.fb_dtsg, str) or not bootstrap.fb_dtsg):
                 raise fail("PROFILE_CONTEXT_UNAVAILABLE", "Session renewal requires the selected profile actor")
-            session = await self.web._ensure_session()
             if session.proxy != self._profile_proxy:
                 raise fail("PROFILE_CONTEXT_UNAVAILABLE", "Session renewal route changed")
             form = {"client_id":self.context.application_id, "__a":"1", "__req":"1",
@@ -1076,7 +1172,8 @@ class AdsManagerPrivateHttp:
             renewal_transport_failure = ""
             try:
                 async with session.request("POST", self.document_origin + "/ads/manager/ajax/renew_access_token/",
-                        data=form, headers=headers, allow_redirects=False, request_timeout_seconds=30) as response:
+                        data=form, headers=headers, allow_redirects=False, request_timeout_seconds=30,
+                        **response_cookie_guard("session_renewal_response_headers")) as response:
                     if response.http_version != "HTTP/2":
                         raise fail("PROTOCOL_UNAVAILABLE", "Session renewal requires HTTP/2")
                     raw = await response.content.read(2_000_001)
@@ -1099,7 +1196,8 @@ class AdsManagerPrivateHttp:
                 result = _strict_response_json(text)
             if not isinstance(result, dict) or "error" in result or "errors" in result:
                 initial_code = result.get("error") if isinstance(result, dict) else None
-                if ((primary_transport_failure or initial_code == 1357001)
+                if (allow_host_fallback
+                        and (primary_transport_failure or initial_code == 1357001)
                         and self.document_origin != "https://business.facebook.com"):
                     # Retry the same read-only renewal on Business when the
                     # selected Ads Manager host rejects it or the profile proxy
@@ -1145,7 +1243,8 @@ class AdsManagerPrivateHttp:
                         async with session.request("POST",
                                 business_origin + "/ads/manager/ajax/renew_access_token/",
                                 data=form, headers=business_headers, allow_redirects=False,
-                                request_timeout_seconds=30) as response:
+                                request_timeout_seconds=30,
+                                **response_cookie_guard("business_renewal_response_headers")) as response:
                             if response.http_version != "HTTP/2":
                                 raise fail("PROTOCOL_UNAVAILABLE",
                                     "Business-host session renewal requires HTTP/2")
@@ -1178,7 +1277,8 @@ class AdsManagerPrivateHttp:
                                 self._profile_name)
             if not isinstance(result, dict) or "error" in result or "errors" in result:
                 code = result.get("error") if isinstance(result, dict) else None
-                if code == 1357001 and self.document_origin != "https://www.facebook.com":
+                if (allow_host_fallback and code == 1357001
+                        and self.document_origin != "https://www.facebook.com"):
                     # The profile homepage confirms the same actor on www.facebook.com.
                     # Try Meta's native renewal there once; this still grants only a
                     # session token, and the exact account + Business READ below stays
@@ -1223,7 +1323,8 @@ class AdsManagerPrivateHttp:
                     async with session.request("POST",
                             www_origin + "/ads/manager/ajax/renew_access_token/",
                             data=form, headers=www_headers, allow_redirects=False,
-                            request_timeout_seconds=30) as response:
+                            request_timeout_seconds=30,
+                            **response_cookie_guard("www_renewal_response_headers")) as response:
                         if response.http_version != "HTTP/2":
                             raise fail("PROTOCOL_UNAVAILABLE",
                                 "www-host session renewal requires HTTP/2")
@@ -1325,11 +1426,17 @@ class AdsManagerPrivateHttp:
             def validate_protocol(response):
                 if response.http_version != "HTTP/2":
                     raise fail("PROTOCOL_UNAVAILABLE", "Advertising origin did not negotiate HTTP/2", True)
+            response_cookie_guard = getattr(
+                self.web, "_restore_profile_cookie_snapshot_if_lost", None)
             def open_response():
                 if not self._profile_matches() or session.proxy != self._profile_proxy:
                     raise fail("PROFILE_CONTEXT_UNAVAILABLE", "Advertising profile changed before dispatch", True)
+                request_options = {"request_timeout_seconds": 300 if files else 60}
+                if callable(response_cookie_guard):
+                    request_options["cookie_jar_guard"] = lambda: response_cookie_guard(
+                        session, stage="ads_api_response_headers")
                 return session.request(method, url, headers=headers, allow_redirects=False,
-                    request_timeout_seconds=300 if files else 60, **options)
+                    **request_options, **options)
             response, raw = await buffered_response(method, open_response,
                 2_000_001, retry_read=method == 'GET', validate=validate_protocol)
             if len(raw) > 2_000_000:
