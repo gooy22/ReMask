@@ -103,6 +103,16 @@ assert.deepEqual(JSON.parse(JSON.stringify(ctx.remaskLaunchMetaParse('52,1000','
 // A draft validation rejection must carry the safe Python-authored reason
 // through the PHP bridge; returning only the code made the UI un-actionable.
 const workerJobsOverlay=read('railway-python-worker-jobs-overlay.php');
+const reviewStart=workerJobsOverlay.indexOf("if ($action === 'private_launch_review')");
+const createStart=workerJobsOverlay.indexOf("if ($action === 'create')",reviewStart);
+assert.ok(reviewStart>=0&&createStart>reviewStart,'the private review route must stay distinct from create');
+const reviewBridge=workerJobsOverlay.slice(reviewStart,createStart);
+assert.match(reviewBridge,/'ad_account_id'=>\$accountId,\s*'page_id'=>\$pageId/s,
+    'read-only review must still require a selected ad account and page');
+assert.match(reviewBridge,/\$businessId !== '' && !preg_match/,
+    'a missing BM is allowed only as an explicit act-only review');
+assert.match(reviewBridge,/'business_id'=>\$businessId/,
+    'pass the optional BM through so the Python read-only path can confirm it');
 assert.match(workerJobsOverlay,/\$code === 'PRIVATE_ADS_DRAFT_INVALID_INPUT'/);
 assert.match(workerJobsOverlay,/\$safe\['message'\] = \$validationMessage/);
 assert.match(workerJobsOverlay,/'message'=>\$e->detail\['message'\] \?\? \$e->detail\['code'\]/);

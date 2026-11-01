@@ -493,13 +493,15 @@ try {
             rmx_pwj_out(['ok'=>false,'error'=>'INVALID_PROFILE_ID'], 400);
         }
         foreach ([
-            'business_id'=>$businessId,
             'ad_account_id'=>$accountId,
             'page_id'=>$pageId,
         ] as $label=>$value) {
             if (!preg_match('/^\d{5,30}$/D', (string)$value)) {
                 rmx_pwj_out(['ok'=>false,'error'=>'INVALID_PRIVATE_LAUNCH_TARGET','field'=>$label], 400);
             }
+        }
+        if ($businessId !== '' && !preg_match('/^\d{5,30}$/D', $businessId)) {
+            rmx_pwj_out(['ok'=>false,'error'=>'INVALID_PRIVATE_LAUNCH_TARGET','field'=>'business_id'], 400);
         }
         if (!is_array($launch)) {
             rmx_pwj_out(['ok'=>false,'error'=>'PRIVATE_LAUNCH_PAYLOAD_REQUIRED'], 400);
