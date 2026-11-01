@@ -365,8 +365,8 @@ class AdsManagerLaunch:
                 business_id=target["business_id"], actor_id=actor,
                 allow_draft_gate_recovery=draft_only,
                 allow_saved_publication_gate_recovery=saved_publication_recovery,
-                account_read_fields=preflight_fields if account_only_preflight else None,
-                account_preflight=account_only_preflight)
+                **({"account_read_fields": preflight_fields, "account_preflight": True}
+                   if account_only_preflight else {}))
         except RemoteRequestError:
             raise fail("TRANSPORT_UNAVAILABLE", "Profile HTTP connection did not reach Ads Manager", True) from None
         if account_only_preflight:
