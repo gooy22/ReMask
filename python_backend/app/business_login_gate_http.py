@@ -13,8 +13,8 @@ from urllib.parse import urlencode, urljoin, urlsplit
 
 _FACEBOOK_HOST_SUFFIX = ".facebook.com"
 _CREDENTIAL_NAME = re.compile(
-    r"(^|[_-])(pass(?:word)?|email|login|username|user_name|identifier|otp|"
-    r"security_code|verification_code)([_-]|$)",
+    r"(^|[_-])(pass(?:word)?|email(?:_address)?|username|user_name|identifier|otp|"
+    r"security_code|verification_code)([_-]|$)|^login$",
     re.IGNORECASE,
 )
 _CHALLENGE_MARKERS = (
@@ -152,6 +152,7 @@ class _BusinessGateParser(HTMLParser):
             self.form_counter += 1
             form_id = str(attrs.get("id") or f"__business_gate_form_{self.form_counter}")
             self.forms[form_id] = {
+                "name": str(attrs.get("name") or ""),
                 "action": attrs.get("action") or "",
                 "method": str(attrs.get("method") or "get").casefold(),
                 "fields": [],
@@ -272,7 +273,38 @@ def _extract_business_login_continuation(
         if score:
             ranked.append((score, label_kind, candidate))
     if not ranked:
-        return None, "no_supported_continuation_control"
+        # Some Business login gates ship an otherwise inert POST form with a
+        # generated submit id (for example, u_0_b) and no button text/value.
+        # Accept it only when Meta names the form g_form/login_form and there
+        # is exactly one visible native submit control in that form.
+        unnamed_submits = []
+        for candidate in parser.candidates:
+            if candidate["tag"] not in {"input", "button"} or candidate["hidden"]:
+                continue
+            attrs = candidate["attrs"]
+            label = re.sub(
+                r"\s+", " ", str(candidate["text"] or attrs.get("aria-label") or "")
+            ).strip()
+            if label:
+                continue
+            form = parser.forms.get(str(candidate.get("form_id") or ""))
+            if not form or form.get("hidden") or form.get("interactive"):
+                continue
+            form_names = {
+                str(candidate.get("form_id") or "").casefold(),
+                str(form.get("name") or "").casefold(),
+            }
+            if not form_names.intersection({"g_form", "login_form"}):
+                continue
+            method = str(attrs.get("formmethod") or form.get("method") or "get").upper()
+            if method == "POST":
+                unnamed_submits.append(candidate)
+        if len(unnamed_submits) != 1:
+            return None, (
+                "ambiguous_continuation_controls"
+                if unnamed_submits else "no_supported_continuation_control"
+            )
+        ranked.append((50, "named_login_form_submit", unnamed_submits[0]))
     best_score = max(row[0] for row in ranked)
     best = [row for row in ranked if row[0] == best_score]
     if len(best) != 1:

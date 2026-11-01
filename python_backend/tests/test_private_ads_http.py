@@ -953,11 +953,14 @@ class ReadOnlyReferenceBootstrapReuseTests(unittest.IsolatedAsyncioTestCase):
         return_url = ("https://adsmanager.facebook.com/adsmanager/manage/campaigns"
             "?act=111111&business_id=222222")
         gate_body = """
-            <form id="handoff" action="/business/loginpage/continue" method="post">
-              <input type="hidden" name="fb_dtsg" value="synthetic-gate-csrf">
-              <button type="submit" name="continue" value="1">
-                Продолжить с аккаунтом Facebook
-              </button>
+            <form id="login_form"
+                  action="https://www.facebook.com/login/device-based/validate/"
+                  method="post">
+              <input type="hidden" name="display" value="page">
+              <input type="hidden" name="login_source" value="business_gate">
+              <input type="hidden" name="next" value="https://business.facebook.com/latest/home">
+              <input type="hidden" name="lsd" value="synthetic-gate-lsd">
+              <input type="submit" id="u_0_b" name="u_0_b" value="">
             </form>
             <script>const cfg=["SprinkleConfig",[],{"param_name":"jazoest","version":2,"should_randomize":false}];</script>
         """
@@ -983,8 +986,9 @@ class ReadOnlyReferenceBootstrapReuseTests(unittest.IsolatedAsyncioTestCase):
         async def request(method, url, **options):
             calls.append((method, url, options))
             headers = {}
-            if url == "https://business.facebook.com/business/loginpage/continue":
-                status, headers, raw = 302, {"Location": "/latest/home"}, b""
+            if url == "https://www.facebook.com/login/device-based/validate/":
+                status, headers, raw = 302, {
+                    "Location": "https://business.facebook.com/latest/home"}, b""
             elif url == "https://business.facebook.com/latest/home":
                 status, raw = 200, b"continued"
             elif url == return_url:
@@ -1010,9 +1014,9 @@ class ReadOnlyReferenceBootstrapReuseTests(unittest.IsolatedAsyncioTestCase):
     async def _assert_business_gate_http_flow(self, calls):
         self.assertEqual([row[0] for row in calls], ["POST", "GET", "GET", "POST", "GET"])
         self.assertEqual(calls[0][1],
-            "https://business.facebook.com/business/loginpage/continue")
+            "https://www.facebook.com/login/device-based/validate/")
         self.assertEqual(calls[0][2]["content"],
-            "fb_dtsg=synthetic-gate-csrf&continue=1")
+            "display=page&login_source=business_gate&next=https%3A%2F%2Fbusiness.facebook.com%2Flatest%2Fhome&lsd=synthetic-gate-lsd&u_0_b=")
         self.assertEqual(calls[1][1], "https://business.facebook.com/latest/home")
         self.assertEqual(calls[2][1],
             "https://adsmanager.facebook.com/adsmanager/manage/campaigns"
@@ -1046,6 +1050,11 @@ class ReadOnlyReferenceBootstrapReuseTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_paused_draft_gate_renews_after_noninteractive_handoff_redirect(self):
         calls = await self._mock_business_gate_session()
+        self.web.fetch_text.return_value = (
+            200, ('<p>Meta Business handoff without a form</p>'
+                  '<script>const cfg=["SprinkleConfig",[],{"param_name":"jazoest",'
+                  '"version":2,"should_randomize":false}];</script>'),
+            "https://business.facebook.com/business/loginpage/")
         self.web._business_login_gate_outcome = "native_root_missing"
         with patch("app.private_ads_http.continue_business_login_gate",
                    new=AsyncMock(return_value=None)):

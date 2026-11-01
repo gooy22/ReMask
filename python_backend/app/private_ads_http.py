@@ -18,7 +18,10 @@ import logging
 import re
 from urllib.parse import parse_qs, urlsplit
 
-from .business_login_gate_http import continue_business_login_gate
+from .business_login_gate_http import (
+    continue_business_login_gate,
+    is_business_login_gate_url,
+)
 from .private_ads_draft import fail, flatten_params, identity
 from .private_ads_document import (_auth_gate, _json_payloads, _JSON_SCRIPT_RE,
                                    _response_only, _strict_json, _strict_json_decoder)
@@ -793,56 +796,44 @@ class AdsManagerPrivateHttp:
             bootstrap_client.read_only = True
             context = await bootstrap_client._renew_session(
                 "", sprinkle_document=body, selected_account_id=account_id,
-                allow_host_fallback=False)
+                allow_host_fallback=False,
+                business_gate_url=(final_url if is_business_login_gate_url(final_url) else ""),
+                return_url=request_url)
             session_renewed = True
             business_gate_token_renewed = True
             gate_recovered = True
-        if business_gate_continuation:
-            # First try a single unambiguous Business handoff. If it cannot
-            # return a verified document on these non-interactive paths, use the selected profile's
-            # cookie-authenticated Ads Manager renewal endpoint. The renewal is
-            # read-only; an exact account+Business READ below remains mandatory.
-            recovered = await continue_business_login_gate(
-                web, gate_url=final_url, body=body, return_url=request_url)
+            recovered = getattr(bootstrap_client, "_business_gate_recovery", None)
             if isinstance(recovered, dict):
-                status, body, final_url = recovered["status"], recovered["body"], recovered["url"]
+                status, body, final_url = (
+                    recovered["status"], recovered["body"], recovered["url"])
+                final = urlsplit(final_url)
+        if business_gate_continuation:
+            # Keep gate parsing, same-profile form submission and token renewal
+            # in one session-renewal path. The exact account + Business READ
+            # below remains mandatory before the client can send a write.
+            seed = AdsManagerContext(account_id, business_id, actor_id,
+                "https://adsmanager-graph.facebook.com", "v22.0", "119211728144504", "")
+            bootstrap_client = cls(web, seed)
+            bootstrap_client.document_origin = "https://adsmanager.facebook.com"
+            bootstrap_client.document_url = url
+            bootstrap_client.read_only = True
+            context = await bootstrap_client._renew_session(
+                "", sprinkle_document=body, selected_account_id=account_id,
+                business_gate_url=final_url, return_url=request_url)
+            session_renewed = True
+            business_gate_token_renewed = True
+            gate_recovered = True
+            recovered = getattr(bootstrap_client, "_business_gate_recovery", None)
+            if isinstance(recovered, dict):
+                status, body, final_url = (
+                    recovered["status"], recovered["body"], recovered["url"])
                 final = urlsplit(final_url)
                 gate = _auth_gate(final_url, body)
                 if gate:
-                    error = fail(gate, "Ads Manager returned an authentication gate after Business handoff", True)
+                    error = fail(gate,
+                        "Ads Manager returned an authentication gate after Business handoff", True)
                     error.transport_stage = "bootstrap"
                     raise error
-                gate_recovered = True
-            else:
-                outcome = str(getattr(web, "_business_login_gate_outcome", "unavailable"))
-                log.info("ads_business_login_gate profile=%s outcome=%s",
-                    getattr(web.profile, "name", ""), outcome)
-                safe_refresh_fallback = (
-                    outcome in {"no_supported_continuation_control", "native_request_scope", "native_root_missing", "continuation_redirected_to_auth"}
-                    and not has_login_form(body)
-                )
-                if not safe_refresh_fallback:
-                    error = fail("BUSINESS_LOGIN_GATE",
-                        "Meta Business handoff did not return a verified Ads Manager document", True)
-                    error.transport_stage = "bootstrap"
-                    raise error
-                seed = AdsManagerContext(account_id, business_id, actor_id,
-                    "https://adsmanager-graph.facebook.com", "v22.0", "119211728144504", "")
-                bootstrap_client = cls(web, seed)
-                # Keep the native renewal on Ads Manager's exact origin and
-                # scoped document Referer even though the document redirected
-                # to Business. Do not treat the login-page query as proof.
-                bootstrap_client.document_origin = "https://adsmanager.facebook.com"
-                bootstrap_client.document_url = url
-                bootstrap_client.read_only = True
-                # Keep renewal pinned to the selected Ads Manager origin and
-                # scoped Referer. Do not merge Business login-gate HTML into Ads Manager
-                # request metadata; pass it only to read the fresh SprinkleConfig checksum.
-                context = await bootstrap_client._renew_session(
-                    "", sprinkle_document=body, selected_account_id=account_id)
-                session_renewed = True
-                business_gate_token_renewed = True
-                gate_recovered = True
 
         # Only typed status and comparison results may leave this boundary.
         # Raw URLs, HTML, cookies and initialization values can contain secrets.
@@ -970,11 +961,12 @@ class AdsManagerPrivateHttp:
         return client
 
     async def _renew_session(self, document, *, sprinkle_document="", selected_account_id="",
-                             allow_host_fallback=True):
+                             allow_host_fallback=True, business_gate_url="", return_url=""):
         """One cookie-authenticated native refresh, as AdsMgmtNetworkRefreshToken.
 
-        No advertising write, OAuth grant, alternate actor or configured token.
-        Source: XAdsCMRenewAccessTokenController + AsyncRequest.promisePayload.
+        A reviewed same-profile Business gate may be continued first. This path
+        performs no advertising write, OAuth grant, alternate actor or configured
+        token. Renewal source: XAdsCMRenewAccessTokenController + AsyncRequest.promisePayload.
         """
         try:
             if type(allow_host_fallback) is not bool:
@@ -990,6 +982,39 @@ class AdsManagerPrivateHttp:
             if not document_query.get("act"):
                 separator = "&" if "?" in self.document_url else "?"
                 self.document_url += separator + "act=" + selected_account_id
+            self._business_gate_recovery = None
+            if business_gate_url:
+                if not is_business_login_gate_url(business_gate_url):
+                    raise fail("BUSINESS_LOGIN_GATE", "Session renewal gate URL is not a reviewed Meta Business gate")
+                gate_document = sprinkle_document if isinstance(sprinkle_document, str) else document
+                recovered = await continue_business_login_gate(
+                    self.web,
+                    gate_url=business_gate_url,
+                    body=gate_document,
+                    return_url=return_url or self.document_url,
+                )
+                self._business_gate_recovery = recovered
+                outcome = str(getattr(self.web, "_business_login_gate_outcome", "unavailable"))
+                log.info("ads_business_login_gate profile=%s outcome=%s recovered=%s",
+                    self._profile_name, outcome, isinstance(recovered, dict))
+                if isinstance(recovered, dict):
+                    document = recovered["body"]
+                    sprinkle_document = ""
+                else:
+                    safe_refresh_fallback = (
+                        outcome in {
+                            "no_supported_continuation_control",
+                            "native_request_scope",
+                            "native_root_missing",
+                            "continuation_redirected_to_auth",
+                        }
+                        and not has_login_form(gate_document)
+                    )
+                    if not safe_refresh_fallback:
+                        error = fail("BUSINESS_LOGIN_GATE",
+                            "Meta Business handoff did not return a verified Ads Manager document", True)
+                        error.transport_stage = "bootstrap"
+                        raise error
             # Use the ordinary profile bootstrap that serves the existing Business
             # reads. The forced profile-page probe can stop on Meta's login gate
             # before the exact account + Business read below gets a chance to prove

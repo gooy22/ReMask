@@ -56,6 +56,51 @@ class GateContinuationParserTests(unittest.TestCase):
         self.assertEqual(result["fields"], [("fb_dtsg", "csrf-token"), ("continue", "1")])
         self.assertEqual(result["label_kind"], "facebook_continue")
 
+    def test_extracts_meta_g_form_and_login_form_hidden_envelopes(self):
+        for form_id in ("g_form", "login_form"):
+            with self.subTest(form_id=form_id):
+                body = f"""
+                <form id="{form_id}"
+                      action="https://www.facebook.com/login/device-based/validate/"
+                      method="post">
+                  <input type="hidden" name="display" value="page">
+                  <input type="hidden" name="login_source" value="business_gate">
+                  <input type="hidden" name="next" value="https://business.facebook.com/latest/home">
+                  <input type="hidden" name="lsd" value="fresh-session-token">
+                  <input type="submit" id="u_0_b" name="u_0_b" value="Continue">
+                </form>
+                """
+                result = extract_business_login_continuation(body, GATE_URL)
+                self.assertEqual(result["method"], "POST")
+                self.assertEqual(
+                    result["url"],
+                    "https://www.facebook.com/login/device-based/validate/",
+                )
+                self.assertEqual(result["fields"], [
+                    ("display", "page"),
+                    ("login_source", "business_gate"),
+                    ("next", "https://business.facebook.com/latest/home"),
+                    ("lsd", "fresh-session-token"),
+                    ("u_0_b", "Continue"),
+                ])
+
+    def test_accepts_single_unnamed_submit_only_for_named_meta_form(self):
+        body = """
+        <form id="g_form" action="https://www.facebook.com/login/device-based/validate/"
+              method="post">
+          <input type="hidden" name="display" value="page">
+          <input type="hidden" name="next" value="https://business.facebook.com/latest/home">
+          <input type="submit" id="u_0_b" name="u_0_b" value="">
+        </form>
+        """
+        result = extract_business_login_continuation(body, GATE_URL)
+        self.assertEqual(result["method"], "POST")
+        self.assertEqual(result["label_kind"], "named_login_form_submit")
+        self.assertEqual(result["fields"][-1], ("u_0_b", ""))
+
+        generic_form = body.replace('id="g_form"', 'id="handoff"')
+        self.assertIsNone(extract_business_login_continuation(generic_form, GATE_URL))
+
     def test_accepts_russian_meta_business_suite_continuation(self):
         body = """
         <form id="handoff" action="/business/loginpage/continue" method="post">
@@ -304,6 +349,43 @@ class GateContinuationTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(method, "POST")
         self.assertEqual(url, "https://business.facebook.com/business/loginpage/continue")
         self.assertEqual(kwargs["content"], "fb_dtsg=csrf-token&continue=1")
+        self.assertEqual(kwargs["proxy"], "http://profile-proxy:8080")
+
+    async def test_posts_named_login_form_hidden_fields_through_same_profile_session(self):
+        body = """
+        <form id="login_form" action="https://www.facebook.com/login/device-based/validate/"
+              method="post">
+          <input type="hidden" name="display" value="page">
+          <input type="hidden" name="login_source" value="business_gate">
+          <input type="hidden" name="next" value="https://business.facebook.com/latest/home">
+          <input type="hidden" name="lsd" value="fresh-session-token">
+          <input type="submit" id="u_0_b" name="u_0_b" value="">
+        </form>
+        """
+        session = _FakeSession([
+            _Response(302, "https://www.facebook.com/login/device-based/validate/",
+                      headers={"Location": "https://business.facebook.com/latest/home"}),
+            _Response(200, "https://business.facebook.com/latest/home", b"handoff response"),
+            _Response(200, RETURN_URL, b"verified profile response"),
+        ])
+        web = _FakeWeb(session)
+        result = await continue_business_login_gate(
+            web, gate_url=GATE_URL, body=body, return_url=RETURN_URL,
+        )
+        self.assertEqual(result["status"], 200)
+        self.assertEqual(result["url"], RETURN_URL)
+        self.assertEqual(web._business_login_gate_outcome, "recovered")
+        self.assertIs(web.session, session)
+        self.assertEqual(len(session.request_calls), 3)
+        method, url, kwargs = session.request_calls[0]
+        self.assertEqual(method, "POST")
+        self.assertEqual(
+            url, "https://www.facebook.com/login/device-based/validate/",
+        )
+        self.assertEqual(
+            kwargs["content"],
+            "display=page&login_source=business_gate&next=https%3A%2F%2Fbusiness.facebook.com%2Flatest%2Fhome&lsd=fresh-session-token&u_0_b=",
+        )
         self.assertEqual(kwargs["proxy"], "http://profile-proxy:8080")
 
     async def test_records_safe_reason_when_gate_has_no_supported_control(self):
