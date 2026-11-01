@@ -622,7 +622,7 @@ async def run_one_shot_act_preflight() -> None:
         observed_business=str(business.get('id') or '').strip() if isinstance(business,dict) else ''
         context_business=str(getattr(client.context,'business_id','') or '').strip()
         if (observed_account != account_id
-                or not re.fullmatch(r'\\d{5,30}',observed_business)
+                or not re.fullmatch(r'\d{5,30}',observed_business)
                 or context_business != observed_business):
             raise RuntimeError('account_scope_not_confirmed')
         log.info(

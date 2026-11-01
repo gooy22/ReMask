@@ -1287,19 +1287,21 @@ class ActOnlyStartupPreflightTests(unittest.IsolatedAsyncioTestCase):
             'REMASK_ACT_PREFLIGHT_PROFILE':profile_id,
             'REMASK_ACT_PREFLIGHT_ACCOUNT_ID':account_id,
         }
-        with tempfile.TemporaryDirectory() as data_root, patch.object(worker_main,'DATA_ROOT',data_root), \\
-                patch.object(worker_main,'pool',pool), patch.object(worker_main,'ProfileSession',FakeProfileSession), \\
-                patch.dict(os.environ,variables,clear=False):
-            with patch('app.private_ads_http.AdsManagerPrivateHttp.open',
-                       new=AsyncMock(return_value=client)) as open_private:
-                await worker_main.run_one_shot_act_preflight()
-                await worker_main.run_one_shot_act_preflight()
-            open_private.assert_awaited_once()
-            pool.resolver.resolve.assert_awaited_once_with(profile_id)
-            kwargs=open_private.await_args.kwargs
-            self.assertEqual(kwargs['account_id'],account_id)
-            self.assertEqual(kwargs['business_id'],'')
-            self.assertEqual(kwargs['account_read_fields'],fields)
-            self.assertIs(kwargs['account_preflight'],True)
-            self.assertNotIn('allow_host_fallback',kwargs)
-            self.assertTrue(client.read_only)
+        with tempfile.TemporaryDirectory() as data_root:
+            with patch.object(worker_main,'DATA_ROOT',data_root):
+                with patch.object(worker_main,'pool',pool):
+                    with patch.object(worker_main,'ProfileSession',FakeProfileSession):
+                        with patch.dict(os.environ,variables,clear=False):
+                            with patch('app.private_ads_http.AdsManagerPrivateHttp.open',
+                                       new=AsyncMock(return_value=client)) as open_private:
+                                await worker_main.run_one_shot_act_preflight()
+                                await worker_main.run_one_shot_act_preflight()
+                            open_private.assert_awaited_once()
+                            pool.resolver.resolve.assert_awaited_once_with(profile_id)
+                            kwargs=open_private.await_args.kwargs
+                            self.assertEqual(kwargs['account_id'],account_id)
+                            self.assertEqual(kwargs['business_id'],'')
+                            self.assertEqual(kwargs['account_read_fields'],fields)
+                            self.assertIs(kwargs['account_preflight'],True)
+                            self.assertNotIn('allow_host_fallback',kwargs)
+                            self.assertTrue(client.read_only)
