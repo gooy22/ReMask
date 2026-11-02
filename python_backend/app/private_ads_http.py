@@ -1221,12 +1221,6 @@ class AdsManagerPrivateHttp:
                 any('jazoest' in source for source in (document, sprinkle_document) if source),
                 bool(form.get('jazoest')))
 
-                "response_pair_present=%s checksum_marker_present=%s checksum_present=%s",
-                self._profile_name, checksum_source, bool(configs['SprinkleConfig']),
-                any(len(fields['fb_dtsg']) == len(fields['jazoest']) == 1
-                    for _, fields in response_fields),
-                any('jazoest' in source for source in (document, sprinkle_document) if source),
-                bool(form.get('jazoest')))
             if sprinkle_document and not form.get('jazoest'):
                 raise fail('SESSION_RENEWAL_CONFIG_UNAVAILABLE',
                     'Current Meta response did not provide a verified jazoest checksum')
