@@ -1175,7 +1175,52 @@ class AdsManagerPrivateHttp:
                             form['lsd'] = next(iter(fields['lsd']))
                         checksum_source = label + '_literal'
                         break
+            bootstrap_pair_present = False
+            if sprinkle_document and not form.get('jazoest'):
+                bootstrap_fb_dtsg = getattr(bootstrap, "fb_dtsg", "")
+                bootstrap_jazoest = getattr(bootstrap, "jazoest", "")
+                try:
+                    bootstrap_source = urlsplit(
+                        str(getattr(bootstrap, "source_url", "") or "")
+                    )
+                    bootstrap_host = str(bootstrap_source.hostname or "").casefold()
+                    bootstrap_path = (
+                        str(bootstrap_source.path or "/").casefold().rstrip("/") or "/"
+                    )
+                    bootstrap_port = bootstrap_source.port
+                except ValueError:
+                    bootstrap_source = None
+                    bootstrap_host = ""
+                    bootstrap_path = ""
+                    bootstrap_port = None
+                bootstrap_is_document = bool(
+                    bootstrap_source is not None
+                    and bootstrap_source.scheme == "https"
+                    and (bootstrap_host == "facebook.com"
+                         or bootstrap_host.endswith(".facebook.com"))
+                    and bootstrap_port in (None, 443)
+                    and not bootstrap_source.username
+                    and not bootstrap_source.password
+                    and not bootstrap_path.startswith("/ajax/")
+                )
+                bootstrap_pair_present = bool(
+                    bootstrap_is_document
+                    and form.get("fb_dtsg") == bootstrap_fb_dtsg
+                    and isinstance(bootstrap_jazoest, str)
+                    and re.fullmatch(r"[0-9]{3,12}", bootstrap_jazoest)
+                )
+                if bootstrap_pair_present:
+                    form["jazoest"] = bootstrap_jazoest
+                    checksum_source = "profile_bootstrap_pair"
             log.info("ads_session_renewal_checksum profile=%s source=%s config_present=%s "
+                "response_pair_present=%s bootstrap_pair_present=%s checksum_marker_present=%s checksum_present=%s",
+                self._profile_name, checksum_source, bool(configs['SprinkleConfig']),
+                any(len(fields['fb_dtsg']) == len(fields['jazoest']) == 1
+                    for _, fields in response_fields),
+                bootstrap_pair_present,
+                any('jazoest' in source for source in (document, sprinkle_document) if source),
+                bool(form.get('jazoest')))
+
                 "response_pair_present=%s checksum_marker_present=%s checksum_present=%s",
                 self._profile_name, checksum_source, bool(configs['SprinkleConfig']),
                 any(len(fields['fb_dtsg']) == len(fields['jazoest']) == 1
