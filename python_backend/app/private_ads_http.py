@@ -23,8 +23,9 @@ from .business_login_gate_http import (
     is_business_login_gate_url,
 )
 from .private_ads_draft import fail, flatten_params, identity
-from .private_ads_document import (_auth_gate, _json_payloads, _JSON_SCRIPT_RE,
-                                   _response_only, _strict_json, _strict_json_decoder)
+from .private_ads_document import (_auth_gate, _extract_sprinkle_config, _json_payloads,
+                                   _JSON_SCRIPT_RE, _response_only, _strict_json,
+                                   _strict_json_decoder)
 from .provisioning.models import ProvisioningError
 from .meta_auth_document import has_login_form
 from .private_http_metrics import measure_phase
@@ -1108,28 +1109,17 @@ class AdsManagerPrivateHttp:
                                 and node[0] == 'SprinkleConfig' and node[1] == []
                                 and isinstance(node[2], dict)):
                             configs['SprinkleConfig'].append(node[2])
-            # ServerJS can embed module tuples inside a JavaScript script instead
-            # of exposing a standalone JSON script or s.handle(...) payload.
-            # Decode only the exact current-response SprinkleConfig tuple. The
-            # strict decoder rejects duplicate keys and non-finite values.
-            from html import unescape
-            decoder = _strict_json_decoder()
-            sprinkle_tuple = re.compile(
-                r'\[\s*"SprinkleConfig"\s*,\s*\[\s*\]\s*,\s*\{')
-            for source in (document, sprinkle_document):
-                if not source:
-                    continue
-                for script_match in _JSON_SCRIPT_RE.finditer(source):
-                    script = unescape(script_match.group(1))
-                    for match in sprinkle_tuple.finditer(script):
-                        try:
-                            node, _ = decoder.raw_decode(script, match.start())
-                        except (ValueError, RecursionError):
-                            continue
-                        if (isinstance(node, list) and len(node) == 3
-                                and node[0] == 'SprinkleConfig' and node[1] == []
-                                and isinstance(node[2], dict)):
-                            configs['SprinkleConfig'].append(node[2])
+            # Inline ServerJS assignments are valid JavaScript but not a
+            # standalone JSON script. Parse only a validated checksum tuple from
+            # the current response using the shared strict document parser.
+            if not configs['SprinkleConfig']:
+                for source in (document, sprinkle_document):
+                    if not source:
+                        continue
+                    sprinkle_config = _extract_sprinkle_config(source)
+                    if sprinkle_config:
+                        configs['SprinkleConfig'].append(sprinkle_config)
+                        break
             # Some first responses carry the already-computed AsyncRequest
             # checksum as an HTML input or literal JSON instead of defining
             # SprinkleConfig.

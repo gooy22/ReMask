@@ -15,6 +15,8 @@ from urllib.parse import parse_qs, unquote, urljoin, urlsplit
 import aiohttp
 import httpx
 
+from app.private_ads_document import _extract_sprinkle_config
+
 from app.private_http import PrivateHttpClient
 from app.business_login_gate_http import continue_business_login_gate, is_business_login_gate_url
 from app.meta_auth_document import auth_route_gate as _auth_route_gate, has_login_form as _has_login_form
@@ -81,58 +83,6 @@ class FacebookBootstrap:
     profile_actor_verified: bool = False
     sprinkle_config: dict[str, object] = field(default_factory=dict, repr=False)
 
-
-def _extract_profile_sprinkle_config(document: str) -> dict[str, object]:
-    """Keep only checksum metadata paired with the current profile document."""
-    import re
-    from html import unescape
-    from app.private_ads_document import _JSON_SCRIPT_RE, _strict_json_decoder
-
-    marker = re.compile(
-        r'\[\s*["\']SprinkleConfig["\']\s*,\s*\[\s*\]\s*,\s*\{'
-    )
-    decoder = _strict_json_decoder()
-    found = []
-    for script_match in _JSON_SCRIPT_RE.finditer(str(document or "")):
-        script = unescape(script_match.group(1))
-        for match in marker.finditer(script):
-            try:
-                node, _ = decoder.raw_decode(script, match.start())
-            except (ValueError, RecursionError):
-                continue
-            if not (
-                isinstance(node, list) and len(node) == 3
-                and node[0] == "SprinkleConfig" and node[1] == []
-                and isinstance(node[2], dict)
-            ):
-                continue
-            config = node[2]
-            version = config.get("version")
-            randomize = config.get("should_randomize")
-            if (
-                config.get("param_name") != "jazoest"
-                or type(randomize) is not bool
-                or not isinstance(version, (str, int))
-                or not str(version).isdigit()
-            ):
-                continue
-            found.append({
-                "param_name": "jazoest",
-                "version": str(version),
-                "should_randomize": randomize,
-            })
-    unique = {
-        (item["param_name"], item["version"], item["should_randomize"])
-        for item in found
-    }
-    if len(unique) != 1:
-        return {}
-    param_name, version, should_randomize = next(iter(unique))
-    return {
-        "param_name": param_name,
-        "version": version,
-        "should_randomize": should_randomize,
-    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -947,7 +897,7 @@ class FacebookWebSession:
                     request_context=self._extract_request_context(body),
                     source_url=target,
                     profile_actor_verified=actor_verified,
-                    sprinkle_config=_extract_profile_sprinkle_config(body),
+                    sprinkle_config=_extract_sprinkle_config(body),
                 )
                 self._bootstrap = bootstrap
                 self._profile_session_identity_verified = actor_verified
@@ -1398,7 +1348,7 @@ class FacebookWebSession:
                 jazoest=jazoest,
                 request_context=request_context,
                 source_url=final_url,
-                sprinkle_config=_extract_profile_sprinkle_config(body),
+                sprinkle_config=_extract_sprinkle_config(body),
             )
 
             self._bootstrap = bootstrap
@@ -1861,7 +1811,7 @@ class FacebookWebSession:
                     lsd=self._first_match(body, [r'"LSD".{0,1800}?"token"\s*:\s*"([^"]+)"']),
                     jazoest=self._first_match(body, [r"""name=["']jazoest["'][^>]*value=["']([^"']+)["']"""]),
                     request_context=self._extract_request_context(body), source_url=final_url,
-                    sprinkle_config=_extract_profile_sprinkle_config(body),
+                    sprinkle_config=_extract_sprinkle_config(body),
                 )
                 self._bootstrap = current
                 await self.refresh_reviewed_modules(body, final_url)
@@ -1926,7 +1876,7 @@ class FacebookWebSession:
                     current = FacebookBootstrap(fb_dtsg=token, actor_id=expected_actor,
                         lsd=self._first_match(auth_body, [r'"LSD".{0,1800}?"token"\s*:\s*"([^"]+)"']),
                         request_context=self._extract_request_context(auth_body), source_url=auth_url,
-                        sprinkle_config=_extract_profile_sprinkle_config(auth_body))
+                        sprinkle_config=_extract_sprinkle_config(auth_body))
                     self._bootstrap = current
                     log.info("[%s] BUSINESS contract precheck verified current profile independently attempts=%s",
                              self.profile.name, json.dumps(attempts, separators=(",", ":")))

@@ -43,6 +43,45 @@ def _strict_json_decoder():
                             parse_constant=_reject_json_constant,
                             parse_float=_finite_json_float)
 
+_SPRINKLE_CONFIG_TUPLE = re.compile(
+    r'\[\s*["\']SprinkleConfig["\']\s*,\s*\[\s*\]\s*,\s*(?P<config>\{)'
+)
+
+
+def _extract_sprinkle_config(document: str) -> dict[str, Any]:
+    """Read one unambiguous AsyncRequest checksum config from a response document."""
+    found = []
+    for script_match in _JSON_SCRIPT_RE.finditer(str(document or "")):
+        script = html.unescape(script_match.group(1))
+        for match in _SPRINKLE_CONFIG_TUPLE.finditer(script):
+            try:
+                config, _ = _strict_json_decoder().raw_decode(
+                    script, match.start("config"))
+            except (ValueError, RecursionError):
+                continue
+            if not isinstance(config, dict):
+                continue
+            version = config.get("version")
+            randomize = config.get("should_randomize")
+            if (
+                config.get("param_name") != "jazoest"
+                or type(randomize) is not bool
+                or not isinstance(version, (str, int))
+                or not str(version).isdigit()
+            ):
+                continue
+            found.append((str(version), randomize))
+    unique = set(found)
+    if len(unique) != 1:
+        return {}
+    version, randomize = next(iter(unique))
+    return {
+        "param_name": "jazoest",
+        "version": version,
+        "should_randomize": randomize,
+    }
+
+
 
 def _strict_json(raw):
     # json.loads accepts both HTTP response bytes and document strings;

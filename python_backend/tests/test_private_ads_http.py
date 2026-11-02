@@ -1152,7 +1152,7 @@ class ReadOnlyReferenceBootstrapReuseTests(unittest.IsolatedAsyncioTestCase):
         calls = await self._mock_business_gate_session()
         self.web.fetch_text.return_value = (
             200, ('<p>Meta Business handoff without a form</p>'
-                  '<script>const cfg=["SprinkleConfig",[],{"param_name":"jazoest",'
+                  '<script>const cfg=[\'SprinkleConfig\',[],{"param_name":"jazoest",'
                   '"version":2,"should_randomize":false}];</script>'),
             "https://business.facebook.com/business/loginpage/")
         self.web._business_login_gate_outcome = "native_root_missing"
