@@ -2,8 +2,8 @@
 /**
  * v74 single-click Launch flow with automatic naming.
  * The Launch button must not be hard-disabled by opaque client readiness state.
- * On click we validate locally, run Launch Review automatically, and only then
- * create the job when the server says the selection is ready.
+ * Draft mode submits directly to the existing server job flow; other modes
+ * retain Launch Review before job creation.
  */
 $root = '/var/www/html';
 $jsPath = $root . '/scripts/launch.js';
@@ -159,16 +159,20 @@ $replacement = <<<'JS'
     const payload = config.payload;
     const accountOverrides = config.accountOverrides;
 
-    // One-click flow: validate the exact selection against Meta before any mutation.
-    show($('launchResult'), `Checking ${accountIds.length} ad account(s) before launch...`);
-    const review = await reviewSelected(false);
-    if (!review) {
-        show($('launchResult'), 'Launch Review failed. Fix the error shown above and try again.', 'failed');
-        return;
-    }
-    if (review.ready !== true) {
-        show($('launchResult'), 'Launch blocked: one or more selected RK failed Launch Review. See the review table above.', 'failed');
-        return;
+    // Draft mode sends the saved configuration straight to the existing job/API flow.
+    // Meta's CREATE response is authoritative; other execution modes retain Launch Review.
+    const executionMode = String($('remaskPrivateExecutionMode')?.value || '').toUpperCase();
+    if (executionMode !== 'DRAFT') {
+        show($('launchResult'), `Checking ${accountIds.length} ad account(s) before launch...`);
+        const review = await reviewSelected(false);
+        if (!review) {
+            show($('launchResult'), 'Launch Review failed. Fix the error shown above and try again.', 'failed');
+            return;
+        }
+        if (review.ready !== true) {
+            show($('launchResult'), 'Launch blocked: one or more selected RK failed Launch Review. See the review table above.', 'failed');
+            return;
+        }
     }
 
     const form = new FormData();
