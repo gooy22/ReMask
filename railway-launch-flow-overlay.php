@@ -1,6 +1,6 @@
 <?php
 /**
- * v74 single-click Launch flow with automatic naming.
+ * v75 single-click Launch flow with automatic naming.
  * The Launch button must not be hard-disabled by opaque client readiness state.
  * Draft mode submits directly to the existing server job flow; other modes
  * retain Launch Review before job creation.
@@ -159,6 +159,7 @@ $replacement = <<<'JS'
     const payload = config.payload;
     const accountOverrides = config.accountOverrides;
 
+    // REMASK_DRAFT_SKIP_REVIEW_V1
     // Draft mode sends the saved configuration straight to the existing job/API flow.
     // Meta's CREATE response is authoritative; other execution modes retain Launch Review.
     const executionMode = String($('remaskPrivateExecutionMode')?.value || '').toUpperCase();
@@ -178,7 +179,7 @@ $replacement = <<<'JS'
     const form = new FormData();
 JS;
 
-if (strpos($js, "Launch blocked: one or more selected RK failed Launch Review") === false) {
+if (strpos($js, 'REMASK_DRAFT_SKIP_REVIEW_V1') === false) {
     if (strpos($js, $needle) === false) {
         fwrite(STDERR, "[launch-flow] job creation insertion point not found\n");
         exit(125);
@@ -192,7 +193,7 @@ if (strpos($js, "Launch blocked: one or more selected RK failed Launch Review") 
 
 $php = preg_replace(
     '#<script src="scripts/launch\.js(?:\?[^"]*)?" type="module"></script>#',
-    '<script src="scripts/launch.js?v=20260918-single-click-v74" type="module"></script>',
+    '<script src="scripts/launch.js?v=20261102-draft-launch-v75" type="module"></script>',
     $php,
     1,
     $sc
