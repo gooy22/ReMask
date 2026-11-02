@@ -341,36 +341,29 @@ JS_CODE;
     if($pc!==1){fwrite(STDERR,"[meta-builder-v102] current payload replacement count=$pc\n");exit(327);}
 
     $placementNeedle=<<<'JS_CODE'
-    const payload = config.payload;
-    const accountOverrides = config.accountOverrides;
-
-    // One-click flow: validate the exact selection against Meta before any mutation.
+    if (executionMode !== 'DRAFT') {
 JS_CODE;
     $placementReplace=<<<'JS_CODE'
-    const payload = config.payload;
-    const accountOverrides = config.accountOverrides;
-
-    const placementCheck = await remaskValidatePlacementsForLaunch(config);
-    if (!placementCheck.ok) {
-        show(
-            $('launchResult'),
-            'Launch blocked by RK-specific placements: ' + placementCheck.failures.join(' | '),
-            'failed'
-        );
-        return;
-    }
-    if (placementCheck.verified) {
-        show(
-            $('launchResult'),
-            'Placements verified from Meta for ' + placementCheck.checked + ' RK.' +
-                (placementCheck.warnings?.length ? ' Warnings: ' + placementCheck.warnings.join(' | ') : ''),
-            'ready'
-        );
-    }
-
-    // One-click flow: validate the exact selection against Meta before any mutation.
+    if (executionMode !== 'DRAFT') {
+        const placementCheck = await remaskValidatePlacementsForLaunch(config);
+        if (!placementCheck.ok) {
+            show(
+                $('launchResult'),
+                'Launch blocked by RK-specific placements: ' + placementCheck.failures.join(' | '),
+                'failed'
+            );
+            return;
+        }
+        if (placementCheck.verified) {
+            show(
+                $('launchResult'),
+                'Placements verified from Meta for ' + placementCheck.checked + ' RK.' +
+                    (placementCheck.warnings?.length ? ' Warnings: ' + placementCheck.warnings.join(' | ') : ''),
+                'ready'
+            );
+        }
 JS_CODE;
-    if(strpos($launch,$placementNeedle)===false){fwrite(STDERR,"[meta-builder-v102] placement preflight anchor missing\n");exit(328);}
+    if(strpos($launch,$placementNeedle)===false){fwrite(STDERR,"[meta-builder-v102] execution-mode placement anchor missing\\n");exit(328);}
     $launch=str_replace($placementNeedle,$placementReplace,$launch,$vc);
     if($vc!==1){fwrite(STDERR,"[meta-builder-v102] placement preflight replacement count=$vc\n");exit(329);}
 
