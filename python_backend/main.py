@@ -4281,6 +4281,15 @@ async def private_launch_review(profile_id: str, payload: dict = Body(...)):
         result = {key:value for key,value in result.items() if not key.startswith('_')}
         return {'ok':True,**result}
     except ProvisioningError as exc:
+        request_keys = sorted(str(key) for key in payload)[:30] if isinstance(payload, dict) else []
+        transport_stage = str(getattr(exc, 'transport_stage', '') or 'unknown')
+        log.warning(
+            "private_launch_review_failed profile=%s code=%s retryable=%s "
+            "request_may_have_been_sent=%s transport_stage=%s payload_keys=%s",
+            clean_profile, exc.code, bool(exc.retryable),
+            bool(getattr(exc, 'request_may_have_been_sent', False)),
+            transport_stage, ",".join(request_keys) or "-",
+        )
         if exc.code in {'CHECKPOINT_REQUIRED', 'PRIVATE_ADS_DRAFT_CHECKPOINT_REQUIRED'}:
             await store.record_terminal_checkpoint(clean_profile)
         elif exc.code in {'BUSINESS_LOGIN_GATE', 'PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE'}:

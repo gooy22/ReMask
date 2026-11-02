@@ -1020,7 +1020,36 @@ class AdsManagerPrivateHttp:
             # before the exact account + Business read below gets a chance to prove
             # the selected scope. The saved c_user, profile, proxy and cookie snapshot
             # are still pinned by _profile_matches(), and no write is enabled yet.
-            bootstrap = await self.web.bootstrap()
+            previous_defer_module_refresh = getattr(self.web, "defer_module_refresh", None)
+            if previous_defer_module_refresh is not None:
+                self.web.defer_module_refresh = True
+            try:
+                bootstrap = await self.web.bootstrap()
+            finally:
+                if previous_defer_module_refresh is not None:
+                    self.web.defer_module_refresh = previous_defer_module_refresh
+            bootstrap_fb_dtsg = getattr(bootstrap, "fb_dtsg", "")
+            bootstrap_source_is_document = False
+            try:
+                bootstrap_source = urlsplit(
+                    str(getattr(bootstrap, "source_url", "") or "")
+                )
+                bootstrap_host = str(bootstrap_source.hostname or "").casefold()
+                bootstrap_path = (
+                    str(bootstrap_source.path or "/").casefold().rstrip("/") or "/"
+                )
+                bootstrap_port = bootstrap_source.port
+                bootstrap_source_is_document = bool(
+                    bootstrap_source.scheme == "https"
+                    and (bootstrap_host == "facebook.com"
+                         or bootstrap_host.endswith(".facebook.com"))
+                    and bootstrap_port in (None, 443)
+                    and not bootstrap_source.username
+                    and not bootstrap_source.password
+                    and not bootstrap_path.startswith("/ajax/")
+                )
+            except ValueError:
+                bootstrap_source_is_document = False
             session = await self.web._ensure_session()
             restore_cookie_snapshot = getattr(
                 self.web, "_restore_profile_cookie_snapshot_if_lost", None)
@@ -1141,6 +1170,35 @@ class AdsManagerPrivateHttp:
                                 parser.values['lsd'].add(node['lsd'])
                 response_fields.append((label, parser.values))
             checksum_source = "document" if document else "gate"
+            if sprinkle_document and not document:
+                gate_field_sets = [
+                    fields for label, fields in response_fields if label == "gate"
+                ]
+                gate_dtsg_is_unique = (
+                    len(gate_field_sets) == 1
+                    and len(gate_field_sets[0]["fb_dtsg"]) == 1
+                )
+                if not configs["SprinkleConfig"] or not gate_dtsg_is_unique:
+                    # A gate checksum can only be paired with its own gate DTSG.
+                    # Without one, use the config captured beside this profile's
+                    # independently verified bootstrap token.
+                    configs["SprinkleConfig"] = []
+                    profile_sprinkle = getattr(bootstrap, "sprinkle_config", {})
+                    profile_version = (
+                        profile_sprinkle.get("version")
+                        if isinstance(profile_sprinkle, dict) else None
+                    )
+                    if (
+                        bootstrap_source_is_document
+                        and form.get("fb_dtsg") == bootstrap_fb_dtsg
+                        and isinstance(profile_sprinkle, dict)
+                        and profile_sprinkle.get("param_name") == "jazoest"
+                        and type(profile_sprinkle.get("should_randomize")) is bool
+                        and isinstance(profile_version, (str, int))
+                        and str(profile_version).isdigit()
+                    ):
+                        configs["SprinkleConfig"].append(profile_sprinkle)
+                        checksum_source = "profile_bootstrap_sprinkle_config"
             for module, field in (('DTSGInitialData','fb_dtsg'),('DTSGInitData','fb_dtsg'),('LSD','lsd')):
                 if configs[module]:
                     value = _unique(configs[module], 'SESSION_RENEWAL_CONFIG_UNAVAILABLE').get('token')
@@ -1154,11 +1212,12 @@ class AdsManagerPrivateHttp:
                         or not isinstance(version, (str,int)) or not str(version).isdigit()):
                     raise fail('SESSION_RENEWAL_CONFIG_UNAVAILABLE','Fresh AsyncRequest CSRF checksum is unreviewed')
                 if sprinkle_document and not document:
-                    for label, fields in response_fields:
-                        if label == 'gate' and len(fields['fb_dtsg']) == 1:
-                            form['fb_dtsg'] = next(iter(fields['fb_dtsg']))
-                            if len(fields['lsd']) == 1:
-                                form['lsd'] = next(iter(fields['lsd']))
+                    if checksum_source != "profile_bootstrap_sprinkle_config":
+                        for label, fields in response_fields:
+                            if label == 'gate' and len(fields['fb_dtsg']) == 1:
+                                form['fb_dtsg'] = next(iter(fields['fb_dtsg']))
+                                if len(fields['lsd']) == 1:
+                                    form['lsd'] = next(iter(fields['lsd']))
                 # DTSGUtils.getNumericValue sums UTF-16 code units, then adds
                 # the fresh SprinkleConfig version when randomization is off.
                 units = form['fb_dtsg'].encode('utf-16-le', errors='surrogatepass')
@@ -1213,11 +1272,18 @@ class AdsManagerPrivateHttp:
                     form["jazoest"] = bootstrap_jazoest
                     checksum_source = "profile_bootstrap_pair"
             log.info("ads_session_renewal_checksum profile=%s source=%s config_present=%s "
-                "response_pair_present=%s bootstrap_pair_present=%s checksum_marker_present=%s checksum_present=%s",
+                "response_pair_present=%s bootstrap_pair_present=%s bootstrap_dtsg_present=%s "
+                "bootstrap_jazoest_numeric=%s bootstrap_source_document=%s bootstrap_dtsg_matches=%s "
+                "bootstrap_sprinkle_config_present=%s checksum_marker_present=%s checksum_present=%s",
                 self._profile_name, checksum_source, bool(configs['SprinkleConfig']),
                 any(len(fields['fb_dtsg']) == len(fields['jazoest']) == 1
                     for _, fields in response_fields),
                 bootstrap_pair_present,
+                bool(getattr(bootstrap, "fb_dtsg", "")),
+                bool(re.fullmatch(r"[0-9]{3,12}", str(getattr(bootstrap, "jazoest", "") or ""))),
+                bootstrap_source_is_document,
+                form.get("fb_dtsg") == getattr(bootstrap, "fb_dtsg", ""),
+                bool(getattr(bootstrap, "sprinkle_config", {})),
                 any('jazoest' in source for source in (document, sprinkle_document) if source),
                 bool(form.get('jazoest')))
 
