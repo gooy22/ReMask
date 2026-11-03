@@ -142,6 +142,9 @@ try {
         throw $error;
     }
 } catch (Throwable $error) {
+    $failureCode = $error->getMessage();
+    if (!preg_match('/^[A-Z][A-Z0-9_]{2,119}$/D', $failureCode)) $failureCode = 'UNCLASSIFIED';
+    error_log('[template-targeting-search] failure code='.$failureCode.' type='.get_class($error));
     http_response_code($error instanceof InvalidArgumentException ? 400 : 409);
     header('Content-Type: application/json; charset=utf-8');
     header('Cache-Control: no-store');
