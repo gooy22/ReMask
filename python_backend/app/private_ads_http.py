@@ -999,7 +999,69 @@ class AdsManagerPrivateHttp:
                 log.info("ads_business_login_gate profile=%s outcome=%s recovered=%s",
                     self._profile_name, outcome, isinstance(recovered, dict))
                 if isinstance(recovered, dict):
-                    document = recovered["body"]
+                    recovered_status = recovered.get("status")
+                    recovered_body = recovered.get("body")
+                    recovered_url = str(recovered.get("url") or "")
+                    expected_return_url = return_url or self.document_url
+                    try:
+                        expected_parts = urlsplit(expected_return_url)
+                        recovered_parts = urlsplit(recovered_url)
+                        expected_query = parse_qs(expected_parts.query, keep_blank_values=True)
+                        recovered_query = parse_qs(recovered_parts.query, keep_blank_values=True)
+                        expected_host = str(expected_parts.hostname or "").casefold()
+                        recovered_host = str(recovered_parts.hostname or "").casefold()
+                        exact_scoped_document = (
+                            type(recovered_status) is int and recovered_status == 200
+                            and isinstance(recovered_body, str)
+                            and len(recovered_body.encode("utf-8")) <= 5_000_000
+                            and expected_parts.scheme == "https"
+                            and expected_host in {"adsmanager.facebook.com", "business.facebook.com"}
+                            and expected_parts.port in (None, 443)
+                            and not expected_parts.username and not expected_parts.password
+                            and expected_parts.path == "/adsmanager/manage/campaigns"
+                            and set(expected_query) <= {"act", "business_id"}
+                            and expected_query.get("act") == [selected_account_id]
+                            and (not self.context.business_id
+                                 or expected_query.get("business_id") == [self.context.business_id])
+                            and recovered_parts.scheme == "https"
+                            and recovered_host in {"adsmanager.facebook.com", "business.facebook.com"}
+                            and recovered_parts.port in (None, 443)
+                            and not recovered_parts.username and not recovered_parts.password
+                            and recovered_parts.path == "/adsmanager/manage/campaigns"
+                            and recovered_query == expected_query
+                            and not _auth_gate(recovered_url, recovered_body)
+                            and not has_login_form(recovered_body)
+                        )
+                    except (UnicodeEncodeError, ValueError):
+                        exact_scoped_document = False
+                    if not exact_scoped_document:
+                        error = fail(
+                            "BUSINESS_LOGIN_GATE",
+                            "Meta handoff did not return the exact scoped Ads Manager document",
+                            True,
+                        )
+                        error.transport_stage = "bootstrap"
+                        raise error
+                    try:
+                        direct_context = context_from_document(
+                            recovered_body,
+                            account_id=selected_account_id,
+                            business_id=self.context.business_id,
+                            actor_id=self.context.actor_id,
+                        )
+                    except _MissingSessionInitialization:
+                        # This exact, actor-matched document may still omit only
+                        # the Ads Manager token initializer. In that case use its
+                        # fresh CSRF data for the existing cookie-authenticated
+                        # renewal path below.
+                        direct_context = None
+                    if direct_context is not None:
+                        log.info(
+                            "ads_business_login_gate_context profile=%s source=continued_adsmanager_document",
+                            self._profile_name,
+                        )
+                        return direct_context
+                    document = recovered_body
                     sprinkle_document = ""
                 else:
                     safe_refresh_fallback = (
