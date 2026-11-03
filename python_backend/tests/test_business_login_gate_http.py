@@ -241,11 +241,14 @@ class GateContinuationParserTests(unittest.TestCase):
                 ADS_MANAGER_RETURN_URL,
             )
         )
-        self.assertIsNone(
-            native_business_login_continuation(
-                body, ADS_MANAGER_RETURN_URL.replace("111111", "999999"),
-            )
+        mismatched_scope = native_business_login_continuation(
+            body, ADS_MANAGER_RETURN_URL.replace("111111", "999999"),
         )
+        self.assertIsNotNone(mismatched_scope)
+        selected_next = parse_qs(urlsplit(mismatched_scope).query)["next"][0]
+        selected_query = parse_qs(urlsplit(selected_next).query)
+        self.assertEqual(selected_query["act"], ["999999"])
+        self.assertEqual(selected_query["business_id"], ["222222"])
 
     def test_native_continuation_supports_exact_account_only_preflight_scope(self):
         from app.private_business_login import native_business_login_continuation
@@ -259,18 +262,25 @@ class GateContinuationParserTests(unittest.TestCase):
         self.assertNotIn("business_id", next_query)
 
         # A gate may not widen this act-only request by supplying an unverified BM.
-        self.assertIsNone(
-            native_business_login_continuation(
-                _native_gate_body(referrerURI=ADS_MANAGER_RETURN_URL),
-                ACCOUNT_ONLY_RETURN_URL,
-            )
+        narrowed_scope = native_business_login_continuation(
+            _native_gate_body(referrerURI=ADS_MANAGER_RETURN_URL),
+            ACCOUNT_ONLY_RETURN_URL,
         )
-        self.assertIsNone(
-            native_business_login_continuation(
-                body,
-                ACCOUNT_ONLY_RETURN_URL.replace("111111", "999999"),
-            )
+        self.assertIsNotNone(narrowed_scope)
+        narrowed_next = parse_qs(urlsplit(narrowed_scope).query)["next"][0]
+        narrowed_query = parse_qs(urlsplit(narrowed_next).query)
+        self.assertEqual(narrowed_query["act"], ["111111"])
+        self.assertNotIn("business_id", narrowed_query)
+
+        changed_actor = native_business_login_continuation(
+            body,
+            ACCOUNT_ONLY_RETURN_URL.replace("111111", "999999"),
         )
+        self.assertIsNotNone(changed_actor)
+        changed_next = parse_qs(urlsplit(changed_actor).query)["next"][0]
+        changed_query = parse_qs(urlsplit(changed_next).query)
+        self.assertEqual(changed_query["act"], ["999999"])
+        self.assertNotIn("business_id", changed_query)
 
     def test_refuses_new_consent_and_human_verification(self):
         for notice in ("By continuing, you agree to new terms.",
