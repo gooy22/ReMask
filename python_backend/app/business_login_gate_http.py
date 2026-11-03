@@ -693,6 +693,20 @@ async def continue_business_login_gate(
             set_outcome("meta_rejected_continuation")
             return None
         if _auth_navigation(action_url) and not is_business_login_gate_url(action_url):
+            parts = urlsplit(action_url)
+            host = str(parts.hostname or "").casefold()
+            path = str(parts.path or "/").casefold().rstrip("/") or "/"
+            route = (
+                "checkpoint" if path.startswith("/checkpoint")
+                else "login" if path == "/login" or path.startswith("/login/")
+                else "login_php" if path == "/login.php"
+                else "business_gate" if is_business_login_gate_url(action_url)
+                else "other"
+            )
+            log.info(
+                "business_login_gate_handoff_rejected profile=%s status=%d host=%s route=%s",
+                profile_name, action_status, host, route,
+            )
             set_outcome("continuation_redirected_to_auth")
             return None
         after = session.facebook_cookie_snapshot()
