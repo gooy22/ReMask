@@ -1025,8 +1025,16 @@ class AdsManagerPrivateHttp:
             previous_defer_module_refresh = getattr(self.web, "defer_module_refresh", None)
             if previous_defer_module_refresh is not None:
                 self.web.defer_module_refresh = True
+            bootstrap_options = {}
+            if self.context.business_id:
+                # Keep any Business-login recovery during this profile bootstrap
+                # bound to the exact RK/BM selected by the read-only caller.
+                bootstrap_options["business_loginpage_return_url"] = (
+                    "https://adsmanager.facebook.com/adsmanager/manage/campaigns"
+                    f"?act={selected_account_id}&business_id={self.context.business_id}"
+                )
             try:
-                bootstrap = await self.web.bootstrap()
+                bootstrap = await self.web.bootstrap(**bootstrap_options)
             finally:
                 if previous_defer_module_refresh is not None:
                     self.web.defer_module_refresh = previous_defer_module_refresh
