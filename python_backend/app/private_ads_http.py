@@ -1008,6 +1008,7 @@ class AdsManagerPrivateHttp:
                             "native_request_scope",
                             "native_root_missing",
                             "continuation_redirected_to_auth",
+                            "saved_login_no_saved_account_control",
                         }
                         and not has_login_form(gate_document)
                     )
