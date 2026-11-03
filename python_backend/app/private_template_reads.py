@@ -102,11 +102,14 @@ async def read_template_reference(web, catalog, context, operation, inputs, *, r
     # This endpoint cannot read account-owned assets or invoke a writer.
     if operation not in REFERENCE_TYPES | {'audience_estimate', 'placements'}:
         raise fail('TEMPLATE_HELPER_UNAVAILABLE', 'Only template reference reads are supported')
-    if set(inputs) - {'q', 'limit', 'targeting_spec', 'optimization_goal', 'bid_strategy',
-            'attribution_spec', 'special_ad_categories', 'campaign_destination_type',
-            'is_cbo_enabled', 'prediction_duration', 'daily_budget', 'bid_amount', 'include_forecast',
-            'promoted_object', 'ad_format'}:
+    if set(inputs) - {'q', 'limit', 'account_id', 'business_id', 'targeting_spec',
+            'optimization_goal', 'bid_strategy', 'attribution_spec', 'special_ad_categories',
+            'campaign_destination_type', 'is_cbo_enabled', 'prediction_duration', 'daily_budget',
+            'bid_amount', 'include_forecast', 'promoted_object', 'ad_format'}:
         raise fail('INVALID_INPUT', 'Template reference input contains an owned resource or selector')
+    if (('account_id' in inputs) != ('business_id' in inputs)
+            or (('account_id' in inputs or 'business_id' in inputs) and operation not in REFERENCE_TYPES)):
+        raise fail('INVALID_INPUT', 'Exact reference scope requires both account and Business IDs')
     PrivateLaunchContractStore._reject_auth_material(inputs)
     if len(json.dumps(inputs, allow_nan=False)) > 65536:
         raise fail('INVALID_INPUT', 'Template reference input exceeds its budget')
@@ -129,12 +132,28 @@ async def read_template_reference(web, catalog, context, operation, inputs, *, r
     actor = identity(str(web.profile.cookies.get('c_user') or ''))
     profile = str(context.profile_id)
     key, now = _key(web), time.monotonic()
-    cached = _sources.get(key)
-    pairs = ([cached[1]] if cached and now-cached[0] < 1800 else [])
-    pairs += [pair for pair in _pairs(context.ad_accounts or [], actor) if pair not in pairs]
-    if not pairs:
-        with measure_phase('reference_discovery'):
-            pairs = await asyncio.wait_for(_discover_sources(web, actor), timeout=18)
+    explicit_scope = None
+    if 'account_id' in inputs:
+        raw_account, raw_business = inputs.get('account_id'), inputs.get('business_id')
+        if type(raw_account) not in (str, int) or type(raw_business) not in (str, int):
+            raise fail('INVALID_INPUT', 'Exact reference IDs must be strings or integers')
+        try:
+            explicit_scope = (identity(str(raw_account)), identity(str(raw_business)))
+        except (ValueError, TypeError, ProvisioningError):
+            raise fail('INVALID_INPUT', 'Exact reference IDs are invalid') from None
+        if explicit_scope[1] == actor:
+            raise fail('INVALID_INPUT', 'A personal actor is not a selected Business')
+        # A Launch-selected pair is already bound to this profile by ReMask.
+        # It skips broad inventory discovery; the resource reader still proves
+        # this exact account and Business through its live ACCOUNT_READ.
+        pairs = [explicit_scope]
+    else:
+        cached = _sources.get(key)
+        pairs = ([cached[1]] if cached and now-cached[0] < 1800 else [])
+        pairs += [pair for pair in _pairs(context.ad_accounts or [], actor) if pair not in pairs]
+        if not pairs:
+            with measure_phase('reference_discovery'):
+                pairs = await asyncio.wait_for(_discover_sources(web, actor), timeout=18)
     # Exact fresh ACCOUNT_READ still confirms every selected pair. A stale or
     # foreign pair can fall through to another pair from this same profile.
     last = None
