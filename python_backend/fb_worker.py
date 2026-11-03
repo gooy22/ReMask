@@ -1112,11 +1112,17 @@ class FacebookWebSession:
                         )
                         if callable(restore_profile_cookies):
                             restore_profile_cookies()
-                        response_header_cookie_guard = lambda stage=(
-                            f"bootstrap_response_headers_{redirect_count + 1}"
-                        ): self._restore_profile_cookie_snapshot_if_lost(
-                            session, stage=stage,
-                        )
+                        redirect_statuses = {301, 302, 303, 307, 308}
+                        response_status = {"value": None}
+
+                        def restore_cookies_after_redirect_headers(response):
+                            response_status["value"] = int(response.status)
+                            if response_status["value"] in redirect_statuses:
+                                self._restore_profile_cookie_snapshot_if_lost(
+                                    session,
+                                    stage=f"bootstrap_response_headers_{redirect_count + 1}",
+                                )
+
                         try:
                             response, candidate_body = await buffered_response(
                                 "GET",
@@ -1126,17 +1132,18 @@ class FacebookWebSession:
                                     headers=request_headers,
                                     allow_redirects=False,
                                     request_timeout_seconds=max(30, self.timeout_seconds),
-                                    cookie_jar_guard=response_header_cookie_guard,
                                 ),
                                 16 * 1024 * 1024 + 1,
                                 retry_read=True,
+                                validate=restore_cookies_after_redirect_headers,
                                 reader=lambda response: response.text(),
                             )
                         finally:
-                            self._restore_profile_cookie_snapshot_if_lost(
-                                session,
-                                stage=f"bootstrap_response_body_{redirect_count + 1}",
-                            )
+                            if response_status["value"] in redirect_statuses:
+                                self._restore_profile_cookie_snapshot_if_lost(
+                                    session,
+                                    stage=f"bootstrap_response_body_{redirect_count + 1}",
+                                )
                         candidate_url = str(response.url)
                         candidate_status = int(response.status)
                         self._restore_invalid_profile_cookie_snapshot(
