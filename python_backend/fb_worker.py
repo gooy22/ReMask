@@ -1556,14 +1556,14 @@ class FacebookWebSession:
                                 lambda: self._restore_profile_cookie_snapshot_if_lost(
                                     session, stage=f"response_headers_{redirect_count + 1}"
                                 )
-                            ) if ads_manager_document else None,
+                            ) if (document_request or ads_manager_document) else None,
                         ),
                         max(1, int(max_bytes)) + 1,
                         retry_read=document_request,
                         retry_timeout=retry_timeout,
                     )
                 finally:
-                    if ads_manager_document:
+                    if document_request or ads_manager_document:
                         self._restore_profile_cookie_snapshot_if_lost(
                             session, stage=f"response_body_{redirect_count + 1}"
                         )
