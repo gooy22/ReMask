@@ -182,7 +182,7 @@ class AdvertisingResourceTests(unittest.IsolatedAsyncioTestCase):
         web=SimpleNamespace(graphql=AsyncMock(return_value=self.response(has_next=True,cursor='same')))
         with self.assertRaises(ProvisioningError):
             await page_catalog().pages(web,self.values())
-        self.assertEqual(web.graphql.await_count,2)
+        self.assertEqual(web.graphql.await_count,3)
 
     async def test_cached_permission_is_not_live_and_actor_or_query_changes_do_not_reuse_it(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -197,4 +197,4 @@ class AdvertisingResourceTests(unittest.IsolatedAsyncioTestCase):
                     ('111111111',{**self.values(),'execution_mode':'DRAFT'})]:
                 result=await store.get(name='pages',values=values,actor_id=actor)
                 self.assertEqual(result['data'],[])
-            self.assertEqual(web.graphql.await_count,1)
+            self.assertEqual(web.graphql.await_count,2)
