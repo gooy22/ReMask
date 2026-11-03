@@ -80,10 +80,29 @@ try {
     $candidate=RemaskTemplateTargetingContext::exactCandidate($profileRow,
         [RemaskPrivateLaunchCatalog::class,'load'],$selectedAccount,$excluded);
     $context=$reference->available([$candidate],time())[0];
+    if (($context['profile'] ?? '') !== $selectedProfile
+        || ($context['account_id'] ?? '') !== $selectedAccount) {
+        throw new RuntimeException('TEMPLATE_LOOKUP_ACCOUNT_SCOPE_MISMATCH');
+    }
+    // The profile's saved inventory already binds this selected RK to one BM.
+    // Pass only that server-derived pair; the worker still performs the exact
+    // live account + Business READ before returning uncached targeting results.
+    $businessIds=[];
+    foreach ((array)($context['catalog']['ad_accounts']['data'] ?? []) as $row) {
+        if (!is_array($row) || (isset($row['profile']) && (string)$row['profile'] !== $selectedProfile)) continue;
+        $rowAccount=preg_replace('/^act_/i','',trim((string)($row['account_id'] ?? $row['id'] ?? '')));
+        $rowBusiness=preg_replace('/^act_/i','',trim((string)($row['business_id'] ?? '')));
+        if ($rowAccount !== $selectedAccount || !preg_match('/^[0-9]{5,30}$/D',(string)$rowBusiness)) continue;
+        $businessIds[(string)$rowBusiness]=true;
+    }
+    if (count($businessIds)!==1) throw new RuntimeException('TEMPLATE_LOOKUP_ACCOUNT_SCOPE_MISMATCH');
+    $selectedBusiness=(string)array_key_first($businessIds);
     try {
-        // This single bounded read is scoped to the selected Launch profile/RK.
+        // Use only the exact Launch selection; the worker verifies the live
+        // account-to-Business relation before any uncached result is returned.
         $result=RemaskTemplateTargetingContext::readReference($selectedProfile,$type,
-            ['q'=>$query,'limit'=>$query==='' ? 20000 : 50]);
+            ['q'=>$query,'limit'=>$query==='' ? 20000 : 50,
+             'account_id'=>$selectedAccount,'business_id'=>$selectedBusiness]);
         $result=RemaskTemplateTargetingContext::referenceResponse($selectedProfile,$result);
         $returnedAccount=preg_replace('/^act_/i','',trim((string)($result['account_id'] ?? '')));
         if ($returnedAccount!==$selectedAccount)
