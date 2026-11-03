@@ -1,4 +1,5 @@
 import ast
+import logging
 from pathlib import Path
 import tempfile
 import unittest
@@ -29,6 +30,7 @@ class LaunchReviewSavedAuthRouteTests(unittest.IsolatedAsyncioTestCase):
             "ProvisioningError": ProvisioningError,
             "ProfileContextError": type("ProfileContextError", (Exception,), {}),
             "Any": object,
+            "log": logging.getLogger("test.private_launch_review"),
         }
         exec(compile(ast.fix_missing_locations(ast.Module(body=[helper, node], type_ignores=[])),
                      "launch-review-route-fixture", "exec"), namespace)
