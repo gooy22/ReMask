@@ -776,6 +776,22 @@ async def continue_business_login_gate(
         elif outcome == "no_supported_continuation_control":
             reason = str(diagnostic.get("reason") or "unavailable")
             gate_diagnostic["native_reason"] = reason
+            if reason == "request_scope":
+                for key in (
+                    "scope_url_parseable",
+                    "scope_scheme_https",
+                    "scope_host_allowed",
+                    "scope_authority_clean",
+                    "scope_path_allowed",
+                    "scope_query_keys_allowed",
+                    "scope_act_count_valid",
+                    "scope_act_format_valid",
+                    "scope_business_count_valid",
+                    "scope_business_format_valid",
+                ):
+                    value = diagnostic.get(key)
+                    if type(value) is bool:
+                        gate_diagnostic[key] = value
             outcome = (
                 "native_" + reason
                 if re.fullmatch(r"[a-z_]{1,64}", reason)
