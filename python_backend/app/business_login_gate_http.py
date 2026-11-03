@@ -35,6 +35,14 @@ _CHALLENGE_MARKERS = (
     "accept the terms",
 )
 
+_LOGIN_ID_HINT_ATTRS = frozenset({
+    "data-user-id", "data-userid", "data-account-id", "data-accountid",
+    "data-uid", "data-profile-id", "data-profileid",
+})
+_LOGIN_ID_FIELDS = frozenset({
+    "uid", "user_id", "userid", "account_id", "accountid", "c_user",
+    "__user", "saved_account_id", "login_user_id",
+})
 
 def _facebook_url(value: str) -> bool:
     try:
@@ -155,6 +163,8 @@ class _BusinessGateParser(HTMLParser):
         self.form_counter = 0
         self.external_fields: dict[str, list[tuple[str, str]]] = {}
         self.visible_text: list[str] = []
+        self.identity_stack: list[tuple[str, list[str]]] = []
+        self.credential_forms: set[str] = set()
 
     def _current_hidden(self) -> bool:
         return any(hidden for _, hidden in self.element_stack)
@@ -171,6 +181,14 @@ class _BusinessGateParser(HTMLParser):
     def handle_starttag(self, tag: str, raw_attrs) -> None:
         tag = tag.casefold()
         attrs = {str(k).casefold(): str(v or "") for k, v in raw_attrs}
+        identity_values = [
+            value for key, value in attrs.items()
+            if key in _LOGIN_ID_HINT_ATTRS and re.fullmatch(r"[0-9]{5,30}", value)
+        ]
+        inherited_identity_values = [
+            value for _, values in self.identity_stack for value in values
+        ]
+        candidate_identity_values = inherited_identity_values + identity_values
         hidden = self._current_hidden() or _hidden(attrs)
 
         if tag == "form":
@@ -183,6 +201,7 @@ class _BusinessGateParser(HTMLParser):
                 "fields": [],
                 "hidden": hidden,
                 "interactive": False,
+                "credential_input": False,
             }
             self.form_stack.append(form_id)
         else:
@@ -193,6 +212,9 @@ class _BusinessGateParser(HTMLParser):
                 value = str(attrs.get("value") or "")
                 if _credential_input(attrs):
                     self.has_credentials = True
+                    if form_id in self.forms:
+                        self.credential_forms.add(form_id)
+                        self.forms[form_id]["credential_input"] = True
                 if form_id:
                     form = self.forms.get(form_id)
                     if form is not None and not hidden:
@@ -211,6 +233,7 @@ class _BusinessGateParser(HTMLParser):
                         "form_id": form_id,
                         "hidden": hidden,
                         "text": attrs.get("value") or "",
+                        "identity_values": candidate_identity_values,
                     })
             elif tag in {"select", "textarea"} and form_id and not hidden:
                 form = self.forms.get(form_id)
@@ -227,6 +250,7 @@ class _BusinessGateParser(HTMLParser):
                     "form_id": form_id,
                     "hidden": hidden,
                     "text": "",
+                    "identity_values": candidate_identity_values,
                 }
                 if not hidden and (tag == "a" or control_type in {"", "submit"}):
                     self.candidates.append(candidate)
@@ -234,6 +258,7 @@ class _BusinessGateParser(HTMLParser):
 
         if tag not in self._VOID:
             self.element_stack.append((tag, hidden))
+            self.identity_stack.append((tag, identity_values))
 
     def handle_startendtag(self, tag: str, attrs) -> None:
         self.handle_starttag(tag, attrs)
@@ -257,6 +282,10 @@ class _BusinessGateParser(HTMLParser):
         for index in range(len(self.element_stack) - 1, -1, -1):
             if self.element_stack[index][0] == tag:
                 del self.element_stack[index:]
+                break
+        for index in range(len(self.identity_stack) - 1, -1, -1):
+            if self.identity_stack[index][0] == tag:
+                del self.identity_stack[index:]
                 break
 
 
@@ -483,6 +512,110 @@ def _login_route(url: str) -> bool:
     path = str(urlsplit(url).path or "").casefold().rstrip("/")
     return path in {"/login", "/login.php"} or path.startswith("/login/")
 
+
+
+
+def _saved_account_login_continuation(
+    body: str,
+    login_url: str,
+    expected_actor_id: str,
+) -> tuple[dict | None, str]:
+    """Continue only one explicit saved-account control bound to this actor."""
+    try:
+        parts = urlsplit(str(login_url or ""))
+        host = str(parts.hostname or "").casefold()
+    except ValueError:
+        return None, "invalid_login_url"
+    if host != "www.facebook.com" or not _login_route(login_url):
+        return None, "not_facebook_login_route"
+    actor_id = str(expected_actor_id or "").strip()
+    if not re.fullmatch(r"[0-9]{5,30}", actor_id):
+        return None, "invalid_expected_actor"
+    if not isinstance(body, str) or len(body) > 2_000_000:
+        return None, "login_body_invalid"
+
+    parser = _BusinessGateParser()
+    try:
+        parser.feed(body)
+        parser.close()
+    except Exception:
+        return None, "malformed_login_markup"
+    for form_id, fields in parser.external_fields.items():
+        if form_id in parser.forms:
+            parser.forms[form_id]["fields"].extend(fields)
+    visible_text = re.sub(r"\s+", " ", " ".join(parser.visible_text)).casefold()
+    if (any(marker in visible_text for marker in _CHALLENGE_MARKERS)
+            or re.search(r"\bby (?:continuing|clicking continue|logging in),?\s+you agree\b", visible_text)):
+        return None, "authentication_challenge"
+
+    ranked = []
+    for candidate in parser.candidates:
+        attrs = candidate["attrs"]
+        label = re.sub(
+            r"\s+", " ", str(candidate["text"] or attrs.get("aria-label") or "")
+        ).strip()
+        _, kind = _score(label)
+        if kind == "continue_as":
+            ranked.append(candidate)
+    if not ranked:
+        return None, "no_saved_account_control"
+    if len(ranked) != 1:
+        return None, "ambiguous_saved_account_controls"
+
+    candidate = ranked[0]
+    attrs = candidate["attrs"]
+    form_id = str(candidate.get("form_id") or "")
+    form = parser.forms.get(form_id) if form_id else None
+    if candidate["tag"] == "a":
+        method = "GET"
+        action = urljoin(login_url, str(attrs.get("href") or ""))
+        fields = []
+    else:
+        if form is None or form.get("hidden") or form.get("interactive"):
+            return None, "saved_account_form_not_inert"
+        if form.get("credential_input") or form_id in parser.credential_forms:
+            return None, "saved_account_form_has_credentials"
+        method = str(attrs.get("formmethod") or form.get("method") or "get").upper()
+        if method not in {"GET", "POST"}:
+            return None, "unsupported_saved_account_method"
+        action = urljoin(login_url, str(attrs.get("formaction") or form.get("action") or login_url))
+        fields = list(form.get("fields") or [])
+        name = str(attrs.get("name") or "").strip()
+        value = str(attrs.get("value") or "")
+        if name:
+            fields.append((name, value))
+
+    identities = {
+        str(value) for value in candidate.get("identity_values", [])
+        if isinstance(value, str)
+    }
+    if form is not None:
+        for name, value in form.get("fields") or []:
+            if str(name).casefold() in _LOGIN_ID_FIELDS and str(value) == actor_id:
+                identities.add(actor_id)
+    if actor_id not in identities:
+        return None, "saved_account_actor_unverified"
+
+    try:
+        action_parts = urlsplit(action)
+    except ValueError:
+        return None, "invalid_saved_account_target"
+    if (not _facebook_url(action) or str(action_parts.hostname or "").casefold() != "www.facebook.com"
+            or not _login_route(action)):
+        return None, "saved_account_target_out_of_scope"
+    if len(fields) > 80 or any(
+        not name or len(name) > 256 or len(value) > 8192 or _CREDENTIAL_NAME.search(name)
+        for name, value in fields
+    ):
+        return None, "unsafe_saved_account_fields"
+    if sum(len(name) + len(value) for name, value in fields) > 16000:
+        return None, "saved_account_fields_too_large"
+    return {
+        "method": method,
+        "url": action,
+        "fields": fields,
+        "label_kind": "continue_as_same_actor",
+    }, "saved_account_actor_verified"
 
 async def _request_facebook(
     session,
@@ -717,6 +850,24 @@ async def continue_business_login_gate(
         if action_status in {401, 403}:
             set_outcome("meta_rejected_continuation")
             return None
+        saved_login_outcome = ""
+        if _login_route(action_url):
+            saved_login, saved_login_outcome = _saved_account_login_continuation(
+                action_body, action_url, actor_id,
+            )
+            log.info(
+                "business_login_gate_saved_login profile=%s outcome=%s",
+                profile_name, saved_login_outcome,
+            )
+            if saved_login:
+                action_status, action_url, action_body, _ = await _request_facebook(
+                    session, profile, saved_login["method"], saved_login["url"],
+                    fields=saved_login["fields"], referer=action_url,
+                    allow_login_redirect=True,
+                )
+                if action_status in {401, 403}:
+                    set_outcome("meta_rejected_saved_account")
+                    return None
         if _auth_navigation(action_url) and not is_business_login_gate_url(action_url):
             parts = urlsplit(action_url)
             host = str(parts.hostname or "").casefold()
@@ -733,8 +884,10 @@ async def continue_business_login_gate(
                 profile_name, action_status, host, route,
             )
             set_outcome(
-                "continuation_login_required"
-                if _login_route(action_url) else "continuation_redirected_to_auth"
+                ("saved_login_" + saved_login_outcome)
+                if _login_route(action_url) and saved_login_outcome
+                else ("continuation_login_required"
+                    if _login_route(action_url) else "continuation_redirected_to_auth")
             )
             return None
         after = session.facebook_cookie_snapshot()

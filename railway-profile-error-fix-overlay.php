@@ -70,64 +70,27 @@ async function remaskSessionRefreshRun(){
     return;
   }
 
-  const raw=window.prompt(
-    'Профиль '+name+'\nВставь свежий Cookies JSON текущей авторизованной Facebook-сессии. Token и proxy не изменяются.'
-  );
-  if(raw===null)return;
+  if(typeof $==='function'&&$('workspaceStatus')){
+    $('workspaceStatus').textContent='Проверяю сохранённую FB-сессию профиля '+name+'…';
+  }
 
-  const cookies=String(raw||'').trim();
   try{
-    if(!cookies)throw new Error('Cookies JSON пустой.');
-    let parsed;
-    try{
-      parsed=JSON.parse(cookies);
-    }catch(_){
-      throw new Error('Cookies JSON имеет неверный формат.');
-    }
-    const list=Array.isArray(parsed)?parsed:Object.values(parsed||{});
-    const names=new Set(
-      list
-        .filter(function(item){
-          return item&&typeof item==='object'&&String(item.value||'').trim()!=='';
-        })
-        .map(function(item){return String(item.name||'').trim();})
-    );
-    if(!names.has('c_user')||!names.has('xs')){
-      throw new Error('В cookies должны присутствовать c_user и xs.');
-    }
-
-    if(typeof $==='function'&&$('workspaceStatus')){
-      $('workspaceStatus').textContent='Обновляю FB-сессию профиля '+name+'…';
-    }
-
-    const updated=await profileSaveJson({
-      action:'session_update',
-      name:name,
-      cookies:cookies
-    });
-
-    if(typeof $==='function'&&$('workspaceStatus')){
-      $('workspaceStatus').textContent='FB-сессия сохранена. Синхронизирую '+name+'…';
-    }
-
+    const requestId='profile-check-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,10);
     const snapshot=await apiJson(
       'ajax/metaHierarchy.php',
-      post({action:'sync_profile',profile:name})
+      post({action:'sync_profile',profile:name,request_id:requestId})
     );
     if(!snapshot || snapshot.sync_complete!==true){
-      throw new Error('FB-сессия сохранена; синхронизация Meta не завершена: '+
-        String(snapshot?.sync_error||'Live inventory не подтверждён'));
+      throw new Error('Meta не подтвердила доступ: '+
+        String(snapshot?.sync_error||'live inventory не завершён'));
     }
     if(typeof applySnapshot==='function' && !applySnapshot(snapshot)){
-      throw new Error('FB-сессия сохранена; результат синхронизации не применён');
+      throw new Error('Meta вернула данные, но ReMask не применил результат синхронизации.');
     }
     if(typeof render==='function')render();
-
     if(typeof $==='function'&&$('workspaceStatus')){
       $('workspaceStatus').textContent=
-        'FB-сессия '+name+' обновлена'+
-        (updated&&updated.token_refreshed?' · Ads Manager token обновлён':'')+
-        ' · Meta синхронизирована'+
+        'Сохранённая FB-сессия '+name+' проверена · Meta синхронизирована'+
         (Array.isArray(snapshot.sync_warnings)&&snapshot.sync_warnings.length
           ? ' · '+snapshot.sync_warnings.join(' | '):'');
     }
@@ -135,7 +98,7 @@ async function remaskSessionRefreshRun(){
   }catch(error){
     const message=String((error&&error.message)||error);
     if(typeof $==='function'&&$('workspaceStatus')){
-      $('workspaceStatus').textContent='FB session: '+message;
+      $('workspaceStatus').textContent='Проверка сохранённой FB-сессии: '+message;
     }
     throw error;
   }
@@ -151,7 +114,7 @@ function remaskSessionRefreshUpdateButton(){
     button.type='button';
     button.id='remaskSessionRefreshBtn';
     button.className='btn btn-secondary';
-    button.textContent='Обновить FB-сессию';
+    button.textContent='Проверить FB-доступ';
     button.style.display='none';
     button.addEventListener('click',function(event){
       event.preventDefault();
