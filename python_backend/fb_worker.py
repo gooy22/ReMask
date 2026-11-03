@@ -2561,7 +2561,7 @@ class FacebookWebSession:
         if business_loginpage_account_id:
             scoped_business_id = str(business_context_id or "").strip()
             if (
-                scoped_probe != "READ_RK"
+                scoped_probe not in {"READ_RK", "READ_FP"}
                 or endpoint != self.GRAPHQL_URL
                 or not re.fullmatch(r"\d{5,30}", scoped_business_id)
                 or not re.fullmatch(r"\d{5,30}", business_loginpage_account_id)
@@ -2571,7 +2571,7 @@ class FacebookWebSession:
                 or not str(friendly_name or "").strip().endswith("Query")
             ):
                 raise RemoteRequestError(
-                    "Exact account handoff scope is limited to a read-only READ_RK query.",
+                    "Exact account handoff scope is limited to read-only READ_RK/READ_FP queries.",
                     request_may_have_been_sent=False,
                     transport_stage="business_auth_precheck",
                 )
