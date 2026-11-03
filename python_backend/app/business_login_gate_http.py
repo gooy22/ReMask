@@ -477,6 +477,13 @@ def _auth_navigation(url: str) -> bool:
     )
 
 
+def _login_route(url: str) -> bool:
+    if not _facebook_url(url):
+        return False
+    path = str(urlsplit(url).path or "").casefold().rstrip("/")
+    return path in {"/login", "/login.php"} or path.startswith("/login/")
+
+
 async def _request_facebook(
     session,
     profile,
@@ -485,6 +492,7 @@ async def _request_facebook(
     *,
     fields: list[tuple[str, str]] | None = None,
     referer: str = "",
+    allow_login_redirect: bool = False,
 ):
     current_method = method.upper()
     current_url = url
@@ -560,8 +568,20 @@ async def _request_facebook(
         if last_status not in {301, 302, 303, 307, 308} or not location:
             return last_status, last_url, last_body, last_headers
         next_url = urljoin(last_url, location)
-        if not _facebook_url(next_url) or _auth_navigation(next_url):
+        if not _facebook_url(next_url):
             return last_status, next_url, last_body, last_headers
+        if _auth_navigation(next_url):
+            # A native Facebook handoff can redirect through /login even when
+            # the existing profile session is sufficient. Follow only that
+            # same-site GET navigation; a login form or checkpoint is still a
+            # hard stop, and no credentials or forms are submitted here.
+            can_follow_existing_login = (
+                allow_login_redirect
+                and current_method == "GET"
+                and _login_route(next_url)
+            )
+            if not can_follow_existing_login:
+                return last_status, next_url, last_body, last_headers
         current_referer = last_url
         current_url = next_url
         log.info(
@@ -685,9 +705,10 @@ async def continue_business_login_gate(
             set_outcome("profile_session_mismatch")
             return None
 
-        action_status, action_url, _, _ = await _request_facebook(
+        action_status, action_url, action_body, _ = await _request_facebook(
             session, profile, continuation["method"], continuation["url"],
             fields=continuation["fields"], referer=gate_url,
+            allow_login_redirect=True,
         )
         if action_status in {401, 403}:
             set_outcome("meta_rejected_continuation")
@@ -707,7 +728,10 @@ async def continue_business_login_gate(
                 "business_login_gate_handoff_rejected profile=%s status=%d host=%s route=%s",
                 profile_name, action_status, host, route,
             )
-            set_outcome("continuation_redirected_to_auth")
+            set_outcome(
+                "continuation_login_required"
+                if _login_route(action_url) else "continuation_redirected_to_auth"
+            )
             return None
         after = session.facebook_cookie_snapshot()
         if (
