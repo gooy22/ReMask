@@ -16,7 +16,7 @@ import json
 import hashlib
 import logging
 import re
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 from .business_login_gate_http import (
     continue_business_login_gate,
@@ -998,11 +998,18 @@ class AdsManagerPrivateHttp:
                 if not is_business_login_gate_url(business_gate_url):
                     raise fail("BUSINESS_LOGIN_GATE", "Session renewal gate URL is not a reviewed Meta Business gate")
                 gate_document = sprinkle_document if isinstance(sprinkle_document, str) else document
+                # Build the continuation target from the already-validated
+                # Launch act. BM ownership is proven by the exact account read
+                # after the handoff, not by the redirect URL.
+                scoped_return_url = (
+                    "https://adsmanager.facebook.com/adsmanager/manage/campaigns?"
+                    + urlencode({"act": selected_account_id})
+                )
                 recovered = await continue_business_login_gate(
                     self.web,
                     gate_url=business_gate_url,
                     body=gate_document,
-                    return_url=return_url or self.document_url,
+                    return_url=scoped_return_url,
                 )
                 self._business_gate_recovery = recovered
                 outcome = str(getattr(self.web, "_business_login_gate_outcome", "unavailable"))
