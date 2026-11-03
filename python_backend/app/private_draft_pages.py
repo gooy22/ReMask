@@ -24,15 +24,19 @@ async def _actor(web):
 async def read_draft_pages(web, *, account, business, query=""):
     """Picker metadata only; Launch independently checks ownership and rights."""
     from .private_business_fan_page_create import read_pages
-    # READ_FP is profile-bound and uses this pinned static contract. Keep
-    # the fresh actor check and exact Business query, but defer CDN module
-    # discovery: it is maintenance work and must not delay this picker read.
+    account_id = _id(account)
+    if not account_id:
+        raise fail("DRAFT_PAGE_ACCOUNT_UNVERIFIED",
+            "A selected numeric ad account is required for the Page picker.")
+    # READ_FP is profile-bound and uses this pinned static contract. Continue
+    # through the exact selected account and Business, without claiming that
+    # the resulting Page can be used for publication.
     web.private_only = True
     had_defer = hasattr(web, "defer_module_refresh")
     previous_defer = getattr(web, "defer_module_refresh", False)
     web.defer_module_refresh = True
     try:
-        rows, complete = await read_pages(web, business)
+        rows, complete = await read_pages(web, business, bootstrap_account_id=account_id)
     finally:
         if had_defer:
             web.defer_module_refresh = previous_defer
@@ -45,8 +49,8 @@ async def read_draft_pages(web, *, account, business, query=""):
         raise fail("DRAFT_PAGE_INVENTORY_INCOMPLETE", "Exact Business Page inventory is incomplete", True)
     query = str(query).casefold()
     rows = [row for row in rows if not query or any(query in str(row[k]).casefold() for k in ("id", "name"))]
-    return {"data": [{**row, "account_id": account, "publication_access_verified": False} for row in rows],
-        "account_id": account, "business_id": business, "account_scope_verified": True,
+    return {"data": [{**row, "account_id": account_id, "publication_access_verified": False} for row in rows],
+        "account_id": account_id, "business_id": business, "account_scope_verified": True,
         "checked_live": True, "checked_at": int(time.time()), "execution_mode": "DRAFT",
         "ad_account_page_access_verified": False, "source": "private_http_business_draft_pages"}
 
