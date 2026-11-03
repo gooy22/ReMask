@@ -1112,19 +1112,38 @@ class FacebookWebSession:
                         )
                         if callable(restore_profile_cookies):
                             restore_profile_cookies()
-                        response, candidate_body = await buffered_response(
-                            "GET",
-                            lambda current_url=current_url: session.get(
-                                current_url,
-                                proxy=self.profile.proxy,
-                                headers=request_headers,
-                                allow_redirects=False,
-                                request_timeout_seconds=max(30, self.timeout_seconds),
-                            ),
-                            16 * 1024 * 1024 + 1,
-                            retry_read=True,
-                            reader=lambda response: response.text(),
-                        )
+                        redirect_statuses = {301, 302, 303, 307, 308}
+                        response_status = {"value": None}
+
+                        def restore_cookies_after_redirect_headers(response):
+                            response_status["value"] = int(response.status)
+                            if response_status["value"] in redirect_statuses:
+                                self._restore_profile_cookie_snapshot_if_lost(
+                                    session,
+                                    stage=f"bootstrap_response_headers_{redirect_count + 1}",
+                                )
+
+                        try:
+                            response, candidate_body = await buffered_response(
+                                "GET",
+                                lambda current_url=current_url: session.get(
+                                    current_url,
+                                    proxy=self.profile.proxy,
+                                    headers=request_headers,
+                                    allow_redirects=False,
+                                    request_timeout_seconds=max(30, self.timeout_seconds),
+                                ),
+                                16 * 1024 * 1024 + 1,
+                                retry_read=True,
+                                validate=restore_cookies_after_redirect_headers,
+                                reader=lambda response: response.text(),
+                            )
+                        finally:
+                            if response_status["value"] in redirect_statuses:
+                                self._restore_profile_cookie_snapshot_if_lost(
+                                    session,
+                                    stage=f"bootstrap_response_body_{redirect_count + 1}",
+                                )
                         candidate_url = str(response.url)
                         candidate_status = int(response.status)
                         self._restore_invalid_profile_cookie_snapshot(
@@ -1164,6 +1183,16 @@ class FacebookWebSession:
                         # Restore the imported profile snapshot before each
                         # first-party hop. Meta can shadow root auth cookies with
                         # Set-Cookie on a redirect response.
+                        if (bootstrap_url == self.ADS_MANAGER_URL
+                                and redirect_count == 0
+                                and candidate_status == 302):
+                            source_host = str(urlsplit(candidate_url).hostname or "").casefold()
+                            target_host = str(next_parts.hostname or "").casefold()
+                            log.info(
+                                "[%s] bootstrap first 302 settle delay seconds=3 source_host=%s target_host=%s",
+                                self.profile.name, source_host, target_host,
+                            )
+                            await asyncio.sleep(3.0)
                         current_url = next_url
                     else:
                         attempts.append(f"{bootstrap_url}: redirect limit")
