@@ -43,8 +43,7 @@ if (strpos($workspace, 'async function profileSaveJson(payload)') === false) {
     $workspace = substr($workspace, 0, $pos) . $helper . "\n\n" . substr($workspace, $pos);
 }
 
-if (strpos($workspace, 'REMASK_SESSION_REFRESH_UI_V1') === false) {
-    $sessionRefreshUi = <<<'JS'
+$sessionRefreshUi = <<<'JS'
 
 // REMASK_SESSION_REFRESH_UI_V1
 function remaskSelectedProfileNameForSessionRefresh(){
@@ -140,6 +139,21 @@ function remaskSessionRefreshUpdateButton(){
   document.addEventListener('change',function(){setTimeout(update,0);},true);
 })();
 JS;
+
+$sessionMarker = '// REMASK_SESSION_REFRESH_UI_V1';
+$sessionMarkerPos = strpos($workspace, $sessionMarker);
+if ($sessionMarkerPos !== false) {
+    $sessionLineStart = strrpos(substr($workspace, 0, $sessionMarkerPos), "\n");
+    $sessionBlockStart = $sessionLineStart === false ? 0 : $sessionLineStart + 1;
+    $sessionEndMarker = strpos($workspace, "\n})();", $sessionMarkerPos);
+    if ($sessionEndMarker === false) {
+        fwrite(STDERR, "[profile-error-fix] existing session refresh block is incomplete\n");
+        exit(79);
+    }
+    $workspace = substr($workspace, 0, $sessionBlockStart)
+        . $sessionRefreshUi
+        . substr($workspace, $sessionEndMarker + strlen("\n})();"));
+} else {
     $workspace .= "\n" . $sessionRefreshUi . "\n";
 }
 
@@ -211,7 +225,7 @@ $workspaceScriptPattern = <<<'REGEX'
 REGEX;
 $workspacePage = preg_replace(
     $workspaceScriptPattern,
-    'scripts/workspace.js?v=20260928-session-refresh-v180',
+    'scripts/workspace.js?v=20261103-saved-profile-session-v181',
     $workspacePage,
     1,
     $workspaceScriptTagCount
