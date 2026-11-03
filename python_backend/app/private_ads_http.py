@@ -396,6 +396,10 @@ class AdsManagerPrivateHttp:
             business_id = identity(business_id)
         elif not account_preflight:
             raise fail("INVALID_RESOURCE_ROUTE", "Advertising Business scope is required")
+        renewal_url = (
+            "https://adsmanager.facebook.com/adsmanager/manage/campaigns?act="
+            + account_id
+        )
         web.private_only = True
         if str(web.profile.cookies.get("c_user") or "") != actor_id:
             raise fail("ACTOR_MISMATCH", "Advertising request belongs to another profile")
@@ -799,13 +803,13 @@ class AdsManagerPrivateHttp:
                 "https://adsmanager-graph.facebook.com", "v22.0", "119211728144504", "")
             bootstrap_client = cls(web, seed)
             bootstrap_client.document_origin = "https://adsmanager.facebook.com"
-            bootstrap_client.document_url = url
+            bootstrap_client.document_url = renewal_url
             bootstrap_client.read_only = True
             context = await bootstrap_client._renew_session(
                 "", sprinkle_document=body, selected_account_id=account_id,
                 allow_host_fallback=False,
                 business_gate_url=(final_url if is_business_login_gate_url(final_url) else ""),
-                return_url=request_url)
+                return_url=renewal_url)
             session_renewed = True
             business_gate_token_renewed = True
             gate_recovered = True
@@ -822,11 +826,11 @@ class AdsManagerPrivateHttp:
                 "https://adsmanager-graph.facebook.com", "v22.0", "119211728144504", "")
             bootstrap_client = cls(web, seed)
             bootstrap_client.document_origin = "https://adsmanager.facebook.com"
-            bootstrap_client.document_url = url
+            bootstrap_client.document_url = renewal_url
             bootstrap_client.read_only = True
             context = await bootstrap_client._renew_session(
                 "", sprinkle_document=body, selected_account_id=account_id,
-                business_gate_url=final_url, return_url=request_url)
+                business_gate_url=final_url, return_url=renewal_url)
             session_renewed = True
             business_gate_token_renewed = True
             gate_recovered = True
@@ -882,7 +886,7 @@ class AdsManagerPrivateHttp:
             except _MissingSessionInitialization as error:
                 client = cls(web, error.context)
                 client.document_origin = final.scheme + '://' + final.hostname
-                client.document_url = final_url
+                client.document_url = renewal_url
                 client.read_only = True
                 context = await client._renew_session(
                     body, selected_account_id=account_id,
@@ -1027,8 +1031,10 @@ class AdsManagerPrivateHttp:
                             and expected_parts.path == "/adsmanager/manage/campaigns"
                             and set(expected_query) <= {"act", "business_id"}
                             and expected_query.get("act") == [selected_account_id]
-                            and (not self.context.business_id
-                                 or expected_query.get("business_id") == [self.context.business_id])
+                            and (
+                                not expected_query.get("business_id")
+                                or expected_query.get("business_id") == [self.context.business_id]
+                            )
                             and recovered_parts.scheme == "https"
                             and recovered_host in {"adsmanager.facebook.com", "business.facebook.com"}
                             and recovered_parts.port in (None, 443)
@@ -1093,14 +1099,15 @@ class AdsManagerPrivateHttp:
             previous_defer_module_refresh = getattr(self.web, "defer_module_refresh", None)
             if previous_defer_module_refresh is not None:
                 self.web.defer_module_refresh = True
-            bootstrap_options = {}
-            if self.context.business_id:
-                # Keep any Business-login recovery during this profile bootstrap
-                # bound to the exact RK/BM selected by the read-only caller.
-                bootstrap_options["business_loginpage_return_url"] = (
+            bootstrap_options = {
+                # Renew from the selected RK without carrying a BM into Meta's
+                # login handoff. The exact RK+BM relationship is proven by the
+                # independent account READ before this client can send a write.
+                "business_loginpage_return_url": (
                     "https://adsmanager.facebook.com/adsmanager/manage/campaigns"
-                    f"?act={selected_account_id}&business_id={self.context.business_id}"
+                    f"?act={selected_account_id}"
                 )
+            }
             try:
                 bootstrap = await self.web.bootstrap(**bootstrap_options)
             finally:
