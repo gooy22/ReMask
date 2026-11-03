@@ -207,8 +207,16 @@ class FacebookWebSession:
                 # jar. Preserve only a snapshot for the same actor; never allow
                 # a redirect to silently switch the profile identity.
                 snapshot = self.session.facebook_cookie_snapshot()
-                original_actor = str(self.profile.cookies.get("c_user") or "")
+                saved_cookies = getattr(self.session, "_profile_cookies", None)
+                saved_cookies = saved_cookies if isinstance(saved_cookies, dict) else {}
+                original_actor = str(saved_cookies.get("c_user") or "")
+                saved_cookie_set_preserved = (
+                    bool(saved_cookies)
+                    and len(snapshot) >= len(saved_cookies)
+                    and all(name in snapshot for name in saved_cookies)
+                )
                 if (self._profile_session_identity_verified
+                        and saved_cookie_set_preserved
                         and snapshot.get("c_user") == original_actor
                         and str(snapshot.get("xs") or "").strip()):
                     self.profile.cookies = snapshot
