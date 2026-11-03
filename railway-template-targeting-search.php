@@ -105,7 +105,8 @@ try {
              'account_id'=>$selectedAccount,'business_id'=>$selectedBusiness]);
         $result=RemaskTemplateTargetingContext::referenceResponse($selectedProfile,$result);
         $returnedAccount=preg_replace('/^act_/i','',trim((string)($result['account_id'] ?? '')));
-        if ($returnedAccount!==$selectedAccount)
+        $returnedBusiness=preg_replace('/^act_/i','',trim((string)($result['business_id'] ?? '')));
+        if ($returnedAccount!==$selectedAccount || $returnedBusiness!==$selectedBusiness)
             throw new RuntimeException('TEMPLATE_LOOKUP_ACCOUNT_SCOPE_MISMATCH');
         $cacheMeta=$result['_cache'] ?? [];
         if (($cacheMeta['hit'] ?? false)===true && ($cacheMeta['cached_only'] ?? false)===true
