@@ -518,21 +518,25 @@ async def _request_facebook(
         # the selected profile snapshot.
         if hop > 0:
             current_cookies = session.facebook_cookie_snapshot()
-            if (
-                not expected_actor_id
-                or not expected_xs
-                or str(current_cookies.get("c_user") or "") != expected_actor_id
-                or str(current_cookies.get("xs") or "").strip() != expected_xs
-            ):
+            current_actor = str(current_cookies.get("c_user") or "")
+            current_xs = str(current_cookies.get("xs") or "").strip()
+            if not expected_actor_id or current_actor != expected_actor_id or not current_xs:
                 if not callable(restore_profile_cookies):
                     return 0, current_url, "", {}
                 restore_profile_cookies()
                 current_cookies = session.facebook_cookie_snapshot()
-                if (
-                    str(current_cookies.get("c_user") or "") != expected_actor_id
-                    or str(current_cookies.get("xs") or "").strip() != expected_xs
-                ):
+                current_actor = str(current_cookies.get("c_user") or "")
+                current_xs = str(current_cookies.get("xs") or "").strip()
+                if current_actor != expected_actor_id or current_xs != expected_xs:
                     return 0, current_url, "", {}
+            elif current_xs != expected_xs:
+                # Meta may rotate xs during the same-actor login handoff. Keep
+                # that token when c_user still pins this request to the selected
+                # profile; never accept a different actor.
+                log.info(
+                    "business_login_gate_cookie_refresh_preserved profile=%s hop=%d actor_matches=true xs_rotated=true",
+                    getattr(profile, "name", "unknown"), hop,
+                )
         headers = {
             "User-Agent": str(profile.user_agent or ""),
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
