@@ -115,6 +115,19 @@ class AdvertisingReadCatalog:
             raise fail("RESOURCE_CONTRACT_REQUIRED", "Reviewed advertising query is missing for " + name)
         records, seen, cursors = [], set(), set()
         cursor = ""
+        if name == "pages":
+            from .static_meta_contracts import execute as execute_static_meta
+
+            # Use the reviewed READ_RK query to continue only to the selected
+            # account and Business. Page access is still proven by the exact
+            # account-scoped query and per-Page permission below.
+            bootstrap_read = await execute_static_meta(
+                web, "READ_RK", business=values["business_id"],
+                bootstrap_account_id=values["ad_account_id"],
+            )
+            if not isinstance(bootstrap_read, dict) or not _complete(bootstrap_read):
+                raise fail("RESOURCE_READ_INCOMPLETE",
+                    "Selected Business handoff read is incomplete", True)
         for _ in range(5):
             response = await web.graphql(row["doc_id"], _render(row["variables"], {"cursor": cursor, **values}),
                 friendly_name=row["friendly_name"], endpoint_url=PrivateLaunchContractStore._endpoint(row.get("endpoint_url")),
