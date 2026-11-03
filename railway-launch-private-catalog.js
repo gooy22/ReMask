@@ -1248,7 +1248,20 @@ if(typeof apiJson==='function'){
             const matches=ids.filter(id=>String((typeof targetForAccount==='function'?targetForAccount(remaskPrivateAccountId(id))?.profile:'')||state.profile||'')===profile);
             if(matches.length)body.set('account_id',remaskPrivateAccountId(matches[0]));
         }
-        return originalAdvertisingApiJson(url,options);
+        try {
+            return await originalAdvertisingApiJson(url,options);
+        } catch(error) {
+            if(String(url).includes('metaTemplateTargetingSearch.php')) {
+                const candidates=[
+                    error?.code,error?.payload?.error?.code,error?.payload?.code,
+                    error?.payload?.error,error?.payload?.message,error?.message
+                ];
+                const code=candidates.map(value=>String(value??'').trim().toUpperCase())
+                    .find(value=>/^[A-Z][A-Z0-9_]{2,119}$/.test(value));
+                if(code)console.info('[remask-targeting] failure_code='+code);
+            }
+            throw error;
+        }
     };
 }
 
