@@ -153,6 +153,26 @@ def native_business_login_continuation(body, return_url, *, diagnostic=None):
     if len(candidates) == 1:
         report['reason'] = 'native_fb_continuation'
         return candidates[0]
+    if not candidates and report.get('reason') == 'root_missing' and ROOT in body:
+        # Some current Business gates render this reviewed native FB button
+        # client-side and omit its serialized React props from the HTML. Match
+        # the same native handoff using only the exact account-scoped Ads Manager
+        # return URL validated above; never broaden to a Business home or another
+        # account. The caller has already rejected credentials and agreement text.
+        target = urlsplit(return_url)
+        target_query = dict(parse_qsl(target.query, keep_blank_values=True))
+        target_query.update(
+            biz_login_source='biz_unified_f3_fb_login_button',
+            join_id=str(uuid4()),
+        )
+        next_url = urlunsplit((target.scheme, target.netloc, target.path,
+                               urlencode(target_query), ''))
+        handoff = 'https://business.facebook.com/business/loginrequest/fb/?' + urlencode({
+            'next': next_url,
+            'f3_request_id': str(uuid4()),
+        })
+        report['reason'] = 'native_fb_scoped_fallback'
+        return handoff
     if len(candidates) > 1:
         report['reason'] = 'ambiguous_root'
     return None
