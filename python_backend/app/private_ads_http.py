@@ -67,6 +67,12 @@ def _strict_response_json(raw):
     return _strict_json(raw)
 
 
+def _safe_renewal_content_type(response):
+    value = str((getattr(response, "headers", {}) or {}).get("content-type") or "")
+    value = value.split(";", 1)[0].strip().casefold()
+    return value if value in {"application/json", "text/html", "text/plain"} else "other"
+
+
 class AdsManagerResponseError(ProvisioningError):
     """A received rejection, with only typed non-secret response metadata."""
     def __init__(self, diagnostic):
@@ -1359,6 +1365,9 @@ class AdsManagerPrivateHttp:
                         raise fail("PROTOCOL_UNAVAILABLE", "Session renewal requires HTTP/2")
                     raw = await response.content.read(2_000_001)
                     if response.status != 200 or len(raw) > 2_000_000:
+                        log.warning("ads_session_renewal response_unusable profile=%s host=%s status=%d decoded_body_bytes=%d content_type=%s",
+                            self._profile_name, "adsmanager.facebook.com", int(response.status),
+                            len(raw), _safe_renewal_content_type(response))
                         raise fail("SESSION_RENEWAL_UNAVAILABLE", "Meta did not return a usable session renewal")
             except ProvisioningError:
                 raise
@@ -1431,8 +1440,9 @@ class AdsManagerPrivateHttp:
                                     "Business-host session renewal requires HTTP/2")
                             business_raw = await response.content.read(2_000_001)
                             if response.status != 200 or len(business_raw) > 2_000_000:
-                                log.warning("ads_session_renewal_business_host unavailable profile=%s status=%s",
-                                    self._profile_name, int(response.status))
+                                log.warning("ads_session_renewal response_unusable profile=%s host=%s status=%d decoded_body_bytes=%d content_type=%s",
+                                    self._profile_name, "business.facebook.com", int(response.status),
+                                    len(business_raw), _safe_renewal_content_type(response))
                                 raise fail("SESSION_RENEWAL_UNAVAILABLE",
                                     "Meta did not return a usable Business-host session renewal")
                     except ProvisioningError:
@@ -1511,8 +1521,9 @@ class AdsManagerPrivateHttp:
                                 "www-host session renewal requires HTTP/2")
                         www_raw = await response.content.read(2_000_001)
                         if response.status != 200 or len(www_raw) > 2_000_000:
-                            log.warning("ads_session_renewal_www_host unavailable profile=%s status=%s",
-                                self._profile_name, int(response.status))
+                            log.warning("ads_session_renewal response_unusable profile=%s host=%s status=%d decoded_body_bytes=%d content_type=%s",
+                                self._profile_name, "www.facebook.com", int(response.status),
+                                len(www_raw), _safe_renewal_content_type(response))
                             raise fail("SESSION_RENEWAL_UNAVAILABLE",
                                 "Meta did not return a usable www-host session renewal")
                     www_text = www_raw.decode("utf-8").strip()

@@ -305,8 +305,9 @@ class PrivateHttpClient:
         except BaseException as exc:
             error = exc
             try:
-                log.warning('[%s] private_http_failure method=%s host=%s kind=%s stages=%s',
+                log.warning('[%s] private_http_failure method=%s host=%s kind=%s error_type=%s stages=%s',
                     self.profile_name, method.upper(), httpx.URL(url).host, error_kind(exc),
+                    type(exc).__name__,
                     json.dumps(stages.snapshot(), sort_keys=True, separators=(',', ':')))
             except Exception:
                 pass
