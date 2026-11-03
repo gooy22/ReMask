@@ -284,7 +284,11 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.web.session.request = request
         client = await AdsManagerPrivateHttp.open(self.web,
             account_id='111111',business_id='222222',actor_id='123456')
-        self.assertEqual(bootstrap_options, [{}])
+        self.assertEqual(bootstrap_options, [{
+            "business_loginpage_return_url":
+                "https://adsmanager.facebook.com/adsmanager/manage/campaigns"
+                "?act=111111&business_id=222222",
+        }])
         self.assertEqual([row[0] for row in calls], ['POST','GET'])
         self.assertTrue(calls[0][1].endswith('/ads/manager/ajax/renew_access_token/'))
         self.assertEqual(calls[0][2]['data']['client_id'],'119211728144504')
