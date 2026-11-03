@@ -1540,6 +1540,12 @@ class FacebookWebSession:
             )
             redirect_limit = 5 if manual_facebook_redirects else 0
             for redirect_count in range(redirect_limit + 1):
+                response_header_cookie_guard = None
+                if document_request or ads_manager_document:
+                    response_header_stage = f"response_headers_{redirect_count + 1}"
+                    response_header_cookie_guard = lambda stage=response_header_stage: (
+                        self._restore_profile_cookie_snapshot_if_lost(session, stage=stage)
+                    )
                 try:
                     response, raw = await buffered_response(
                         "GET",
@@ -1552,11 +1558,7 @@ class FacebookWebSession:
                                 {"request_timeout_seconds": max(30, self.timeout_seconds)}
                                 if document_request else {}
                             ),
-                            cookie_jar_guard=(
-                                lambda: self._restore_profile_cookie_snapshot_if_lost(
-                                    session, stage=f"response_headers_{redirect_count + 1}"
-                                )
-                            ) if (document_request or ads_manager_document) else None,
+                            cookie_jar_guard=response_header_cookie_guard,
                         ),
                         max(1, int(max_bytes)) + 1,
                         retry_read=document_request,
