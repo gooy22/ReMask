@@ -79,6 +79,7 @@ def native_business_login_continuation(body, return_url, *, diagnostic=None):
         return None
     report['reason'] = 'root_missing'
     candidates = []
+    native_facebook_flows = 0
     for script in _JSON_SCRIPT_RE.finditer(body):
         source = script.group(1)
         if ROOT not in source:
@@ -116,6 +117,7 @@ def native_business_login_continuation(body, return_url, *, diagnostic=None):
                                ('addNewProfileAM', 'fromProfileSwitcherAddAccount',
                                 'isFromInvitationFlow', 'igInvite'))):
                     continue
+                native_facebook_flows += 1
                 next_url = scalar('referrerURI')
                 request_id = scalar('requestId')
                 report['reason'] = 'request_id_or_destination'
@@ -160,6 +162,27 @@ def native_business_login_continuation(body, return_url, *, diagnostic=None):
         # return URL validated above; never broaden to a Business home or another
         # account. The caller has already rejected credentials and agreement text.
         target = urlsplit(return_url)
+        target_query = dict(parse_qsl(target.query, keep_blank_values=True))
+        target_query.update(
+            biz_login_source='biz_unified_f3_fb_login_button',
+            join_id=str(uuid4()),
+        )
+        next_url = urlunsplit((target.scheme, target.netloc, target.path,
+                               urlencode(target_query), ''))
+        handoff = 'https://business.facebook.com/business/loginrequest/fb/?' + urlencode({
+            'next': next_url,
+            'f3_request_id': str(uuid4()),
+        })
+        report['reason'] = 'native_fb_scoped_fallback'
+        return handoff
+    if (not candidates and native_facebook_flows == 1
+            and report.get('reason') == 'request_id_or_destination'):
+        # The current gate rendered a reviewed Facebook-only continuation
+        # control, but its serialized destination/request ID no longer matches
+        # the old client shape. Fall back to the exact account URL supplied by
+        # the caller, which was validated above; never accept an untrusted
+        # destination or widen the act/BM scope.
+        target = expected
         target_query = dict(parse_qsl(target.query, keep_blank_values=True))
         target_query.update(
             biz_login_source='biz_unified_f3_fb_login_button',
