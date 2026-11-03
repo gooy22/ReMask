@@ -47,18 +47,47 @@ def native_business_login_continuation(body, return_url, *, diagnostic=None):
     from .private_ads_document import _JSON_SCRIPT_RE
     report = diagnostic if diagnostic is not None else {}
     report['reason'] = 'request_scope'
-    expected = urlsplit(return_url)
-    expected_query = parse_qs(expected.query, keep_blank_values=True)
+    try:
+        expected = urlsplit(return_url)
+        expected_host = str(expected.hostname or '').casefold()
+        expected_port = expected.port
+        expected_query = parse_qs(expected.query, keep_blank_values=True)
+    except (TypeError, ValueError):
+        report['scope_url_parseable'] = False
+        return None
     expected_business_ids = expected_query.get('business_id', [])
-    if (expected.scheme != 'https' or expected.netloc not in
-            {'business.facebook.com', 'adsmanager.facebook.com'}
-            or expected.path != '/adsmanager/manage/campaigns'
-            or set(expected_query) - {'act', 'business_id'}
-            or len(expected_query.get('act', [])) != 1
-            or not re.fullmatch(r'[0-9]{5,30}', expected_query['act'][0])
-            or len(expected_business_ids) > 1
-            or (expected_business_ids and not
-                re.fullmatch(r'[0-9]{5,30}', expected_business_ids[0]))):
+    expected_acts = expected_query.get('act', [])
+    allowed_hosts = {'business.facebook.com', 'adsmanager.facebook.com'}
+    allowed_paths = {
+        '/adsmanager/manage/campaigns',
+        '/adsmanager/manage/campaigns/',
+    }
+    scope_checks = {
+        'scope_scheme_https': expected.scheme.casefold() == 'https',
+        'scope_host_allowed': expected_host in allowed_hosts,
+        'scope_authority_clean': (
+            expected.username is None and expected.password is None
+            and expected_port in (None, 443)
+        ),
+        'scope_path_allowed': expected.path in allowed_paths,
+        'scope_query_keys_allowed': set(expected_query) <= {'act', 'business_id'},
+        'scope_act_count_valid': len(expected_acts) == 1,
+        'scope_act_format_valid': (
+            len(expected_acts) == 1
+            and re.fullmatch(r'[0-9]{5,30}', expected_acts[0]) is not None
+        ),
+        'scope_business_count_valid': len(expected_business_ids) <= 1,
+        'scope_business_format_valid': (
+            not expected_business_ids
+            or (
+                len(expected_business_ids) == 1
+                and re.fullmatch(r'[0-9]{5,30}', expected_business_ids[0]) is not None
+            )
+        ),
+    }
+    report['scope_url_parseable'] = True
+    report.update(scope_checks)
+    if not all(scope_checks.values()):
         return None
     class Credentials(HTMLParser):
         blocked = False
