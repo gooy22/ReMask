@@ -4276,7 +4276,10 @@ async def private_launch_review(profile_id: str, payload: dict = Body(...)):
                 context=context,
                 payload=payload,
             )
-        result=await read_with_saved_auth_refresh(pool.resolver, context, review_once)
+        # Launch Review is read-only and the PHP bridge already supplies the
+        # request budget. Do not cancel same-profile saved-auth refresh at 5s.
+        result=await read_with_saved_auth_refresh(
+            pool.resolver, context, review_once, refresh_timeout_seconds=None)
         await _clear_business_login_gate_after_profile_review(clean_profile, result)
         result = {key:value for key,value in result.items() if not key.startswith('_')}
         return {'ok':True,**result}

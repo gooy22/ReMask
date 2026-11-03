@@ -52,6 +52,27 @@ def _facebook_url(value: str) -> bool:
     )
 
 
+def _navigation_fetch_site(referer: str, destination: str) -> str:
+    if not referer:
+        return "none"
+    try:
+        source = urlsplit(referer)
+        target = urlsplit(destination)
+        source_host = str(source.hostname or "").casefold()
+        target_host = str(target.hostname or "").casefold()
+        source_port = source.port or (443 if source.scheme == "https" else 80)
+        target_port = target.port or (443 if target.scheme == "https" else 80)
+    except ValueError:
+        return "cross-site"
+    if (source.scheme, source_host, source_port) == (target.scheme, target_host, target_port):
+        return "same-origin"
+    source_facebook = source_host == "facebook.com" or source_host.endswith(_FACEBOOK_HOST_SUFFIX)
+    target_facebook = target_host == "facebook.com" or target_host.endswith(_FACEBOOK_HOST_SUFFIX)
+    if source_facebook and target_facebook:
+        return "same-site"
+    return "cross-site"
+
+
 def is_business_login_gate_url(value: str) -> bool:
     try:
         parts = urlsplit(str(value or "").strip())
@@ -512,7 +533,7 @@ async def _request_facebook(
             "Pragma": "no-cache",
             "Sec-Fetch-Dest": "document",
             "Sec-Fetch-Mode": "navigate",
-            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-Site": _navigation_fetch_site(current_referer, current_url),
             "Sec-Fetch-User": "?1",
             "Upgrade-Insecure-Requests": "1",
         }
@@ -543,6 +564,13 @@ async def _request_facebook(
             return last_status, next_url, last_body, last_headers
         current_referer = last_url
         current_url = next_url
+        log.info(
+            "business_login_gate_redirect profile=%s hop=%d method=%s status=%d source_host=%s target_host=%s sec_fetch_site=%s",
+            getattr(profile, "name", "unknown"), hop + 1, current_method, last_status,
+            str(urlsplit(last_url).hostname or "").casefold(),
+            str(urlsplit(next_url).hostname or "").casefold(),
+            _navigation_fetch_site(current_referer, current_url),
+        )
         if last_status in {301, 302, 303} and current_method == "POST":
             current_method = "GET"
             current_fields = []

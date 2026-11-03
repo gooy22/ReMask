@@ -9,6 +9,7 @@ from typing import Any, Awaitable, Callable, TypeVar
 _READ_AUTH_CODES = frozenset({
     "BUSINESS_LOGIN_GATE", "SESSION_EXPIRED", "PROFILE_IDENTITY_UNCONFIRMED",
     "PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE", "PRIVATE_ADS_DRAFT_SESSION_EXPIRED",
+    "PRIVATE_ADS_DRAFT_META_LOGIN_REQUIRED",
 })
 AUTH_COOKIE_KEYS = ("fr", "sb", "datr", "ps_l", "ps_n")
 _T = TypeVar("_T")
@@ -75,6 +76,7 @@ def auth_cookie_variant(current: dict[str, Any], candidate: dict[str, Any]) -> b
 
 async def read_with_saved_auth_refresh(
     resolver: Any, context: Any, read_once: Callable[[], Awaitable[_T]],
+    *, refresh_timeout_seconds: float | None = 5.0,
 ) -> _T:
     """Retry a read once after loading newer authentication for the same actor.
 
@@ -88,8 +90,12 @@ async def read_with_saved_auth_refresh(
         if not isinstance(code, str) or code not in _READ_AUTH_CODES:
             raise
         try:
-            changed = await asyncio.wait_for(
-                refresh_saved_auth_context(resolver, context), timeout=5.0)
+            refresh = refresh_saved_auth_context(resolver, context)
+            if refresh_timeout_seconds is None:
+                changed = await refresh
+            else:
+                changed = await asyncio.wait_for(
+                    refresh, timeout=max(0.001, float(refresh_timeout_seconds)))
         except Exception as refresh_error:
             log.info("private read auth refresh profile=%s code=%s error_type=%s",
                 getattr(context, "profile_id", ""), code, type(refresh_error).__name__)

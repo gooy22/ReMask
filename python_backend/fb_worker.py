@@ -1586,9 +1586,16 @@ class FacebookWebSession:
                 next_url = urljoin(str(response.url), location)
                 next_parts = urlsplit(next_url)
                 next_host = str(next_parts.hostname or "").lower()
+                try:
+                    next_port = next_parts.port
+                except ValueError:
+                    next_port = -1
                 if (
                     next_parts.scheme != "https"
                     or (next_host != "facebook.com" and not next_host.endswith(".facebook.com"))
+                    or next_parts.username
+                    or next_parts.password
+                    or next_port not in (None, 443)
                 ):
                     raise RemoteRequestError(
                         "Facebook document redirect was blocked",
@@ -1598,10 +1605,28 @@ class FacebookWebSession:
                     )
 
                 # The response hook already restored any damaged profile snapshot.
-                # Follow only Meta's validated Location; pause after its first 302.
+                # Keep the initial Ads Manager GET byte-for-byte configured as before;
+                # only later hops receive navigation metadata for their new target.
+                previous_url = str(response.url)
+                previous_parts = urlsplit(previous_url)
+                same_origin = (
+                    previous_parts.scheme == next_parts.scheme
+                    and str(previous_parts.hostname or "").casefold() == next_host
+                    and (previous_parts.port or 443) == (next_port or 443)
+                )
                 if (ads_manager_document and redirect_count == 0
                         and response.status == 302):
                     await asyncio.sleep(3)
+                request_headers["Referer"] = previous_url
+                request_headers["Sec-Fetch-Site"] = (
+                    "same-origin" if same_origin else "same-site"
+                )
+                log.info(
+                    "[%s] private_http_document_redirect hop=%d status=%d source_host=%s target_host=%s sec_fetch_site=%s",
+                    self.profile.name, redirect_count + 1, response.status,
+                    str(previous_parts.hostname or "").casefold(), next_host,
+                    request_headers["Sec-Fetch-Site"],
+                )
                 current_url = next_url
 
             if len(raw) > max_bytes:
