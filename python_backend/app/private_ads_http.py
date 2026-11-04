@@ -311,7 +311,8 @@ class AdsManagerPrivateHttp:
     @classmethod
     async def open(cls, web, *, account_id, business_id, actor_id, reference_read=False,
                    account_read_fields=None, allow_draft_gate_recovery=False,
-                   allow_saved_publication_gate_recovery=False, account_preflight=False):
+                   allow_saved_publication_gate_recovery=False, account_preflight=False,
+                   saved_context_only=False):
         account_id = identity(account_id)
         actor_id = identity(actor_id)
         business_id = str(business_id or "").strip()
@@ -323,9 +324,11 @@ class AdsManagerPrivateHttp:
         else:
             business_id = identity(business_id)
         if (type(reference_read) is not bool or type(allow_draft_gate_recovery) is not bool
-                or type(allow_saved_publication_gate_recovery) is not bool):
+                or type(allow_saved_publication_gate_recovery) is not bool
+                or type(saved_context_only) is not bool):
             raise fail("INVALID_RESOURCE_ROUTE", "Advertising bootstrap mode must be explicit")
-        allow_business_gate_renewal = (not account_preflight and
+        # A DRAFT must use only the session context already present in the selected profile.
+        allow_business_gate_renewal = (not account_preflight and not saved_context_only and
             (reference_read or allow_draft_gate_recovery or allow_saved_publication_gate_recovery))
         if account_read_fields is not None:
             allowed_fields = {"id", "account_id", "business", "account_status",
@@ -341,6 +344,7 @@ class AdsManagerPrivateHttp:
             return await cls._open_uncached(web, account_id=account_id,
                 business_id=business_id, actor_id=actor_id, refresh_modules=True,
                 allow_business_gate_renewal=allow_business_gate_renewal,
+                allow_session_renewal=not saved_context_only,
                 account_preflight=account_preflight, account_read_fields=account_read_fields)
         profile = web.profile
         if str(profile.cookies.get("c_user") or "") != actor_id:
@@ -353,6 +357,7 @@ class AdsManagerPrivateHttp:
                 business_id=business_id, actor_id=actor_id, refresh_modules=False,
                 account_read_fields=account_read_fields,
                 allow_business_gate_renewal=allow_business_gate_renewal,
+                allow_session_renewal=not saved_context_only,
                 account_preflight=account_preflight)
             client.read_only = True
             return client
@@ -376,6 +381,7 @@ class AdsManagerPrivateHttp:
                 business_id=business_id, actor_id=actor_id, refresh_modules=False,
                 account_read_fields=account_read_fields,
                 allow_business_gate_renewal=allow_business_gate_renewal,
+                allow_session_renewal=not saved_context_only,
                 account_preflight=account_preflight)
             client.read_only = True
             _REFERENCE_CONTEXT_CACHE[digest] = (time.monotonic(),
@@ -388,7 +394,7 @@ class AdsManagerPrivateHttp:
     @classmethod
     async def _open_uncached(cls, web, *, account_id, business_id, actor_id, refresh_modules,
                              account_read_fields=None, allow_business_gate_renewal=False,
-                             account_preflight=False):
+                             allow_session_renewal=True, account_preflight=False):
         account_id = identity(account_id)
         actor_id = identity(actor_id)
         business_id = str(business_id or "").strip()
@@ -799,6 +805,9 @@ class AdsManagerPrivateHttp:
         business_gate_token_renewed = False
         session_renewed = False
         if account_preflight_login_gate:
+            if not allow_session_renewal:
+                raise fail("SESSION_CONTEXT_UNAVAILABLE",
+                    "Saved DRAFT context cannot pass Meta's Business login gate", True)
             seed = AdsManagerContext(account_id, business_id, actor_id,
                 "https://adsmanager-graph.facebook.com", "v22.0", "119211728144504", "")
             bootstrap_client = cls(web, seed)
@@ -884,6 +893,9 @@ class AdsManagerPrivateHttp:
                 context = context_from_document(body, account_id=account_id,
                             business_id=business_id, actor_id=actor_id)
             except _MissingSessionInitialization as error:
+                if not allow_session_renewal:
+                    raise fail("SESSION_CONTEXT_UNAVAILABLE",
+                        "Ads Manager omitted the saved DRAFT session context", True) from None
                 client = cls(web, error.context)
                 client.document_origin = final.scheme + '://' + final.hostname
                 client.document_url = renewal_url
@@ -902,6 +914,9 @@ class AdsManagerPrivateHttp:
             # Cookie-authenticated session renewal is not account proof.
             account_matches = False
         if account_preflight and not session_renewed:
+            if not allow_session_renewal:
+                raise fail("SESSION_CONTEXT_UNAVAILABLE",
+                    "Saved DRAFT context cannot initialize the Ads Manager session", True)
             # The selected act is the only scope selector available before the
             # profile inventory supplies a BM. Renew directly from this document,
             # then require the exact private account READ below before returning.
