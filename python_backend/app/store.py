@@ -1267,21 +1267,21 @@ class JobStore:
             (str(item.get('profile_id') or ''),),
         ).fetchone()
         terminal_status = str(terminal['status'] or '').upper() if terminal else ''
-        if (terminal_status == 'CHECKPOINT'
-                or (terminal_status == 'BUSINESS_LOGIN_GATE' and not allow_business_login_gate)):
-            return False
-
         item_error = str(item.get('error_code') or '')
         meta_login_retry = (
             allow_meta_login_retry
             and item_error == 'PRIVATE_ADS_DRAFT_META_LOGIN_REQUIRED'
         )
+        if (terminal_status == 'CHECKPOINT'
+                or (terminal_status == 'BUSINESS_LOGIN_GATE'
+                    and not (allow_business_login_gate or meta_login_retry))):
+            return False
         if meta_login_retry:
             if (
                 job_id != 'a7ab6547d74b4ceab021fa9a6cfe0666'
                 or str(item.get('id') or '') != 'c35e8eb06b654b07b7f8be3acdd5e993'
                 or str(item.get('profile_id') or '') != '27'
-                or str(item.get('attempt') or '') != '2'
+                or str(item.get('attempt') or '') != '3'
                 or terminal_status != 'BUSINESS_LOGIN_GATE'
                 or len(tasks) != 1
             ):
@@ -1301,7 +1301,7 @@ class JobStore:
         task = candidates[0]
         if meta_login_retry and (
             str(task.get('id') or '') != '6b0e78265c304420a291914fc49f04ed'
-            or str(task.get('attempt') or '') != '2'
+            or str(task.get('attempt') or '') != '3'
         ):
             return False
         payload = task.get('payload')
@@ -1906,7 +1906,7 @@ class JobStore:
                     and job_id == 'a7ab6547d74b4ceab021fa9a6cfe0666'
                     and str(row['id']) == 'c35e8eb06b654b07b7f8be3acdd5e993'
                     and profile == '27'
-                    and str(row['attempt'] or '') == '2'
+                    and str(row['attempt'] or '') == '3'
                     and row['error_code'] == 'PRIVATE_ADS_DRAFT_META_LOGIN_REQUIRED'
                 )
                 if (
