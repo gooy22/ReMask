@@ -1255,6 +1255,314 @@ class JobStore:
                         if key in publication} if isinstance(publication, dict) else {}})
         return progress
 
+    async def private_launch_saved_campaign_retry_available(
+        self, job_id: str, item: dict[str, Any], *, allow_business_login_gate: bool = False
+    ) -> bool:
+        """Read-only eligibility check for the exact saved profile 28 campaign prefix."""
+        if not isinstance(item, dict):
+            return False
+        item_id = str(item.get("id") or "").strip()
+        if not item_id:
+            return False
+        return await asyncio.to_thread(
+            self._private_launch_saved_campaign_retry_available_sync,
+            str(job_id or "").strip(),
+            item_id,
+            bool(allow_business_login_gate),
+        )
+
+    def _private_launch_saved_campaign_retry_available_sync(
+        self, job_id: str, item_id: str, allow_business_login_gate: bool = False
+    ) -> bool:
+        with self._connect() as con:
+            item_row = con.execute(
+                """SELECT i.id,i.job_id,i.profile_id,i.status,i.attempt,i.error_code
+                   FROM job_items AS i JOIN jobs AS j ON j.id=i.job_id
+                   WHERE i.id=? AND i.job_id=? AND j.status='FAILED'""",
+                (item_id, job_id),
+            ).fetchone()
+            if not item_row:
+                return False
+            item = dict(item_row)
+            task_rows = con.execute(
+                """SELECT id,item_id,action,payload_json,idempotency_key,status,attempt,
+                          result_json,error_code
+                   FROM job_tasks WHERE item_id=? ORDER BY position""",
+                (item_id,),
+            ).fetchall()
+            tasks = []
+            try:
+                for task_row in task_rows:
+                    task = dict(task_row)
+                    task["payload"] = json.loads(task.pop("payload_json") or "{}")
+                    raw_result = task.pop("result_json")
+                    if raw_result:
+                        task["result"] = json.loads(raw_result)
+                    tasks.append(task)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                return False
+            return self._private_launch_saved_campaign_read_retry_available(
+                con, item, tasks, job_id=job_id,
+                allow_business_login_gate=allow_business_login_gate,
+            )
+
+    @staticmethod
+    def _private_launch_saved_campaign_read_retry_available(
+        con, item, tasks, *, job_id="", allow_business_login_gate=False
+    ):
+        """Resume only a receipt-backed, paused campaign prefix for the one saved job."""
+        expected_job = "64ad97e3bd4f4c2ba744eda37763c962"
+        expected_item = "0ec5cb5d0fec418abddb33adc4a7b370"
+        expected_source = "4ae223fa5fd8132843cb1cca972ef339759c84167c96b7c9c2feb7685d97ddb3"
+        expected_draft = "2210627659890877"
+        expected_business = "1889034722540874"
+        expected_page = "1463070456885337"
+        accepted_accounts = {"52569470944909", "2610919942714650"}
+        if (
+            job_id != expected_job
+            or str(item.get("id") or "") != expected_item
+            or str(item.get("job_id") or "") != expected_job
+            or str(item.get("profile_id") or "") != "28"
+            or str(item.get("status") or "").upper() != "FAILED"
+            or str(item.get("attempt") or "") != "1"
+            or str(item.get("error_code") or "") != "PRIVATE_ADS_DRAFT_READ_SPEC_MISMATCH"
+            or len(tasks) != 1
+            or con.execute("SELECT COUNT(*) FROM job_items WHERE job_id=?", (expected_job,)).fetchone()[0] != 1
+        ):
+            return False
+        terminal = con.execute(
+            "SELECT status FROM profile_terminal_statuses WHERE profile_id='28'"
+        ).fetchone()
+        terminal_status = str(terminal["status"] or "").upper() if terminal else ""
+        if terminal_status == "CHECKPOINT" or (
+            terminal_status == "BUSINESS_LOGIN_GATE" and not allow_business_login_gate
+        ):
+            return False
+
+        task = tasks[0]
+        if (
+            str(task.get("item_id") or "") != expected_item
+            or str(task.get("action") or "").lower() != "private_launch"
+            or str(task.get("status") or "").upper() != "FAILED"
+            or str(task.get("attempt") or "") != "1"
+            or str(task.get("error_code") or "") != "PRIVATE_ADS_DRAFT_READ_SPEC_MISMATCH"
+        ):
+            return False
+        payload = task.get("payload")
+        if not isinstance(payload, dict):
+            return False
+        if (
+            str(payload.get("business_id") or "") != expected_business
+            or str(payload.get("ad_account_id") or "") != "52569470944909"
+            or str(payload.get("page_id") or "") != expected_page
+            or any(name in payload for name in ("publish_saved_draft", "repair_objective", "reconcile_only"))
+        ):
+            return False
+        launch_key = str(payload.get("launch_key") or "").strip()
+        if not launch_key or len(launch_key) > 200 or str(task.get("idempotency_key") or "") != launch_key:
+            return False
+        launch = payload.get("launch")
+        base = launch.get("base") if isinstance(launch, dict) else None
+        if not isinstance(base, dict) or str(base.get("execution_mode") or "").upper() != "DRAFT":
+            return False
+        campaign = base.get("campaign")
+        adset = base.get("adset")
+        ad = base.get("ad")
+        delivery = base.get("delivery")
+        if not all(isinstance(value, dict) for value in (campaign, adset, ad, delivery)):
+            return False
+        if (
+            campaign.get("name") != "CS2 Match"
+            or str(campaign.get("status") or "").upper() != "PAUSED"
+            or adset.get("name") != "ReMask neutral test audience"
+            or str(adset.get("status") or "").upper() != "PAUSED"
+            or str(ad.get("status") or "").upper() != "PAUSED"
+            or delivery != {"campaign": "PAUSED", "adset": "PAUSED", "ad": "PAUSED"}
+        ):
+            return False
+        daily_budgets = [
+            section["daily_budget"] for section in (campaign, adset) if "daily_budget" in section
+        ]
+        lifetime_budgets = [
+            section["lifetime_budget"] for section in (campaign, adset) if "lifetime_budget" in section
+        ]
+        if (
+            len(daily_budgets) != 1
+            or type(daily_budgets[0]) is not int
+            or daily_budgets[0] != 500
+            or lifetime_budgets
+        ):
+            return False
+
+        if not con.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='private_launch_plans'"
+        ).fetchone():
+            return False
+        plan = con.execute(
+            """SELECT profile_id,business_id,ad_account_id,fingerprint,contract_digest
+               FROM private_launch_plans WHERE launch_key=?""",
+            (launch_key,),
+        ).fetchone()
+        if (
+            not plan
+            or str(plan["profile_id"]) != "28"
+            or str(plan["business_id"]) != expected_business
+            or str(plan["ad_account_id"]) not in accepted_accounts
+            or not re.fullmatch(r"[a-f0-9]{64}", str(plan["fingerprint"] or ""))
+            or not re.fullmatch(r"[a-f0-9]{64}", str(plan["contract_digest"] or ""))
+        ):
+            return False
+        if not con.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='private_launch_steps'"
+        ).fetchone():
+            return False
+        step_rows = con.execute(
+            """SELECT launch_key,profile_id,business_id,ad_account_id,step,status,entity_id,
+                      result_json,error_code,submitted
+               FROM private_launch_steps WHERE launch_key=? ORDER BY step""",
+            (launch_key,),
+        ).fetchall()
+        if not 2 <= len(step_rows) <= 16:
+            return False
+        by_step = {str(row["step"] or ""): row for row in step_rows}
+        required = {"ADS_MANAGER:DRAFT", "ADS_MANAGER:FRAGMENT_CAMPAIGN"}
+        if not required <= set(by_step):
+            return False
+        for row in step_rows:
+            if (
+                str(row["launch_key"]) != launch_key
+                or str(row["profile_id"]) != "28"
+                or str(row["business_id"]) != expected_business
+                or str(row["ad_account_id"]) != str(plan["ad_account_id"])
+            ):
+                return False
+        allowed_media = re.compile(
+            r"ADS_MANAGER:(?:IMAGE:[a-f0-9]{64}|VIDEO_START:[a-f0-9]{64}|"
+            r"VIDEO_TRANSFER_[0-9]+:[a-f0-9]{64}|VIDEO_FINISH:[a-f0-9]{64})"
+        )
+        for name in set(by_step) - required:
+            if not allowed_media.fullmatch(name):
+                return False
+        if any(name.startswith("ADS_MANAGER:PUBLISH") or name.startswith("ADS_MANAGER:DELIVERY_")
+               or name in {"ADS_MANAGER:FRAGMENT_AD_SET", "ADS_MANAGER:FRAGMENT_AD"}
+               for name in by_step):
+            return False
+
+        def decoded(row):
+            try:
+                result = json.loads(row["result_json"] or "")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                return None, None
+            evidence = result.get("evidence") if isinstance(result, dict) else None
+            if not isinstance(result, dict) or not isinstance(evidence, dict):
+                return None, None
+            return result, evidence
+
+        draft_row = by_step["ADS_MANAGER:DRAFT"]
+        draft_result, draft_evidence = decoded(draft_row)
+        draft_receipt = draft_evidence.get("receipt") if isinstance(draft_evidence, dict) else None
+        draft_proof = draft_evidence.get("verification") if isinstance(draft_evidence, dict) else None
+        actor_id = str((draft_evidence or {}).get("actor_id") or "")
+        if (
+            str(draft_row["status"] or "").upper() != "SUCCESS"
+            or str(draft_row["error_code"] or "") != "PRIVATE_ADS_DRAFT_READ_CONFIRMED"
+            or draft_row["submitted"] != 1
+            or not isinstance(draft_result, dict)
+            or draft_result.get("status") != "SUCCESS"
+            or draft_result.get("code") != "PRIVATE_ADS_DRAFT_READ_CONFIRMED"
+            or not isinstance(draft_receipt, dict)
+            or set(draft_receipt) != {"draft_id"}
+            or str(draft_receipt.get("draft_id") or "") != expected_draft
+            or str(draft_row["entity_id"] or "") != expected_draft
+            or not isinstance(draft_proof, dict)
+            or draft_proof.get("verified") is not True
+            or draft_proof.get("source") != "independent_private_ads_http"
+            or str(draft_proof.get("draft_id") or "") != expected_draft
+            or not re.fullmatch(r"[1-9][0-9]{4,39}", actor_id)
+            or draft_evidence.get("source_digest") != expected_source
+            or draft_evidence.get("launch_fingerprint") != str(plan["fingerprint"])
+            or hashlib.sha256((expected_source + actor_id).encode()).hexdigest()
+                != str(plan["contract_digest"])
+            or not re.fullmatch(r"[a-f0-9]{64}", str(draft_evidence.get("operation_fingerprint") or ""))
+        ):
+            return False
+
+        campaign_row = by_step["ADS_MANAGER:FRAGMENT_CAMPAIGN"]
+        campaign_result, campaign_evidence = decoded(campaign_row)
+        campaign_receipt = campaign_evidence.get("receipt") if isinstance(campaign_evidence, dict) else None
+        binding = campaign_evidence.get("binding") if isinstance(campaign_evidence, dict) else None
+        bound_values = binding.get("values") if isinstance(binding, dict) else None
+        fragment_id = str((campaign_receipt or {}).get("fragment_id") or "")
+        if (
+            str(campaign_row["status"] or "").upper() != "RECONCILE_REQUIRED"
+            or str(campaign_row["error_code"] or "") != "PRIVATE_ADS_DRAFT_READ_PENDING"
+            or campaign_row["submitted"] != 1
+            or not isinstance(campaign_result, dict)
+            or campaign_result.get("status") != "RECONCILE_REQUIRED"
+            or campaign_result.get("code") != "PRIVATE_ADS_DRAFT_READ_PENDING"
+            or str(campaign_result.get("entity_id") or "") != fragment_id
+            or not isinstance(campaign_receipt, dict)
+            or set(campaign_receipt) != {"fragment_id"}
+            or not re.fullmatch(r"[1-9][0-9]{4,39}", fragment_id)
+            or str(campaign_row["entity_id"] or "") != fragment_id
+            or not isinstance(bound_values, dict)
+            or bound_values.get("name") != "CS2 Match"
+            or str(bound_values.get("status") or "").upper() != "PAUSED"
+            or isinstance(campaign_evidence.get("verification"), dict)
+            or isinstance(campaign_evidence.get("response_error"), dict)
+            or campaign_evidence.get("source_digest") != expected_source
+            or campaign_evidence.get("launch_fingerprint") != str(plan["fingerprint"])
+            or campaign_evidence.get("actor_id") != actor_id
+            or not re.fullmatch(r"[a-f0-9]{64}", str(campaign_evidence.get("operation_fingerprint") or ""))
+        ):
+            return False
+
+        video_started, video_finished, video_operations = set(), set(), set()
+        for name in set(by_step) - required:
+            row = by_step[name]
+            result, evidence = decoded(row)
+            operation = name.removeprefix("ADS_MANAGER:")
+            match_start = re.fullmatch(r"VIDEO_START:([a-f0-9]{64})", operation)
+            match_transfer = re.fullmatch(r"VIDEO_TRANSFER_[0-9]+:([a-f0-9]{64})", operation)
+            match_finish = re.fullmatch(r"VIDEO_FINISH:([a-f0-9]{64})", operation)
+            is_image = re.fullmatch(r"IMAGE:[a-f0-9]{64}", operation) is not None
+            digest_match = match_start or match_transfer or match_finish
+            if match_start:
+                video_started.add(match_start.group(1))
+            if match_finish:
+                video_finished.add(match_finish.group(1))
+            if match_transfer:
+                video_operations.add(match_transfer.group(1))
+            if digest_match:
+                video_operations.add(digest_match.group(1))
+            proof = evidence.get("verification") if isinstance(evidence, dict) else None
+            if (
+                (not is_image and not digest_match)
+                or str(row["status"] or "").upper() != "SUCCESS"
+                or str(row["error_code"] or "") != "PRIVATE_ADS_DRAFT_READ_CONFIRMED"
+                or row["submitted"] != 1
+                or not isinstance(result, dict)
+                or result.get("status") != "SUCCESS"
+                or result.get("code") != "PRIVATE_ADS_DRAFT_READ_CONFIRMED"
+                or not isinstance(evidence, dict)
+                or not isinstance(evidence.get("receipt"), dict)
+                or isinstance(evidence.get("response_error"), dict)
+                or not isinstance(proof, dict)
+                or proof.get("source") != "independent_private_ads_http"
+                or evidence.get("source_digest") != expected_source
+                or evidence.get("launch_fingerprint") != str(plan["fingerprint"])
+                or evidence.get("actor_id") != actor_id
+                or not re.fullmatch(r"[a-f0-9]{64}", str(evidence.get("operation_fingerprint") or ""))
+                or (is_image and proof.get("verified") is not True)
+                or (not is_image and operation.startswith(("VIDEO_START:", "VIDEO_TRANSFER_"))
+                    and proof.get("phase_receipt") is not True)
+                or (operation.startswith("VIDEO_FINISH:") and proof.get("verified") is not True)
+            ):
+                return False
+        if video_started != video_finished or video_operations - video_started:
+            return False
+        return True
+
     @staticmethod
     def _private_launch_pre_submit_renewal_retry_available(
         con, item, tasks, *, allow_business_login_gate=False,
@@ -1851,6 +2159,7 @@ class JobStore:
         *,
         excluded_profile_ids: set[str] | None = None,
         allow_business_login_gate_profile_ids: set[str] | None = None,
+        allow_saved_campaign_readback_retry_item_ids: set[str] | None = None,
     ) -> int:
         excluded=tuple(sorted({
             str(value).strip()
@@ -1862,8 +2171,13 @@ class JobStore:
             for value in (allow_business_login_gate_profile_ids or set())
             if str(value).strip()
         }))
+        allow_saved_campaign=tuple(sorted({
+            str(value).strip()
+            for value in (allow_saved_campaign_readback_retry_item_ids or set())
+            if str(value).strip()
+        }))
         return await asyncio.to_thread(
-            self._retry_failed_sync, job_id, excluded, allow_business_gate
+            self._retry_failed_sync, job_id, excluded, allow_business_gate, allow_saved_campaign
         )
 
     def _retry_failed_sync(
@@ -1871,10 +2185,12 @@ class JobStore:
         job_id: str,
         excluded_profile_ids: tuple[str, ...] = (),
         allow_business_login_gate_profile_ids: tuple[str, ...] = (),
+        allow_saved_campaign_readback_retry_item_ids: tuple[str, ...] = (),
     ) -> int:
         now=_now()
         excluded=set(excluded_profile_ids)
         allow_business_gate_profiles=set(allow_business_login_gate_profile_ids)
+        allow_saved_campaign_item_ids=set(allow_saved_campaign_readback_retry_item_ids)
         with self._connect() as con:
             rows=con.execute(
                 "SELECT id,profile_id,retryable,error_code,attempt FROM job_items "
@@ -1895,6 +2211,8 @@ class JobStore:
             }
             private_launch_recovery_ids = set()
             private_launch_gate_recovery_ids = set()
+            saved_campaign_readback_recovery_ids = set()
+            saved_campaign_readback_gate_recovery_ids = set()
             for row in rows:
                 profile=str(row['profile_id'] or '')
                 allow_gate_retry=(
@@ -1909,12 +2227,16 @@ class JobStore:
                     and str(row['attempt'] or '') == '3'
                     and row['error_code'] == 'PRIVATE_ADS_DRAFT_META_LOGIN_REQUIRED'
                 )
+                saved_campaign_retry_requested = (
+                    str(row['id']) in allow_saved_campaign_item_ids
+                    and row['error_code'] == 'PRIVATE_ADS_DRAFT_READ_SPEC_MISMATCH'
+                )
                 if (
                     (profile in excluded and not allow_gate_retry)
-                    or row['error_code'] not in {
+                    or (row['error_code'] not in {
                         'PRIVATE_ADS_DRAFT_SESSION_RENEWAL_UNAVAILABLE',
                         'PRIVATE_ADS_DRAFT_META_LOGIN_REQUIRED',
-                    }
+                    } and not saved_campaign_retry_requested)
                 ):
                     continue
                 task_rows = con.execute(
@@ -1944,16 +2266,25 @@ class JobStore:
                     private_launch_recovery_ids.add(item_id)
                     if allow_gate_retry:
                         private_launch_gate_recovery_ids.add(item_id)
+                if saved_campaign_retry_requested and self._private_launch_saved_campaign_read_retry_available(
+                        con,item,tasks,job_id=job_id,allow_business_login_gate=allow_gate_retry):
+                    item_id=str(row['id'])
+                    saved_campaign_readback_recovery_ids.add(item_id)
+                    if allow_gate_retry:
+                        saved_campaign_readback_gate_recovery_ids.add(item_id)
             ids=[
                 str(row['id'])
                 for row in rows
                 if (
                     (str(row['profile_id'] or '') not in excluded
                      and (bool(row['retryable']) or str(row['id']) in recovery_ids
-                         or str(row['id']) in private_launch_recovery_ids or row['error_code'] in {
+                         or str(row['id']) in private_launch_recovery_ids
+                         or str(row['id']) in saved_campaign_readback_recovery_ids
+                         or row['error_code'] in {
                          'CHECKPOINT_REQUIRED', 'SESSION_EXPIRED', 'TWO_FACTOR_REQUIRED', 'PAGE_ADD_UI_CHANGED',
                      }))
                     or str(row['id']) in private_launch_gate_recovery_ids
+                    or str(row['id']) in saved_campaign_readback_gate_recovery_ids
                 )
             ]
             for item_id in ids:
@@ -1978,9 +2309,11 @@ class JobStore:
                              'PRIVATE_ADS_DRAFT_SESSION_RENEWAL_UNAVAILABLE',
                              'PRIVATE_ADS_DRAFT_META_LOGIN_REQUIRED'
                            ) AND ?=1)
+                           OR (error_code='PRIVATE_ADS_DRAFT_READ_SPEC_MISMATCH' AND ?=1)
                          )""",
                     (now,item_id,1 if item_id in recovery_ids else 0,
-                     1 if item_id in private_launch_recovery_ids else 0),
+                     1 if item_id in private_launch_recovery_ids else 0,
+                     1 if item_id in saved_campaign_readback_recovery_ids else 0),
                 )
             if ids:
                 con.execute(
