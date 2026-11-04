@@ -998,12 +998,15 @@ class AdsManagerPrivateHttp:
                 if not is_business_login_gate_url(business_gate_url):
                     raise fail("BUSINESS_LOGIN_GATE", "Session renewal gate URL is not a reviewed Meta Business gate")
                 gate_document = sprinkle_document if isinstance(sprinkle_document, str) else document
-                # Build the continuation target from the already-validated
-                # Launch act. BM ownership is proven by the exact account read
-                # after the handoff, not by the redirect URL.
+                # Return through the same first-party Business host and
+                # exact selected account scope that opened this gate. The exact
+                # account+Business READ remains mandatory before any write.
+                scoped_params = {"act": selected_account_id}
+                if self.context.business_id:
+                    scoped_params["business_id"] = self.context.business_id
                 scoped_return_url = (
-                    "https://adsmanager.facebook.com/adsmanager/manage/campaigns?"
-                    + urlencode({"act": selected_account_id})
+                    "https://business.facebook.com/adsmanager/manage/campaigns?"
+                    + urlencode(scoped_params)
                 )
                 recovered = await continue_business_login_gate(
                     self.web,
@@ -1019,7 +1022,7 @@ class AdsManagerPrivateHttp:
                     recovered_status = recovered.get("status")
                     recovered_body = recovered.get("body")
                     recovered_url = str(recovered.get("url") or "")
-                    expected_return_url = return_url or self.document_url
+                    expected_return_url = scoped_return_url
                     try:
                         expected_parts = urlsplit(expected_return_url)
                         recovered_parts = urlsplit(recovered_url)

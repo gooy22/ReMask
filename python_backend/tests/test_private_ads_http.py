@@ -1054,8 +1054,8 @@ class ReadOnlyReferenceBootstrapReuseTests(unittest.IsolatedAsyncioTestCase):
 
     async def _mock_business_gate_session(self, account_business="222222"):
         gate_url = "https://business.facebook.com/business/loginpage/"
-        return_url = ("https://adsmanager.facebook.com/adsmanager/manage/campaigns"
-            "?act=111111")
+        return_url = ("https://business.facebook.com/adsmanager/manage/campaigns"
+            "?act=111111&business_id=222222")
         gate_body = """
             <form id="login_form"
                   action="https://www.facebook.com/login/device-based/validate/"
@@ -1123,8 +1123,8 @@ class ReadOnlyReferenceBootstrapReuseTests(unittest.IsolatedAsyncioTestCase):
             "display=page&login_source=business_gate&next=https%3A%2F%2Fbusiness.facebook.com%2Flatest%2Fhome&lsd=synthetic-gate-lsd&u_0_b=")
         self.assertEqual(calls[1][1], "https://business.facebook.com/latest/home")
         self.assertEqual(calls[2][1],
-            "https://adsmanager.facebook.com/adsmanager/manage/campaigns"
-            "?act=111111")
+            "https://business.facebook.com/adsmanager/manage/campaigns"
+            "?act=111111&business_id=222222")
         self.assertEqual(calls[3][1],
             "https://adsmanager.facebook.com/ads/manager/ajax/renew_access_token/")
         self.assertEqual(calls[3][2]["headers"]["Origin"],
