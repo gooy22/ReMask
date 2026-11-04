@@ -189,7 +189,7 @@ if (strpos($js, 'REMASK_PRIVATE_SAVED_RETRY_V1') === false) {
     let consumed = false;
     const selectedFailedPrivateJobId = () => {
         const requestedId = new URL(window.location.href).searchParams.get('private_job') || '';
-        if (requestedId !== 'a7ab6547d74b4ceab021fa9a6cfe0666') return '';
+        if (!['a7ab6547d74b4ceab021fa9a6cfe0666', '64ad97e3bd4f4c2ba744eda37763c962'].includes(requestedId)) return '';
         return requestedId;
     };
     const render = () => {
@@ -218,7 +218,7 @@ if (strpos($js, 'REMASK_PRIVATE_SAVED_RETRY_V1') === false) {
             const payload = task?.payload || {};
             const base = payload?.launch?.base || {};
             const delivery = base?.delivery || {};
-            const exactSavedDraft =
+            const exactProfile27Draft =
                 job?.id === 'a7ab6547d74b4ceab021fa9a6cfe0666' &&
                 jobId === job.id && job?.status === 'FAILED' && items.length === 1 &&
                 item?.id === 'c35e8eb06b654b07b7f8be3acdd5e993' &&
@@ -235,7 +235,23 @@ if (strpos($js, 'REMASK_PRIVATE_SAVED_RETRY_V1') === false) {
                 base?.adset?.status === 'PAUSED' &&
                 base?.ad?.status === 'PAUSED' &&
                 delivery?.campaign === 'PAUSED' && delivery?.adset === 'PAUSED' && delivery?.ad === 'PAUSED';
-            if (!exactSavedDraft) {
+            const exactProfile28Draft =
+                job?.id === '64ad97e3bd4f4c2ba744eda37763c962' &&
+                jobId === job.id && job?.status === 'FAILED' && items.length === 1 &&
+                item?.id === '0ec5cb5d0fec418abddb33adc4a7b370' &&
+                item?.profile_id === '28' && item?.status === 'FAILED' && item?.attempt === 1 &&
+                item?.error_code === 'PRIVATE_ADS_DRAFT_READ_SPEC_MISMATCH' &&
+                tasks.length === 1 && task?.action === 'private_launch' && task?.status === 'FAILED' &&
+                task?.attempt === 1 && task?.error_code === 'PRIVATE_ADS_DRAFT_READ_SPEC_MISMATCH' &&
+                payload?.business_id === '1889034722540874' &&
+                payload?.ad_account_id === '52569470944909' &&
+                payload?.page_id === '1463070456885337' &&
+                base?.execution_mode === 'DRAFT' &&
+                base?.campaign?.name === 'CS2 Match' && base?.campaign?.status === 'PAUSED' &&
+                base?.adset?.name === 'ReMask neutral test audience' && base?.adset?.status === 'PAUSED' &&
+                base?.ad?.status === 'PAUSED' &&
+                delivery?.campaign === 'PAUSED' && delivery?.adset === 'PAUSED' && delivery?.ad === 'PAUSED';
+            if (!exactProfile27Draft && !exactProfile28Draft) {
                 show($('launchResult'), 'Сохранённая задача изменилась; повтор не отправлен.', 'failed');
                 return;
             }
