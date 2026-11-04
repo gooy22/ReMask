@@ -1021,6 +1021,10 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
             con.execute("UPDATE job_items SET retryable=1 WHERE id=?", (item_id,))
             con.execute("UPDATE job_tasks SET retryable=1 WHERE item_id=?", (item_id,))
 
+        view = await self.store.job_view(job_id)
+        self.assertTrue(await self.store.private_launch_saved_campaign_retry_available(
+            job_id, view['items'][0]
+        ))
         self.assertEqual(await self.store.retry_failed(job_id), 0)
         self.assertEqual((await self.store.item(item_id))['status'], 'FAILED')
         self.assertEqual((await self.store.tasks(item_id))[0]['status'], 'FAILED')
