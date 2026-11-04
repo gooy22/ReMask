@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import os
 import tempfile
@@ -847,6 +848,164 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(after['items'][0]['retryable'])
         self.assertEqual(await self.store.retry_failed(
             job_id,allow_business_login_gate_profile_ids={'27'}),0)
+
+    def _seed_profile28_saved_campaign_readback_mismatch(self, *, extra_child=False):
+        now = int(time.time())
+        job_id = '64ad97e3bd4f4c2ba744eda37763c962'
+        item_id = '0ec5cb5d0fec418abddb33adc4a7b370'
+        task_id = '6c0d5e63db5648b7a256f4a773d8457c'
+        launch_key = 'private-launch-28-52569470944909-fixture'
+        source_digest = '4ae223fa5fd8132843cb1cca972ef339759c84167c96b7c9c2feb7685d97ddb3'
+        actor_id = '61595942820593'
+        fingerprint = 'a' * 64
+        draft_id = '2210627659890877'
+        fragment_id = '2210630549890588'
+        business = '1889034722540874'
+        account = '52569470944909'
+        page = '1463070456885337'
+        payload = {
+            'business_id': business,
+            'ad_account_id': account,
+            'page_id': page,
+            'launch_key': launch_key,
+            'launch': {'base': {
+                'execution_mode': 'DRAFT',
+                'campaign': {'name': 'CS2 Match', 'status': 'PAUSED'},
+                'adset': {'name': 'ReMask neutral test audience', 'status': 'PAUSED', 'daily_budget': 500},
+                'ad': {'name': 'CS2 Match ad', 'status': 'PAUSED'},
+                'delivery': {'campaign': 'PAUSED', 'adset': 'PAUSED', 'ad': 'PAUSED'},
+            }},
+        }
+        contract_digest = hashlib.sha256((source_digest + actor_id).encode()).hexdigest()
+        draft_evidence = {
+            'operation_fingerprint': 'b' * 64,
+            'launch_fingerprint': fingerprint,
+            'source_digest': source_digest,
+            'actor_id': actor_id,
+            'receipt': {'draft_id': draft_id},
+            'verification': {'verified': True, 'source': 'independent_private_ads_http', 'draft_id': draft_id},
+        }
+        campaign_evidence = {
+            'operation_fingerprint': 'c' * 64,
+            'launch_fingerprint': fingerprint,
+            'source_digest': source_digest,
+            'actor_id': actor_id,
+            'receipt': {'fragment_id': fragment_id},
+            'binding': {'values': {'name': 'CS2 Match', 'status': 'PAUSED'}},
+        }
+        draft_result = {
+            'status': 'SUCCESS', 'code': 'PRIVATE_ADS_DRAFT_READ_CONFIRMED',
+            'entity_id': draft_id, 'evidence': draft_evidence,
+        }
+        campaign_result = {
+            'status': 'RECONCILE_REQUIRED', 'code': 'PRIVATE_ADS_DRAFT_READ_PENDING',
+            'submitted': True, 'entity_id': fragment_id, 'evidence': campaign_evidence,
+        }
+        with self.store._connect() as con:
+            con.execute(
+                "INSERT INTO jobs(id,status,idempotency_key,created_at,updated_at) VALUES(?,?,?,?,?)",
+                (job_id, 'FAILED', 'idem-profile28-saved-draft', now, now),
+            )
+            con.execute(
+                """INSERT INTO job_items(
+                    id,job_id,profile_id,status,error_code,error_message,retryable,attempt,
+                    created_at,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                (item_id, job_id, '28', 'FAILED', 'PRIVATE_ADS_DRAFT_READ_SPEC_MISMATCH',
+                 'Meta campaign readback differed before reviewed defaults were accepted', 0, 1, now, now),
+            )
+            con.execute(
+                """INSERT INTO job_tasks(
+                    id,item_id,position,action,payload_json,idempotency_key,status,attempt,
+                    error_code,error_message,retryable,created_at,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (task_id, item_id, 0, 'private_launch', json.dumps(payload), launch_key, 'FAILED', 1,
+                 'PRIVATE_ADS_DRAFT_READ_SPEC_MISMATCH', 'Campaign settings did not match before reviewed defaults', 0,
+                 now, now),
+            )
+            con.execute(
+                """CREATE TABLE private_launch_plans(
+                    launch_key TEXT PRIMARY KEY,profile_id TEXT NOT NULL,business_id TEXT NOT NULL,
+                    ad_account_id TEXT NOT NULL,fingerprint TEXT NOT NULL,contract_digest TEXT NOT NULL,
+                    created_at INTEGER NOT NULL
+                )"""
+            )
+            con.execute(
+                """CREATE TABLE private_launch_steps(
+                    launch_key TEXT NOT NULL,profile_id TEXT NOT NULL,business_id TEXT NOT NULL,
+                    ad_account_id TEXT NOT NULL,step TEXT NOT NULL,status TEXT NOT NULL,
+                    entity_id TEXT,result_json TEXT,error_code TEXT,submitted INTEGER,
+                    created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,
+                    PRIMARY KEY(launch_key,step)
+                )"""
+            )
+            con.execute(
+                "INSERT INTO private_launch_plans VALUES(?,?,?,?,?,?,?)",
+                (launch_key, '28', business, account, fingerprint, contract_digest, now),
+            )
+            for step, status, entity_id, result, code in (
+                ('ADS_MANAGER:DRAFT', 'SUCCESS', draft_id, draft_result, 'PRIVATE_ADS_DRAFT_READ_CONFIRMED'),
+                ('ADS_MANAGER:FRAGMENT_CAMPAIGN', 'RECONCILE_REQUIRED', fragment_id, campaign_result,
+                 'PRIVATE_ADS_DRAFT_READ_PENDING'),
+            ):
+                con.execute(
+                    """INSERT INTO private_launch_steps(
+                        launch_key,profile_id,business_id,ad_account_id,step,status,entity_id,result_json,
+                        error_code,submitted,created_at,updated_at
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (launch_key, '28', business, account, step, status, entity_id,
+                     json.dumps(result), code, 1, now, now),
+                )
+            if extra_child:
+                con.execute(
+                    """INSERT INTO private_launch_steps(
+                        launch_key,profile_id,business_id,ad_account_id,step,status,entity_id,result_json,
+                        error_code,submitted,created_at,updated_at
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (launch_key, '28', business, account, 'ADS_MANAGER:FRAGMENT_AD_SET',
+                     'RECONCILE_REQUIRED', '2210630549890589', '{}',
+                     'PRIVATE_ADS_DRAFT_READ_PENDING', 1, now, now),
+                )
+        return job_id, item_id
+
+    async def test_exact_profile28_campaign_readback_resume_requeues_only_the_saved_item_once(self):
+        job_id, item_id = self._seed_profile28_saved_campaign_readback_mismatch()
+        view = await self.store.job_view(job_id)
+        self.assertTrue(await self.store.private_launch_saved_campaign_retry_available(
+            job_id, view['items'][0]
+        ))
+        self.assertEqual(await self.store.retry_failed(
+            job_id, allow_saved_campaign_readback_retry_item_ids={item_id}
+        ), 1)
+        self.assertEqual((await self.store.item(item_id))['status'], 'QUEUED')
+        self.assertEqual((await self.store.tasks(item_id))[0]['status'], 'QUEUED')
+        self.assertEqual(await self.store.retry_failed(
+            job_id, allow_saved_campaign_readback_retry_item_ids={item_id}
+        ), 0)
+
+    async def test_profile28_campaign_readback_resume_rejects_child_create_and_checkpoint(self):
+        job_id, item_id = self._seed_profile28_saved_campaign_readback_mismatch(extra_child=True)
+        view = await self.store.job_view(job_id)
+        self.assertFalse(await self.store.private_launch_saved_campaign_retry_available(
+            job_id, view['items'][0]
+        ))
+        self.assertEqual(await self.store.retry_failed(
+            job_id, allow_saved_campaign_readback_retry_item_ids={item_id}
+        ), 0)
+        self.assertEqual((await self.store.item(item_id))['status'], 'FAILED')
+
+        job_id, item_id = self._seed_profile28_saved_campaign_readback_mismatch()
+        await self.store.record_terminal_checkpoint('28')
+        view = await self.store.job_view(job_id)
+        self.assertFalse(await self.store.private_launch_saved_campaign_retry_available(
+            job_id, view['items'][0], allow_business_login_gate=True
+        ))
+        self.assertEqual(await self.store.retry_failed(
+            job_id, excluded_profile_ids={'28'},
+            allow_business_login_gate_profile_ids={'28'},
+            allow_saved_campaign_readback_retry_item_ids={item_id},
+        ), 0)
+        self.assertEqual((await self.store.item(item_id))['status'], 'FAILED')
 
     async def test_job_view_index_migrates_existing_database_without_touching_jobs(self):
         job_id, item_id=self._seed(task_status='SUCCESS')
