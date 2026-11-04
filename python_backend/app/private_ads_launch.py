@@ -27,8 +27,9 @@ SOURCE_REVISION = "ads-manager-private-2026-10-13-media-resources"
 # Reviewed PR #288 sender: serializers and catalogs are unchanged by the
 # corrected root-parent READ guard. Retain its source and operation fingerprints
 # while completing an unpublished PAUSED draft. This never permits publication.
+DRAFT_PARENT_READ_PREDECESSOR = "4fcc647349f62da7039d8042cbedd7136fcf8fa8ab25b13693dac0f0a8fa6ffe"
 DRAFT_PARENT_READ_PREDECESSORS = frozenset({
-    "4fcc647349f62da7039d8042cbedd7136fcf8fa8ab25b13693dac0f0a8fa6ffe",
+    DRAFT_PARENT_READ_PREDECESSOR,
     "4ae223fa5fd8132843cb1cca972ef339759c84167c96b7c9c2feb7685d97ddb3",
 })
 # Exact source/catalog digests of reviewed main 6b7dfc1, 7b6a985,
