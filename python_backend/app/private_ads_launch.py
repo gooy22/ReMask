@@ -27,7 +27,10 @@ SOURCE_REVISION = "ads-manager-private-2026-10-13-media-resources"
 # Reviewed PR #288 sender: serializers and catalogs are unchanged by the
 # corrected root-parent READ guard. Retain its source and operation fingerprints
 # while completing an unpublished PAUSED draft. This never permits publication.
-DRAFT_PARENT_READ_PREDECESSOR = "4fcc647349f62da7039d8042cbedd7136fcf8fa8ab25b13693dac0f0a8fa6ffe"
+DRAFT_PARENT_READ_PREDECESSORS = frozenset({
+    "4fcc647349f62da7039d8042cbedd7136fcf8fa8ab25b13693dac0f0a8fa6ffe",
+    "4ae223fa5fd8132843cb1cca972ef339759c84167c96b7c9c2feb7685d97ddb3",
+})
 # Exact source/catalog digests of reviewed main 6b7dfc1, 7b6a985,
 # b23917a (PR #228), 638d773 (PR #229), 2582080 (PR #230),
 # and 842f2c6 (PR #231).
@@ -528,10 +531,11 @@ class AdsManagerLaunch:
         historical_recovery = bool(saved_steps) and saved_sources != {source_digest}
         draft_read_recovery = (historical_recovery and not promote
             and launch.get("execution_mode") == "DRAFT"
-            and saved_sources == {DRAFT_PARENT_READ_PREDECESSOR}
+            and len(saved_sources) == 1
+            and next(iter(saved_sources)) in DRAFT_PARENT_READ_PREDECESSORS
             and not any(row["step"] == "ADS_MANAGER:PUBLISH" for row in saved_steps))
         if draft_read_recovery:
-            source_digest = DRAFT_PARENT_READ_PREDECESSOR
+            source_digest = next(iter(saved_sources))
             historical_recovery = False
         if historical_recovery:
             if len(saved_sources) != 1 or next(iter(saved_sources)) not in READ_ONLY_PUBLICATION_PREDECESSORS:
