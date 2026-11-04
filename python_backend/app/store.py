@@ -1309,11 +1309,15 @@ class JobStore:
             return False
         if any(payload.get(flag) is True for flag in ('reconcile_only', 'repair_objective', 'publish_saved_draft')):
             return False
-        launch = payload.get('launch')
-        base = launch.get('base') if isinstance(launch, dict) else None
-        if not isinstance(base, dict):
-            return False
-        mode = str(base.get('execution_mode') or payload.get('execution_mode') or 'DRAFT').upper()
+        if meta_login_retry:
+            launch = payload.get('launch')
+            base = launch.get('base') if isinstance(launch, dict) else None
+            if not isinstance(base, dict):
+                return False
+            mode = str(base.get('execution_mode') or '').upper()
+        else:
+            base = None
+            mode = str(payload.get('execution_mode') or 'DRAFT').upper()
         if mode != 'DRAFT':
             return False
         if meta_login_retry:
