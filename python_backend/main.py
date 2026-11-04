@@ -4453,6 +4453,33 @@ async def retry_failed(job_id: str, consent: dict | None = Body(default=None)) -
         profile for profile, value in terminal_statuses.items()
         if str(value.get('status') or '').upper() == 'CHECKPOINT'
     }
+    business_gate_profiles = {
+        profile for profile, value in terminal_statuses.items()
+        if str(value.get('status') or '').upper() == 'BUSINESS_LOGIN_GATE'
+    }
+    failed_items_by_profile = {}
+    for item in current_view.get('items') or []:
+        if not isinstance(item,dict) or str(item.get('status') or '').upper() != 'FAILED':
+            continue
+        profile = str(item.get('profile_id') or '').strip()
+        if profile:
+            failed_items_by_profile.setdefault(profile, []).append(item)
+    private_draft_gate_retry_profiles = set()
+    for profile in business_gate_profiles:
+        failed = failed_items_by_profile.get(profile, [])
+        if len(failed) != 1:
+            continue
+        item = failed[0]
+        if item.get('error_code') != 'PRIVATE_ADS_DRAFT_SESSION_RENEWAL_UNAVAILABLE':
+            continue
+        matching_tasks = [
+            task for task in item.get('tasks', [])
+            if str(task.get('action') or '').lower() == 'private_launch'
+            and str(task.get('status') or '').upper() == 'FAILED'
+            and task.get('error_code') == 'PRIVATE_ADS_DRAFT_SESSION_RENEWAL_UNAVAILABLE'
+        ]
+        if len(matching_tasks) == 1:
+            private_draft_gate_retry_profiles.add(profile)
     if isinstance(consent,dict) and consent.get('consent_page_policies') is True:
         eligible=any(item.get('error_code')=='PAGE_POLICIES_CONFIRMATION_REQUIRED' and
             any(((task.get('payload') or {}).get('parameters',{}).get('FAN_PAGES') or {}).get('common_page') is True
@@ -4521,8 +4548,19 @@ async def retry_failed(job_id: str, consent: dict | None = Body(default=None)) -
     count=await store.retry_failed(
         job_id,
         excluded_profile_ids=excluded_profiles,
+        allow_business_login_gate_profile_ids=private_draft_gate_retry_profiles,
     )
     view=await store.job_view(job_id)
+    recovered_gate_profiles = set()
+    if count and view:
+        recovered_gate_profiles = {
+            profile for profile in private_draft_gate_retry_profiles
+            if any(
+                str(item.get('profile_id') or '').strip() == profile
+                and str(item.get('status') or '').upper() == 'QUEUED'
+                for item in view.get('items') or []
+            )
+        }
     if view and mirror.enabled:
         try:
             await mirror.save_job(view)
@@ -4533,12 +4571,13 @@ async def retry_failed(job_id: str, consent: dict | None = Body(default=None)) -
     return RetryResponse(
         job_id=job_id,
         requeued=count,
-        blocked_profiles=sorted(excluded_profiles),
+        blocked_profiles=sorted(excluded_profiles - recovered_gate_profiles),
         blocked_reason=(
             'CHECKPOINT_TERMINAL' if checkpoint_profiles else
             'PROFILE_META_BLOCKED' if any(
                 str(value.get('status') or '').upper() == 'BUSINESS_LOGIN_GATE'
-                for value in terminal_statuses.values()
+                and profile not in recovered_gate_profiles
+                for profile, value in terminal_statuses.items()
             ) else
             'FACEBOOK_AUTH_REQUIRED' if auth_blocked else
             'PROFILE_SESSION_BLOCKED' if status_blocked_profiles else ''
