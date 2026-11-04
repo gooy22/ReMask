@@ -173,7 +173,8 @@ function fixture(size=30) {
   }
 
   {
-    const {ctx,config,rows,requests,storage}=fixture();
+    const {ctx,config,rows,requests,storage,controls}=fixture();
+    controls.remaskPrivateExecutionMode={value:'PUBLISH'};
     ctx.review=async payload=>payload.ad_account_id===rows[0].ad_account_id
       ?{review:{ready:false,preflight:{payment_selection_required:true,payment_methods:[{type:'Visa',last4:'1111'}]}}}
       :{review:{ready:true,preflight:{}}};
@@ -187,9 +188,12 @@ function fixture(size=30) {
   }
 
   {
-    const {ctx,rows,requests,storage}=fixture();
+    const {ctx,rows,requests,storage,controls}=fixture();
+    controls.remaskPrivateExecutionMode={value:'DRAFT'};
     const accepted=await ctx.remaskPrivateCreateJob();
     assert.equal(accepted.job.job_id,'fixture-job');
+    assert.equal(requests.filter(row=>row.action==='private_launch_review').length,0,
+      'DRAFT queues directly; the worker owns the account/page/session preflight before CREATE');
     const jobs=requests.filter(row=>row.action==='create');assert.equal(jobs.length,1);
     assert.equal(jobs[0].profiles.length,30);
     assert.deepEqual(Array.from(jobs[0].profiles,row=>row.tasks[0].payload.page_id),rows.map(row=>row.page_id));
@@ -197,5 +201,5 @@ function fixture(size=30) {
     assert.equal(new Set(jobs[0].profiles.map(row=>row.tasks[0].idempotency_key)).size,30);
     assert.ok(storage.has('remask_private_launch_pending_v1'));
   }
-  console.log('1/3/5/10/30-target review reports every outcome, preserves scope, stops auth repeats and keeps admission/idempotency guards.');
+  console.log('Launch Review preserves PUBLISH admission; DRAFT queues without browser Review and keeps idempotency guards.');
 })().catch(error=>{console.error(error);process.exitCode=1;});
