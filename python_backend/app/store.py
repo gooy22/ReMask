@@ -1255,6 +1255,88 @@ class JobStore:
                         if key in publication} if isinstance(publication, dict) else {}})
         return progress
 
+    @staticmethod
+    def _private_launch_pre_submit_renewal_retry_available(con, item, tasks):
+        """Allow a legacy session-renewal retry only when no Ads Manager write was submitted."""
+        if str(item.get('status') or '').upper() != 'FAILED':
+            return False
+        terminal = con.execute(
+            "SELECT status FROM profile_terminal_statuses WHERE profile_id=?",
+            (str(item.get('profile_id') or ''),),
+        ).fetchone()
+        if terminal and str(terminal['status'] or '').upper() in {'CHECKPOINT', 'BUSINESS_LOGIN_GATE'}:
+            return False
+
+        candidates = [
+            task for task in tasks
+            if str(task.get('action') or '').lower() == 'private_launch'
+            and str(task.get('status') or '').upper() == 'FAILED'
+            and str(task.get('error_code') or '') == 'PRIVATE_ADS_DRAFT_SESSION_RENEWAL_UNAVAILABLE'
+        ]
+        if len(candidates) != 1:
+            return False
+        task = candidates[0]
+        payload = task.get('payload')
+        if not isinstance(payload, dict):
+            return False
+        if any(payload.get(flag) is True for flag in ('reconcile_only', 'repair_objective', 'publish_saved_draft')):
+            return False
+        mode = str(payload.get('execution_mode') or 'DRAFT').upper()
+        if mode != 'DRAFT':
+            return False
+
+        profile = str(item.get('profile_id') or '').strip()
+        business = str(payload.get('business_id') or '').strip()
+        account = str(payload.get('ad_account_id') or payload.get('account_id') or '').strip()
+        if account.startswith('act_'):
+            account = account[4:]
+        launch_key = str(payload.get('launch_key') or task.get('idempotency_key') or '').strip()
+        if (not profile.isdigit() or not re.fullmatch(r'\d{5,30}', business)
+                or not re.fullmatch(r'\d{5,30}', account) or not launch_key or len(launch_key) > 200):
+            return False
+
+        def has_external_evidence(value, depth=0):
+            if depth > 24:
+                return True
+            if isinstance(value, dict):
+                for key, child in value.items():
+                    name = str(key).lower()
+                    if name in {'entity_id', 'campaign_id', 'adset_id', 'creative_id', 'ad_id', 'draft_id', 'operation_id'}:
+                        if child not in (None, '', False, 0):
+                            return True
+                    if name in {'submitted', 'verified', 'draft_verified'} and child is True:
+                        return True
+                    if has_external_evidence(child, depth + 1):
+                        return True
+            elif isinstance(value, (list, tuple)):
+                return any(has_external_evidence(child, depth + 1) for child in value)
+            return False
+
+        if has_external_evidence(task.get('result')):
+            return False
+        if not con.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='private_launch_steps'"
+        ).fetchone():
+            return False
+        rows = con.execute(
+            """SELECT status,entity_id,result_json,submitted FROM private_launch_steps
+               WHERE launch_key=? AND profile_id=? AND business_id=? AND ad_account_id=?""",
+            (launch_key, profile, business, account),
+        ).fetchall()
+        for row in rows:
+            status = str(row['status'] or '').upper()
+            if (row['submitted'] is not None and bool(row['submitted'])) or row['entity_id']:
+                return False
+            if status not in {'FAILED', 'SKIPPED'}:
+                return False
+            try:
+                result = json.loads(row['result_json'] or '{}')
+            except (TypeError, ValueError, json.JSONDecodeError):
+                return False
+            if has_external_evidence(result):
+                return False
+        return True
+
     def _job_view_sync(self, job_id: str) -> dict[str, Any] | None:
         with self._connect() as con:
             job=con.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone()
@@ -1314,6 +1396,14 @@ class JobStore:
                 item['advertising_steps']=(self._advertising_progress(con,item,tasks)
                     if any(t.get('action') in {'private_launch','private_delivery'} for t in tasks)
                     else [])
+                if self._private_launch_pre_submit_renewal_retry_available(con,item,tasks):
+                    item['retryable']=True
+                    item['recovery_mode']='retry_private_launch_before_submit'
+                    for task in tasks:
+                        if (task.get('action')=='private_launch'
+                                and task.get('error_code')=='PRIVATE_ADS_DRAFT_SESSION_RENEWAL_UNAVAILABLE'):
+                            task['retryable']=True
+                            task['recovery_mode']='retry_private_launch_before_submit'
                 item['provisioning_steps']=steps_by_item.get(item['id'],[])
                 items.append(item)
             data=dict(job)
@@ -1734,11 +1824,36 @@ class JobStore:
                 if row['error_code'] == 'META_AD_ACCOUNT_CREATE_UNAVAILABLE'
                 and self._rk_details_recovery_available(con, row['id'], row['profile_id'])
             }
+            private_launch_recovery_ids = set()
+            for row in rows:
+                if (str(row['profile_id'] or '') in excluded
+                        or row['error_code'] != 'PRIVATE_ADS_DRAFT_SESSION_RENEWAL_UNAVAILABLE'):
+                    continue
+                task_rows = con.execute(
+                    """SELECT id,action,payload_json,idempotency_key,status,result_json,error_code,retryable
+                       FROM job_tasks WHERE item_id=? ORDER BY position""",
+                    (row['id'],),
+                ).fetchall()
+                tasks = []
+                try:
+                    for task_row in task_rows:
+                        task = dict(task_row)
+                        task['payload'] = json.loads(task.pop('payload_json') or '{}')
+                        result_json = task.pop('result_json')
+                        if result_json:
+                            task['result'] = json.loads(result_json)
+                        tasks.append(task)
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    continue
+                item = {'id':row['id'],'profile_id':row['profile_id'],'status':'FAILED'}
+                if self._private_launch_pre_submit_renewal_retry_available(con,item,tasks):
+                    private_launch_recovery_ids.add(str(row['id']))
             ids=[
                 str(row['id'])
                 for row in rows
                 if str(row['profile_id'] or '') not in excluded
-                and (bool(row['retryable']) or str(row['id']) in recovery_ids or row['error_code'] in {
+                and (bool(row['retryable']) or str(row['id']) in recovery_ids
+                    or str(row['id']) in private_launch_recovery_ids or row['error_code'] in {
                     'CHECKPOINT_REQUIRED', 'SESSION_EXPIRED', 'TWO_FACTOR_REQUIRED', 'PAGE_ADD_UI_CHANGED',
                 })
             ]
@@ -1760,8 +1875,10 @@ class JobStore:
                              'PAGE_ADD_UI_CHANGED'
                            )
                            OR (error_code='META_AD_ACCOUNT_CREATE_UNAVAILABLE' AND ?=1)
+                           OR (error_code='PRIVATE_ADS_DRAFT_SESSION_RENEWAL_UNAVAILABLE' AND ?=1)
                          )""",
-                    (now,item_id,1 if item_id in recovery_ids else 0),
+                    (now,item_id,1 if item_id in recovery_ids else 0,
+                     1 if item_id in private_launch_recovery_ids else 0),
                 )
             if ids:
                 con.execute(

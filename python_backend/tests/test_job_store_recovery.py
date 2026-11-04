@@ -690,6 +690,86 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
             )
         return job_id, item_id
 
+    async def _seed_private_launch_session_renewal_failure(self, *, submitted=None, entity_id=None):
+        job, item = self._seed(task_status='RUNNING')
+        task = (await self.store.tasks(item))[0]
+        now = int(time.time())
+        launch_key = 'private-launch-retry-profile-4'
+        business = '1422264096661455'
+        account = '120250306658010101'
+        payload = {
+            'execution_mode': 'DRAFT',
+            'launch_key': launch_key,
+            'business_id': business,
+            'ad_account_id': account,
+        }
+        with self.store._connect() as con:
+            con.execute(
+                """CREATE TABLE private_launch_steps(
+                    launch_key TEXT NOT NULL,
+                    profile_id TEXT NOT NULL,
+                    business_id TEXT NOT NULL,
+                    ad_account_id TEXT NOT NULL,
+                    step TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    entity_id TEXT,
+                    result_json TEXT,
+                    error_code TEXT,
+                    submitted INTEGER,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    PRIMARY KEY(launch_key,step)
+                )"""
+            )
+            con.execute(
+                """UPDATE job_tasks SET action='private_launch',payload_json=?,idempotency_key=?
+                   WHERE id=?""",
+                (json.dumps(payload), launch_key, task['id']),
+            )
+            if submitted is not None or entity_id is not None:
+                con.execute(
+                    """INSERT INTO private_launch_steps(
+                        launch_key,profile_id,business_id,ad_account_id,step,status,
+                        entity_id,result_json,error_code,submitted,created_at,updated_at
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (launch_key,'4',business,account,'ADS_MANAGER:CAMPAIGN','FAILED',
+                     entity_id,'{}','PRIVATE_ADS_DRAFT_SESSION_RENEWAL_UNAVAILABLE',
+                     1 if submitted else 0,now,now),
+                )
+        await self.store.set_task_failed(
+            task['id'],
+            'PRIVATE_ADS_DRAFT_SESSION_RENEWAL_UNAVAILABLE',
+            'Advertising session renewal did not return usable data',
+            retryable=False,
+        )
+        await self.store.finalize_item(item)
+        return job, item, task['id']
+
+    async def test_pre_submit_private_launch_session_renewal_failure_is_retryable(self):
+        job, item, task_id = await self._seed_private_launch_session_renewal_failure()
+        view = await self.store.job_view(job)
+        self.assertTrue(view['items'][0]['retryable'])
+        self.assertEqual(view['items'][0]['recovery_mode'], 'retry_private_launch_before_submit')
+        self.assertTrue(view['items'][0]['tasks'][0]['retryable'])
+        self.assertEqual(await self.store.retry_failed(job), 1)
+        self.assertEqual((await self.store.item(item))['status'], 'QUEUED')
+        self.assertEqual((await self.store.tasks(item))[0]['id'], task_id)
+        self.assertEqual((await self.store.tasks(item))[0]['status'], 'QUEUED')
+
+    async def test_private_launch_session_renewal_retry_refuses_submitted_meta_operation(self):
+        job, item, _ = await self._seed_private_launch_session_renewal_failure(submitted=True)
+        view = await self.store.job_view(job)
+        self.assertFalse(view['items'][0]['retryable'])
+        self.assertEqual(await self.store.retry_failed(job), 0)
+        self.assertEqual((await self.store.item(item))['status'], 'FAILED')
+
+    async def test_private_launch_session_renewal_retry_refuses_existing_meta_entity(self):
+        job, item, _ = await self._seed_private_launch_session_renewal_failure(entity_id='campaign-test-123')
+        view = await self.store.job_view(job)
+        self.assertFalse(view['items'][0]['retryable'])
+        self.assertEqual(await self.store.retry_failed(job), 0)
+        self.assertEqual((await self.store.item(item))['status'], 'FAILED')
+
     async def test_job_view_index_migrates_existing_database_without_touching_jobs(self):
         job_id, item_id=self._seed(task_status='SUCCESS')
         with self.store._connect() as con:
