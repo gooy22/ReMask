@@ -191,22 +191,37 @@ class AdsManagerLaunch:
         return target, launch, references, _launch_fingerprint(payload, target["page_id"])
 
     def is_paused_draft_revalidation(self, profile_id, payload):
-        """Allow one fresh DRAFT preflight through a prior Business Login gate."""
+        """Recognize an explicit paused draft without pre-validating its full form."""
+        del profile_id
         if not isinstance(payload, dict) or any(
             name in payload for name in ("publish_saved_draft", "repair_objective", "reconcile_only")
         ):
             return False
-        try:
-            _target, launch, _references, _fingerprint = self.prepare(profile_id, payload)
-        except Exception:
+        raw = payload.get("launch")
+        if not isinstance(raw, dict):
             return False
-        delivery = launch.get("delivery")
-        return (
-            launch.get("execution_mode") == "DRAFT"
-            and isinstance(delivery, dict)
-            and set(delivery) == {"campaign", "adset", "ad"}
-            and all(delivery.get(level) == "PAUSED" for level in ("campaign", "adset", "ad"))
-        )
+        base = raw.get("base", raw)
+        override = raw.get("override", {})
+        if not isinstance(base, dict) or not isinstance(override, dict):
+            return False
+        if set(raw) - {"base", "override"} or "execution_mode" in override:
+            return False
+        if base.get("execution_mode") != "DRAFT":
+            return False
+        expected = {"campaign", "adset", "ad"}
+        base_delivery = base.get("delivery")
+        if not isinstance(base_delivery, dict) or set(base_delivery) != expected:
+            return False
+        if not all(base_delivery.get(level) == "PAUSED" for level in expected):
+            return False
+        override_delivery = override.get("delivery")
+        if override_delivery is not None and (
+            not isinstance(override_delivery, dict)
+            or set(override_delivery) != expected
+            or any(override_delivery.get(level) != "PAUSED" for level in expected)
+        ):
+            return False
+        return True
 
     def plan(self, *, profile_id, payload):
         if isinstance(payload, dict) and "publish_saved_draft" in payload:
