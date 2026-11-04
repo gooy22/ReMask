@@ -1,8 +1,9 @@
 """Narrow, read-only recovery for saved paused draft fragments.
 
-The fallback is limited to the reviewed account-level Campaigns/Ad Sets reads.
-It runs only after the exact fragment read returns Meta's known unsupported-object
-response, then requires one uniquely named, fully matching PAUSED object.
+The fallback uses only reviewed account-level Campaigns/Ad Sets/Ads reads and
+exact object reads. It runs only after Meta rejects the saved fragment node with
+the known unsupported-object response, then requires one uniquely named,
+fully matching PAUSED object.
 """
 from __future__ import annotations
 
@@ -10,7 +11,7 @@ from .private_ads_draft import FRAGMENT_FIELDS, fail, identity
 from .private_ads_verify import _same
 
 
-_ALLOWED_EDGES = {"campaign": "campaigns", "ad_set": "adsets"}
+_ALLOWED_EDGES = {"campaign": "campaigns", "ad_set": "adsets", "ad": "ads"}
 
 
 def is_exact_fragment_read_rejection(error) -> bool:
@@ -25,6 +26,21 @@ def is_exact_fragment_read_rejection(error) -> bool:
         and diagnostic.get("error_subcode") == 33
         and diagnostic.get("type") == "GraphMethodException"
     )
+
+
+def _account(row, account_id, object_id=None):
+    if (not isinstance(row, dict) or "error" in row or "errors" in row
+            or row.get("id") != object_id and object_id is not None):
+        raise fail("READ_SCOPE_MISMATCH", "Meta object read did not return the exact saved identity")
+    returned_account = row.get("account_id")
+    if (not isinstance(returned_account, str)
+            or returned_account.removeprefix("act_") != account_id):
+        raise fail("READ_SCOPE_MISMATCH", "Meta object read returned another advertising account")
+
+
+def _matches(row, values, *, exclude=()):
+    return all(key in row and _same(row[key], value, key)
+               for key, value in values.items() if key not in exclude)
 
 
 async def _read_account_level_object(
@@ -42,8 +58,17 @@ async def _read_account_level_object(
         parent_id is None or values.get("campaign_id") != parent_id
     ):
         raise fail("READ_RELATION_MISMATCH", "Saved Ad Set does not name the confirmed Campaign parent")
+    if level == "ad" and (
+        parent_id is None or values.get("adset_id") != parent_id
+        or not isinstance(values.get("creative"), dict)
+    ):
+        raise fail("READ_RELATION_MISMATCH", "Saved Ad does not name the confirmed Ad Set and creative")
 
-    fields = sorted({"id", "account_id", *values.keys()})
+    list_fields = {"id", "account_id", *values.keys()}
+    if level == "ad":
+        list_fields.discard("creative")
+        list_fields.add("creative{id}")
+    fields = sorted(list_fields)
     response = await client.get(
         "/act_" + account_id + "/" + edge,
         {"fields": fields, "limit": 1000},
@@ -61,10 +86,7 @@ async def _read_account_level_object(
             raise fail("READ_SCOPE_MISMATCH", "Meta returned an invalid account object")
         if row.get("name") != name:
             continue
-        returned_account = row.get("account_id")
-        if (not isinstance(returned_account, str)
-                or returned_account.removeprefix("act_") != account_id):
-            raise fail("READ_SCOPE_MISMATCH", "Account object list returned another advertising account")
+        _account(row, account_id)
         same_name.append(row)
 
     if len(same_name) != 1:
@@ -73,15 +95,44 @@ async def _read_account_level_object(
     object_id = identity(row.get("id"))
     if row.get("status") != "PAUSED":
         raise fail("DRAFT_DELIVERY_UNSAFE", "Account object list did not confirm PAUSED status")
-    if any(key not in row or not _same(row[key], value, key) for key, value in values.items()):
+    if not _matches(row, values, exclude={"creative"} if level == "ad" else ()):
         raise fail("READ_SPEC_MISMATCH", "Account object settings differ from the saved Launch")
-    if level == "ad_set" and row.get("campaign_id") != parent_id:
-        raise fail("READ_RELATION_MISMATCH", "Account object belongs to another Campaign")
+
+    creative_id = None
+    checked_fields = fields
+    if level == "campaign":
+        source = "account_campaigns_read"
+    elif level == "ad_set":
+        source = "account_adsets_read"
+    else:
+        source = "account_ads_read"
+        if row.get("campaign_id") != values.get("campaign_id") or row.get("adset_id") != parent_id:
+            raise fail("READ_RELATION_MISMATCH", "Account Ad belongs to another Campaign or Ad Set")
+        ad_fields = sorted({"id", "account_id", *values.keys()} - {"creative"})
+        ad_fields.append("creative{id}")
+        ad_row = await client.get("/" + object_id, {"fields": ad_fields})
+        _account(ad_row, account_id, object_id)
+        if ad_row.get("status") != "PAUSED" or not _matches(
+            ad_row, values, exclude={"creative"}
+        ):
+            raise fail("READ_SPEC_MISMATCH", "Direct Ad read differs from the saved Launch")
+        creative = ad_row.get("creative")
+        if not isinstance(creative, dict):
+            raise fail("READ_SPEC_MISMATCH", "Direct Ad read did not return its Creative identity")
+        creative_id = identity(creative.get("id"))
+        creative_values = values["creative"]
+        creative_fields = sorted({"id", "account_id", *creative_values.keys()})
+        creative_row = await client.get("/" + creative_id, {"fields": creative_fields})
+        _account(creative_row, account_id, creative_id)
+        if not _matches(creative_row, creative_values):
+            raise fail("READ_SPEC_MISMATCH", "Direct Creative read differs from the saved Launch")
+        checked_fields = sorted(set(fields + ad_fields + creative_fields))
 
     return {
-        "source": "account_" + edge + "_read",
+        "source": source,
         "level": level,
         "object_id": object_id,
+        "creative_id": creative_id,
         "account_id": account_id,
         "draft_id": draft_id,
         "fragment_id": fragment_id,
@@ -91,7 +142,7 @@ async def _read_account_level_object(
         "pagination_complete": True,
         "validation_unobserved": True,
         "fragment_read_error": fragment_read_error or {},
-        "checked_fields": fields,
+        "checked_fields": checked_fields,
     }
 
 
