@@ -64,9 +64,22 @@ async def read_diagnostic(adapter, *, profile_id, context, session, payload):
         adapter, profile_id=profile_id, context=context, payload=payload)
     if draft_id is None:
         raise fail("RECONCILE_REQUIRED", "Saved draft has no exact read handle")
-    web = await session.facebook_web()
-    client = await AdsManagerPrivateHttp.open(web, account_id=target["ad_account_id"],
-        business_id=target["business_id"], actor_id=actor, reference_read=True)
+    try:
+        web = await session.facebook_web()
+        client = await AdsManagerPrivateHttp.open(web, account_id=target["ad_account_id"],
+            business_id=target["business_id"], actor_id=actor, reference_read=True)
+    except Exception as exc:
+        from fb_worker import RemoteRequestError
+        import httpx
+        if isinstance(exc, (RemoteRequestError, httpx.HTTPError, TimeoutError)):
+            stage = getattr(exc, "transport_stage", "") or "connect"
+            logging.getLogger(__name__).warning(
+                "saved_draft_read_transport_failure profile=%s stage=%s error_type=%s",
+                profile_id, stage, type(exc).__name__)
+            raise fail("READ_TRANSPORT_UNAVAILABLE",
+                "The saved Meta draft could not be read because the profile connection failed before a response",
+                True) from None
+        raise
     client.read_only = True
     draft = await client.get("/addraft_" + draft_id,
         {"fields": ["id", "account_id", "author_id", "ownership_type"]})
