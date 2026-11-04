@@ -1325,6 +1325,7 @@ class JobStore:
         permitted_failures = {
             ("1", "PRIVATE_ADS_DRAFT_READ_SPEC_MISMATCH"),
             ("2", "PRIVATE_ADS_DRAFT_VALIDATION_PENDING"),
+            ("3", "PRIVATE_ADS_DRAFT_REQUEST_REJECTED"),
         }
         if (
             job_id != expected_job
@@ -2248,6 +2249,7 @@ class JobStore:
                     and row['error_code'] in {
                         'PRIVATE_ADS_DRAFT_READ_SPEC_MISMATCH',
                         'PRIVATE_ADS_DRAFT_VALIDATION_PENDING',
+                        'PRIVATE_ADS_DRAFT_REQUEST_REJECTED',
                     }
                 )
                 if (
