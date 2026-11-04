@@ -991,19 +991,26 @@ class FacebookWebSession:
         business_loginpage_return_url = str(business_loginpage_return_url or "").strip()
         if business_loginpage_return_url:
             parts = urlsplit(business_loginpage_return_url)
-            params = parse_qs(parts.query)
+            params = parse_qs(parts.query, keep_blank_values=True)
             account_ids = params.get("act", [])
             business_ids = params.get("business_id", [])
+            account_only_scope = set(params) == {"act"} and not business_ids
+            exact_business_scope = (
+                set(params) == {"act", "business_id"}
+                and len(business_ids) == 1
+                and bool(re.fullmatch(r"\d{5,30}", business_ids[0]))
+            )
+            # An account-only token bootstrap intentionally omits BM from the
+            # login handoff. The caller must prove the exact BM with a live READ
+            # before enabling any advertising write.
             if (
                 parts.scheme != "https"
                 or parts.netloc != "adsmanager.facebook.com"
                 or parts.path != "/adsmanager/manage/campaigns"
                 or parts.fragment
-                or set(params) != {"act", "business_id"}
+                or not (account_only_scope or exact_business_scope)
                 or len(account_ids) != 1
-                or len(business_ids) != 1
                 or not re.fullmatch(r"\d{5,30}", account_ids[0])
-                or not re.fullmatch(r"\d{5,30}", business_ids[0])
             ):
                 raise RemoteRequestError(
                     "Read-only Business handoff scope is invalid.",
