@@ -2256,7 +2256,7 @@ class JobStore:
                 except (TypeError, ValueError, json.JSONDecodeError):
                     continue
                 item = {
-                    'id':row['id'],'profile_id':row['profile_id'],'status':'FAILED',
+                    'id':row['id'],'job_id':job_id,'profile_id':row['profile_id'],'status':'FAILED',
                     'attempt':row['attempt'],'error_code':row['error_code'],
                 }
                 if self._private_launch_pre_submit_renewal_retry_available(
