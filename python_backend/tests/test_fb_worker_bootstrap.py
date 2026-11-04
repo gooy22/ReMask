@@ -693,6 +693,20 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(cookie_session.restored)
         session.fetch_text.assert_awaited_once()
 
+    async def test_bootstrap_accepts_exact_account_only_saved_context_return(self):
+        actor, account = "123456789", "555666777"
+        session = FacebookWebSession(WebProfile(name="27",
+            cookies={"c_user": actor}, proxy=None, user_agent="fixture"))
+        session._ensure_session = AsyncMock(side_effect=RuntimeError("validated account-only scope"))
+
+        with self.assertRaisesRegex(RuntimeError, "validated account-only scope"):
+            await session.bootstrap(business_loginpage_return_url=(
+                "https://adsmanager.facebook.com/adsmanager/manage/campaigns"
+                f"?act={account}"
+            ))
+
+        session._ensure_session.assert_awaited_once()
+
     async def test_read_fp_handoff_uses_exact_selected_account_and_business(self):
         actor, business, account = "123456789", "987654321", "555666777"
         from app.business_fan_page_contracts import command
