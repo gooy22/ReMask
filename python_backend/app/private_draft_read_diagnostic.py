@@ -175,6 +175,14 @@ async def read_diagnostic(adapter, *, profile_id, context, session, payload):
         if not all(checks.values()):
             break
         parent = row.get("ad_object_id")
+    validation_summary = [
+        {"level": read["level"], "validation_status": read["observed"].get("validation_status"),
+         "active_errors": read["active_error_diagnostic"]}
+        for read in reads
+    ]
+    logging.getLogger(__name__).info(
+        "saved_draft_read_validation profile=%s draft_id=%s fragments=%s",
+        profile_id, draft_id, json.dumps(validation_summary, sort_keys=True, separators=(",", ":")))
     return {"draft_id": draft_id, "fragment_reads": reads, "pending_stage": pending,
         "draft_verified": False, "advertising_mutation_posts": 0, "persisted": False,
         "transport": "private_ads_manager_http_h2", "source": "independent_private_ads_http"}
