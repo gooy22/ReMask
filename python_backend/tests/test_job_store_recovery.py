@@ -770,6 +770,84 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.store.retry_failed(job), 0)
         self.assertEqual((await self.store.item(item))['status'], 'FAILED')
 
+    async def test_exact_saved_draft_attempt_three_allows_one_final_retry(self):
+        now = int(time.time())
+        job_id = 'a7ab6547d74b4ceab021fa9a6cfe0666'
+        item_id = 'c35e8eb06b654b07b7f8be3acdd5e993'
+        task_id = '6b0e78265c304420a291914fc49f04ed'
+        launch_key = 'private-launch-27-120250306658010101-2262ad9a8ce56c545c620279e3b51a7a'
+        payload = {
+            'business_id': '1422264096661455',
+            'ad_account_id': '120250306658010101',
+            'page_id': '1458249004037430',
+            'launch_key': launch_key,
+            'launch': {'base': {
+                'execution_mode': 'DRAFT',
+                'campaign': {'status': 'PAUSED'},
+                'adset': {'status': 'PAUSED'},
+                'ad': {'status': 'PAUSED'},
+                'delivery': {'campaign': 'PAUSED', 'adset': 'PAUSED', 'ad': 'PAUSED'},
+            }},
+        }
+        with self.store._connect() as con:
+            con.execute(
+                "INSERT INTO jobs(id,status,idempotency_key,created_at,updated_at) VALUES(?,?,?,?,?)",
+                (job_id, 'FAILED', 'idem-final-saved-draft', now, now),
+            )
+            con.execute(
+                """INSERT INTO job_items(
+                    id,job_id,profile_id,status,error_code,error_message,retryable,attempt,
+                    created_at,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                (item_id,job_id,'27','FAILED','PRIVATE_ADS_DRAFT_META_LOGIN_REQUIRED',
+                 'Meta returned a login-required response',0,3,now,now),
+            )
+            con.execute(
+                """INSERT INTO job_tasks(
+                    id,item_id,position,action,payload_json,idempotency_key,status,attempt,
+                    error_code,error_message,retryable,created_at,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (task_id,item_id,0,'private_launch',json.dumps(payload),launch_key,'FAILED',3,
+                 'PRIVATE_ADS_DRAFT_META_LOGIN_REQUIRED','Meta returned a login-required response',
+                 0,now,now),
+            )
+            con.execute(
+                """CREATE TABLE IF NOT EXISTS private_launch_steps(
+                    launch_key TEXT NOT NULL, profile_id TEXT NOT NULL, business_id TEXT NOT NULL,
+                    ad_account_id TEXT NOT NULL, step TEXT NOT NULL, status TEXT NOT NULL,
+                    entity_id TEXT, result_json TEXT, error_code TEXT, submitted INTEGER,
+                    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+                    PRIMARY KEY(launch_key,step)
+                )"""
+            )
+        await self.store.record_terminal_profile_status('27','BUSINESS_LOGIN_GATE')
+
+        before = await self.store.job_view(job_id)
+        self.assertTrue(before['items'][0]['retryable'])
+        self.assertEqual(before['items'][0]['recovery_mode'],'retry_private_launch_before_submit')
+        self.assertEqual(await self.store.retry_failed(
+            job_id,allow_business_login_gate_profile_ids={'27'}),1)
+        self.assertEqual((await self.store.item(item_id))['status'],'QUEUED')
+        self.assertEqual((await self.store.tasks(item_id))[0]['id'],task_id)
+
+        with self.store._connect() as con:
+            con.execute(
+                """UPDATE job_items SET status='FAILED',error_code=?,
+                    error_message=?,retryable=0,attempt=4,updated_at=? WHERE id=?""",
+                ('PRIVATE_ADS_DRAFT_META_LOGIN_REQUIRED','Meta returned a login-required response',
+                 now+1,item_id),
+            )
+            con.execute(
+                """UPDATE job_tasks SET status='FAILED',error_code=?,error_message=?,
+                    retryable=0,attempt=4,result_json=NULL,updated_at=? WHERE id=?""",
+                ('PRIVATE_ADS_DRAFT_META_LOGIN_REQUIRED','Meta returned a login-required response',
+                 now+1,task_id),
+            )
+        after = await self.store.job_view(job_id)
+        self.assertFalse(after['items'][0]['retryable'])
+        self.assertEqual(await self.store.retry_failed(
+            job_id,allow_business_login_gate_profile_ids={'27'}),0)
+
     async def test_job_view_index_migrates_existing_database_without_touching_jobs(self):
         job_id, item_id=self._seed(task_status='SUCCESS')
         with self.store._connect() as con:

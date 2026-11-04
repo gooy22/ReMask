@@ -998,15 +998,11 @@ class AdsManagerPrivateHttp:
                 if not is_business_login_gate_url(business_gate_url):
                     raise fail("BUSINESS_LOGIN_GATE", "Session renewal gate URL is not a reviewed Meta Business gate")
                 gate_document = sprinkle_document if isinstance(sprinkle_document, str) else document
-                # Return through the same first-party Business host and
-                # exact selected account scope that opened this gate. The exact
-                # account+Business READ remains mandatory before any write.
-                scoped_params = {"act": selected_account_id}
-                if self.context.business_id:
-                    scoped_params["business_id"] = self.context.business_id
+                # Keep Meta's handoff return URL act-only. The exact Business
+                # scope is still verified by an independent account READ before writes.
                 scoped_return_url = (
                     "https://business.facebook.com/adsmanager/manage/campaigns?"
-                    + urlencode(scoped_params)
+                    + urlencode({"act": selected_account_id})
                 )
                 recovered = await continue_business_login_gate(
                     self.web,

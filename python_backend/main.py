@@ -4481,14 +4481,14 @@ async def retry_failed(job_id: str, consent: dict | None = Body(default=None)) -
             if len(matching_tasks) == 1:
                 private_draft_gate_retry_profiles.add(profile)
             continue
-        # One recovery retry is permitted only for the exact saved draft whose
-        # corrected renewal implementation is now deployed.
+        # One final retry is permitted only for this exact saved draft after the
+        # act-only Business handoff correction is deployed.
         if (
             job_id != 'a7ab6547d74b4ceab021fa9a6cfe0666'
             or len(current_view.get('items') or []) != 1
             or profile != '27'
             or str(item.get('id') or '') != 'c35e8eb06b654b07b7f8be3acdd5e993'
-            or str(item.get('attempt') or '') != '2'
+            or str(item.get('attempt') or '') != '3'
             or item_error != 'PRIVATE_ADS_DRAFT_META_LOGIN_REQUIRED'
         ):
             continue
@@ -4501,7 +4501,7 @@ async def retry_failed(job_id: str, consent: dict | None = Body(default=None)) -
         if (
             len(matching_tasks) == 1
             and str(matching_tasks[0].get('id') or '') == '6b0e78265c304420a291914fc49f04ed'
-            and str(matching_tasks[0].get('attempt') or '') == '2'
+            and str(matching_tasks[0].get('attempt') or '') == '3'
         ):
             private_draft_gate_retry_profiles.add(profile)
     if isinstance(consent,dict) and consent.get('consent_page_policies') is True:
