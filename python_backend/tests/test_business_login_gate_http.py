@@ -378,6 +378,48 @@ class SavedAccountLoginContinuationTests(unittest.TestCase):
         self.assertEqual(outcome, "saved_account_form_not_inert")
 
 
+    def test_saved_login_diagnostics_report_shape_without_values(self):
+        import json
+        from app.business_login_gate_http import _saved_account_login_continuation
+
+        private_marker = "do-not-log-login-value"
+        body = """
+        <form id="g_form" action="/login/device-based/validate/" method="post">
+          <input type="hidden" name="uid" value="123456">
+          <input type="password" name="pass" value="do-not-log-login-value">
+          <button type="submit" name="continue" value="1">Continue</button>
+        </form>
+        <script type="application/json">{"label":"Continue with Facebook"}</script>
+        """
+        diagnostic = {}
+        result, outcome = _saved_account_login_continuation(
+            body, "https://www.facebook.com/login/", "123456",
+            diagnostic=diagnostic,
+        )
+
+        self.assertIsNone(result)
+        self.assertEqual(outcome, "saved_account_form_not_inert")
+        self.assertEqual(diagnostic["form_count"], 1)
+        self.assertEqual(diagnostic["forms"], [{
+            "kind": "g_form",
+            "method": "POST",
+            "action_kind": "device_validate",
+            "field_count": 1,
+            "interactive": True,
+            "credential_input": True,
+            "actor_field_bound": True,
+        }])
+        self.assertEqual(diagnostic["controls"], [{
+            "tag": "button",
+            "kind": "generic_continue",
+            "in_form": True,
+            "actor_bound": True,
+        }])
+        self.assertTrue(diagnostic["script_continue_marker"])
+        self.assertNotIn(private_marker, json.dumps(diagnostic))
+        self.assertNotIn("123456", json.dumps(diagnostic))
+
+
 class _ResponseBody:
     def __init__(self, value):
         self.value = value
