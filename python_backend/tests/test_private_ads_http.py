@@ -1117,7 +1117,13 @@ class ReadOnlyReferenceBootstrapReuseTests(unittest.IsolatedAsyncioTestCase):
         self.web.bootstrap = AsyncMock(return_value=SimpleNamespace(
             actor_id="123456", profile_actor_verified=True,
             fb_dtsg="synthetic-fresh-csrf", lsd="synthetic-fresh-lsd",
-            jazoest="", request_context={"__rev": "12345"}))
+            jazoest="", request_context={"__rev": "12345"},
+            source_url="https://www.facebook.com/",
+            sprinkle_config={
+                "param_name": "jazoest",
+                "version": "2",
+                "should_randomize": False,
+            }))
         self.web.session.facebook_cookie_snapshot = lambda: dict(self.web.profile.cookies)
         calls = []
 
