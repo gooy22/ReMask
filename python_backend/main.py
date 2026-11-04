@@ -4315,12 +4315,39 @@ async def private_launch_review(profile_id: str, payload: dict = Body(...)):
             },
         ) from exc
 
+def _single_paused_private_launch_draft_request(request: CreateJobRequest) -> bool:
+    profiles = getattr(request, "profiles", None)
+    if not isinstance(profiles, list) or len(profiles) != 1:
+        return False
+    profile = profiles[0]
+    tasks = getattr(profile, "tasks", None)
+    if not isinstance(tasks, list) or len(tasks) != 1:
+        return False
+    task = tasks[0]
+    if str(getattr(task, "action", "") or "").strip().lower() != "private_launch":
+        return False
+    adapter = getattr(pool.private_launch, "ads_manager", None)
+    checker = getattr(adapter, "is_paused_draft_revalidation", None)
+    if not callable(checker):
+        return False
+    return bool(checker(str(getattr(profile, "profile_id", "") or ""), getattr(task, "payload", None)))
+
+
 @app.post('/api/v1/jobs',response_model=JobAccepted,dependencies=[Depends(require_key)])
 async def create_job(request: CreateJobRequest) -> JobAccepted:
     requested_profile_ids = [str(profile.profile_id) for profile in request.profiles]
     terminal_statuses = await _terminal_profile_statuses(requested_profile_ids)
     blocked_profiles = sorted(terminal_statuses)
-    if blocked_profiles:
+    paused_draft_revalidation = (
+        bool(blocked_profiles)
+        and _single_paused_private_launch_draft_request(request)
+        and all(
+            str((terminal_statuses.get(profile_id) or {}).get("status") or "").upper()
+            == "BUSINESS_LOGIN_GATE"
+            for profile_id in blocked_profiles
+        )
+    )
+    if blocked_profiles and not paused_draft_revalidation:
         blocked_set = set(blocked_profiles)
         allowed_profiles = [
             profile for profile in request.profiles

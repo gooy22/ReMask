@@ -456,6 +456,15 @@ class WorkerPool:
             item = await self.store.item(item_id)
             if not item or item['status'] != 'QUEUED':
                 return
+            tasks=await self.store.tasks(item_id)
+            draft_manager=getattr(self.private_launch,'ads_manager',None)
+            draft_checker=getattr(draft_manager,'is_paused_draft_revalidation',None)
+            paused_draft_revalidation=(
+                len(tasks)==1
+                and str(tasks[0].get('action') or '').strip().lower()=='private_launch'
+                and callable(draft_checker)
+                and bool(draft_checker(profile_id,tasks[0].get('payload')))
+            )
             terminal_reader = getattr(self.store, 'terminal_profile_statuses', None)
             terminal = (await terminal_reader([profile_id])).get(profile_id, {}) if callable(terminal_reader) else {}
             terminal_status = str(terminal.get('status') or '').upper()
@@ -465,7 +474,7 @@ class WorkerPool:
                     await fail_checkpoint(item_id)
                     log.info('worker_item_blocked_terminal_checkpoint item=%s profile=%s',item_id,profile_id)
                     return
-            if terminal_status == 'BUSINESS_LOGIN_GATE':
+            if terminal_status == 'BUSINESS_LOGIN_GATE' and not paused_draft_revalidation:
                 fail_terminal = getattr(self.store, 'fail_item_for_terminal_access', None)
                 if callable(fail_terminal):
                     await fail_terminal(item_id, terminal_status)
@@ -481,7 +490,6 @@ class WorkerPool:
                     return
             if not await self.store.set_item_running(item_id):
                 return
-            tasks=await self.store.tasks(item_id)
             # updated_at is the last QUEUED transition, including explicit
             # requeues; created_at alone exaggerates retries as queue latency.
             queued_at=item.get('updated_at')
@@ -547,6 +555,8 @@ class WorkerPool:
                                         ),
                                     )
                                 except ProvisioningError as auth_error:
+                                    if paused_draft_revalidation:
+                                        raise
                                     if (action != 'private_launch'
                                             or auth_error.code != 'PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE'
                                             or getattr(auth_error, 'request_may_have_been_sent', None) is not False):
@@ -686,6 +696,16 @@ class WorkerPool:
                                     )
                             else:
                                 result=await self.registry.execute(action,session,task['payload'])
+                            if (
+                                terminal_status == 'BUSINESS_LOGIN_GATE'
+                                and paused_draft_revalidation
+                                and isinstance(result, dict)
+                                and isinstance(result.get('preflight'), dict)
+                                and result['preflight'].get('draft_ready') is True
+                            ):
+                                clear_gate = getattr(self.store, 'clear_terminal_business_login_gate', None)
+                                if callable(clear_gate):
+                                    await clear_gate(profile_id)
                             await self.store.set_task_success(task['id'],result)
                             traffic_outcome = 'success'
                         except ProvisioningError as exc:
