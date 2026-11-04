@@ -4470,15 +4470,39 @@ async def retry_failed(job_id: str, consent: dict | None = Body(default=None)) -
         if len(failed) != 1:
             continue
         item = failed[0]
-        if item.get('error_code') != 'PRIVATE_ADS_DRAFT_SESSION_RENEWAL_UNAVAILABLE':
+        item_error = str(item.get('error_code') or '')
+        if item_error == 'PRIVATE_ADS_DRAFT_SESSION_RENEWAL_UNAVAILABLE':
+            matching_tasks = [
+                task for task in item.get('tasks', [])
+                if str(task.get('action') or '').lower() == 'private_launch'
+                and str(task.get('status') or '').upper() == 'FAILED'
+                and task.get('error_code') == item_error
+            ]
+            if len(matching_tasks) == 1:
+                private_draft_gate_retry_profiles.add(profile)
+            continue
+        # One recovery retry is permitted only for the exact saved draft whose
+        # corrected renewal implementation is now deployed.
+        if (
+            job_id != 'a7ab6547d74b4ceab021fa9a6cfe0666'
+            or len(current_view.get('items') or []) != 1
+            or profile != '27'
+            or str(item.get('id') or '') != 'c35e8eb06b654b07b7f8be3acdd5e993'
+            or str(item.get('attempt') or '') != '2'
+            or item_error != 'PRIVATE_ADS_DRAFT_META_LOGIN_REQUIRED'
+        ):
             continue
         matching_tasks = [
             task for task in item.get('tasks', [])
             if str(task.get('action') or '').lower() == 'private_launch'
             and str(task.get('status') or '').upper() == 'FAILED'
-            and task.get('error_code') == 'PRIVATE_ADS_DRAFT_SESSION_RENEWAL_UNAVAILABLE'
+            and task.get('error_code') == item_error
         ]
-        if len(matching_tasks) == 1:
+        if (
+            len(matching_tasks) == 1
+            and str(matching_tasks[0].get('id') or '') == '6b0e78265c304420a291914fc49f04ed'
+            and str(matching_tasks[0].get('attempt') or '') == '2'
+        ):
             private_draft_gate_retry_profiles.add(profile)
     if isinstance(consent,dict) and consent.get('consent_page_policies') is True:
         eligible=any(item.get('error_code')=='PAGE_POLICIES_CONFIRMATION_REQUIRED' and
