@@ -4525,52 +4525,53 @@ async def retry_failed(job_id: str, consent: dict | None = Body(default=None)) -
                 allow_business_login_gate=saved_profile in business_gate_profiles,
             )
         ):
-            if saved_profile in business_gate_profiles:
-                saved_task_id = str(saved_tasks[0].get('id') or '') if len(saved_tasks) == 1 else ''
-                try:
-                    readback = await private_draft_read(
-                        saved_profile, {'job_id': job_id, 'task_id': saved_task_id}
-                    )
-                except HTTPException as exc:
-                    log.info(
-                        'saved campaign retry readback gate preflight rejected profile=%s code=%s',
-                        saved_profile, str(exc.detail)[:80],
-                    )
-                else:
-                    fragment_reads = readback.get('fragment_reads') if isinstance(readback, dict) else None
-                    campaign_read = fragment_reads[0] if isinstance(fragment_reads, list) and len(fragment_reads) == 1 else {}
-                    checks = campaign_read.get('checks') if isinstance(campaign_read, dict) else {}
-                    observed = campaign_read.get('observed') if isinstance(campaign_read, dict) else {}
-                    errors = campaign_read.get('active_error_diagnostic') if isinstance(campaign_read, dict) else {}
-                    status_value = observed.get('status', {}).get('value') if isinstance(observed, dict) else None
-                    validation_value = observed.get('validation_status', {}).get('value') if isinstance(observed, dict) else None
-                    exact_readback = (
-                        readback.get('ok') is True
-                        and readback.get('draft_id') == '2210627659890877'
-                        and readback.get('source') == 'independent_private_ads_http'
-                        and readback.get('advertising_mutation_posts') == 0
-                        and campaign_read.get('level') == 'campaign'
-                        and campaign_read.get('relationships_match') is True
-                        and campaign_read.get('settings_match') is True
-                        and isinstance(checks, dict)
-                        and all(checks.get(key) is True for key in (
-                            'id', 'ad_draft_id', 'ad_object_type', 'parent_ad_object_id'
-                        ))
-                        and status_value == 'PAUSED'
-                        and validation_value == 'VALIDATED'
-                        and isinstance(errors, dict)
-                        and errors.get('has_errors') is False
-                    )
-                    if exact_readback:
-                        private_draft_gate_retry_profiles.add(saved_profile)
-                        saved_campaign_readback_retry_item_ids.add(saved_item_id)
-                    else:
-                        log.info(
-                            'saved campaign retry readback gate preflight did not confirm exact paused campaign profile=%s',
-                            saved_profile,
-                        )
+            saved_task_id = str(saved_tasks[0].get('id') or '') if len(saved_tasks) == 1 else ''
+            try:
+                readback = await private_draft_read(
+                    saved_profile, {'job_id': job_id, 'task_id': saved_task_id}
+                )
+            except HTTPException as exc:
+                log.info(
+                    'saved campaign retry readback preflight rejected profile=%s code=%s',
+                    saved_profile, str(exc.detail)[:80],
+                )
             else:
-                saved_campaign_readback_retry_item_ids.add(saved_item_id)
+                fragment_reads = readback.get('fragment_reads') if isinstance(readback, dict) else None
+                campaign_read = fragment_reads[0] if isinstance(fragment_reads, list) and len(fragment_reads) == 1 else {}
+                checks = campaign_read.get('checks') if isinstance(campaign_read, dict) else {}
+                observed = campaign_read.get('observed') if isinstance(campaign_read, dict) else {}
+                errors = campaign_read.get('active_error_diagnostic') if isinstance(campaign_read, dict) else {}
+                status_value = observed.get('status', {}).get('value') if isinstance(observed, dict) else None
+                validation_value = observed.get('validation_status', {}).get('value') if isinstance(observed, dict) else None
+                errors_confirmed = isinstance(errors, dict) and (
+                    (errors.get('observed') is True and errors.get('is_list') is True
+                     and errors.get('has_errors') is False)
+                    or (errors.get('observed') is False and validation_value == 'VALIDATED')
+                )
+                exact_readback = (
+                    readback.get('ok') is True
+                    and readback.get('draft_id') == '2210627659890877'
+                    and readback.get('source') == 'independent_private_ads_http'
+                    and readback.get('advertising_mutation_posts') == 0
+                    and campaign_read.get('level') == 'campaign'
+                    and campaign_read.get('relationships_match') is True
+                    and campaign_read.get('settings_match') is True
+                    and isinstance(checks, dict)
+                    and all(checks.get(key) is True for key in (
+                        'id', 'ad_draft_id', 'ad_object_type', 'parent_ad_object_id'
+                    ))
+                    and status_value == 'PAUSED'
+                    and validation_value == 'VALIDATED'
+                    and errors_confirmed
+                )
+                if exact_readback:
+                    private_draft_gate_retry_profiles.add(saved_profile)
+                    saved_campaign_readback_retry_item_ids.add(saved_item_id)
+                else:
+                    log.info(
+                        'saved campaign retry readback preflight did not confirm exact paused campaign profile=%s',
+                        saved_profile,
+                    )
 
     if isinstance(consent,dict) and consent.get('consent_page_policies') is True:
         eligible=any(item.get('error_code')=='PAGE_POLICIES_CONFIRMATION_REQUIRED' and
