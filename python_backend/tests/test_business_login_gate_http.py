@@ -1,6 +1,7 @@
 import json
 import unittest
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 from urllib.parse import parse_qs, urlsplit
 
 from app.business_login_gate_http import (
@@ -575,6 +576,61 @@ class GateContinuationTransportTests(unittest.IsolatedAsyncioTestCase):
             "display=page&login_source=business_gate&next=https%3A%2F%2Fbusiness.facebook.com%2Flatest%2Fhome&lsd=fresh-session-token&u_0_b=",
         )
         self.assertEqual(kwargs["proxy"], "http://profile-proxy:8080")
+
+    async def test_first_302_waits_and_restores_truncated_profile_cookie_snapshot(self):
+        from app.private_business_login import native_business_login_continuation
+
+        body = _native_gate_body(referrerURI=ACCOUNT_ONLY_RETURN_URL)
+        native_url = native_business_login_continuation(
+            body, ACCOUNT_ONLY_RETURN_URL,
+        )
+        session = _FakeSession([
+            _Response(
+                302, native_url,
+                headers={"Location": "https://www.facebook.com/login/"},
+            ),
+            _Response(
+                200, "https://www.facebook.com/login/",
+                b'<div role="button">Continue</div>',
+            ),
+        ])
+        full_snapshot = {
+            "c_user": "123", "xs": "same-session", "fr": "fixture-fr",
+            "locale": "en_US",
+        }
+        session.profile_cookie_snapshot = dict(full_snapshot)
+        session._profile_cookies = dict(full_snapshot)
+        session.snapshots = [
+            dict(full_snapshot),
+            {"c_user": "123"},
+        ]
+        web = _FakeWeb(session)
+
+        with patch(
+            "app.business_login_gate_http.asyncio.sleep",
+            new_callable=AsyncMock,
+        ) as sleep:
+            result = await continue_business_login_gate(
+                web,
+                gate_url="https://business.facebook.com/business/loginpage/",
+                body=body,
+                return_url=ACCOUNT_ONLY_RETURN_URL,
+            )
+
+        self.assertIsNone(result)
+        sleep.assert_awaited_once_with(3.0)
+        self.assertEqual(session.restore_count, 1)
+        self.assertEqual(len(session.request_calls), 2)
+        self.assertFalse(session.request_calls[0][2]["allow_redirects"])
+        self.assertTrue(callable(session.request_calls[0][2]["cookie_jar_guard"]))
+        self.assertEqual(
+            session.request_calls[1][1],
+            "https://www.facebook.com/login/",
+        )
+        self.assertEqual(
+            web._business_login_gate_outcome,
+            "saved_login_no_saved_account_control",
+        )
 
     async def test_records_safe_reason_when_gate_has_no_supported_control(self):
         session = _FakeSession([])
