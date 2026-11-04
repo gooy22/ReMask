@@ -150,10 +150,22 @@ def fragment_values_match(rows, expected, *, business_id=None, old_values=None):
     fields = [row.get("field") for row in rows]
     if any(not isinstance(field, str) for field in fields) or len(set(fields)) != len(fields):
         return False
-    allowed = set(expected) | ({"acting_business_id"} if business_id is not None else set())
+    wanted = dict(expected)
+    # Meta's saved ODAX campaign readback includes these two platform defaults.
+    # Accept only the exact observed values, and only on campaign-shaped reads;
+    # these defaults are never added to the outgoing campaign request.
+    if ({"objective", "buying_type", "is_odax_campaign_group", "special_ad_categories"}
+            <= set(expected)):
+        campaign_readback_defaults = {
+            "ad_creation_package_config": None,
+            "automation_unified_campaign_type": "UNIFIED_TRAFFIC_PROXY",
+        }
+        for field, value in campaign_readback_defaults.items():
+            if field in fields:
+                wanted[field] = value
+    allowed = set(wanted) | ({"acting_business_id"} if business_id is not None else set())
     if set(fields) - allowed or not set(expected) <= set(fields):
         return False
-    wanted = dict(expected)
     if "acting_business_id" in fields and business_id is not None:
         wanted["acting_business_id"] = business_id
     def unique_members(pairs):
