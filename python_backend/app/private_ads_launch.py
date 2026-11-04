@@ -398,7 +398,6 @@ class AdsManagerLaunch:
                 business_id=target["business_id"], actor_id=actor,
                 allow_draft_gate_recovery=draft_only,
                 allow_saved_publication_gate_recovery=saved_publication_recovery,
-                saved_context_only=draft_only,
                 **({"account_read_fields": preflight_fields, "account_preflight": True}
                    if account_only_preflight else {}))
         except RemoteRequestError:
