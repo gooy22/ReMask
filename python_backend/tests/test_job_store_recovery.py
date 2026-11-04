@@ -983,7 +983,7 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
             job_id, allow_saved_campaign_readback_retry_item_ids={item_id}
         ), 0)
 
-    async def test_profile28_campaign_readback_resume_rejects_child_create_and_checkpoint(self):
+    async def test_profile28_campaign_readback_resume_rejects_child_create(self):
         job_id, item_id = self._seed_profile28_saved_campaign_readback_mismatch(extra_child=True)
         view = await self.store.job_view(job_id)
         self.assertFalse(await self.store.private_launch_saved_campaign_retry_available(
@@ -994,6 +994,7 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
         ), 0)
         self.assertEqual((await self.store.item(item_id))['status'], 'FAILED')
 
+    async def test_profile28_campaign_readback_resume_rejects_checkpoint(self):
         job_id, item_id = self._seed_profile28_saved_campaign_readback_mismatch()
         await self.store.record_terminal_checkpoint('28')
         view = await self.store.job_view(job_id)
