@@ -68,6 +68,7 @@ if (strpos($php, 'id="openRecentJob"') !== false && strpos($php, 'REMASK_AUTO_OP
         '<div class="col-md-12"><!-- REMASK_AUTO_OPEN_RECENT_JOB_V1 -->' . "\n" .
         '                <select id="recentJobSelect" class="form-control"><option value="">Recent jobs</option></select>' . "\n" .
         '                <button id="openRecentJob" type="button" style="display:none" aria-hidden="true">OPEN JOB</button>' . "\n" .
+        '                <button id="retryPrivateSavedJob" type="button" class="btn btn-warning w-100 mt-2" style="display:none" disabled>Повторить сохранённую задачу</button>' . "\n" .
         '            </div>',
         $php,
         $openCount
@@ -132,6 +133,63 @@ function renderJobActionMenu() {
     menu.style.display = state.currentJob && available.length ? '' : 'none';
     menu.disabled = state.processingJob || available.length === 0;
 }
+
+/* REMASK_PRIVATE_SAVED_RETRY_V1
+ * Requeue the exact failed private job opened through ?private_job=... .
+ * The original payload stays in storage; the normal CSRF-aware API helper sends POST.
+ */
+(() => {
+    const button = $('retryPrivateSavedJob');
+    const select = $('recentJobSelect');
+    if (!button || !select) return;
+
+    let busy = false;
+    const selectedFailedPrivateJobId = () => {
+        const requestedId = new URL(window.location.href).searchParams.get('private_job') || '';
+        const option = select.selectedOptions?.[0];
+        if (!/^[a-f0-9]{32}$/i.test(requestedId)) return '';
+        if (select.value !== 'private:' + requestedId) return '';
+        if (!/(ошибка|failed|error|rejected)/i.test(option?.textContent || '')) return '';
+        return requestedId;
+    };
+    const render = () => {
+        const allowed = !!selectedFailedPrivateJobId() && !busy;
+        button.style.display = allowed ? '' : 'none';
+        button.disabled = !allowed;
+    };
+
+    select.addEventListener('change', render);
+    button.addEventListener('click', async () => {
+        const jobId = selectedFailedPrivateJobId();
+        if (!jobId || busy) return;
+        busy = true;
+        render();
+        try {
+            show($('launchResult'), 'Повторяю сохранённую задачу ' + jobId + '…', 'ready');
+            const result = await apiJson('ajax/metaJobRetry.php', formPost({
+                job_id: jobId,
+                mode: 'retry_failed',
+            }));
+            if (Number(result?.items_requeued || 0) !== 1) {
+                show($('launchResult'), result?.message || 'Для этой задачи нет неудачных элементов для повтора.', 'failed');
+                await loadRecentJobs();
+                await openRecentJob();
+                return;
+            }
+            show($('launchResult'), 'Повтор сохранённой задачи отправлен. ID: ' + jobId, 'ready');
+            await loadRecentJobs();
+            await openRecentJob();
+        } catch (e) {
+            show($('launchResult'), e.payload?.message || e.message || String(e), 'failed');
+            await loadRecentJobs();
+            await openRecentJob();
+        } finally {
+            busy = false;
+            render();
+        }
+    });
+    render();
+})();
 
 JS;
     $escapeNeedle = "function escapeHtml(value) {";
