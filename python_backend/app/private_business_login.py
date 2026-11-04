@@ -165,6 +165,33 @@ def native_business_login_continuation(body, return_url, *, diagnostic=None):
                     and set(home_query) <= {'nav_ref'}
                     and all(len(values) == 1 and re.fullmatch(r'[A-Za-z0-9_-]{0,160}', values[0])
                             for values in home_query.values()))
+                latest_home_query_safe = (
+                    set(actual_query) <= {'nav_ref', 'act', 'business_id'}
+                    and all(
+                        len(values) == 1
+                        and (
+                            (key == 'nav_ref' and re.fullmatch(r'[A-Za-z0-9_-]{0,160}', values[0]))
+                            or (key in {'act', 'business_id'} and re.fullmatch(r'[0-9]{5,30}', values[0]))
+                        )
+                        for key, values in actual_query.items()
+                    )
+                )
+                latest_home_scope_safe = (
+                    (not actual_query.get('act') or actual_query.get('act') == expected_acts)
+                    and (
+                        not actual_query.get('business_id')
+                        or actual_query.get('business_id') == expected_business_ids
+                    )
+                )
+                # Some reviewed FB handoffs return through Business Home before
+                # the exact Ads Manager URL. This is navigation only; the caller
+                # still re-requests and verifies the exact selected return_url.
+                latest_home = (
+                    actual.netloc == 'business.facebook.com'
+                    and actual.path.rstrip('/') == '/latest/home'
+                    and latest_home_query_safe
+                    and latest_home_scope_safe
+                )
                 exact_account_scope = (
                     actual.path.rstrip('/') == expected.path
                     and actual_query.get('act', []) == expected_query['act']
@@ -172,7 +199,8 @@ def native_business_login_continuation(body, return_url, *, diagnostic=None):
                 )
                 if (actual.scheme != 'https' or actual.netloc not in
                         {'business.facebook.com', 'adsmanager.facebook.com'}
-                        or actual.fragment or (not business_home and not exact_account_scope)):
+                        or actual.fragment
+                        or not (business_home or latest_home or exact_account_scope)):
                     continue
                 query = dict(parse_qsl(actual.query))
                 query.update(biz_login_source='biz_unified_f3_fb_login_button', join_id=str(uuid4()))

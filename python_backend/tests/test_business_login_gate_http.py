@@ -250,6 +250,25 @@ class GateContinuationParserTests(unittest.TestCase):
         self.assertEqual(selected_query["act"], ["999999"])
         self.assertEqual(selected_query["business_id"], ["222222"])
 
+    def test_accepts_same_scope_latest_home_with_native_request_id(self):
+        from app.private_business_login import native_business_login_continuation
+
+        latest_home = "https://business.facebook.com/latest/home?business_id=222222"
+        continuation = native_business_login_continuation(
+            _native_gate_body(referrerURI=latest_home), ADS_MANAGER_RETURN_URL,
+        )
+        self.assertIsNotNone(continuation)
+        query = parse_qs(urlsplit(continuation).query)
+        self.assertEqual(query["f3_request_id"], ["native-request-id"])
+        next_url = query["next"][0]
+        self.assertEqual(urlsplit(next_url).path, "/latest/home")
+        next_query = parse_qs(urlsplit(next_url).query)
+        self.assertEqual(next_query["business_id"], ["222222"])
+        self.assertEqual(
+            next_query["biz_login_source"],
+            ["biz_unified_f3_fb_login_button"],
+        )
+
     def test_native_continuation_supports_exact_account_only_preflight_scope(self):
         from app.private_business_login import native_business_login_continuation
 
