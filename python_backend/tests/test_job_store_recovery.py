@@ -770,7 +770,7 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.store.retry_failed(job), 0)
         self.assertEqual((await self.store.item(item))['status'], 'FAILED')
 
-    async def test_exact_saved_draft_attempt_three_allows_one_final_retry(self):
+    async def test_exact_saved_draft_attempt_four_allows_one_final_retry(self):
         now = int(time.time())
         job_id = 'a7ab6547d74b4ceab021fa9a6cfe0666'
         item_id = 'c35e8eb06b654b07b7f8be3acdd5e993'
@@ -800,14 +800,14 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
                     created_at,updated_at
                 ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
                 (item_id,job_id,'27','FAILED','PRIVATE_ADS_DRAFT_META_LOGIN_REQUIRED',
-                 'Meta returned a login-required response',0,3,now,now),
+                 'Meta returned a login-required response',0,4,now,now),
             )
             con.execute(
                 """INSERT INTO job_tasks(
                     id,item_id,position,action,payload_json,idempotency_key,status,attempt,
                     error_code,error_message,retryable,created_at,updated_at
                 ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (task_id,item_id,0,'private_launch',json.dumps(payload),launch_key,'FAILED',3,
+                (task_id,item_id,0,'private_launch',json.dumps(payload),launch_key,'FAILED',4,
                  'PRIVATE_ADS_DRAFT_META_LOGIN_REQUIRED','Meta returned a login-required response',
                  0,now,now),
             )
@@ -833,13 +833,13 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
         with self.store._connect() as con:
             con.execute(
                 """UPDATE job_items SET status='FAILED',error_code=?,
-                    error_message=?,retryable=0,attempt=4,updated_at=? WHERE id=?""",
+                    error_message=?,retryable=0,attempt=5,updated_at=? WHERE id=?""",
                 ('PRIVATE_ADS_DRAFT_META_LOGIN_REQUIRED','Meta returned a login-required response',
                  now+1,item_id),
             )
             con.execute(
                 """UPDATE job_tasks SET status='FAILED',error_code=?,error_message=?,
-                    retryable=0,attempt=4,result_json=NULL,updated_at=? WHERE id=?""",
+                    retryable=0,attempt=5,result_json=NULL,updated_at=? WHERE id=?""",
                 ('PRIVATE_ADS_DRAFT_META_LOGIN_REQUIRED','Meta returned a login-required response',
                  now+1,task_id),
             )
