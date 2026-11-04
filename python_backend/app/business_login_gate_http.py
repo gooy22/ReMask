@@ -6,6 +6,7 @@ are left for supported reauthentication.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -732,7 +733,10 @@ async def _request_facebook(
     fields: list[tuple[str, str]] | None = None,
     referer: str = "",
     allow_login_redirect: bool = False,
+    cookie_snapshot_guard=None,
 ):
+    if cookie_snapshot_guard is not None and not callable(cookie_snapshot_guard):
+        raise TypeError("cookie_snapshot_guard must be callable")
     current_method = method.upper()
     current_url = url
     current_fields = list(fields or [])
@@ -796,6 +800,10 @@ async def _request_facebook(
             "allow_redirects": False,
             "request_timeout_seconds": 15,
         }
+        if callable(cookie_snapshot_guard):
+            kwargs["cookie_jar_guard"] = lambda stage=f"business_login_gate_headers_{hop + 1}": (
+                cookie_snapshot_guard(stage)
+            )
         if current_method == "POST":
             headers["Origin"] = f"https://{urlsplit(current_url).hostname}"
             headers["Content-Type"] = "application/x-www-form-urlencoded"
@@ -808,6 +816,8 @@ async def _request_facebook(
             location = str(response.headers.get("Location") or "")
             last_headers = {str(key):str(value) for key,value in response.headers.items()}
             last_body = await _bounded_response(response)
+        if callable(cookie_snapshot_guard):
+            cookie_snapshot_guard(f"business_login_gate_body_{hop + 1}")
         if last_status not in {301, 302, 303, 307, 308} or not location:
             return last_status, last_url, last_body, last_headers
         next_url = urljoin(last_url, location)
@@ -825,6 +835,16 @@ async def _request_facebook(
             )
             if not can_follow_existing_login:
                 return last_status, next_url, last_body, last_headers
+        if hop == 0 and last_status == 302:
+            source_host = str(urlsplit(last_url).hostname or "").casefold()
+            target_host = str(urlsplit(next_url).hostname or "").casefold()
+            log.info(
+                "business_login_gate_first_302_settle_delay profile=%s seconds=3 source_host=%s target_host=%s",
+                getattr(profile, "name", "unknown"), source_host, target_host,
+            )
+            await asyncio.sleep(3.0)
+            if callable(cookie_snapshot_guard):
+                cookie_snapshot_guard("business_login_gate_first_302_settled")
         current_referer = last_url
         current_url = next_url
         log.info(
@@ -964,10 +984,49 @@ async def continue_business_login_gate(
             set_outcome("profile_session_mismatch")
             return None
 
+        def preserve_profile_cookie_snapshot(stage: str):
+            restore_if_lost = getattr(
+                web, "_restore_profile_cookie_snapshot_if_lost", None)
+            if callable(restore_if_lost):
+                return restore_if_lost(session, stage=stage)
+            saved = getattr(session, "_profile_cookies", None)
+            read_snapshot = getattr(session, "facebook_cookie_snapshot", None)
+            restore = getattr(session, "restore_profile_cookies", None)
+            if not isinstance(saved, dict) or not saved or not callable(read_snapshot):
+                return False
+            current = read_snapshot()
+            if not isinstance(current, dict):
+                current = {}
+            lost = (
+                len(current) < len(saved)
+                or any(name not in current for name in saved)
+            )
+            if not lost:
+                return False
+            if not callable(restore):
+                raise RuntimeError("profile cookie snapshot restore is unavailable")
+            restore()
+            restored = read_snapshot()
+            valid = (
+                isinstance(restored, dict)
+                and len(restored) >= len(saved)
+                and all(name in restored for name in saved)
+                and str(restored.get("c_user") or "") == actor_id
+                and str(restored.get("xs") or "").strip() == profile_xs
+            )
+            if not valid:
+                raise RuntimeError("profile cookie snapshot restore was not verified")
+            log.info(
+                "business_login_gate_cookie_snapshot_restored profile=%s stage=%s expected_count=%d restored_count=%d",
+                profile_name, stage, len(saved), len(restored),
+            )
+            return True
+
         action_status, action_url, action_body, _ = await _request_facebook(
             session, profile, continuation["method"], continuation["url"],
             fields=continuation["fields"], referer=gate_url,
             allow_login_redirect=True,
+            cookie_snapshot_guard=preserve_profile_cookie_snapshot,
         )
         if action_status in {401, 403}:
             set_outcome("meta_rejected_continuation")
@@ -989,6 +1048,7 @@ async def continue_business_login_gate(
                     session, profile, saved_login["method"], saved_login["url"],
                     fields=saved_login["fields"], referer=action_url,
                     allow_login_redirect=True,
+                    cookie_snapshot_guard=preserve_profile_cookie_snapshot,
                 )
                 if action_status in {401, 403}:
                     set_outcome("meta_rejected_saved_account")
@@ -1026,6 +1086,7 @@ async def continue_business_login_gate(
 
         status, final_url, response_body, response_headers = await _request_facebook(
             session, profile, "GET", return_url, referer=gate_url,
+            cookie_snapshot_guard=preserve_profile_cookie_snapshot,
         )
         after = session.facebook_cookie_snapshot()
         if (
