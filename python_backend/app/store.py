@@ -1318,14 +1318,21 @@ class JobStore:
         expected_business = "1889034722540874"
         expected_page = "1463070456885337"
         accepted_accounts = {"52569470944909", "2610919942714650"}
+        item_failure = (
+            str(item.get("attempt") or ""),
+            str(item.get("error_code") or ""),
+        )
+        permitted_failures = {
+            ("1", "PRIVATE_ADS_DRAFT_READ_SPEC_MISMATCH"),
+            ("2", "PRIVATE_ADS_DRAFT_VALIDATION_PENDING"),
+        }
         if (
             job_id != expected_job
             or str(item.get("id") or "") != expected_item
             or str(item.get("job_id") or "") != expected_job
             or str(item.get("profile_id") or "") != "28"
             or str(item.get("status") or "").upper() != "FAILED"
-            or str(item.get("attempt") or "") != "1"
-            or str(item.get("error_code") or "") != "PRIVATE_ADS_DRAFT_READ_SPEC_MISMATCH"
+            or item_failure not in permitted_failures
             or len(tasks) != 1
             or con.execute("SELECT COUNT(*) FROM job_items WHERE job_id=?", (expected_job,)).fetchone()[0] != 1
         ):
@@ -1344,8 +1351,8 @@ class JobStore:
             str(task.get("item_id") or "") != expected_item
             or str(task.get("action") or "").lower() != "private_launch"
             or str(task.get("status") or "").upper() != "FAILED"
-            or str(task.get("attempt") or "") != "1"
-            or str(task.get("error_code") or "") != "PRIVATE_ADS_DRAFT_READ_SPEC_MISMATCH"
+            or str(task.get("attempt") or "") != item_failure[0]
+            or str(task.get("error_code") or "") != item_failure[1]
         ):
             return False
         payload = task.get("payload")
@@ -2229,7 +2236,10 @@ class JobStore:
                 )
                 saved_campaign_retry_requested = (
                     str(row['id']) in allow_saved_campaign_item_ids
-                    and row['error_code'] == 'PRIVATE_ADS_DRAFT_READ_SPEC_MISMATCH'
+                    and row['error_code'] in {
+                        'PRIVATE_ADS_DRAFT_READ_SPEC_MISMATCH',
+                        'PRIVATE_ADS_DRAFT_VALIDATION_PENDING',
+                    }
                 )
                 if (
                     (profile in excluded and not allow_gate_retry)
@@ -2309,7 +2319,10 @@ class JobStore:
                              'PRIVATE_ADS_DRAFT_SESSION_RENEWAL_UNAVAILABLE',
                              'PRIVATE_ADS_DRAFT_META_LOGIN_REQUIRED'
                            ) AND ?=1)
-                           OR (error_code='PRIVATE_ADS_DRAFT_READ_SPEC_MISMATCH' AND ?=1)
+                           OR (error_code IN (
+                             'PRIVATE_ADS_DRAFT_READ_SPEC_MISMATCH',
+                             'PRIVATE_ADS_DRAFT_VALIDATION_PENDING'
+                           ) AND ?=1)
                          )""",
                     (now,item_id,1 if item_id in recovery_ids else 0,
                      1 if item_id in private_launch_recovery_ids else 0,
