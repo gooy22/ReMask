@@ -4504,6 +4504,74 @@ async def retry_failed(job_id: str, consent: dict | None = Body(default=None)) -
             and str(matching_tasks[0].get('attempt') or '') == '3'
         ):
             private_draft_gate_retry_profiles.add(profile)
+
+    # Resume only this saved campaign prefix. The worker reuses its exact draft
+    # and campaign receipts, verifies the campaign before any new child POST,
+    # and remains in DRAFT mode throughout.
+    saved_campaign_readback_retry_item_ids = set()
+    if (
+        job_id == '64ad97e3bd4f4c2ba744eda37763c962'
+        and len(current_view.get('items') or []) == 1
+    ):
+        saved_item = current_view['items'][0]
+        saved_profile = str(saved_item.get('profile_id') or '').strip()
+        saved_item_id = str(saved_item.get('id') or '')
+        saved_tasks = saved_item.get('tasks') or []
+        if (
+            saved_profile == '28'
+            and saved_item_id == '0ec5cb5d0fec418abddb33adc4a7b370'
+            and await store.private_launch_saved_campaign_retry_available(
+                job_id, saved_item,
+                allow_business_login_gate=saved_profile in business_gate_profiles,
+            )
+        ):
+            if saved_profile in business_gate_profiles:
+                saved_task_id = str(saved_tasks[0].get('id') or '') if len(saved_tasks) == 1 else ''
+                try:
+                    readback = await private_draft_read(
+                        saved_profile, {'job_id': job_id, 'task_id': saved_task_id}
+                    )
+                except HTTPException as exc:
+                    log.info(
+                        'saved campaign retry readback gate preflight rejected profile=%s code=%s',
+                        saved_profile, str(exc.detail)[:80],
+                    )
+                else:
+                    fragment_reads = readback.get('fragment_reads') if isinstance(readback, dict) else None
+                    campaign_read = fragment_reads[0] if isinstance(fragment_reads, list) and len(fragment_reads) == 1 else {}
+                    checks = campaign_read.get('checks') if isinstance(campaign_read, dict) else {}
+                    observed = campaign_read.get('observed') if isinstance(campaign_read, dict) else {}
+                    errors = campaign_read.get('active_error_diagnostic') if isinstance(campaign_read, dict) else {}
+                    status_value = observed.get('status', {}).get('value') if isinstance(observed, dict) else None
+                    validation_value = observed.get('validation_status', {}).get('value') if isinstance(observed, dict) else None
+                    exact_readback = (
+                        readback.get('ok') is True
+                        and readback.get('draft_id') == '2210627659890877'
+                        and readback.get('source') == 'independent_private_ads_http'
+                        and readback.get('advertising_mutation_posts') == 0
+                        and campaign_read.get('level') == 'campaign'
+                        and campaign_read.get('relationships_match') is True
+                        and campaign_read.get('settings_match') is True
+                        and isinstance(checks, dict)
+                        and all(checks.get(key) is True for key in (
+                            'id', 'ad_draft_id', 'ad_object_type', 'parent_ad_object_id'
+                        ))
+                        and status_value == 'PAUSED'
+                        and validation_value == 'VALIDATED'
+                        and isinstance(errors, dict)
+                        and errors.get('has_errors') is False
+                    )
+                    if exact_readback:
+                        private_draft_gate_retry_profiles.add(saved_profile)
+                        saved_campaign_readback_retry_item_ids.add(saved_item_id)
+                    else:
+                        log.info(
+                            'saved campaign retry readback gate preflight did not confirm exact paused campaign profile=%s',
+                            saved_profile,
+                        )
+            else:
+                saved_campaign_readback_retry_item_ids.add(saved_item_id)
+
     if isinstance(consent,dict) and consent.get('consent_page_policies') is True:
         eligible=any(item.get('error_code')=='PAGE_POLICIES_CONFIRMATION_REQUIRED' and
             any(((task.get('payload') or {}).get('parameters',{}).get('FAN_PAGES') or {}).get('common_page') is True
@@ -4573,6 +4641,7 @@ async def retry_failed(job_id: str, consent: dict | None = Body(default=None)) -
         job_id,
         excluded_profile_ids=excluded_profiles,
         allow_business_login_gate_profile_ids=private_draft_gate_retry_profiles,
+        allow_saved_campaign_readback_retry_item_ids=saved_campaign_readback_retry_item_ids,
     )
     view=await store.job_view(job_id)
     recovered_gate_profiles = set()
