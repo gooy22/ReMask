@@ -9,7 +9,7 @@ import json
 import logging
 import re
 
-from .private_ads_draft import FRAGMENT_FIELDS, fail, fragment_parent_matches, fragment_values_match
+from .private_ads_draft import fail, fragment_parent_matches, fragment_values_match
 from .private_ads_http import AdsManagerPrivateHttp
 from .private_ads_inspect import _validation_fields, adapter_scope, saved_draft_intent, validation_diagnostic
 from .private_ads_draft_fallback import read_fragment_with_account_object_fallback
