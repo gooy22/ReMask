@@ -319,6 +319,65 @@ class GateContinuationParserTests(unittest.TestCase):
         self.assertIsNone(extract_business_login_continuation(hidden, GATE_URL))
 
 
+class SavedAccountLoginContinuationTests(unittest.TestCase):
+    def test_accepts_generic_continue_only_for_exact_actor_in_inert_form(self):
+        from app.business_login_gate_http import _saved_account_login_continuation
+
+        login_url = "https://www.facebook.com/login/"
+        body = """
+        <form id="saved" action="/login/device-based/validate/" method="post">
+          <input type="hidden" name="uid" value="123456">
+          <input type="hidden" name="next" value="/business/loginrequest/fb/">
+          <button type="submit" name="continue" value="1">Continue</button>
+        </form>
+        """
+        continuation, outcome = _saved_account_login_continuation(
+            body, login_url, "123456",
+        )
+
+        self.assertEqual(outcome, "saved_account_actor_verified")
+        self.assertEqual(continuation["method"], "POST")
+        self.assertEqual(
+            continuation["url"],
+            "https://www.facebook.com/login/device-based/validate/",
+        )
+        self.assertEqual(continuation["label_kind"], "generic_continue_same_actor")
+        self.assertEqual(continuation["fields"], [
+            ("uid", "123456"),
+            ("next", "/business/loginrequest/fb/"),
+            ("continue", "1"),
+        ])
+
+    def test_generic_continue_refuses_actor_mismatch_and_credentials(self):
+        from app.business_login_gate_http import _saved_account_login_continuation
+
+        login_url = "https://www.facebook.com/login/"
+        actor_mismatch = """
+        <form id="saved" action="/login/device-based/validate/" method="post">
+          <input type="hidden" name="uid" value="999999">
+          <button type="submit" name="continue" value="1">Continue</button>
+        </form>
+        """
+        result, outcome = _saved_account_login_continuation(
+            actor_mismatch, login_url, "123456",
+        )
+        self.assertIsNone(result)
+        self.assertEqual(outcome, "saved_account_actor_unverified")
+
+        credential_form = """
+        <form id="saved" action="/login/device-based/validate/" method="post">
+          <input type="hidden" name="uid" value="123456">
+          <input type="password" name="pass">
+          <button type="submit" name="continue" value="1">Continue</button>
+        </form>
+        """
+        result, outcome = _saved_account_login_continuation(
+            credential_form, login_url, "123456",
+        )
+        self.assertIsNone(result)
+        self.assertEqual(outcome, "saved_account_form_not_inert")
+
+
 class _ResponseBody:
     def __init__(self, value):
         self.value = value
