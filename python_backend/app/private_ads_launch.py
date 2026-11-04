@@ -190,6 +190,24 @@ class AdsManagerLaunch:
                 raise fail("INVALID_INPUT", "Advertising values cannot be encoded") from None
         return target, launch, references, _launch_fingerprint(payload, target["page_id"])
 
+    def is_paused_draft_revalidation(self, profile_id, payload):
+        """Allow one fresh DRAFT preflight through a prior Business Login gate."""
+        if not isinstance(payload, dict) or any(
+            name in payload for name in ("publish_saved_draft", "repair_objective", "reconcile_only")
+        ):
+            return False
+        try:
+            _target, launch, _references, _fingerprint = self.prepare(profile_id, payload)
+        except Exception:
+            return False
+        delivery = launch.get("delivery")
+        return (
+            launch.get("execution_mode") == "DRAFT"
+            and isinstance(delivery, dict)
+            and set(delivery) == {"campaign", "adset", "ad"}
+            and all(delivery.get(level) == "PAUSED" for level in ("campaign", "adset", "ad"))
+        )
+
     def plan(self, *, profile_id, payload):
         if isinstance(payload, dict) and "publish_saved_draft" in payload:
             raise fail("INVALID_INPUT", "Draft review cannot request publication")
