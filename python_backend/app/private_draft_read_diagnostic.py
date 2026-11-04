@@ -64,6 +64,27 @@ def safe_nested_shape(value, *, depth=0, budget=None):
     return result
 
 
+_SAFE_REVIEWED_ENUM_FIELDS = frozenset({"automation_unified_campaign_type", "ad_creation_package_config"})
+_SAFE_REVIEWED_ENUM_VALUE = re.compile(r"[A-Za-z0-9_:-]{1,64}\\Z")
+
+
+def safe_reviewed_value_shape(field, value):
+    """Expose only bounded scalar enum defaults for two reviewed Meta-owned fields."""
+    result = safe_nested_shape(value)
+    if field not in _SAFE_REVIEWED_ENUM_FIELDS:
+        return result
+    decoded = value
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except (ValueError, RecursionError):
+            return result
+    if (decoded is None or type(decoded) in {bool, int}
+            or (isinstance(decoded, str) and _SAFE_REVIEWED_ENUM_VALUE.fullmatch(decoded))):
+        result["json_scalar"] = scalar_shape(decoded)
+    return result
+
+
 def values_diagnostic(rows, expected, business_id):
     """Explain the existing strict comparison without returning ad text or secrets."""
     result = {"collection": scalar_shape(rows), "fields": []}
@@ -79,7 +100,7 @@ def values_diagnostic(rows, expected, business_id):
         if isinstance(row, dict) and isinstance(row.get("field"), str)
         and row["field"] not in wanted and row["field"] in _validation_fields()})
     result["unexpected_value_shapes"] = [
-        {"field": row["field"], "new_value": safe_nested_shape(row.get("new_value"))}
+        {"field": row["field"], "new_value": safe_reviewed_value_shape(row["field"], row.get("new_value"))}
         for row in rows if isinstance(row, dict)
         and row.get("field") in result["unexpected_reviewed_fields"]
     ][:20]
