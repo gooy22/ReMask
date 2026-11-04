@@ -693,6 +693,54 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(cookie_session.restored)
         session.fetch_text.assert_awaited_once()
 
+    async def test_read_fp_handoff_uses_exact_selected_account_and_business(self):
+        actor, business, account = "123456789", "987654321", "555666777"
+        from app.business_fan_page_contracts import command
+        row = command("READ_FP", business=business, cursor=None)
+        session = FacebookWebSession(WebProfile(name="27",
+            cookies={"c_user": actor}, proxy=None, user_agent="fixture"))
+        session._validate_business_loginpage_probe = Mock(return_value="READ_FP")
+        bootstrap = FacebookBootstrap(actor_id=actor, fb_dtsg="fixture-token",
+            profile_actor_verified=True)
+        session.bootstrap = AsyncMock(return_value=bootstrap)
+        session._business_bootstrap = AsyncMock(return_value=bootstrap)
+        session._ensure_session = AsyncMock(side_effect=RuntimeError("stop before GraphQL POST"))
+
+        with self.assertRaisesRegex(RuntimeError, "stop before GraphQL POST"):
+            await session.graphql(
+                row["doc_id"], row["variables"],
+                friendly_name=row["friendly_name"], endpoint_url=row["endpoint_url"],
+                business_context_id=business, business_loginpage_probe="READ_FP",
+                business_loginpage_account_id=account, read_timeout_seconds=30,
+            )
+
+        session.bootstrap.assert_awaited_once_with(
+            business_loginpage_return_url=(
+                "https://adsmanager.facebook.com/adsmanager/manage/campaigns"
+                f"?act={account}&business_id={business}"
+            ),
+        )
+        session._business_bootstrap.assert_awaited_once()
+        self.assertEqual(session._business_bootstrap.await_args.kwargs["business_loginpage_probe"], "READ_FP")
+        session._ensure_session.assert_awaited_once()
+
+    async def test_account_handoff_rejects_other_business_operations_before_bootstrap(self):
+        actor, business, account = "123456789", "987654321", "555666777"
+        session = FacebookWebSession(WebProfile(name="27",
+            cookies={"c_user": actor}, proxy=None, user_agent="fixture"))
+        session._validate_business_loginpage_probe = Mock(return_value="CONFIG")
+        session.bootstrap = AsyncMock()
+
+        with self.assertRaisesRegex(RemoteRequestError, "Exact account handoff scope"):
+            await session.graphql(
+                "fixture-doc", {}, friendly_name="BusinessSettingsQuery",
+                endpoint_url=session.GRAPHQL_URL, business_context_id=business,
+                business_loginpage_probe="CONFIG",
+                business_loginpage_account_id=account,
+            )
+
+        session.bootstrap.assert_not_awaited()
+
     async def test_business_loginpage_bypass_is_limited_to_exact_pinned_contract_and_verified_reads(self):
         from app.static_meta_contracts import command
         session = FacebookWebSession(WebProfile(name="15",

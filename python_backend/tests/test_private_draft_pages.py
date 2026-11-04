@@ -117,7 +117,7 @@ class DraftPageTests(unittest.IsolatedAsyncioTestCase):
         read = AsyncMock(return_value=([{'id':'555555','name':'Page','business_id':'222222'}], True))
         with patch('app.private_business_fan_page_create.read_pages', new=read):
             result = await read_draft_pages(self.web, account='111111',business='222222')
-        read.assert_awaited_once_with(self.web, '222222')
+        read.assert_awaited_once_with(self.web, '222222', bootstrap_account_id='111111')
         self.assertFalse(result['ad_account_page_access_verified'])
         self.assertFalse(result['data'][0]['publication_access_verified'])
         self.assertEqual(result['execution_mode'], 'DRAFT')
@@ -126,20 +126,21 @@ class DraftPageTests(unittest.IsolatedAsyncioTestCase):
     async def test_picker_skips_cdn_module_refresh_and_restores_flag(self):
         observed = []
 
-        async def read_pages(web, business):
-            observed.append(web.defer_module_refresh)
+        async def read_pages(web, business, *, bootstrap_account_id=""):
+            observed.append((web.defer_module_refresh, bootstrap_account_id))
             return ([{'id':'555555','name':'Page','business_id':'222222'}], True)
 
         with patch('app.private_business_fan_page_create.read_pages',
                 new=AsyncMock(side_effect=read_pages)):
             await read_draft_pages(self.web,account='111111',business='222222')
-        self.assertEqual(observed, [True])
+        self.assertEqual(observed, [(True, '111111')])
         self.assertFalse(hasattr(self.web, 'defer_module_refresh'))
 
         self.web.defer_module_refresh = False
 
-        async def fail_read(web, business):
+        async def fail_read(web, business, *, bootstrap_account_id=""):
             self.assertTrue(web.defer_module_refresh)
+            self.assertEqual(bootstrap_account_id, '111111')
             raise RuntimeError('read failed')
 
         with patch('app.private_business_fan_page_create.read_pages',

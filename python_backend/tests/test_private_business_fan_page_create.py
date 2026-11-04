@@ -544,6 +544,21 @@ class BusinessPageHTTPTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([row['cursor'] for row in calls], [None, 'next'])
         self.assertTrue(all(row['id'] == row['businessID'] == BM2 and row['assetTypes'] == ['PAGE'] for row in calls))
 
+    async def test_read_fp_account_handoff_is_exact_and_read_only(self):
+        web = SimpleNamespace(graphql=AsyncMock(return_value={"data": {"node": {}}}))
+        await execute(web, 'READ_FP', business=BM2, cursor=None, bootstrap_account_id=RK1)
+        web.graphql.assert_awaited_once()
+        kwargs = web.graphql.await_args.kwargs
+        self.assertEqual(kwargs['business_loginpage_probe'], 'READ_FP')
+        self.assertEqual(kwargs['business_loginpage_account_id'], RK1)
+        self.assertEqual(kwargs['business_context_id'], BM2)
+        self.assertEqual(kwargs['read_timeout_seconds'], 30)
+
+        with self.assertRaises(ProvisioningError):
+            await execute(web, 'FP_CATEGORY', business=BM2,
+                categories=['242822000000000'], bootstrap_account_id=RK1)
+        self.assertEqual(web.graphql.await_count, 1)
+
     async def test_mutation_requires_durable_intent(self):
         with self.assertRaises(ProvisioningError):
             await execute(self.meta, 'CREATE_FP', business=BM2, name='PrgssTeam', bio='',

@@ -20,12 +20,15 @@ log = logging.getLogger('remask_worker')
 TRANSPORT = 'business_suite_page_static_http2'
 
 
-async def read_pages(web, business):
+async def read_pages(web, business, *, bootstrap_account_id=""):
     """Only canonical PAGE edges of this exact Business count as inventory."""
     rows, cursor, seen = {}, None, set()
     valid = True
     for _ in range(20):
-        payload = await execute(web, 'READ_FP', business=business, cursor=cursor)
+        bindings = {'business': business, 'cursor': cursor}
+        if bootstrap_account_id:
+            bindings['bootstrap_account_id'] = bootstrap_account_id
+        payload = await execute(web, 'READ_FP', **bindings)
         node = _data(payload).get('node')
         if not isinstance(node, dict) or _id(node.get('id')) != business:
             raise ProvisioningError('PRIVATE_FAN_PAGE_INVENTORY_INCONCLUSIVE',

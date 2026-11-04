@@ -50,7 +50,14 @@ def command(operation, **bindings):
     return {key: row[key] for key in ('doc_id', 'friendly_name', 'endpoint_url', 'operation_kind')} | {'variables': render(row['variables'])}
 
 
-async def execute(web, operation, *, business, before_submit=None, **bindings):
+async def execute(web, operation, *, business, before_submit=None,
+                  bootstrap_account_id="", **bindings):
+    bootstrap_account_id = str(bootstrap_account_id or "").strip()
+    if bootstrap_account_id and (
+            operation != 'READ_FP'
+            or not re.fullmatch(r'\d{5,30}', bootstrap_account_id)):
+        raise ProvisioningError('INVALID_INPUT',
+            'Selected account handoff is limited to an exact READ_FP query.')
     row = command(operation, business=business, **bindings)
     if operation == 'CREATE_FP' and not callable(before_submit):
         raise ProvisioningError('PRIVATE_STATIC_INTENT_REQUIRED', 'Durable Page intent must precede CREATE.')
@@ -62,6 +69,8 @@ async def execute(web, operation, *, business, before_submit=None, **bindings):
         'business_context_id': business,
         'business_loginpage_probe': operation,
     }
+    if bootstrap_account_id:
+        kwargs['business_loginpage_account_id'] = bootstrap_account_id
     if row['operation_kind'] == 'query':
         kwargs['read_timeout_seconds'] = 30
     if before_submit is not None:
