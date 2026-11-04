@@ -12,6 +12,7 @@ import re
 from .private_ads_draft import FRAGMENT_FIELDS, fail, fragment_parent_matches, fragment_values_match
 from .private_ads_http import AdsManagerPrivateHttp
 from .private_ads_inspect import _validation_fields, adapter_scope, saved_draft_intent, validation_diagnostic
+from .private_ads_draft_fallback import read_fragment_with_account_object_fallback
 
 
 def scalar_shape(value):
@@ -149,8 +150,44 @@ async def read_diagnostic(adapter, *, profile_id, context, session, payload):
     if draft.get("id") != draft_id or draft.get("author_id") != actor or draft.get("ownership_type") != "USER":
         raise fail("READ_SCOPE_MISMATCH", "Saved draft ownership was not confirmed")
     reads, parent = [], None
+    campaign_object_read, account_object_fallbacks = None, []
     for level, fragment_id, values, _confirmed_object in fragments:
-        row = await client.get("/addraftfragment_" + fragment_id, {"fields": FRAGMENT_FIELDS})
+        observed_result = await read_fragment_with_account_object_fallback(
+            client, account_id=target["ad_account_id"], draft_id=draft_id,
+            fragment_id=fragment_id, level=level, values=values,
+            parent_id=parent, allow_fallback=True)
+        fallback = observed_result["fallback"]
+        if fallback is not None:
+            account_object_fallbacks.append(fallback)
+            if level == "campaign":
+                campaign_object_read = fallback
+            checks = {
+                "fragment_receipt": fallback.get("fragment_id") == fragment_id,
+                "draft_id": fallback.get("draft_id") == draft_id,
+                "account_id": fallback.get("account_id") == target["ad_account_id"],
+                "level": fallback.get("level") == level,
+                "parent": level == "campaign" or (parent is not None and values.get("campaign_id") == parent),
+            }
+            observed = {
+                "id": {"present": False, **scalar_shape(None)},
+                "ad_draft_id": {"present": True, **scalar_shape(draft_id)},
+                "ad_object_id": {"present": True, **scalar_shape(fallback.get("object_id"))},
+                "ad_object_type": {"present": True, **scalar_shape(level)},
+                "parent_ad_object_id": {"present": False, **scalar_shape(None)},
+                "validation_status": {"present": False, **scalar_shape(None)},
+                "status": {"present": True, **scalar_shape("PAUSED")},
+            }
+            reads.append({"level": level, "fragment_id": fragment_id,
+                "relationships_match": all(checks.values()), "checks": checks,
+                "observed": observed, "settings_match": fallback.get("settings_match") is True,
+                "settings_diagnostic": None,
+                "active_error_diagnostic": validation_diagnostic(None, observed=False),
+                "account_object_read": fallback})
+            if not all(checks.values()):
+                break
+            parent = fallback.get("object_id")
+            continue
+        row = observed_result["row"]
         adapter_scope(row, target["ad_account_id"])
         checks = {"id": row.get("id") == fragment_id,
             "ad_draft_id": row.get("ad_draft_id") == draft_id,
@@ -184,5 +221,7 @@ async def read_diagnostic(adapter, *, profile_id, context, session, payload):
         "saved_draft_read_validation profile=%s draft_id=%s fragments=%s",
         profile_id, draft_id, json.dumps(validation_summary, sort_keys=True, separators=(",", ":")))
     return {"draft_id": draft_id, "fragment_reads": reads, "pending_stage": pending,
+        "campaign_object_read": campaign_object_read,
+        "account_object_read_fallbacks": account_object_fallbacks,
         "draft_verified": False, "advertising_mutation_posts": 0, "persisted": False,
         "transport": "private_ads_manager_http_h2", "source": "independent_private_ads_http"}
