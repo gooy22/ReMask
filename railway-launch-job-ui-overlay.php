@@ -1,6 +1,6 @@
 <?php
 /**
- * v71 Launch Job UI cleanup.
+ * v72 Launch Job UI cleanup.
  * Keep legacy action buttons hidden for compatibility with launch.js handlers,
  * expose one contextual action select, and auto-open selected recent jobs.
  */
@@ -81,7 +81,7 @@ if (strpos($php, 'id="openRecentJob"') !== false && strpos($php, 'REMASK_AUTO_OP
 
 $php = preg_replace(
     '#<script src="scripts/launch\.js(?:\?[^"]*)?" type="module"></script>#',
-    '<script src="scripts/launch.js?v=20260918-launch-job-ui-v71" type="module"></script>',
+    '<script src="scripts/launch.js?v=20260918-launch-job-ui-v72" type="module"></script>',
     $php,
     1,
     $scriptCount
@@ -239,10 +239,10 @@ if (strpos($js, 'REMASK_PRIVATE_SAVED_RETRY_V1') === false) {
                 job?.id === '64ad97e3bd4f4c2ba744eda37763c962' &&
                 jobId === job.id && job?.status === 'FAILED' && items.length === 1 &&
                 item?.id === '0ec5cb5d0fec418abddb33adc4a7b370' &&
-                item?.profile_id === '28' && item?.status === 'FAILED' && item?.attempt === 1 &&
-                item?.error_code === 'PRIVATE_ADS_DRAFT_READ_SPEC_MISMATCH' &&
+                item?.profile_id === '28' && item?.status === 'FAILED' && item?.attempt === 2 &&
+                item?.error_code === 'PRIVATE_ADS_DRAFT_VALIDATION_PENDING' &&
                 tasks.length === 1 && task?.action === 'private_launch' && task?.status === 'FAILED' &&
-                task?.attempt === 1 && task?.error_code === 'PRIVATE_ADS_DRAFT_READ_SPEC_MISMATCH' &&
+                task?.attempt === 2 && task?.error_code === 'PRIVATE_ADS_DRAFT_VALIDATION_PENDING' &&
                 payload?.business_id === '1889034722540874' &&
                 payload?.ad_account_id === '52569470944909' &&
                 payload?.page_id === '1463070456885337' &&
