@@ -1013,6 +1013,18 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
         ), 0)
         self.assertEqual((await self.store.item(item_id))['status'], 'FAILED')
 
+    async def test_profile28_request_rejected_cannot_bypass_readback_with_retryable_flag(self):
+        job_id, item_id = self._seed_profile28_saved_campaign_readback_mismatch(
+            attempt=3, error_code='PRIVATE_ADS_DRAFT_REQUEST_REJECTED'
+        )
+        with self.store._connect() as con:
+            con.execute("UPDATE job_items SET retryable=1 WHERE id=?", (item_id,))
+            con.execute("UPDATE job_tasks SET retryable=1 WHERE item_id=?", (item_id,))
+
+        self.assertEqual(await self.store.retry_failed(job_id), 0)
+        self.assertEqual((await self.store.item(item_id))['status'], 'FAILED')
+        self.assertEqual((await self.store.tasks(item_id))[0]['status'], 'FAILED')
+
     async def test_profile28_campaign_readback_resume_rejects_child_create(self):
         job_id, item_id = self._seed_profile28_saved_campaign_readback_mismatch(extra_child=True)
         view = await self.store.job_view(job_id)
