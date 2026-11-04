@@ -229,6 +229,72 @@ JS;
     }
 }
 
+if (strpos($js, 'REMASK_PRIVATE_SAVED_RETRY_V1') === false) {
+    $retryUi = <<<'JS'
+/* REMASK_PRIVATE_SAVED_RETRY_V1
+ * Requeue only the failed private job selected in the matching ?private_job=... page.
+ * Keep the stored payload unchanged and use Launch's normal CSRF-aware API helpers.
+ */
+(() => {
+    const button = $('retryPrivateSavedJob');
+    const select = $('recentJobSelect');
+    if (!button || !select) return;
+
+    let busy = false;
+    let consumed = false;
+    const selectedFailedPrivateJobId = () => {
+        const requestedId = new URL(window.location.href).searchParams.get('private_job') || '';
+        const option = select.selectedOptions?.[0];
+        if (!/^[a-f0-9]{32}$/i.test(requestedId)) return '';
+        if (select.value !== 'private:' + requestedId) return '';
+        if (!/(ошибка|failed|error|rejected)/i.test(option?.textContent || '')) return '';
+        return requestedId;
+    };
+    const render = () => {
+        const allowed = !!selectedFailedPrivateJobId() && !busy && !consumed;
+        button.style.display = allowed ? '' : 'none';
+        button.disabled = !allowed;
+    };
+
+    select.addEventListener('change', render);
+    const observer = new MutationObserver(render);
+    observer.observe(select, {childList:true, subtree:true, attributes:true, attributeFilter:['selected']});
+    button.addEventListener('click', async () => {
+        const jobId = selectedFailedPrivateJobId();
+        if (!jobId || busy || consumed) return;
+        busy = true;
+        consumed = true;
+        render();
+        try {
+            show($('launchResult'), 'Повторяю сохранённую задачу ' + jobId + '…', 'ready');
+            const result = await apiJson('ajax/metaJobRetry.php', formPost({
+                job_id: jobId,
+                mode: 'retry_failed',
+            }));
+            if (Number(result?.items_requeued || 0) !== 1) {
+                show($('launchResult'), result?.message || 'Для этой задачи нет неудачных элементов для повтора.', 'failed');
+                await loadRecentJobs();
+                await openRecentJob();
+                return;
+            }
+            show($('launchResult'), 'Повтор сохранённой задачи отправлен. ID: ' + jobId, 'ready');
+            await loadRecentJobs();
+            await openRecentJob();
+        } catch (e) {
+            show($('launchResult'), e.payload?.message || e.message || String(e), 'failed');
+            await loadRecentJobs();
+            await openRecentJob();
+        } finally {
+            busy = false;
+            render();
+        }
+    });
+    render();
+})();
+JS;
+    $js .= "\n" . $retryUi . "\n";
+}
+
 file_put_contents($phpPath, $php);
 file_put_contents($jsPath, $js);
 fwrite(STDERR, "[launch-job-ui] contextual Job actions UI ready\n");
