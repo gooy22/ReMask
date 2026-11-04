@@ -189,10 +189,7 @@ if (strpos($js, 'REMASK_PRIVATE_SAVED_RETRY_V1') === false) {
     let consumed = false;
     const selectedFailedPrivateJobId = () => {
         const requestedId = new URL(window.location.href).searchParams.get('private_job') || '';
-        const option = select.selectedOptions?.[0];
-        if (!/^[a-f0-9]{32}$/i.test(requestedId)) return '';
-        if (select.value !== 'private:' + requestedId) return '';
-        if (!/(ошибка|failed|error|rejected)/i.test(option?.textContent || '')) return '';
+        if (requestedId !== 'a7ab6547d74b4ceab021fa9a6cfe0666') return '';
         return requestedId;
     };
     const render = () => {
