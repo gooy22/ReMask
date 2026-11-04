@@ -400,6 +400,41 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls[0][2]["data"]["jazoest"], expected)
         self.assertEqual(calls[0][2]["headers"]["X-FB-LSD"], "fresh-profile-lsd")
 
+    async def test_gate_renewal_uses_profile_sprinkle_config_when_gate_config_has_no_dtsg(self):
+        self.web.bootstrap = AsyncMock(return_value=SimpleNamespace(
+            actor_id="123456",
+            fb_dtsg="fresh-profile-dtsg",
+            lsd="fresh-profile-lsd",
+            jazoest="",
+            request_context={},
+            source_url="https://www.facebook.com/",
+            sprinkle_config={
+                "param_name": "jazoest",
+                "version": "2",
+                "should_randomize": False,
+            },
+        ))
+        calls = []
+
+        @asynccontextmanager
+        async def request(method, url, **options):
+            calls.append((method, url, options))
+            payload = {"payload": {"access_token": "fresh-renewed-session",
+                "client_id": self.client.context.application_id}}
+            yield SimpleNamespace(http_version="HTTP/2", status=200,
+                content=Body(("for (;;);" + json.dumps(payload)).encode()))
+
+        self.web.session.request = request
+        gate_html = ('<script>var config=["SprinkleConfig",[],'
+            '{"param_name":"jazoest","version":99,"should_randomize":false}];</script>')
+        renewed = await self.client._renew_session("", sprinkle_document=gate_html)
+        self.assertEqual(renewed.access_token, "fresh-renewed-session")
+        self.assertEqual(len(calls), 1)
+        expected = "2" + str(sum(map(ord, "fresh-profile-dtsg")))
+        self.assertEqual(calls[0][2]["data"]["fb_dtsg"], "fresh-profile-dtsg")
+        self.assertEqual(calls[0][2]["data"]["jazoest"], expected)
+        self.assertEqual(calls[0][2]["headers"]["X-FB-LSD"], "fresh-profile-lsd")
+
     async def test_gate_renewal_rejects_profile_sprinkle_config_from_ajax_endpoint(self):
         self.web.bootstrap = AsyncMock(return_value=SimpleNamespace(
             actor_id="123456",
