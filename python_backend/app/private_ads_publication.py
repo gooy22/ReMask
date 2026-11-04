@@ -103,12 +103,14 @@ class AdsManagerDraftPublisher:
                     raise fail("DRAFT_DELIVERY_UNSAFE", "Saved draft fragment reports active delivery")
                 # Meta can expose HAS_ERRORS before returning its error list.
                 # A stored fragment is not a settled, valid configuration.
+                active_errors_present = "active_errors" in row
                 active_errors = row.get("active_errors")
                 if row.get("validation_status") == "HAS_ERRORS" or (isinstance(active_errors, list) and active_errors):
                     raise fail("VALIDATION_ERRORS", "Meta returned active validation errors for the " + level + " draft")
-                # A response without an explicit empty error list is incomplete.
-                # VALIDATED alone is not proof that there are no active errors.
-                if row.get("validation_status") != "VALIDATED" or not isinstance(active_errors, list):
+                # Meta may omit the nullable error collection after explicitly validating a fragment.
+                # If it returns the field, require a list; non-empty lists and HAS_ERRORS stay terminal.
+                if (row.get("validation_status") != "VALIDATED"
+                        or (active_errors_present and not isinstance(active_errors, list))):
                     # Keep the accepted receipt. A retry reads this exact
                     # fragment through the original intent, without POST replay.
                     raise fail("VALIDATION_PENDING", "Meta has not confirmed validation of the " + level + " draft; resume its saved read", True)
@@ -119,7 +121,7 @@ class AdsManagerDraftPublisher:
                     "ad_object_id": objects[level], "fragment_saved": True,
                     "relationships_confirmed": True, "editor_verified": False,
                     "meta_validation_status": row.get("validation_status"),
-                    "active_errors_observed": True})
+                    "active_errors_observed": active_errors_present})
                 fragments.append(fragment_id);parent_id = objects[level]
             if draft_only:
                 return {"status": "SUCCESS", "draft_id": draft_id, "fragment_ids": fragments,

@@ -849,7 +849,7 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.store.retry_failed(
             job_id,allow_business_login_gate_profile_ids={'27'}),0)
 
-    def _seed_profile28_saved_campaign_readback_mismatch(self, *, extra_child=False):
+    def _seed_profile28_saved_campaign_readback_mismatch(self, *, extra_child=False, attempt=1, error_code='PRIVATE_ADS_DRAFT_READ_SPEC_MISMATCH'):
         now = int(time.time())
         job_id = '64ad97e3bd4f4c2ba744eda37763c962'
         item_id = '0ec5cb5d0fec418abddb33adc4a7b370'
@@ -911,16 +911,16 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
                     id,job_id,profile_id,status,error_code,error_message,retryable,attempt,
                     created_at,updated_at
                 ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
-                (item_id, job_id, '28', 'FAILED', 'PRIVATE_ADS_DRAFT_READ_SPEC_MISMATCH',
-                 'Meta campaign readback differed before reviewed defaults were accepted', 0, 1, now, now),
+                (item_id, job_id, '28', 'FAILED', error_code,
+                 'Saved campaign readback is eligible only after exact live validation proof', 0, attempt, now, now),
             )
             con.execute(
                 """INSERT INTO job_tasks(
                     id,item_id,position,action,payload_json,idempotency_key,status,attempt,
                     error_code,error_message,retryable,created_at,updated_at
                 ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (task_id, item_id, 0, 'private_launch', json.dumps(payload), launch_key, 'FAILED', 1,
-                 'PRIVATE_ADS_DRAFT_READ_SPEC_MISMATCH', 'Campaign settings did not match before reviewed defaults', 0,
+                (task_id, item_id, 0, 'private_launch', json.dumps(payload), launch_key, 'FAILED', attempt,
+                 error_code, 'Saved campaign readback is eligible only after exact live validation proof', 0,
                  now, now),
             )
             con.execute(
@@ -982,6 +982,36 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.store.retry_failed(
             job_id, allow_saved_campaign_readback_retry_item_ids={item_id}
         ), 0)
+
+    async def test_profile28_validated_campaign_pending_retries_once(self):
+        job_id, item_id = self._seed_profile28_saved_campaign_readback_mismatch(
+            attempt=2, error_code='PRIVATE_ADS_DRAFT_VALIDATION_PENDING'
+        )
+        view = await self.store.job_view(job_id)
+        self.assertTrue(await self.store.private_launch_saved_campaign_retry_available(
+            job_id, view['items'][0]
+        ))
+        self.assertEqual(await self.store.retry_failed(
+            job_id, allow_saved_campaign_readback_retry_item_ids={item_id}
+        ), 1)
+        self.assertEqual((await self.store.item(item_id))['status'], 'QUEUED')
+        self.assertEqual((await self.store.tasks(item_id))[0]['status'], 'QUEUED')
+        self.assertEqual(await self.store.retry_failed(
+            job_id, allow_saved_campaign_readback_retry_item_ids={item_id}
+        ), 0)
+
+    async def test_profile28_validated_campaign_retry_rejects_later_attempt(self):
+        job_id, item_id = self._seed_profile28_saved_campaign_readback_mismatch(
+            attempt=3, error_code='PRIVATE_ADS_DRAFT_VALIDATION_PENDING'
+        )
+        view = await self.store.job_view(job_id)
+        self.assertFalse(await self.store.private_launch_saved_campaign_retry_available(
+            job_id, view['items'][0]
+        ))
+        self.assertEqual(await self.store.retry_failed(
+            job_id, allow_saved_campaign_readback_retry_item_ids={item_id}
+        ), 0)
+        self.assertEqual((await self.store.item(item_id))['status'], 'FAILED')
 
     async def test_profile28_campaign_readback_resume_rejects_child_create(self):
         job_id, item_id = self._seed_profile28_saved_campaign_readback_mismatch(extra_child=True)

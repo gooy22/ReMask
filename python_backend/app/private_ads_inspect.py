@@ -84,7 +84,7 @@ def validation_diagnostic(value, *, observed):
                     walk(decoded, key, depth + 1)
 
     walk(value)
-    return {"observed": observed, "has_errors": bool(value),
+    return {"observed": observed, "is_list": isinstance(value, list), "has_errors": bool(value),
         "codes": [{"field": key, "value": number} for key, number in sorted(codes)],
         "terms": sorted(terms), "field_names": sorted(names), "truncated": truncated}
 
