@@ -228,11 +228,15 @@ $('adAccount')?.addEventListener('change',()=>{
     const profile=state.profile,account=selectedAccountIds()[0];
     const status=remaskPageStatus();
     status.textContent='Загружаем страницы выбранного РК…';
+    const selectionIsCurrent=()=>profile===state.profile && selectedAccountIds()[0]===account;
+    const selectionWasCleared=()=>profile===state.profile && selectedAccountIds().length===0;
     loadPages().then(()=>{
-        if(profile===state.profile && selectedAccountIds()[0]===account) status.textContent='';
+        if(selectionIsCurrent() || selectionWasCleared()) status.textContent='';
     }).catch((error)=>{
-        if(profile===state.profile && selectedAccountIds()[0]===account)
+        if(selectionIsCurrent())
             status.textContent=remaskPrivatePageReadFailure(error,profile,account);
+        else if(selectionWasCleared())
+            status.textContent='';
     });
 });
 
