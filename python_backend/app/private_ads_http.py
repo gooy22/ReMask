@@ -1254,25 +1254,35 @@ class AdsManagerPrivateHttp:
                                 parser.values['lsd'].add(node['lsd'])
                 response_fields.append((label, parser.values))
             checksum_source = "document" if document else "gate"
-            if sprinkle_document and not document and not configs["SprinkleConfig"]:
-                # Prefer checksum metadata supplied with this current gate response.
-                # If absent, use config from the selected profile's verified bootstrap.
-                profile_sprinkle = getattr(bootstrap, "sprinkle_config", {})
-                profile_version = (
-                    profile_sprinkle.get("version")
-                    if isinstance(profile_sprinkle, dict) else None
-                )
-                if (
-                    bootstrap_source_is_document
-                    and form.get("fb_dtsg") == bootstrap_fb_dtsg
-                    and isinstance(profile_sprinkle, dict)
-                    and profile_sprinkle.get("param_name") == "jazoest"
-                    and type(profile_sprinkle.get("should_randomize")) is bool
-                    and isinstance(profile_version, (str, int))
-                    and str(profile_version).isdigit()
-                ):
-                    configs["SprinkleConfig"].append(profile_sprinkle)
-                    checksum_source = "profile_bootstrap_sprinkle_config"
+            gate_field_sets = [
+                fields for label, fields in response_fields if label == "gate"
+            ]
+            gate_dtsg_unique = (
+                len(gate_field_sets) == 1
+                and len(gate_field_sets[0]["fb_dtsg"]) == 1
+            )
+            if sprinkle_document and not document:
+                if not configs["SprinkleConfig"] or not gate_dtsg_unique:
+                    # A gate checksum is usable only with that gate's own unique
+                    # DTSG. Otherwise bind the checksum to the selected profile's
+                    # independently verified bootstrap document and token.
+                    configs["SprinkleConfig"] = []
+                    profile_sprinkle = getattr(bootstrap, "sprinkle_config", {})
+                    profile_version = (
+                        profile_sprinkle.get("version")
+                        if isinstance(profile_sprinkle, dict) else None
+                    )
+                    if (
+                        bootstrap_source_is_document
+                        and form.get("fb_dtsg") == bootstrap_fb_dtsg
+                        and isinstance(profile_sprinkle, dict)
+                        and profile_sprinkle.get("param_name") == "jazoest"
+                        and type(profile_sprinkle.get("should_randomize")) is bool
+                        and isinstance(profile_version, (str, int))
+                        and str(profile_version).isdigit()
+                    ):
+                        configs["SprinkleConfig"].append(profile_sprinkle)
+                        checksum_source = "profile_bootstrap_sprinkle_config"
             for module, field in (('DTSGInitialData','fb_dtsg'),('DTSGInitData','fb_dtsg'),('LSD','lsd')):
                 if configs[module]:
                     value = _unique(configs[module], 'SESSION_RENEWAL_CONFIG_UNAVAILABLE').get('token')
@@ -1346,12 +1356,14 @@ class AdsManagerPrivateHttp:
                     form["jazoest"] = bootstrap_jazoest
                     checksum_source = "profile_bootstrap_pair"
             log.info("ads_session_renewal_checksum profile=%s source=%s config_present=%s "
-                "response_pair_present=%s bootstrap_pair_present=%s bootstrap_dtsg_present=%s "
-                "bootstrap_jazoest_numeric=%s bootstrap_source_document=%s bootstrap_dtsg_matches=%s "
-                "bootstrap_sprinkle_config_present=%s checksum_marker_present=%s checksum_present=%s",
+                "response_pair_present=%s gate_dtsg_unique=%s bootstrap_pair_present=%s "
+                "bootstrap_dtsg_present=%s bootstrap_jazoest_numeric=%s bootstrap_source_document=%s "
+                "bootstrap_dtsg_matches=%s bootstrap_sprinkle_config_present=%s "
+                "checksum_marker_present=%s checksum_present=%s",
                 self._profile_name, checksum_source, bool(configs['SprinkleConfig']),
                 any(len(fields['fb_dtsg']) == len(fields['jazoest']) == 1
                     for _, fields in response_fields),
+                gate_dtsg_unique,
                 bootstrap_pair_present,
                 bool(getattr(bootstrap, "fb_dtsg", "")),
                 bool(re.fullmatch(r"[0-9]{3,12}", str(getattr(bootstrap, "jazoest", "") or ""))),
