@@ -2203,6 +2203,15 @@ class JobStore:
                 "SELECT id,profile_id,retryable,error_code,attempt FROM job_items "
                 "WHERE job_id=? AND status='FAILED'", (job_id,),
             ).fetchall()
+            # This exact saved campaign can only re-enter the queue through its
+            # explicit readback recovery path. Do not let a stale generic retryable
+            # bit bypass the route's fresh Meta preflight.
+            saved_campaign_subject_ids = {
+                str(row['id']) for row in rows
+                if job_id == '64ad97e3bd4f4c2ba744eda37763c962'
+                and str(row['id']) == '0ec5cb5d0fec418abddb33adc4a7b370'
+                and str(row['profile_id'] or '') == '28'
+            }
             terminal_status_by_profile={
                 str(row['profile_id'] or ''):str(row['status'] or '').upper()
                 for row in con.execute(
@@ -2287,7 +2296,7 @@ class JobStore:
                 for row in rows
                 if (
                     (str(row['profile_id'] or '') not in excluded
-                     and (bool(row['retryable']) or str(row['id']) in recovery_ids
+                     and (bool(row['retryable']) and str(row['id']) not in saved_campaign_subject_ids or str(row['id']) in recovery_ids
                          or str(row['id']) in private_launch_recovery_ids
                          or str(row['id']) in saved_campaign_readback_recovery_ids
                          or row['error_code'] in {
