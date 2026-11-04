@@ -65,7 +65,7 @@ def safe_nested_shape(value, *, depth=0, budget=None):
 
 
 _SAFE_REVIEWED_ENUM_FIELDS = frozenset({"automation_unified_campaign_type", "ad_creation_package_config"})
-_SAFE_REVIEWED_ENUM_VALUE = re.compile(r"[A-Za-z0-9_:-]{1,64}\\Z")
+_SAFE_REVIEWED_ENUM_VALUE = re.compile(r"[A-Za-z0-9_:-]{1,64}\Z")
 
 
 def safe_reviewed_value_shape(field, value):
