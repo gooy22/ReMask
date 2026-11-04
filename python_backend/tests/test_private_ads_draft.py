@@ -755,34 +755,46 @@ class PublisherTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(self.client.posts), 3)
         self.assertFalse(any(path.endswith('/publish') for path, _ in self.client.posts))
 
-    async def test_validated_fragment_without_complete_error_readback_never_advances(self):
-        original = self.client.get
-        shape = ["missing"]
-        async def read(path, params):
-            row = await original(path, params)
-            if row.get("ad_object_type") == "ad_set":
-                if shape[0] == "missing":
-                    row.pop("active_errors", None)
-                elif shape[0] == "null":
-                    row["active_errors"] = None
-                elif shape[0] == "malformed":
-                    row["active_errors"] = {"error_code": 1815857}
-            return row
-        self.client.get = read
-        for value in ("missing", "null", "malformed"):
-            shape[0] = value
-            with self.subTest(error_shape=value), self.assertRaises(ProvisioningError) as caught:
-                await self.publisher.run(self.client, name="source-flow", levels=self.levels,
-                                         verify_objects=self.verify, draft_only=True)
-            self.assertEqual(caught.exception.code, "PRIVATE_ADS_DRAFT_VALIDATION_PENDING")
-            self.assertEqual(len(self.client.posts), 3, "Incomplete proof cannot cause another POST")
-            self.assertEqual(set(self.client.fragments), {"111111", "222222"})
-        shape[0] = "complete"
-        result = await self.publisher.run(self.client, name="source-flow", levels=self.levels,
-                                          verify_objects=self.verify, draft_only=True)
+    async def test_validated_fragment_with_omitted_error_list_advances_safely(self):
+        async def make_case(name, error_shape):
+            state = PrivateLaunchStateStore(Path(self.tmp.name) / ("validation-" + name + ".sqlite"))
+            await state.init()
+            sender = AdsManagerSubmitter(state, launch_key="validation-" + name,
+                profile_id="19", business_id="222222", account_id="111111",
+                actor_id="123456", launch_fingerprint="fixed-inputs", source_digest="source")
+            publisher = AdsManagerDraftPublisher(sender)
+            client = DraftClient()
+            original = client.get
+            async def read(path, params):
+                row = await original(path, params)
+                if row.get("ad_object_type") == "ad_set":
+                    if error_shape == "missing":
+                        row.pop("active_errors", None)
+                    elif error_shape == "null":
+                        row["active_errors"] = None
+                    elif error_shape == "malformed":
+                        row["active_errors"] = {"error_code": 1815857}
+                return row
+            client.get = read
+            return publisher, client
+
+        publisher, client = await make_case("missing", "missing")
+        result = await publisher.run(client, name="source-flow", levels=self.levels,
+                                     verify_objects=self.verify, draft_only=True)
         self.assertEqual(result["status"], "SUCCESS")
-        self.assertEqual(len(self.client.posts), 4, "Resume may only create the not-yet-submitted Ad")
-        self.assertFalse(any(path.endswith("/publish") for path, _ in self.client.posts))
+        self.assertEqual(len(client.posts), 4, "A validated saved hierarchy may create only the missing Ad")
+        self.assertEqual(set(client.fragments), {"111111", "222222", "333333"})
+        self.assertFalse(any(path.endswith("/publish") for path, _ in client.posts))
+
+        for error_shape in ("null", "malformed"):
+            publisher, client = await make_case(error_shape, error_shape)
+            with self.subTest(error_shape=error_shape), self.assertRaises(ProvisioningError) as caught:
+                await publisher.run(client, name="source-flow", levels=self.levels,
+                                    verify_objects=self.verify, draft_only=True)
+            self.assertEqual(caught.exception.code, "PRIVATE_ADS_DRAFT_VALIDATION_PENDING")
+            self.assertEqual(len(client.posts), 3, "Invalid error evidence cannot create another fragment")
+            self.assertEqual(set(client.fragments), {"111111", "222222"})
+            self.assertFalse(any(path.endswith("/publish") for path, _ in client.posts))
 
     async def test_profile38_bid_amount_error_is_retained_without_bid_or_objective_rewrite(self):
         self.levels['campaign'].update(objective='OUTCOME_TRAFFIC', daily_budget=500)
