@@ -174,7 +174,7 @@ class InstalledLaunchTests(unittest.TestCase):
             if path == 'scripts/launch.js':
                 body += b'\nwindow.fixtureSingleTarget=(account,business="654321")=>{state.profile="20";state.targets=[];state.accounts=[{id:account,business_id:business}];$("adAccount").innerHTML=`<option value="${account}" selected>${account}</option>`;$("adAccount").disabled=false;$("adAccount").dispatchEvent(new Event("change",{bubbles:true}));};'
                 body += b'\nwindow.fixtureBulkTargets=()=>{state.targets=[{profile:"20",account_id:"act_123456",business_id:"654321"},{profile:"20",account_id:"act_234567",business_id:"765432"}];state.profile="20";state.targetBindingAssets.pages={};$("adAccount").innerHTML=state.targets.map(t=>`<option value="${t.account_id}" selected>${t.account_id}</option>`).join("");renderTargetBindings();};'
-                body += b'\nwindow.fixtureLaunch={payload:()=>buildPayload(),effective:()=>remaskApplySavedMetaBuilderToPayload(buildPayload()),capture:()=>bundleFormState(),restore:applyBundleData,config:loadLaunchConfig,ready:()=>Boolean(state.launchConfig),geo:()=>{state.geo=[{type:"country",key:"US",country_code:"US",name:"United States"}];$("geoQuery").dispatchEvent(new Event("change",{bubbles:true}));},instagramTargets:()=>{state.targets=[{profile:"20",account_id:"act_123456",business_id:"654321"},{profile:"21",account_id:"act_234567",business_id:"765432"}];state.profile="20";state.targetBindingAssets.pages={"20|123456|DRAFT":[{id:"345678",instagram_business_account:{id:"456789"}}],"21|234567|DRAFT":[{id:"567890",instagram_business_account:{id:"678901"}}]};$("adAccount").innerHTML=state.targets.map(t=>`<option value="${t.account_id}" selected>${t.account_id}</option>`).join("");$("creativeFormat").value="INSTAGRAM_POST";renderTargetBindings();},reloadPages:force=>loadPages(force),binding:account=>({...bindingFor(account)}),preparedRows:()=>remaskPrivatePrepareConfig().then(config=>config._targets)};'
+                body += b'\nwindow.fixtureLaunch={payload:()=>buildPayload(),effective:()=>remaskApplySavedMetaBuilderToPayload(buildPayload()),capture:()=>bundleFormState(),restore:applyBundleData,config:loadLaunchConfig,ready:()=>Boolean(state.launchConfig),geo:()=>{state.geo=[{type:"country",key:"US",country_code:"US",name:"United States"}];$("geoQuery").dispatchEvent(new Event("change",{bubbles:true}));},instagramTargets:()=>{state.targets=[{profile:"20",account_id:"act_123456",business_id:"654321"},{profile:"21",account_id:"act_234567",business_id:"765432"}];state.profile="20";state.targetBindingAssets.pages={"20|123456|DRAFT":[{id:"345678",instagram_business_account:{id:"456789"}}],"21|234567|DRAFT":[{id:"567890",instagram_business_account:{id:"678901"}}]};$("adAccount").innerHTML=state.targets.map(t=>`<option value="${t.account_id}" selected>${t.account_id}</option>`).join("");$("creativeFormat").value="INSTAGRAM_POST";renderTargetBindings();},reloadPages:force=>loadPages(force),pageReadStatus:()=>remaskPageStatus().textContent,clearAccountSelection:()=>{state.accounts=[];$("adAccount").innerHTML="";},binding:account=>({...bindingFor(account)}),preparedRows:()=>remaskPrivatePrepareConfig().then(config=>config._targets)};'
             route.fulfill(body=body, content_type='application/javascript' if path.endswith('.js') else 'text/css'); return
         data = {}
         status = 200
@@ -203,7 +203,7 @@ class InstalledLaunchTests(unittest.TestCase):
             if resource=='pages':
                 if self._testMethodName=='test_page_access_failure_keeps_profile_pages_for_local_drafts' and account:
                     route.fulfill(status=409,json={'ok':False,'error':{'message':'Page access not confirmed'}});return
-                if self._testMethodName=='test_old_page_read_cannot_overwrite_new_selected_account' and account=='act_123456':
+                if self._testMethodName in {'test_old_page_read_cannot_overwrite_new_selected_account','test_stale_page_loading_clears_when_account_selection_is_reset'} and account=='act_123456':
                     self.waiting_pages.append(route);return
                 data={'data':[{'id':'555555' if account.removeprefix('act_')=='111111' else ('345678' if account.removeprefix('act_')=='123456' else '567890'),'name':'Scoped Page'}]}
             else:data={'data':[]}
@@ -798,6 +798,14 @@ class InstalledLaunchTests(unittest.TestCase):
         pages=[fields for fields in self.asset_requests if fields['resource']==['pages']]
         self.assertEqual(pages[-1].get('execution_mode'),['PUBLISH'])
         self.assertEqual(pages[-1]['account_id'],['act_123456'])
+
+    def test_stale_page_loading_clears_when_account_selection_is_reset(self):
+        self.page.evaluate('fixtureSingleTarget("act_123456")')
+        self.page.wait_for_function('fixtureLaunch.pageReadStatus().startsWith("Загружаем страницы")')
+        self.assertEqual(len(self.waiting_pages),1)
+        self.page.evaluate('fixtureLaunch.clearAccountSelection()')
+        self.waiting_pages.pop().fulfill(status=409,json={'ok':False,'error':{'message':'Page access not confirmed'}})
+        self.page.wait_for_function('fixtureLaunch.pageReadStatus() === ""')
 
     def test_workspace_bulk_pages_use_exact_rk_and_mode_on_the_same_profile(self):
         self.page.wait_for_function('fixtureLaunch.ready()')
