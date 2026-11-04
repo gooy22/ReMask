@@ -222,11 +222,11 @@ if (strpos($js, 'REMASK_PRIVATE_SAVED_RETRY_V1') === false) {
                 job?.id === 'a7ab6547d74b4ceab021fa9a6cfe0666' &&
                 jobId === job.id && job?.status === 'FAILED' && items.length === 1 &&
                 item?.id === 'c35e8eb06b654b07b7f8be3acdd5e993' &&
-                item?.profile_id === '27' && item?.status === 'FAILED' && item?.attempt === 3 &&
+                item?.profile_id === '27' && item?.status === 'FAILED' && item?.attempt === 4 &&
                 item?.error_code === 'PRIVATE_ADS_DRAFT_META_LOGIN_REQUIRED' &&
                 tasks.length === 1 && task?.id === '6b0e78265c304420a291914fc49f04ed' &&
                 task?.action === 'private_launch' && task?.status === 'FAILED' &&
-                task?.attempt === 3 && task?.error_code === 'PRIVATE_ADS_DRAFT_META_LOGIN_REQUIRED' &&
+                task?.attempt === 4 && task?.error_code === 'PRIVATE_ADS_DRAFT_META_LOGIN_REQUIRED' &&
                 payload?.business_id === '1422264096661455' &&
                 payload?.ad_account_id === '120250306658010101' &&
                 payload?.page_id === '1458249004037430' &&
