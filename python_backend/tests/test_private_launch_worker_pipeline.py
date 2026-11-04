@@ -130,7 +130,8 @@ class NativeWorkerPipelineTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(response.status_code,200,response.text)
                 view = response.json()
                 if view['status'] not in {'QUEUED','RUNNING'}:
-                    await self.pool.queue.join()
+                    while self.pool.queue.active:
+                        await asyncio.sleep(.005)
                     return view
                 await asyncio.sleep(.005)
         return await asyncio.wait_for(wait(),10)
