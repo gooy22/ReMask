@@ -79,8 +79,9 @@ def safe_reviewed_value_shape(field, value):
             decoded = json.loads(value)
         except (ValueError, RecursionError):
             return result
-    if (decoded is None or type(decoded) in {bool, int}
-            or (isinstance(decoded, str) and _SAFE_REVIEWED_ENUM_VALUE.fullmatch(decoded))):
+    if isinstance(decoded, str) and _SAFE_REVIEWED_ENUM_VALUE.fullmatch(decoded):
+        result["json_scalar"] = {"type": "str", "length": len(decoded), "value": decoded}
+    elif decoded is None or type(decoded) in {bool, int}:
         result["json_scalar"] = scalar_shape(decoded)
     return result
 
