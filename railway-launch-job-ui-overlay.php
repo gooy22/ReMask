@@ -251,7 +251,58 @@ if (strpos($js, 'REMASK_PRIVATE_SAVED_RETRY_V1') === false) {
                 base?.adset?.name === 'ReMask neutral test audience' && base?.adset?.status === 'PAUSED' &&
                 base?.ad?.status === 'PAUSED' &&
                 delivery?.campaign === 'PAUSED' && delivery?.adset === 'PAUSED' && delivery?.ad === 'PAUSED';
-            if (!exactProfile27Draft && !exactProfile28Draft) {
+            const exactProfile28RequestRejectedDraft =
+                job?.id === '64ad97e3bd4f4c2ba744eda37763c962' &&
+                jobId === job.id && job?.status === 'FAILED' && items.length === 1 &&
+                item?.id === '0ec5cb5d0fec418abddb33adc4a7b370' &&
+                item?.profile_id === '28' && item?.status === 'FAILED' && item?.attempt === 3 &&
+                item?.error_code === 'PRIVATE_ADS_DRAFT_REQUEST_REJECTED' &&
+                tasks.length === 1 && task?.id === 'd12b87d200984297bea37bca6b90eb7e' &&
+                task?.action === 'private_launch' && task?.status === 'FAILED' &&
+                task?.attempt === 3 && task?.error_code === 'PRIVATE_ADS_DRAFT_REQUEST_REJECTED' &&
+                payload?.business_id === '1889034722540874' &&
+                payload?.ad_account_id === '52569470944909' &&
+                payload?.page_id === '1463070456885337' &&
+                base?.execution_mode === 'DRAFT' &&
+                base?.campaign?.name === 'CS2 Match' &&
+                base?.campaign?.objective === 'OUTCOME_TRAFFIC' &&
+                base?.campaign?.buying_type === 'AUCTION' &&
+                Array.isArray(base?.campaign?.special_ad_categories) &&
+                base.campaign.special_ad_categories.length === 0 &&
+                base?.campaign?.status === 'PAUSED' &&
+                base?.adset?.name === 'ReMask neutral test audience' &&
+                base?.adset?.optimization_goal === 'LINK_CLICKS' &&
+                base?.adset?.billing_event === 'IMPRESSIONS' &&
+                base?.adset?.bid_strategy === 'LOWEST_COST_WITHOUT_CAP' &&
+                base?.adset?.daily_budget === 500 &&
+                base?.adset?.destination_type === 'WEBSITE' &&
+                base?.adset?.age_min === 23 && base?.adset?.age_max === 33 &&
+                Array.isArray(base?.adset?.targeting?.geo_locations?.countries) &&
+                base.adset.targeting.geo_locations.countries.length === 1 &&
+                base.adset.targeting.geo_locations.countries[0] === 'UA' &&
+                Array.isArray(base?.adset?.targeting?.locales) &&
+                base.adset.targeting.locales.length === 1 &&
+                base.adset.targeting.locales[0] === 24 &&
+                Array.isArray(base?.adset?.targeting?.flexible_spec) &&
+                base.adset.targeting.flexible_spec.length === 1 &&
+                Array.isArray(base.adset.targeting.flexible_spec[0]?.interests) &&
+                base.adset.targeting.flexible_spec[0].interests.length === 1 &&
+                base.adset.targeting.flexible_spec[0].interests[0]?.id === '6004160395895' &&
+                base.adset.targeting.flexible_spec[0].interests[0]?.name === 'Travel (travel & tourism)' &&
+                base?.creative?.name === 'ReMask neutral test creative' &&
+                base?.creative?.page_id === '1463070456885337' &&
+                base?.creative?.message === 'Neutral software verification draft. No advertising delivery is intended.' &&
+                base?.creative?.headline === 'Neutral draft verification' &&
+                base?.creative?.description === '' &&
+                base?.creative?.link === 'https://example.com/' &&
+                base?.creative?.call_to_action === 'LEARN_MORE' &&
+                base?.creative?.url_tags === '' &&
+                base?.creative?.format === 'SINGLE' &&
+                base?.creative?.media_library_id === 'm-6ae276ad78cfba62004b533c' &&
+                base?.ad?.name === 'ReMask neutral test ad' &&
+                base?.ad?.status === 'PAUSED' &&
+                delivery?.campaign === 'PAUSED' && delivery?.adset === 'PAUSED' && delivery?.ad === 'PAUSED';
+            if (!exactProfile27Draft && !exactProfile28Draft && !exactProfile28RequestRejectedDraft) {
                 show($('launchResult'), 'Сохранённая задача изменилась; повтор не отправлен.', 'failed');
                 return;
             }
