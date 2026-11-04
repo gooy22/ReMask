@@ -1179,15 +1179,29 @@ async function remaskPrivateCreateJob() {
     try{
         const config=await remaskPrivatePrepareConfig();
         remaskPrivateAssertCurrentConfig(config);
-        const reviewed=await remaskPrivateReviewConfig(config,{render:true,
-            assertCurrent:()=>remaskPrivateAssertCurrentConfig(config)});
-        remaskPrivateAssertCurrentConfig(config);
+        const executionMode=remaskPrivateExecutionMode(config);
+        let reviewed;
+        if(executionMode==='DRAFT'){
+            // Draft jobs run the authoritative account/page/session preflight in the worker
+            // immediately before CREATE. Do not block the queue on a duplicate browser-side Review.
+            const contracts=await remaskPrivateContractStatus({render:true,config});
+            remaskPrivateAssertCurrentConfig(config);
+            if(!contracts.ready){
+                const missing=contracts.missing.map(row=>row.step).join(', ');
+                throw new Error('Модуль публикации не готов ('+missing+').');
+            }
+            reviewed=remaskPrivateTargetRows(config).map(row=>({row,status:'QUEUED',review_attempted:false}));
+        }else{
+            reviewed=await remaskPrivateReviewConfig(config,{render:true,
+                assertCurrent:()=>remaskPrivateAssertCurrentConfig(config)});
+            remaskPrivateAssertCurrentConfig(config);
+            const blocked=reviewed.filter(entry=>entry.review?.ready!==true);
+            if(blocked.length)throw new Error('Проверка не пройдена для РК '+
+                blocked.map(entry=>entry.row.ad_account_id+': '+entry.error).join(' · ')+'.');
+        }
         if(!reviewed?.length)return null;
-        const blocked=reviewed.filter(entry=>entry.review?.ready!==true);
-        if(blocked.length)throw new Error('Черновик не сохранён для РК '+
-            blocked.map(entry=>entry.row.ad_account_id+': '+entry.error).join(' · ')+'.');
         const planned=remaskPrivateJobRequest(config,reviewed);
-        remaskPrivateShow(remaskPrivateExecutionMode()==='DRAFT'?'Сохраняю черновик…':'Отправляю рекламу…');
+        remaskPrivateShow(executionMode==='DRAFT'?'Сохраняю черновик…':'Отправляю рекламу…');
         submitting=true;
         const accepted=await remaskPrivateWorker(planned.request);
         const jobId=String(accepted?.job?.job_id||'').trim();
