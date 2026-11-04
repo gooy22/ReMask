@@ -577,6 +577,90 @@ class PublisherTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any(path.endswith('/publish') for path, _params in self.client.posts))
         verify.assert_not_awaited()
 
+    async def test_paused_pending_fragments_with_empty_errors_can_finish_a_draft(self):
+        original = self.client.get
+        async def pending_parents(path, params):
+            row = await original(path, params)
+            if row.get('ad_object_type') in {'campaign', 'ad_set'}:
+                row['validation_status'] = 'PENDING'
+                row['active_errors'] = []
+            return row
+        self.client.get = pending_parents
+        result = await self.publisher.run(self.client, name='source-flow', levels=self.levels,
+            verify_objects=self.verify, draft_only=True)
+        self.assertEqual(result['status'], 'SUCCESS')
+        self.assertFalse(result['published'])
+        self.assertEqual(result['meta_validation_pending_levels'], ['campaign', 'ad_set'])
+        self.assertEqual(len(self.client.posts), 4)
+        self.assertFalse(any(path.endswith('/publish') for path, _ in self.client.posts))
+
+    async def test_pending_campaign_without_explicit_empty_errors_stops_before_child(self):
+        original = self.client.get
+        async def unknown_errors(path, params):
+            row = await original(path, params)
+            if row.get('ad_object_type') == 'campaign':
+                row['validation_status'] = 'PENDING'
+                row.pop('active_errors', None)
+            return row
+        self.client.get = unknown_errors
+        with self.assertRaises(ProvisioningError) as caught:
+            await self.publisher.run(self.client, name='source-flow', levels=self.levels,
+                verify_objects=self.verify, draft_only=True)
+        self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_VALIDATION_PENDING')
+        self.assertEqual(len(self.client.posts), 2)
+        self.assertFalse(any(path.endswith('/publish') for path, _ in self.client.posts))
+
+    async def test_exact_fragment_read_rejection_recovers_one_paused_campaign_without_recreate(self):
+        from app.private_ads_http import AdsManagerResponseError
+        original = self.client.get
+        calls = []
+        async def read(path, params):
+            calls.append(path)
+            if path == '/addraftfragment_111111':
+                raise AdsManagerResponseError({
+                    'http_status': 200, 'code': 100, 'error_subcode': 33,
+                    'type': 'GraphMethodException',
+                })
+            if path == '/act_111111/campaigns':
+                self.assertEqual(params['limit'], 1000)
+                return {'data': [{
+                    'id': '777771', 'account_id': '111111',
+                    'name': 'campaign', 'status': 'PAUSED',
+                }]}
+            return await original(path, params)
+        self.client.get = read
+        result = await self.publisher.run(self.client, name='source-flow', levels=self.levels,
+            verify_objects=self.verify, draft_only=True)
+        self.assertEqual(result['status'], 'SUCCESS')
+        self.assertEqual(result['account_object_read_fallback_levels'], ['campaign'])
+        self.assertFalse(result['fragment_storage_verified'])
+        self.assertEqual(len(self.client.posts), 4)
+        self.assertEqual(self.client.posts[2][1]['parent_ad_object_id'], '777771')
+        self.assertFalse(any(path.endswith('/publish') for path, _ in self.client.posts))
+        self.assertEqual(calls.count('/act_111111/campaigns'), 1)
+
+    async def test_duplicate_campaign_name_rejects_fallback_before_ad_set_create(self):
+        from app.private_ads_http import AdsManagerResponseError
+        original = self.client.get
+        async def read(path, params):
+            if path == '/addraftfragment_111111':
+                raise AdsManagerResponseError({
+                    'http_status': 200, 'code': 100, 'error_subcode': 33,
+                    'type': 'GraphMethodException',
+                })
+            if path == '/act_111111/campaigns':
+                row = {'id': '777771', 'account_id': '111111',
+                       'name': 'campaign', 'status': 'PAUSED'}
+                return {'data': [row, {**row, 'id': '777772'}]}
+            return await original(path, params)
+        self.client.get = read
+        with self.assertRaises(ProvisioningError) as caught:
+            await self.publisher.run(self.client, name='source-flow', levels=self.levels,
+                verify_objects=self.verify, draft_only=True)
+        self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_READ_RELATION_MISMATCH')
+        self.assertEqual(len(self.client.posts), 2)
+        self.assertFalse(any(path.endswith('/publish') for path, _ in self.client.posts))
+
     async def test_account_parent_on_child_is_rejected_before_next_write(self):
         original = self.client.get
         async def account_parent(path, params):
