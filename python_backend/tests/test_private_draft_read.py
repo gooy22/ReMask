@@ -38,6 +38,56 @@ class DraftReadDiagnosticTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(read['observed']['parent_ad_object_id']['value'], '0')
         self.assertTrue(read['settings_match'])
 
+    async def test_exact_unsupported_fragment_read_uses_only_unique_paused_account_object(self):
+        from app.private_ads_http import AdsManagerResponseError
+        target = {'ad_account_id':'111111', 'business_id':'222222'}
+        values = {'name':'fixture campaign', 'status':'PAUSED'}
+        intent = (target, 'saved-key', 'fingerprint', '333333', 'source', '444444',
+                  [('campaign', '555555', values, None)], {'stage':'FRAGMENT_AD_SET'})
+        client = SimpleNamespace(read_only=False, context=SimpleNamespace(account_id='111111'),
+            post=AsyncMock(side_effect=AssertionError('No POST')))
+        calls = []
+        async def get(path, params):
+            calls.append(path)
+            if path == '/addraft_444444':
+                return {'id':'444444', 'account_id':'111111',
+                    'author_id':'333333', 'ownership_type':'USER'}
+            if path == '/addraftfragment_555555':
+                raise AdsManagerResponseError({
+                    'http_status':200, 'code':100, 'error_subcode':33,
+                    'type':'GraphMethodException',
+                })
+            if path == '/act_111111/campaigns':
+                return {'data':[{'id':'666666', 'account_id':'111111',
+                    'name':'fixture campaign', 'status':'PAUSED'}]}
+            raise AssertionError('Unexpected read path: '+path)
+        client.get = AsyncMock(side_effect=get)
+        session = SimpleNamespace(facebook_web=AsyncMock(return_value=object()))
+        open_client = AsyncMock(return_value=client)
+        with patch('app.private_draft_read_diagnostic.saved_draft_intent',
+                new=AsyncMock(return_value=intent)), \
+                patch('app.private_draft_read_diagnostic.AdsManagerPrivateHttp.open', new=open_client):
+            result = await read_diagnostic(object(), profile_id='4', context=object(),
+                session=session, payload={})
+        client.post.assert_not_awaited()
+        self.assertTrue(client.read_only)
+        self.assertEqual(calls, ['/addraft_444444', '/addraftfragment_555555',
+                                 '/act_111111/campaigns'])
+        proof = result['campaign_object_read']
+        self.assertEqual(proof['object_id'], '666666')
+        self.assertEqual(proof['source'], 'account_campaigns_read')
+        self.assertEqual(proof['fragment_id'], '555555')
+        self.assertEqual(proof['draft_id'], '444444')
+        self.assertTrue(proof['settings_match'])
+        self.assertEqual(proof['fragment_read_error'], {
+            'http_status':200, 'code':100, 'error_subcode':33,
+            'type':'GraphMethodException',
+        })
+        self.assertTrue(result['fragment_reads'][0]['relationships_match'])
+        self.assertTrue(result['fragment_reads'][0]['settings_match'])
+        self.assertEqual(result['advertising_mutation_posts'], 0)
+        self.assertFalse(result['persisted'])
+
     async def test_invalid_saved_binding_stops_before_opening_a_session(self):
         session = SimpleNamespace(facebook_web=AsyncMock())
         with patch('app.private_draft_read_diagnostic.saved_draft_intent',

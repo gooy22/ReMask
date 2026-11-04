@@ -11,9 +11,10 @@ import asyncio
 import time
 
 from .action_result import ActionResult
-from .private_ads_draft import (FRAGMENT_FIELDS, LEVELS, PUBLISH_FIELDS, fail,
+from .private_ads_draft import (LEVELS, PUBLISH_FIELDS, fail,
                                 fragment_params, fragment_parent_matches, fragment_values_match, identity, publication_receipt, publication_status, publish_params)
 from .private_launch_extensions import OperationKey
+from .private_ads_draft_fallback import read_fragment_with_account_object_fallback
 
 
 class AdsManagerDraftPublisher:
@@ -76,6 +77,7 @@ class AdsManagerDraftPublisher:
                 raise fail("READ_SCOPE_MISMATCH", "Draft identity or ownership is unconfirmed")
             await self._confirm("DRAFT", {"draft_id": draft_id})
             fragments, objects, parent_id = [], {}, None
+            account_fallback_levels, validation_pending_levels = [], []
             for level in LEVELS:
                 values = copy.deepcopy(levels[level])
                 if level == "ad_set":
@@ -90,7 +92,36 @@ class AdsManagerDraftPublisher:
                 fragment_id = receipt["fragment_id"]
                 if fragment_id in fragments:
                     raise fail("READ_RELATION_MISMATCH", "Draft hierarchy reused a fragment identity")
-                row = await client.get("/addraftfragment_" + fragment_id, {"fields": FRAGMENT_FIELDS})
+                observed = await read_fragment_with_account_object_fallback(
+                    client, account_id=scope["ad_account_id"], draft_id=draft_id,
+                    fragment_id=fragment_id, level=level, values=values,
+                    parent_id=parent_id, allow_fallback=draft_only)
+                fallback = observed["fallback"]
+                if fallback is not None:
+                    if (fallback.get("level") != level or fallback.get("draft_id") != draft_id
+                            or fallback.get("fragment_id") != fragment_id
+                            or fallback.get("account_id") != scope["ad_account_id"]
+                            or fallback.get("status") != "PAUSED"
+                            or fallback.get("settings_match") is not True
+                            or fallback.get("unique_name_match_count") != 1
+                            or fallback.get("pagination_complete") is not True):
+                        raise fail("READ_SCOPE_MISMATCH", "Account readback does not confirm the saved paused draft")
+                    objects[level] = identity(fallback.get("object_id"))
+                    if objects[level] in list(objects.values())[:-1]:
+                        raise fail("READ_RELATION_MISMATCH", "Draft levels have duplicate object identities")
+                    await self._confirm(operation, {"draft_id": draft_id, "fragment_id": fragment_id,
+                        "ad_object_id": objects[level], "fragment_saved": False,
+                        "relationships_confirmed": True, "editor_verified": False,
+                        "account_object_read_verified": True,
+                        "account_object_read_source": fallback.get("source"),
+                        "account_object_read_fields": fallback.get("checked_fields", []),
+                        "fragment_storage_verified": False, "validation_unobserved": True,
+                        "status": "PAUSED"})
+                    account_fallback_levels.append(level)
+                    fragments.append(fragment_id);parent_id = objects[level]
+                    continue
+
+                row = observed["row"]
                 self._account(row, scope["ad_account_id"])
                 if (row.get("id") != fragment_id or row.get("ad_draft_id") != draft_id
                         or row.get("ad_object_type") != level
@@ -101,19 +132,23 @@ class AdsManagerDraftPublisher:
                     raise fail("READ_SPEC_MISMATCH", "Saved draft settings differ from this Launch")
                 if row.get("status") == "ACTIVE":
                     raise fail("DRAFT_DELIVERY_UNSAFE", "Saved draft fragment reports active delivery")
-                # Meta can expose HAS_ERRORS before returning its error list.
-                # A stored fragment is not a settled, valid configuration.
+                # A parent fragment may remain PENDING until its child exists.
+                # Continue only when Meta explicitly returned an empty error list.
                 active_errors_present = "active_errors" in row
                 active_errors = row.get("active_errors")
                 if row.get("validation_status") == "HAS_ERRORS" or (isinstance(active_errors, list) and active_errors):
                     raise fail("VALIDATION_ERRORS", "Meta returned active validation errors for the " + level + " draft")
-                # Meta may omit the nullable error collection after explicitly validating a fragment.
-                # If it returns the field, require a list; non-empty lists and HAS_ERRORS stay terminal.
-                if (row.get("validation_status") != "VALIDATED"
+                validation_pending = (
+                    row.get("validation_status") == "PENDING"
+                    and active_errors_present
+                    and isinstance(active_errors, list)
+                    and not active_errors
+                )
+                if (row.get("validation_status") != "VALIDATED" and not validation_pending
                         or (active_errors_present and not isinstance(active_errors, list))):
-                    # Keep the accepted receipt. A retry reads this exact
-                    # fragment through the original intent, without POST replay.
                     raise fail("VALIDATION_PENDING", "Meta has not confirmed validation of the " + level + " draft; resume its saved read", True)
+                if validation_pending:
+                    validation_pending_levels.append(level)
                 objects[level] = identity(row.get("ad_object_id"))
                 if objects[level] in list(objects.values())[:-1]:
                     raise fail("READ_RELATION_MISMATCH", "Draft levels have duplicate object identities")
@@ -121,12 +156,18 @@ class AdsManagerDraftPublisher:
                     "ad_object_id": objects[level], "fragment_saved": True,
                     "relationships_confirmed": True, "editor_verified": False,
                     "meta_validation_status": row.get("validation_status"),
+                    "validation_pending": validation_pending,
                     "active_errors_observed": active_errors_present})
                 fragments.append(fragment_id);parent_id = objects[level]
             if draft_only:
                 return {"status": "SUCCESS", "draft_id": draft_id, "fragment_ids": fragments,
                     "draft_objects": objects, "draft_verified": True, "published": False,
-                    "fragment_storage_verified": True, "relationships_confirmed": True,
+                    "fragment_storage_verified": not account_fallback_levels,
+                    "account_object_read_fallback_levels": account_fallback_levels,
+                    "meta_validation_complete": not validation_pending_levels and not account_fallback_levels,
+                    "meta_validation_pending_levels": validation_pending_levels,
+                    "meta_validation_unobserved_levels": account_fallback_levels,
+                    "relationships_confirmed": True,
                     "editor_verified": False, "editor_state": "EDITOR_UNVERIFIED",
                     "verified": False, "delivery_running_verified": False, "browser_started": False,
                     "verification_source": "independent_private_ads_http",
