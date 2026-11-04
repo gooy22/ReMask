@@ -29,6 +29,41 @@ def scalar_shape(value):
     return result
 
 
+_SENSITIVE_SHAPE_KEY = re.compile(r"cookie|token|secret|password|credential|authorization|dtsg|lsd|session|url|text|message", re.I)
+
+
+def safe_nested_shape(value, *, depth=0, budget=None):
+    """Bounded value shape for reviewed unexpected Meta defaults; never emit free text."""
+    if budget is None:
+        budget = {"nodes": 0}
+    budget["nodes"] += 1
+    result = scalar_shape(value)
+    if depth >= 5 or budget["nodes"] > 64:
+        return {**result, "truncated": True}
+    if isinstance(value, dict):
+        safe_items = [(key, item) for key, item in value.items()
+                      if isinstance(key, str) and not _SENSITIVE_SHAPE_KEY.search(key)]
+        result["keys"] = sorted(key for key, _ in safe_items)[:32]
+        result["values"] = {key: safe_nested_shape(item, depth=depth + 1, budget=budget)
+                            for key, item in safe_items[:32]}
+        if len(safe_items) > 32:
+            result["truncated"] = True
+    elif isinstance(value, list):
+        result["length"] = len(value)
+        result["items"] = [safe_nested_shape(item, depth=depth + 1, budget=budget)
+                           for item in value[:8]]
+        if len(value) > 8:
+            result["truncated"] = True
+    elif isinstance(value, str) and len(value) <= 16000:
+        try:
+            decoded = json.loads(value)
+        except (ValueError, RecursionError):
+            decoded = None
+        if isinstance(decoded, (dict, list)):
+            result["json_decoded"] = safe_nested_shape(decoded, depth=depth + 1, budget=budget)
+    return result
+
+
 def values_diagnostic(rows, expected, business_id):
     """Explain the existing strict comparison without returning ad text or secrets."""
     result = {"collection": scalar_shape(rows), "fields": []}
@@ -43,6 +78,11 @@ def values_diagnostic(rows, expected, business_id):
     result["unexpected_reviewed_fields"] = sorted({row["field"] for row in rows
         if isinstance(row, dict) and isinstance(row.get("field"), str)
         and row["field"] not in wanted and row["field"] in _validation_fields()})
+    result["unexpected_value_shapes"] = [
+        {"field": row["field"], "new_value": safe_nested_shape(row.get("new_value"))}
+        for row in rows if isinstance(row, dict)
+        and row.get("field") in result["unexpected_reviewed_fields"]
+    ][:20]
     for field, value in sorted(wanted.items()):
         found = [row for row in rows if isinstance(row, dict) and row.get("field") == field]
         item = {"field": field, "count": len(found), "expected": scalar_shape(value),
@@ -60,7 +100,7 @@ def values_diagnostic(rows, expected, business_id):
 
 
 async def read_diagnostic(adapter, *, profile_id, context, session, payload):
-    target, _key, _fingerprint, actor, _source, draft_id, fragments, pending = await saved_draft_intent(
+    target, _key, _fingerprint, actor, source_digest, draft_id, fragments, pending = await saved_draft_intent(
         adapter, profile_id=profile_id, context=context, payload=payload)
     if draft_id is None:
         raise fail("RECONCILE_REQUIRED", "Saved draft has no exact read handle")
@@ -99,8 +139,8 @@ async def read_diagnostic(adapter, *, profile_id, context, session, payload):
         settings_diagnostic = values_diagnostic(row.get("values"), values, target["business_id"])
         if not settings_match:
             logging.getLogger(__name__).warning(
-                "saved_draft_read_settings_mismatch profile=%s level=%s diagnostic=%s",
-                profile_id, level,
+                "saved_draft_read_settings_mismatch profile=%s level=%s source_digest=%s diagnostic=%s",
+                profile_id, level, source_digest,
                 json.dumps(settings_diagnostic, sort_keys=True, separators=(",", ":")))
         reads.append({"level": level, "fragment_id": fragment_id,
             "relationships_match": all(checks.values()), "checks": checks,
