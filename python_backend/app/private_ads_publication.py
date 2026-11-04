@@ -11,7 +11,7 @@ import asyncio
 import time
 
 from .action_result import ActionResult
-from .private_ads_draft import (FRAGMENT_FIELDS, LEVELS, PUBLISH_FIELDS, fail,
+from .private_ads_draft import (LEVELS, PUBLISH_FIELDS, fail,
                                 fragment_params, fragment_parent_matches, fragment_values_match, identity, publication_receipt, publication_status, publish_params)
 from .private_launch_extensions import OperationKey
 from .private_ads_draft_fallback import read_fragment_with_account_object_fallback
