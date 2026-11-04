@@ -2240,7 +2240,7 @@ class JobStore:
                 ):
                     continue
                 task_rows = con.execute(
-                    """SELECT id,action,payload_json,idempotency_key,status,result_json,error_code,retryable,attempt
+                    """SELECT id,item_id,action,payload_json,idempotency_key,status,result_json,error_code,retryable,attempt
                        FROM job_tasks WHERE item_id=? ORDER BY position""",
                     (row['id'],),
                 ).fetchall()
