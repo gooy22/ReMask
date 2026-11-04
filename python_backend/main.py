@@ -4564,7 +4564,41 @@ async def retry_failed(job_id: str, consent: dict | None = Body(default=None)) -
                     and validation_value == 'VALIDATED'
                     and errors_confirmed
                 )
-                if exact_readback:
+                fallback_read = readback.get('campaign_object_read') if isinstance(readback, dict) else None
+                fallback_error = fallback_read.get('fragment_read_error') if isinstance(fallback_read, dict) else None
+                fallback_id = fallback_read.get('object_id') if isinstance(fallback_read, dict) else None
+                checked_fields = fallback_read.get('checked_fields') if isinstance(fallback_read, dict) else None
+                exact_campaign_object_read = (
+                    readback.get('ok') is True
+                    and readback.get('draft_id') == '2210627659890877'
+                    and readback.get('source') == 'independent_private_ads_http'
+                    and readback.get('advertising_mutation_posts') == 0
+                    and campaign_read.get('level') == 'campaign'
+                    and campaign_read.get('fragment_id') == '2210630549890588'
+                    and campaign_read.get('relationships_match') is True
+                    and campaign_read.get('settings_match') is True
+                    and isinstance(fallback_read, dict)
+                    and fallback_read.get('source') == 'account_campaigns_read'
+                    and fallback_read.get('level') == 'campaign'
+                    and fallback_read.get('draft_id') == '2210627659890877'
+                    and fallback_read.get('fragment_id') == campaign_read.get('fragment_id')
+                    and fallback_read.get('account_id') == '52569470944909'
+                    and fallback_read.get('status') == 'PAUSED'
+                    and fallback_read.get('settings_match') is True
+                    and fallback_read.get('unique_name_match_count') == 1
+                    and fallback_read.get('pagination_complete') is True
+                    and fallback_read.get('validation_unobserved') is True
+                    and isinstance(fallback_id, str) and fallback_id.isdigit()
+                    and 5 <= len(fallback_id) <= 40
+                    and isinstance(checked_fields, list)
+                    and 'name' in checked_fields and 'status' in checked_fields
+                    and isinstance(fallback_error, dict)
+                    and fallback_error.get('http_status') == 200
+                    and fallback_error.get('code') == 100
+                    and fallback_error.get('error_subcode') == 33
+                    and fallback_error.get('type') == 'GraphMethodException'
+                )
+                if exact_readback or exact_campaign_object_read:
                     private_draft_gate_retry_profiles.add(saved_profile)
                     saved_campaign_readback_retry_item_ids.add(saved_item_id)
                 else:
