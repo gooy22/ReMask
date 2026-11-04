@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import asyncio
 import time
 
@@ -98,6 +99,13 @@ class AdsManagerDraftPublisher:
                             parent_id=parent_id, root_account_id=getattr(client, "draft_root_parent_id", client.context.account_id))):
                     raise fail("READ_RELATION_MISMATCH", "Draft fragment identity or parent is unconfirmed")
                 if not fragment_values_match(row.get("values"), values, business_id=scope["business_id"]):
+                    from .private_draft_read_diagnostic import values_diagnostic
+                    logging.getLogger(__name__).warning(
+                        "draft_value_mismatch profile=%s level=%s diagnostic=%s",
+                        self.submitter.profile_id if hasattr(self.submitter, "profile_id") else scope["profile_id"],
+                        level,
+                        json.dumps(values_diagnostic(row.get("values"), values, scope["business_id"]),
+                                   sort_keys=True, separators=(",", ":")))
                     raise fail("READ_SPEC_MISMATCH", "Saved draft settings differ from this Launch")
                 if row.get("status") == "ACTIVE":
                     raise fail("DRAFT_DELIVERY_UNSAFE", "Saved draft fragment reports active delivery")
