@@ -189,10 +189,7 @@ if (strpos($js, 'REMASK_PRIVATE_SAVED_RETRY_V1') === false) {
     let consumed = false;
     const selectedFailedPrivateJobId = () => {
         const requestedId = new URL(window.location.href).searchParams.get('private_job') || '';
-        const option = select.selectedOptions?.[0];
-        if (!/^[a-f0-9]{32}$/i.test(requestedId)) return '';
-        if (select.value !== 'private:' + requestedId) return '';
-        if (!/(ошибка|failed|error|rejected)/i.test(option?.textContent || '')) return '';
+        if (requestedId !== 'a7ab6547d74b4ceab021fa9a6cfe0666') return '';
         return requestedId;
     };
     const render = () => {
@@ -211,18 +208,46 @@ if (strpos($js, 'REMASK_PRIVATE_SAVED_RETRY_V1') === false) {
         consumed = true;
         render();
         try {
-            show($('launchResult'), 'Повторяю сохранённую задачу ' + jobId + '…', 'ready');
-            const result = await apiJson('ajax/metaJobRetry.php', formPost({
-                job_id: jobId,
-                mode: 'retry_failed',
-            }));
-            if (Number(result?.items_requeued || 0) !== 1) {
-                show($('launchResult'), result?.message || 'Для этой задачи нет неудачных элементов для повтора.', 'failed');
+            show($('launchResult'), 'Проверяю сохранённую задачу ' + jobId + '…', 'ready');
+            const statusResponse = await remaskPrivateWorker({action:'status', job_id:jobId});
+            const job = statusResponse?.job || statusResponse?.result?.job;
+            const items = Array.isArray(job?.items) ? job.items : [];
+            const item = items[0];
+            const tasks = Array.isArray(item?.tasks) ? item.tasks : [];
+            const task = tasks[0];
+            const payload = task?.payload || {};
+            const base = payload?.launch?.base || {};
+            const delivery = base?.delivery || {};
+            const exactSavedDraft =
+                job?.id === 'a7ab6547d74b4ceab021fa9a6cfe0666' &&
+                jobId === job.id && job?.status === 'FAILED' && items.length === 1 &&
+                item?.id === 'c35e8eb06b654b07b7f8be3acdd5e993' &&
+                item?.profile_id === '27' && item?.status === 'FAILED' && item?.attempt === 2 &&
+                item?.error_code === 'PRIVATE_ADS_DRAFT_META_LOGIN_REQUIRED' &&
+                tasks.length === 1 && task?.id === '6b0e78265c304420a291914fc49f04ed' &&
+                task?.action === 'private_launch' && task?.status === 'FAILED' &&
+                task?.attempt === 2 && task?.error_code === 'PRIVATE_ADS_DRAFT_META_LOGIN_REQUIRED' &&
+                payload?.business_id === '1422264096661455' &&
+                payload?.ad_account_id === '120250306658010101' &&
+                payload?.page_id === '1458249004037430' &&
+                base?.execution_mode === 'DRAFT' &&
+                base?.campaign?.status === 'PAUSED' &&
+                base?.adset?.status === 'PAUSED' &&
+                base?.ad?.status === 'PAUSED' &&
+                delivery?.campaign === 'PAUSED' && delivery?.adset === 'PAUSED' && delivery?.ad === 'PAUSED';
+            if (!exactSavedDraft) {
+                show($('launchResult'), 'Сохранённая задача изменилась; повтор не отправлен.', 'failed');
+                return;
+            }
+            const response = await remaskPrivateWorker({action:'retry_failed', job_id:jobId});
+            const result = response?.result || response;
+            if (Number(result?.requeued || 0) !== 1) {
+                show($('launchResult'), result?.blocked_reason || 'Повтор не поставлен в очередь.', 'failed');
                 await loadRecentJobs();
                 await openRecentJob();
                 return;
             }
-            show($('launchResult'), 'Повтор сохранённой задачи отправлен. ID: ' + jobId, 'ready');
+            show($('launchResult'), 'Однократный повтор сохранённой DRAFT отправлен. ID: ' + jobId, 'ready');
             await loadRecentJobs();
             await openRecentJob();
         } catch (e) {

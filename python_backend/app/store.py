@@ -1257,8 +1257,9 @@ class JobStore:
 
     @staticmethod
     def _private_launch_pre_submit_renewal_retry_available(
-        con, item, tasks, *, allow_business_login_gate=False):
-        """Allow a no-write DRAFT retry; a saved Business gate is resumable only by that path."""
+        con, item, tasks, *, allow_business_login_gate=False,
+        allow_meta_login_retry=False, job_id=''):
+        """Allow a no-write DRAFT retry only when its saved failure is safe and exact."""
         if str(item.get('status') or '').upper() != 'FAILED':
             return False
         terminal = con.execute(
@@ -1270,23 +1271,74 @@ class JobStore:
                 or (terminal_status == 'BUSINESS_LOGIN_GATE' and not allow_business_login_gate)):
             return False
 
+        item_error = str(item.get('error_code') or '')
+        meta_login_retry = (
+            allow_meta_login_retry
+            and item_error == 'PRIVATE_ADS_DRAFT_META_LOGIN_REQUIRED'
+        )
+        if meta_login_retry:
+            if (
+                job_id != 'a7ab6547d74b4ceab021fa9a6cfe0666'
+                or str(item.get('id') or '') != 'c35e8eb06b654b07b7f8be3acdd5e993'
+                or str(item.get('profile_id') or '') != '27'
+                or str(item.get('attempt') or '') != '2'
+                or terminal_status != 'BUSINESS_LOGIN_GATE'
+                or len(tasks) != 1
+            ):
+                return False
+            expected_error = 'PRIVATE_ADS_DRAFT_META_LOGIN_REQUIRED'
+        else:
+            expected_error = 'PRIVATE_ADS_DRAFT_SESSION_RENEWAL_UNAVAILABLE'
+
         candidates = [
             task for task in tasks
             if str(task.get('action') or '').lower() == 'private_launch'
             and str(task.get('status') or '').upper() == 'FAILED'
-            and str(task.get('error_code') or '') == 'PRIVATE_ADS_DRAFT_SESSION_RENEWAL_UNAVAILABLE'
+            and str(task.get('error_code') or '') == expected_error
         ]
         if len(candidates) != 1:
             return False
         task = candidates[0]
+        if meta_login_retry and (
+            str(task.get('id') or '') != '6b0e78265c304420a291914fc49f04ed'
+            or str(task.get('attempt') or '') != '2'
+        ):
+            return False
         payload = task.get('payload')
         if not isinstance(payload, dict):
             return False
         if any(payload.get(flag) is True for flag in ('reconcile_only', 'repair_objective', 'publish_saved_draft')):
             return False
-        mode = str(payload.get('execution_mode') or 'DRAFT').upper()
+        if meta_login_retry:
+            launch = payload.get('launch')
+            base = launch.get('base') if isinstance(launch, dict) else None
+            if not isinstance(base, dict):
+                return False
+            mode = str(base.get('execution_mode') or '').upper()
+        else:
+            base = None
+            mode = str(payload.get('execution_mode') or 'DRAFT').upper()
         if mode != 'DRAFT':
             return False
+        if meta_login_retry:
+            campaign = base.get('campaign')
+            adset = base.get('adset')
+            ad = base.get('ad')
+            delivery = base.get('delivery')
+            if not all(isinstance(value, dict) for value in (campaign, adset, ad, delivery)):
+                return False
+            if (
+                str(payload.get('business_id') or '') != '1422264096661455'
+                or str(payload.get('ad_account_id') or '') != '120250306658010101'
+                or str(payload.get('page_id') or '') != '1458249004037430'
+                or str(payload.get('launch_key') or '')
+                    != 'private-launch-27-120250306658010101-2262ad9a8ce56c545c620279e3b51a7a'
+                or str(campaign.get('status') or '').upper() != 'PAUSED'
+                or str(adset.get('status') or '').upper() != 'PAUSED'
+                or str(ad.get('status') or '').upper() != 'PAUSED'
+                or delivery != {'campaign': 'PAUSED', 'adset': 'PAUSED', 'ad': 'PAUSED'}
+            ):
+                return False
 
         profile = str(item.get('profile_id') or '').strip()
         business = str(payload.get('business_id') or '').strip()
@@ -1399,12 +1451,17 @@ class JobStore:
                 item['advertising_steps']=(self._advertising_progress(con,item,tasks)
                     if any(t.get('action') in {'private_launch','private_delivery'} for t in tasks)
                     else [])
-                if self._private_launch_pre_submit_renewal_retry_available(con,item,tasks):
+                if self._private_launch_pre_submit_renewal_retry_available(
+                        con,item,tasks,job_id=job_id,allow_meta_login_retry=True):
                     item['retryable']=True
                     item['recovery_mode']='retry_private_launch_before_submit'
                     for task in tasks:
                         if (task.get('action')=='private_launch'
-                                and task.get('error_code')=='PRIVATE_ADS_DRAFT_SESSION_RENEWAL_UNAVAILABLE'):
+                                and str(task.get('status') or '').upper()=='FAILED'
+                                and task.get('error_code') in {
+                                    'PRIVATE_ADS_DRAFT_SESSION_RENEWAL_UNAVAILABLE',
+                                    'PRIVATE_ADS_DRAFT_META_LOGIN_REQUIRED',
+                                }):
                             task['retryable']=True
                             task['recovery_mode']='retry_private_launch_before_submit'
                 item['provisioning_steps']=steps_by_item.get(item['id'],[])
@@ -1820,7 +1877,7 @@ class JobStore:
         allow_business_gate_profiles=set(allow_business_login_gate_profile_ids)
         with self._connect() as con:
             rows=con.execute(
-                "SELECT id,profile_id,retryable,error_code FROM job_items "
+                "SELECT id,profile_id,retryable,error_code,attempt FROM job_items "
                 "WHERE job_id=? AND status='FAILED'", (job_id,),
             ).fetchall()
             terminal_status_by_profile={
@@ -1844,11 +1901,24 @@ class JobStore:
                     profile in allow_business_gate_profiles
                     and terminal_status_by_profile.get(profile) == 'BUSINESS_LOGIN_GATE'
                 )
-                if ((profile in excluded and not allow_gate_retry)
-                        or row['error_code'] != 'PRIVATE_ADS_DRAFT_SESSION_RENEWAL_UNAVAILABLE'):
+                allow_meta_login_retry = (
+                    allow_gate_retry
+                    and job_id == 'a7ab6547d74b4ceab021fa9a6cfe0666'
+                    and str(row['id']) == 'c35e8eb06b654b07b7f8be3acdd5e993'
+                    and profile == '27'
+                    and str(row['attempt'] or '') == '2'
+                    and row['error_code'] == 'PRIVATE_ADS_DRAFT_META_LOGIN_REQUIRED'
+                )
+                if (
+                    (profile in excluded and not allow_gate_retry)
+                    or row['error_code'] not in {
+                        'PRIVATE_ADS_DRAFT_SESSION_RENEWAL_UNAVAILABLE',
+                        'PRIVATE_ADS_DRAFT_META_LOGIN_REQUIRED',
+                    }
+                ):
                     continue
                 task_rows = con.execute(
-                    """SELECT id,action,payload_json,idempotency_key,status,result_json,error_code,retryable
+                    """SELECT id,action,payload_json,idempotency_key,status,result_json,error_code,retryable,attempt
                        FROM job_tasks WHERE item_id=? ORDER BY position""",
                     (row['id'],),
                 ).fetchall()
@@ -1863,9 +1933,13 @@ class JobStore:
                         tasks.append(task)
                 except (TypeError, ValueError, json.JSONDecodeError):
                     continue
-                item = {'id':row['id'],'profile_id':row['profile_id'],'status':'FAILED'}
+                item = {
+                    'id':row['id'],'profile_id':row['profile_id'],'status':'FAILED',
+                    'attempt':row['attempt'],'error_code':row['error_code'],
+                }
                 if self._private_launch_pre_submit_renewal_retry_available(
-                        con,item,tasks,allow_business_login_gate=allow_gate_retry):
+                        con,item,tasks,allow_business_login_gate=allow_gate_retry,
+                        allow_meta_login_retry=allow_meta_login_retry,job_id=job_id):
                     item_id=str(row['id'])
                     private_launch_recovery_ids.add(item_id)
                     if allow_gate_retry:
@@ -1900,7 +1974,10 @@ class JobStore:
                              'PAGE_ADD_UI_CHANGED'
                            )
                            OR (error_code='META_AD_ACCOUNT_CREATE_UNAVAILABLE' AND ?=1)
-                           OR (error_code='PRIVATE_ADS_DRAFT_SESSION_RENEWAL_UNAVAILABLE' AND ?=1)
+                           OR (error_code IN (
+                             'PRIVATE_ADS_DRAFT_SESSION_RENEWAL_UNAVAILABLE',
+                             'PRIVATE_ADS_DRAFT_META_LOGIN_REQUIRED'
+                           ) AND ?=1)
                          )""",
                     (now,item_id,1 if item_id in recovery_ids else 0,
                      1 if item_id in private_launch_recovery_ids else 0),
