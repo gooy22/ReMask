@@ -519,8 +519,11 @@ def _saved_account_login_continuation(
     body: str,
     login_url: str,
     expected_actor_id: str,
+    *,
+    diagnostic: dict | None = None,
 ) -> tuple[dict | None, str]:
     """Continue only one inert, explicit control bound to this actor."""
+    report = diagnostic if diagnostic is not None else {}
     try:
         parts = urlsplit(str(login_url or ""))
         host = str(parts.hostname or "").casefold()
@@ -544,8 +547,97 @@ def _saved_account_login_continuation(
         if form_id in parser.forms:
             parser.forms[form_id]["fields"].extend(fields)
     visible_text = re.sub(r"\s+", " ", " ".join(parser.visible_text)).casefold()
-    if (any(marker in visible_text for marker in _CHALLENGE_MARKERS)
-            or re.search(r"\bby (?:continuing|clicking continue|logging in),?\s+you agree\b", visible_text)):
+    challenge_present = bool(
+        any(marker in visible_text for marker in _CHALLENGE_MARKERS)
+        or re.search(
+            r"\bby (?:continuing|clicking continue|logging in),?\s+you agree\b",
+            visible_text,
+        )
+    )
+
+    def form_actor_bound(form):
+        return bool(
+            isinstance(form, dict)
+            and any(
+                str(name).casefold() in _LOGIN_ID_FIELDS and str(value) == actor_id
+                for name, value in form.get("fields") or []
+            )
+        )
+
+    def candidate_actor_bound(candidate):
+        identities = {
+            str(value) for value in candidate.get("identity_values", [])
+            if isinstance(value, str)
+        }
+        form = parser.forms.get(str(candidate.get("form_id") or ""))
+        return actor_id in identities or form_actor_bound(form)
+
+    def action_kind(value):
+        try:
+            action_parts = urlsplit(urljoin(login_url, str(value or login_url)))
+            host = str(action_parts.hostname or "").casefold()
+            path = str(action_parts.path or "/").casefold()
+        except ValueError:
+            return "invalid"
+        if host != "www.facebook.com":
+            return "outside_facebook"
+        if path.startswith("/login/device-based/validate"):
+            return "device_validate"
+        if path == "/login" or path.startswith("/login/"):
+            return "login"
+        return "other"
+
+    form_rows = []
+    actor_form_marker = False
+    for form_id, form in parser.forms.items():
+        bound = form_actor_bound(form)
+        actor_form_marker = actor_form_marker or bound
+        form_rows.append({
+            "kind": form_id if form_id in {"g_form", "login_form"} else "other",
+            "method": str(form.get("method") or "get").upper(),
+            "action_kind": action_kind(form.get("action")),
+            "field_count": len(form.get("fields") or []),
+            "interactive": bool(form.get("interactive")),
+            "credential_input": bool(form.get("credential_input")),
+            "actor_field_bound": bound,
+        })
+
+    control_rows = []
+    for candidate in parser.candidates:
+        attrs = candidate["attrs"]
+        label = re.sub(
+            r"\s+", " ", str(candidate["text"] or attrs.get("aria-label") or "")
+        ).strip()
+        _, kind = _score(label)
+        control_rows.append({
+            "tag": candidate["tag"],
+            "kind": kind or "other",
+            "in_form": bool(candidate.get("form_id")),
+            "actor_bound": candidate_actor_bound(candidate),
+        })
+
+    report.update({
+        "body_chars": len(body),
+        "form_count": len(parser.forms),
+        "forms": form_rows[:16],
+        "control_count": len(parser.candidates),
+        "controls": control_rows[:24],
+        "challenge_present": challenge_present,
+        "actor_field_bound": actor_form_marker,
+        "actor_id_marker_in_body": actor_id in body,
+        "script_count": len(re.findall(r"<script\b", body, flags=re.IGNORECASE)),
+        "json_script_count": len(re.findall(
+            r"<script\b[^>]*type\s*=\s*['\"]application/json['\"]",
+            body,
+            flags=re.IGNORECASE,
+        )),
+        "script_continue_marker": bool(re.search(
+            r"continue\s+as|continue\s+with\s+facebook|saved.?account",
+            body,
+            flags=re.IGNORECASE,
+        )),
+    })
+    if challenge_present:
         return None, "authentication_challenge"
 
     ranked = []
@@ -882,12 +974,15 @@ async def continue_business_login_gate(
             return None
         saved_login_outcome = ""
         if _login_route(action_url):
+            saved_login_diagnostic = {}
             saved_login, saved_login_outcome = _saved_account_login_continuation(
                 action_body, action_url, actor_id,
+                diagnostic=saved_login_diagnostic,
             )
             log.info(
-                "business_login_gate_saved_login profile=%s outcome=%s",
+                "business_login_gate_saved_login profile=%s outcome=%s summary=%s",
                 profile_name, saved_login_outcome,
+                json.dumps(saved_login_diagnostic, sort_keys=True, separators=(",", ":")),
             )
             if saved_login:
                 action_status, action_url, action_body, _ = await _request_facebook(
