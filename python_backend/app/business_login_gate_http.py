@@ -520,7 +520,7 @@ def _saved_account_login_continuation(
     login_url: str,
     expected_actor_id: str,
 ) -> tuple[dict | None, str]:
-    """Continue only one explicit saved-account control bound to this actor."""
+    """Continue only one inert, explicit control bound to this actor."""
     try:
         parts = urlsplit(str(login_url or ""))
         host = str(parts.hostname or "").casefold()
@@ -556,13 +556,22 @@ def _saved_account_login_continuation(
         ).strip()
         _, kind = _score(label)
         if kind == "continue_as":
-            ranked.append(candidate)
+            ranked.append((candidate, kind))
+        elif (
+            kind in {"facebook_continue", "generic_continue"}
+            and candidate["tag"] in {"button", "input"}
+            and candidate.get("form_id")
+        ):
+            # Meta may render the same-actor action as a plain Continue button.
+            # Only form controls are considered; exact actor binding and the
+            # inert-form checks below remain mandatory.
+            ranked.append((candidate, kind))
     if not ranked:
         return None, "no_saved_account_control"
     if len(ranked) != 1:
         return None, "ambiguous_saved_account_controls"
 
-    candidate = ranked[0]
+    candidate, control_kind = ranked[0]
     attrs = candidate["attrs"]
     form_id = str(candidate.get("form_id") or "")
     form = parser.forms.get(form_id) if form_id else None
@@ -610,11 +619,16 @@ def _saved_account_login_continuation(
         return None, "unsafe_saved_account_fields"
     if sum(len(name) + len(value) for name, value in fields) > 16000:
         return None, "saved_account_fields_too_large"
+    label_kind = (
+        "continue_as_same_actor"
+        if control_kind == "continue_as"
+        else control_kind + "_same_actor"
+    )
     return {
         "method": method,
         "url": action,
         "fields": fields,
-        "label_kind": "continue_as_same_actor",
+        "label_kind": label_kind,
     }, "saved_account_actor_verified"
 
 async def _request_facebook(
