@@ -1256,15 +1256,18 @@ class JobStore:
         return progress
 
     @staticmethod
-    def _private_launch_pre_submit_renewal_retry_available(con, item, tasks):
-        """Allow a legacy session-renewal retry only when no Ads Manager write was submitted."""
+    def _private_launch_pre_submit_renewal_retry_available(
+        con, item, tasks, *, allow_business_login_gate=False):
+        """Allow a no-write DRAFT retry; a saved Business gate is resumable only by that path."""
         if str(item.get('status') or '').upper() != 'FAILED':
             return False
         terminal = con.execute(
             "SELECT status FROM profile_terminal_statuses WHERE profile_id=?",
             (str(item.get('profile_id') or ''),),
         ).fetchone()
-        if terminal and str(terminal['status'] or '').upper() in {'CHECKPOINT', 'BUSINESS_LOGIN_GATE'}:
+        terminal_status = str(terminal['status'] or '').upper() if terminal else ''
+        if (terminal_status == 'CHECKPOINT'
+                or (terminal_status == 'BUSINESS_LOGIN_GATE' and not allow_business_login_gate)):
             return False
 
         candidates = [
@@ -1790,43 +1793,58 @@ class JobStore:
         job_id: str,
         *,
         excluded_profile_ids: set[str] | None = None,
+        allow_business_login_gate_profile_ids: set[str] | None = None,
     ) -> int:
         excluded=tuple(sorted({
             str(value).strip()
             for value in (excluded_profile_ids or set())
             if str(value).strip()
         }))
+        allow_business_gate=tuple(sorted({
+            str(value).strip()
+            for value in (allow_business_login_gate_profile_ids or set())
+            if str(value).strip()
+        }))
         return await asyncio.to_thread(
-            self._retry_failed_sync, job_id, excluded
+            self._retry_failed_sync, job_id, excluded, allow_business_gate
         )
 
     def _retry_failed_sync(
         self,
         job_id: str,
         excluded_profile_ids: tuple[str, ...] = (),
+        allow_business_login_gate_profile_ids: tuple[str, ...] = (),
     ) -> int:
         now=_now()
         excluded=set(excluded_profile_ids)
+        allow_business_gate_profiles=set(allow_business_login_gate_profile_ids)
         with self._connect() as con:
             rows=con.execute(
                 "SELECT id,profile_id,retryable,error_code FROM job_items "
                 "WHERE job_id=? AND status='FAILED'", (job_id,),
             ).fetchall()
-            excluded.update(
-                str(row['profile_id'] or '')
+            terminal_status_by_profile={
+                str(row['profile_id'] or ''):str(row['status'] or '').upper()
                 for row in con.execute(
-                    "SELECT profile_id FROM profile_terminal_statuses "
+                    "SELECT profile_id,status FROM profile_terminal_statuses "
                     "WHERE status IN ('CHECKPOINT','BUSINESS_LOGIN_GATE')"
                 ).fetchall()
-            )
+            }
+            excluded.update(terminal_status_by_profile)
             recovery_ids = {
                 str(row['id']) for row in rows
                 if row['error_code'] == 'META_AD_ACCOUNT_CREATE_UNAVAILABLE'
                 and self._rk_details_recovery_available(con, row['id'], row['profile_id'])
             }
             private_launch_recovery_ids = set()
+            private_launch_gate_recovery_ids = set()
             for row in rows:
-                if (str(row['profile_id'] or '') in excluded
+                profile=str(row['profile_id'] or '')
+                allow_gate_retry=(
+                    profile in allow_business_gate_profiles
+                    and terminal_status_by_profile.get(profile) == 'BUSINESS_LOGIN_GATE'
+                )
+                if ((profile in excluded and not allow_gate_retry)
                         or row['error_code'] != 'PRIVATE_ADS_DRAFT_SESSION_RENEWAL_UNAVAILABLE'):
                     continue
                 task_rows = con.execute(
@@ -1846,16 +1864,23 @@ class JobStore:
                 except (TypeError, ValueError, json.JSONDecodeError):
                     continue
                 item = {'id':row['id'],'profile_id':row['profile_id'],'status':'FAILED'}
-                if self._private_launch_pre_submit_renewal_retry_available(con,item,tasks):
-                    private_launch_recovery_ids.add(str(row['id']))
+                if self._private_launch_pre_submit_renewal_retry_available(
+                        con,item,tasks,allow_business_login_gate=allow_gate_retry):
+                    item_id=str(row['id'])
+                    private_launch_recovery_ids.add(item_id)
+                    if allow_gate_retry:
+                        private_launch_gate_recovery_ids.add(item_id)
             ids=[
                 str(row['id'])
                 for row in rows
-                if str(row['profile_id'] or '') not in excluded
-                and (bool(row['retryable']) or str(row['id']) in recovery_ids
-                    or str(row['id']) in private_launch_recovery_ids or row['error_code'] in {
-                    'CHECKPOINT_REQUIRED', 'SESSION_EXPIRED', 'TWO_FACTOR_REQUIRED', 'PAGE_ADD_UI_CHANGED',
-                })
+                if (
+                    (str(row['profile_id'] or '') not in excluded
+                     and (bool(row['retryable']) or str(row['id']) in recovery_ids
+                         or str(row['id']) in private_launch_recovery_ids or row['error_code'] in {
+                         'CHECKPOINT_REQUIRED', 'SESSION_EXPIRED', 'TWO_FACTOR_REQUIRED', 'PAGE_ADD_UI_CHANGED',
+                     }))
+                    or str(row['id']) in private_launch_gate_recovery_ids
+                )
             ]
             for item_id in ids:
                 con.execute(
