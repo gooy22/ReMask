@@ -6,6 +6,7 @@ Only exact handles already retained by the original job can be read.
 from __future__ import annotations
 
 import json
+import logging
 import re
 
 from .private_ads_draft import FRAGMENT_FIELDS, fail, fragment_parent_matches, fragment_values_match
@@ -81,13 +82,20 @@ async def read_diagnostic(adapter, *, profile_id, context, session, payload):
             "ad_object_type": row.get("ad_object_type") == level,
             "parent_ad_object_id": fragment_parent_matches(row.get("parent_ad_object_id"), level=level,
                 parent_id=parent, root_account_id=getattr(client, "draft_root_parent_id", client.context.account_id))}
+        settings_match = fragment_values_match(row.get("values"), values, business_id=target["business_id"])
+        settings_diagnostic = values_diagnostic(row.get("values"), values, target["business_id"])
+        if not settings_match:
+            logging.getLogger(__name__).warning(
+                "saved_draft_read_settings_mismatch profile=%s level=%s diagnostic=%s",
+                profile_id, level,
+                json.dumps(settings_diagnostic, sort_keys=True, separators=(",", ":")))
         reads.append({"level": level, "fragment_id": fragment_id,
             "relationships_match": all(checks.values()), "checks": checks,
             "observed": {field: {"present": field in row, **scalar_shape(row.get(field))}
                 for field in ("id", "ad_draft_id", "ad_object_id", "ad_object_type",
                               "parent_ad_object_id", "validation_status", "status")},
-            "settings_match": fragment_values_match(row.get("values"), values, business_id=target["business_id"]),
-            "settings_diagnostic": values_diagnostic(row.get("values"), values, target["business_id"]),
+            "settings_match": settings_match,
+            "settings_diagnostic": settings_diagnostic,
             "active_error_diagnostic": validation_diagnostic(row.get("active_errors"), observed="active_errors" in row)})
         if not all(checks.values()):
             break
