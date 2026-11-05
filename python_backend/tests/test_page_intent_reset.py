@@ -15,7 +15,18 @@ class PageIntentResetTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self.tmp.cleanup)
         self.state = ProvisioningStateStore(str(Path(self.tmp.name) / 'state.sqlite'))
         await self.state.init()
-        self.repair = json.loads(MANIFEST.read_text())['repairs'][0]
+        self.repair = {
+            'id': 'fixture-page-reset',
+            'item_id': 'workspace-business-page-facebook:61594946647826-1451903470239662',
+            'profile_id': '15',
+            'business_id': '1451903470239662',
+            'actor_id': '61594946647826',
+            'page_name': 'PrgssTeam',
+            'authorized_at': 1791527732,
+            'reason': 'Synthetic fixture for one-shot reset behavior.',
+        }
+        self.manifest = Path(self.tmp.name) / 'repairs.json'
+        self.manifest.write_text(json.dumps({'version': 1, 'repairs': [self.repair]}))
         self.item = self.repair['item_id']
         self.value = {'phase': 'PAGE_CREATE_RESULT_UNKNOWN', 'resume_from': 'RECONCILE_CREATE',
             'business_id': self.repair['business_id'], 'create_actor_id': self.repair['actor_id'],
@@ -39,7 +50,7 @@ class PageIntentResetTests(unittest.IsolatedAsyncioTestCase):
         await self.seed(item='other-bm', value={**self.value, 'business_id': '1428816905866955'})
         await self.seed(item='other-profile', profile='16')
         before = await self.state.step(self.item, ProvisioningStep.FAN_PAGES)
-        outcomes = await apply_page_intent_resets(self.state)
+        outcomes = await apply_page_intent_resets(self.state, self.manifest)
         self.assertEqual(outcomes[0]['outcome'], 'APPLIED')
         self.assertEqual(outcomes[0]['reset_count'], 2)
         self.assertEqual((await self.result())['phase'], PHASE)
@@ -58,15 +69,15 @@ class PageIntentResetTests(unittest.IsolatedAsyncioTestCase):
         await self.seed(status='RUNNING')
         await self.state.init()
         self.assertEqual((await self.state.step(self.item, ProvisioningStep.FAN_PAGES))['status'], 'QUEUED')
-        self.assertEqual((await apply_page_intent_resets(self.state))[0]['outcome'], 'APPLIED')
+        self.assertEqual((await apply_page_intent_resets(self.state, self.manifest))[0]['outcome'], 'APPLIED')
 
     async def test_new_attempt_is_never_reset_on_subsequent_startup(self):
         await self.seed()
-        await apply_page_intent_resets(self.state)
+        await apply_page_intent_resets(self.state, self.manifest)
         new = {**self.value, 'create_attempt_id': 'new-journalled-submit'}
         await self.seed(value=new, status='RUNNING')
         await self.state.init()
-        self.assertEqual((await apply_page_intent_resets(self.state))[0]['outcome'], 'ALREADY_APPLIED')
+        self.assertEqual((await apply_page_intent_resets(self.state, self.manifest))[0]['outcome'], 'ALREADY_APPLIED')
         self.assertEqual(await self.result(), new)
 
     async def test_known_ids_success_new_journal_actor_and_active_run_are_protected(self):
@@ -80,7 +91,7 @@ class PageIntentResetTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(changes=changes, status=status):
                 value = {**self.value, **changes}
                 await self.seed(value=value, status=status)
-                self.assertEqual((await apply_page_intent_resets(self.state))[0]['outcome'], 'TARGET_CHANGED')
+                self.assertEqual((await apply_page_intent_resets(self.state, self.manifest))[0]['outcome'], 'TARGET_CHANGED')
                 self.assertEqual(await self.result(), value)
 
     async def test_bound_page_prevents_reset_and_confirmed_bm_rk_payment_are_preserved(self):
@@ -94,7 +105,7 @@ class PageIntentResetTests(unittest.IsolatedAsyncioTestCase):
                 (ProvisioningStep.AD_ACCOUNT, {'business_id': self.repair['business_id'], 'ad_account_id': '120251650486340295'})):
             await self.state.complete('confirmed-' + step.value, '15', 'bundle', step, data)
         await self.state.set_payment_link_state('15', '120251650486340295', True, source='fixture')
-        self.assertEqual((await apply_page_intent_resets(self.state))[0]['outcome'], 'PAGE_ALREADY_BOUND')
+        self.assertEqual((await apply_page_intent_resets(self.state, self.manifest))[0]['outcome'], 'PAGE_ALREADY_BOUND')
         self.assertEqual((await self.state.snapshot('15', 'bundle')).ad_account_id, '120251650486340295')
         self.assertEqual((await store.get())['page_id'], '2348798761652037')
         self.assertEqual((await self.result())['phase'], 'PAGE_CREATE_RESULT_UNKNOWN')
@@ -104,7 +115,7 @@ class PageIntentResetTests(unittest.IsolatedAsyncioTestCase):
         with self.state._connect() as con:
             con.execute("CREATE TRIGGER fail_reset BEFORE UPDATE ON provisioning_steps BEGIN SELECT RAISE(ABORT,'fixture'); END")
         with self.assertRaises(sqlite3.DatabaseError):
-            await apply_page_intent_resets(self.state)
+            await apply_page_intent_resets(self.state, self.manifest)
         self.assertEqual(await self.result(), self.value)
         with self.state._connect() as con:
             table = con.execute("SELECT 1 FROM sqlite_master WHERE name='provisioning_page_intent_resets'").fetchone()
