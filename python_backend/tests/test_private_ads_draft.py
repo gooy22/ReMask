@@ -716,6 +716,11 @@ class PublisherTests(unittest.IsolatedAsyncioTestCase):
                     'http_status': 200, 'code': 100, 'error_subcode': 33,
                     'type': 'GraphMethodException',
                 })
+            if path == '/111111':
+                raise AdsManagerResponseError({
+                    'http_status': 200, 'code': 100, 'error_subcode': 33,
+                    'type': 'GraphMethodException',
+                })
             if path == '/act_111111/campaigns':
                 self.assertEqual(params['limit'], 1000)
                 return {'data': [{
@@ -740,6 +745,11 @@ class PublisherTests(unittest.IsolatedAsyncioTestCase):
         original = self.client.get
         async def read(path, params):
             if path.startswith('/addraftfragment_'):
+                raise AdsManagerResponseError({
+                    'http_status': 200, 'code': 100, 'error_subcode': 33,
+                    'type': 'GraphMethodException',
+                })
+            if path == '/111111':
                 raise AdsManagerResponseError({
                     'http_status': 200, 'code': 100, 'error_subcode': 33,
                     'type': 'GraphMethodException',
@@ -817,6 +827,11 @@ class PublisherTests(unittest.IsolatedAsyncioTestCase):
                     'http_status': 200, 'code': 100, 'error_subcode': 33,
                     'type': 'GraphMethodException',
                 })
+            if path == '/111111':
+                raise AdsManagerResponseError({
+                    'http_status': 200, 'code': 100, 'error_subcode': 33,
+                    'type': 'GraphMethodException',
+                })
             if path == '/act_111111/campaigns':
                 saved = dict(self.levels['campaign'])
                 wrong = {'id': '777770', 'account_id': '111111', **saved,
@@ -838,6 +853,11 @@ class PublisherTests(unittest.IsolatedAsyncioTestCase):
         original = self.client.get
         async def read(path, params):
             if path == '/addraftfragment_111111':
+                raise AdsManagerResponseError({
+                    'http_status': 200, 'code': 100, 'error_subcode': 33,
+                    'type': 'GraphMethodException',
+                })
+            if path == '/111111':
                 raise AdsManagerResponseError({
                     'http_status': 200, 'code': 100, 'error_subcode': 33,
                     'type': 'GraphMethodException',
