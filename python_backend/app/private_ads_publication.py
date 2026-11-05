@@ -103,7 +103,9 @@ class AdsManagerDraftPublisher:
                             or fallback.get("account_id") != scope["ad_account_id"]
                             or fallback.get("status") != "PAUSED"
                             or fallback.get("settings_match") is not True
-                            or fallback.get("unique_name_match_count") != 1
+                            or fallback.get("unique_name_match_count", 0) < 1
+                            or fallback.get("unique_spec_match_count") != 1
+                            or fallback.get("paused_spec_match_count") != 1
                             or fallback.get("pagination_complete") is not True):
                         raise fail("READ_SCOPE_MISMATCH", "Account readback does not confirm the saved paused draft")
                     objects[level] = identity(fallback.get("object_id"))
