@@ -529,6 +529,7 @@ class DraftClient:
         self.context = SimpleNamespace(account_id="111111", business_id="222222",
             actor_id="123456", application_id="654321")
         self.posts = [];self.fragments = {};self.pending = False;self.foreign = False
+        self.post_campaign_object_id = None
 
     async def post(self, path, params, *, before_submit, files):
         await before_submit();self.posts.append((path, copy.deepcopy(params)))
@@ -543,7 +544,10 @@ class DraftClient:
                 "validation_status": "VALIDATED", "active_errors": [],
                 "parent_ad_object_id": params.get("parent_ad_object_id")}
             self.fragments[fragment_id] = row
-            return {"id": fragment_id}
+            response = {"id": fragment_id}
+            if index == 0 and self.post_campaign_object_id is not None:
+                response["ad_object_id"] = self.post_campaign_object_id
+            return response
         return {"success": True, "async_request_set_id": "789012"}
 
     async def get(self, path, params):
@@ -705,6 +709,40 @@ class PublisherTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("/act_111111/campaigns", calls)
         self.assertFalse(any(path.endswith("/publish") for path, _ in self.client.posts))
 
+    async def test_private_campaign_object_id_receipt_is_read_without_fragment_id_guess(self):
+        from app.private_ads_http import AdsManagerResponseError
+        self.client.post_campaign_object_id = '777771'
+        original = self.client.get
+        calls = []
+
+        async def read(path, params):
+            calls.append(path)
+            if path in {'/addraftfragment_111111',
+                        '/addraft_555555/addraft_fragments'}:
+                raise AdsManagerResponseError({
+                    'http_status': 200, 'code': 100, 'error_subcode': 33,
+                    'type': 'GraphMethodException',
+                })
+            if path == '/777771':
+                return {'id': '777771', 'account_id': '111111',
+                    'name': 'campaign', 'status': 'PAUSED'}
+            return await original(path, params)
+
+        self.client.get = read
+        result = await self.publisher.run(self.client, name='source-flow', levels=self.levels,
+            verify_objects=self.verify, draft_only=True)
+        self.assertEqual(result['status'], 'SUCCESS')
+        self.assertEqual(result['draft_objects']['campaign'], '777771')
+        self.assertEqual(self.client.posts[2][1]['parent_ad_object_id'], '777771')
+        self.assertEqual(calls.count('/777771'), 1)
+        self.assertNotIn('/111111', calls)
+        self.assertEqual(len(self.client.posts), 4)
+        self.assertFalse(any(path.endswith('/publish') for path, _ in self.client.posts))
+        steps = await self.state.all_steps('launch')
+        campaign = next(row for row in steps if row['step'] == 'ADS_MANAGER:FRAGMENT_CAMPAIGN')
+        receipt = campaign['result']['evidence']['receipt']
+        self.assertEqual(receipt, {'fragment_id': '111111', 'ad_object_id': '777771'})
+
     async def test_exact_fragment_read_rejection_recovers_one_paused_campaign_without_recreate(self):
         from app.private_ads_http import AdsManagerResponseError
         original = self.client.get
@@ -712,11 +750,6 @@ class PublisherTests(unittest.IsolatedAsyncioTestCase):
         async def read(path, params):
             calls.append(path)
             if path == '/addraftfragment_111111':
-                raise AdsManagerResponseError({
-                    'http_status': 200, 'code': 100, 'error_subcode': 33,
-                    'type': 'GraphMethodException',
-                })
-            if path == '/111111':
                 raise AdsManagerResponseError({
                     'http_status': 200, 'code': 100, 'error_subcode': 33,
                     'type': 'GraphMethodException',
@@ -745,11 +778,6 @@ class PublisherTests(unittest.IsolatedAsyncioTestCase):
         original = self.client.get
         async def read(path, params):
             if path.startswith('/addraftfragment_'):
-                raise AdsManagerResponseError({
-                    'http_status': 200, 'code': 100, 'error_subcode': 33,
-                    'type': 'GraphMethodException',
-                })
-            if path == '/111111':
                 raise AdsManagerResponseError({
                     'http_status': 200, 'code': 100, 'error_subcode': 33,
                     'type': 'GraphMethodException',
@@ -827,11 +855,6 @@ class PublisherTests(unittest.IsolatedAsyncioTestCase):
                     'http_status': 200, 'code': 100, 'error_subcode': 33,
                     'type': 'GraphMethodException',
                 })
-            if path == '/111111':
-                raise AdsManagerResponseError({
-                    'http_status': 200, 'code': 100, 'error_subcode': 33,
-                    'type': 'GraphMethodException',
-                })
             if path == '/act_111111/campaigns':
                 saved = dict(self.levels['campaign'])
                 wrong = {'id': '777770', 'account_id': '111111', **saved,
@@ -853,11 +876,6 @@ class PublisherTests(unittest.IsolatedAsyncioTestCase):
         original = self.client.get
         async def read(path, params):
             if path == '/addraftfragment_111111':
-                raise AdsManagerResponseError({
-                    'http_status': 200, 'code': 100, 'error_subcode': 33,
-                    'type': 'GraphMethodException',
-                })
-            if path == '/111111':
                 raise AdsManagerResponseError({
                     'http_status': 200, 'code': 100, 'error_subcode': 33,
                     'type': 'GraphMethodException',
