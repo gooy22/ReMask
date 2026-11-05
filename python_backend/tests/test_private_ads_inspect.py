@@ -48,6 +48,56 @@ class SavedDraftInspectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['fragment_reads'][0]['submitted_values']['objective'], 'LINK_CLICKS')
         self.assertEqual(await self.owner.state.all_steps('image-launch'), before)
 
+    async def test_partial_saved_campaign_is_inspected_through_exact_draft_edge_without_post(self):
+        from app.private_ads_draft import fail
+        from app.private_ads_http import AdsManagerResponseError
+        self.payload['launch']['execution_mode'] = 'DRAFT'
+        original = self.client.get
+
+        async def interrupted_campaign(path, params):
+            if path == '/addraftfragment_111111':
+                raise fail('READ_PENDING', 'synthetic interrupted Campaign read', True)
+            return await original(path, params)
+
+        self.client.get = interrupted_campaign
+        with self.assertRaises(ProvisioningError) as caught:
+            await self.launch()
+        self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_READ_PENDING')
+        self.assertEqual(len(self.client.posts), 2)
+
+        async def edge_read(path, params):
+            if path.startswith('/addraftfragment_'):
+                raise AdsManagerResponseError({
+                    'http_status': 200, 'code': 100, 'error_subcode': 33,
+                    'type': 'GraphMethodException',
+                })
+            if path == '/addraft_555555/addraft_fragments':
+                fields = set(params.get('fields') or [])
+                rows = [
+                    {key: copy.deepcopy(value) for key, value in row.items() if key in fields}
+                    for row in self.client.fragments.values()
+                ]
+                return {'data': rows}
+            return await original(path, params)
+
+        self.client.get = edge_read
+        self.payload['reconcile_only'] = True
+        before = copy.deepcopy(await self.owner.state.all_steps('image-launch'))
+        with patch.object(self.client, 'post',
+                          new=AsyncMock(side_effect=AssertionError('Inspection cannot POST'))) as post:
+            result = await self.launch()
+        post.assert_not_awaited()
+        self.assertEqual(result['execution_mode'], 'DRAFT_INSPECT')
+        self.assertEqual(result['status'], 'RECONCILE_REQUIRED')
+        self.assertEqual(result['pending_stage'],
+                         {'stage': 'FRAGMENT_AD_SET', 'reason': 'NOT_SUBMITTED'})
+        self.assertEqual(result['draft_objects'], {'campaign': '777771'})
+        self.assertEqual([row['read_source'] for row in result['fragment_reads']], ['draft_edge'])
+        self.assertEqual(result['mutation_posts'], 0)
+        self.assertFalse(result['draft_verified'])
+        self.assertIsNone(result['published'])
+        self.assertEqual(await self.owner.state.all_steps('image-launch'), before)
+
     async def test_exact_native_objects_and_creative_are_read_separately_from_fragments(self):
         await self.saved()
         result = await self.launch()
