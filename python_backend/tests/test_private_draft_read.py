@@ -58,6 +58,11 @@ class DraftReadDiagnosticTests(unittest.IsolatedAsyncioTestCase):
                     'http_status':200, 'code':100, 'error_subcode':33,
                     'type':'GraphMethodException',
                 })
+            if path == '/555555':
+                raise AdsManagerResponseError({
+                    'http_status':200, 'code':100, 'error_subcode':33,
+                    'type':'GraphMethodException',
+                })
             if path == '/act_111111/campaigns':
                 return {'data':[{'id':'666666', 'account_id':'111111',
                     'name':'fixture campaign', 'status':'PAUSED'}]}
@@ -74,7 +79,7 @@ class DraftReadDiagnosticTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(client.read_only)
         self.assertEqual(calls, ['/addraft_444444', '/addraftfragment_555555',
                                  '/addraftfragment_555555',
-                                 '/addraft_444444/addraft_fragments',
+                                 '/addraft_444444/addraft_fragments', '/555555',
                                  '/act_111111/campaigns'])
         proof = result['campaign_object_read']
         self.assertEqual(proof['object_id'], '666666')
