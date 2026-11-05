@@ -120,8 +120,14 @@ const source = fs.readFileSync('railway-python-worker-ui.js', 'utf8');
   assert.equal(calls.at(-1).profiles[0].profile_id,'38');
   assert.equal(scope.pythonWorkerDraftInspectionKey(retained,
     {...failed,payload:{...failed.payload,repair_objective:true}}),'');
+  for(const prefixLength of [2,3,4]){
+    assert.equal(scope.pythonWorkerDraftInspectionKey({
+      ...retained,advertising_steps:steps.slice(0,prefixLength)
+    },failed),'retained-failed-intent');
+  }
   for(const [item,candidate] of [
-    [{...retained,advertising_steps:steps.slice(0,3)},failed],
+    [{...retained,advertising_steps:steps.slice(0,1)},failed],
+    [{...retained,advertising_steps:[steps[0],steps[2]]},failed],
     [{...retained,advertising_steps:steps.map(step=>({...step,task_id:'other'}))},failed],
     [{...retained,advertising_steps:[...steps,{task_id:task.id,step:'ADS_MANAGER:PUBLISH'}]},failed],
     [retained,{...failed,payload:{...failed.payload,launch:{execution_mode:'PUBLISH'}}}],

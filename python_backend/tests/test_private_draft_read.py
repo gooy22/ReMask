@@ -52,7 +52,8 @@ class DraftReadDiagnosticTests(unittest.IsolatedAsyncioTestCase):
             if path == '/addraft_444444':
                 return {'id':'444444', 'account_id':'111111',
                     'author_id':'333333', 'ownership_type':'USER'}
-            if path == '/addraftfragment_555555':
+            if path in {'/addraftfragment_555555',
+                        '/addraft_444444/addraft_fragments'}:
                 raise AdsManagerResponseError({
                     'http_status':200, 'code':100, 'error_subcode':33,
                     'type':'GraphMethodException',
@@ -72,7 +73,9 @@ class DraftReadDiagnosticTests(unittest.IsolatedAsyncioTestCase):
         client.post.assert_not_awaited()
         self.assertTrue(client.read_only)
         self.assertEqual(calls, ['/addraft_444444', '/addraftfragment_555555',
-                                 '/addraftfragment_555555', '/act_111111/campaigns'])
+                                 '/addraftfragment_555555',
+                                 '/addraft_444444/addraft_fragments',
+                                 '/act_111111/campaigns'])
         proof = result['campaign_object_read']
         self.assertEqual(proof['object_id'], '666666')
         self.assertEqual(proof['source'], 'account_campaigns_read')

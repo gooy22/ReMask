@@ -1593,9 +1593,13 @@ function pythonWorkerDraftInspectionKey(item,task){
   if(steps.some(step=>step.step==='ADS_MANAGER:PUBLISH'))return '';
   const saved=task.result?.draft_verified===true&&task.result?.published===false;
   const mode=task.payload.launch?.base?.execution_mode||task.payload.launch?.execution_mode;
-  const complete=['DRAFT','FRAGMENT_CAMPAIGN','FRAGMENT_AD_SET','FRAGMENT_AD'].every(operation=>
-    steps.some(step=>step.step==='ADS_MANAGER:'+operation&&step.submitted===true));
-  if(!saved&&!(mode==='DRAFT'&&complete))return '';
+  const operations=['DRAFT','FRAGMENT_CAMPAIGN','FRAGMENT_AD_SET','FRAGMENT_AD'];
+  const submitted=new Set(steps.filter(step=>step.submitted===true).map(step=>step.step));
+  let prefixLength=0;
+  while(prefixLength<operations.length&&submitted.has('ADS_MANAGER:'+operations[prefixLength]))prefixLength++;
+  const contiguousPrefix=prefixLength>=2&&operations.slice(prefixLength)
+    .every(operation=>!submitted.has('ADS_MANAGER:'+operation));
+  if(!saved&&!(mode==='DRAFT'&&contiguousPrefix))return '';
   return String(task.result?.launch_key||task.payload.launch_key||task.idempotency_key||'');
 }
 

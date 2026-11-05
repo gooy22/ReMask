@@ -7,7 +7,8 @@ import json
 import logging
 import re
 
-from .private_ads_draft import FRAGMENT_FIELDS, LEVELS, fail, fragment_parent_matches, fragment_values_match, identity
+from .private_ads_draft import LEVELS, fail, fragment_parent_matches, fragment_values_match, identity
+from .private_ads_draft_fallback import read_fragment_with_account_object_fallback
 from .private_ads_http import AdsManagerPrivateHttp
 from .private_launch import _launch_fingerprint
 
@@ -198,9 +199,13 @@ async def inspect_saved_draft(adapter, *, profile_id, context, session, payload)
         raise fail("READ_SCOPE_MISMATCH", "Fresh draft ownership differs from the saved intent")
     objects, reads = {}, []
     for level, fragment_id, values, confirmed_object in fragments:
-        row = await client.get("/addraftfragment_" + fragment_id, {"fields": FRAGMENT_FIELDS})
-        adapter_scope(row, target["ad_account_id"])
         parent = objects.get("campaign" if level == "ad_set" else "ad_set") if level != "campaign" else None
+        observed = await read_fragment_with_account_object_fallback(
+            client, account_id=target["ad_account_id"], draft_id=draft_id,
+            fragment_id=fragment_id, level=level, values=values,
+            parent_id=parent, allow_fallback=False)
+        row = observed["row"]
+        adapter_scope(row, target["ad_account_id"])
         if (row.get("id") != fragment_id or row.get("ad_draft_id") != draft_id or row.get("ad_object_type") != level
                 or not fragment_parent_matches(row.get("parent_ad_object_id"), level=level,
                     parent_id=parent, root_account_id=getattr(client, "draft_root_parent_id", client.context.account_id))):
@@ -223,6 +228,7 @@ async def inspect_saved_draft(adapter, *, profile_id, context, session, payload)
         if len(set(objects.values())) != len(objects):
             raise fail("READ_RELATION_MISMATCH", "Fresh draft levels have duplicate object identities")
         reads.append({"level": level, "fragment_id": fragment_id, "ad_object_id": objects[level],
+            "read_source": observed.get("source"),
             "submitted_values": values, "settings_match": True,
             "fresh_values": {entry["field"]: copy.deepcopy(entry.get("new_value")) for entry in row["values"]},
             "validation_status": row.get("validation_status"), "active_errors_present": bool(row.get("active_errors")),
