@@ -98,6 +98,100 @@ class SavedDraftInspectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result['published'])
         self.assertEqual(await self.owner.state.all_steps('image-launch'), before)
 
+    async def _save_partial_campaign_for_account_readback(self):
+        from app.private_ads_draft import fail
+        self.payload['launch']['execution_mode'] = 'DRAFT'
+        original = self.client.get
+
+        async def interrupted_campaign(path, params):
+            if path == '/addraftfragment_111111':
+                raise fail('READ_PENDING', 'synthetic interrupted Campaign read', True)
+            return await original(path, params)
+
+        self.client.get = interrupted_campaign
+        with self.assertRaises(ProvisioningError):
+            await self.launch()
+        self.assertEqual(len(self.client.posts), 2)
+        self.payload['reconcile_only'] = True
+        return original
+
+    async def test_partial_campaign_uses_unique_exact_paused_account_fallback_without_post(self):
+        from app.private_ads_http import AdsManagerResponseError
+        original = await self._save_partial_campaign_for_account_readback()
+        calls = []
+
+        async def account_read(path, params):
+            calls.append(path)
+            if path.startswith('/addraftfragment_'):
+                raise AdsManagerResponseError({
+                    'http_status': 200, 'code': 100, 'error_subcode': 33,
+                    'type': 'GraphMethodException',
+                })
+            if path == '/addraft_555555/addraft_fragments':
+                return {'data': []}
+            if path == '/act_111111/campaigns':
+                campaign_fragment = self.client.fragments['111111']
+                values = {row['field']: copy.deepcopy(row['new_value'])
+                          for row in campaign_fragment['values']}
+                return {'data': [{'id': '777771', 'account_id': '111111', **values}]}
+            return await original(path, params)
+
+        self.client.get = account_read
+        before = copy.deepcopy(await self.owner.state.all_steps('image-launch'))
+        post_count = len(self.client.posts)
+        with patch.object(self.client, 'post',
+                          new=AsyncMock(side_effect=AssertionError('Inspection cannot POST'))) as post:
+            result = await self.launch()
+        post.assert_not_awaited()
+        self.assertEqual(calls.count('/act_111111/campaigns'), 1)
+        self.assertEqual(result['execution_mode'], 'DRAFT_INSPECT')
+        self.assertEqual(result['status'], 'RECONCILE_REQUIRED')
+        self.assertEqual(result['draft_objects'], {'campaign': '777771'})
+        self.assertEqual(result['fragment_reads'][0]['read_source'], 'account_campaigns_read')
+        self.assertTrue(result['fragment_reads'][0]['account_fallback_verified'])
+        self.assertFalse(result['fragment_reads'][0]['fragment_storage_verified'])
+        self.assertFalse(result['fragment_reads'][0]['fragment_relation_verified'])
+        self.assertTrue(result['object_reads'][0]['available'])
+        self.assertTrue(result['object_reads'][0]['settings_match'])
+        self.assertFalse(result['fragment_storage_verified'])
+        self.assertFalse(result['relationships_confirmed'])
+        self.assertEqual(result['mutation_posts'], 0)
+        self.assertIsNone(result['published'])
+        self.assertEqual(len(self.client.posts), post_count)
+        self.assertEqual(await self.owner.state.all_steps('image-launch'), before)
+
+    async def test_partial_campaign_account_fallback_rejects_multiple_exact_paused_matches(self):
+        from app.private_ads_http import AdsManagerResponseError
+        original = await self._save_partial_campaign_for_account_readback()
+
+        async def ambiguous_read(path, params):
+            if path.startswith('/addraftfragment_'):
+                raise AdsManagerResponseError({
+                    'http_status': 200, 'code': 100, 'error_subcode': 33,
+                    'type': 'GraphMethodException',
+                })
+            if path == '/addraft_555555/addraft_fragments':
+                return {'data': []}
+            if path == '/act_111111/campaigns':
+                campaign_fragment = self.client.fragments['111111']
+                values = {row['field']: copy.deepcopy(row['new_value'])
+                          for row in campaign_fragment['values']}
+                row = {'id': '777771', 'account_id': '111111', **values}
+                return {'data': [row, copy.deepcopy(row)]}
+            return await original(path, params)
+
+        self.client.get = ambiguous_read
+        before = copy.deepcopy(await self.owner.state.all_steps('image-launch'))
+        post_count = len(self.client.posts)
+        with patch.object(self.client, 'post',
+                          new=AsyncMock(side_effect=AssertionError('Inspection cannot POST'))) as post:
+            with self.assertRaises(ProvisioningError) as caught:
+                await self.launch()
+        post.assert_not_awaited()
+        self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_READ_RELATION_MISMATCH')
+        self.assertEqual(len(self.client.posts), post_count)
+        self.assertEqual(await self.owner.state.all_steps('image-launch'), before)
+
     async def test_exact_native_objects_and_creative_are_read_separately_from_fragments(self):
         await self.saved()
         result = await self.launch()
