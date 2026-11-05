@@ -449,11 +449,10 @@ async def private_inventory_snapshot(
             try:
                 from .static_meta_inventory import read_ad_account_inventory
                 bootstrap_account_hint = next(iter(expected)) if len(expected) == 1 else ""
-                proof = await asyncio.wait_for(
-                    read_ad_account_inventory(
-                        web, business_id, "", expected=bootstrap_account_hint,
-                    ),
-                    timeout=6.0,
+                # Let the private HTTP/2 request finish within its own transport deadline.
+                # A shorter outer wait_for cancels the Relay response while its body is streaming.
+                proof = await read_ad_account_inventory(
+                    web, business_id, "", expected=bootstrap_account_hint,
                 )
                 for item in proof.get("account_rows", []):
                     if not isinstance(item, dict):
