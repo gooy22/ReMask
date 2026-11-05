@@ -17,6 +17,16 @@ from .private_launch_extensions import OperationKey
 from .private_ads_draft_fallback import read_fragment_with_account_object_fallback
 
 
+def _fragment_receipt(row):
+    if not isinstance(row, dict):
+        raise ValueError("Invalid fragment receipt")
+    receipt = {"fragment_id": identity(row.get("id"))}
+    object_id = row.get("ad_object_id")
+    if object_id is not None:
+        receipt["ad_object_id"] = identity(object_id)
+    return receipt
+
+
 class AdsManagerDraftPublisher:
     def __init__(self, submitter):
         self.submitter = submitter
@@ -88,14 +98,15 @@ class AdsManagerDraftPublisher:
                 operation = "FRAGMENT_" + level.upper()
                 receipt = await self.submitter.submit(client, operation=operation,
                     path="/" + draft_id + "/addraft_fragments", params=params,
-                    receipt=lambda row: {"fragment_id": identity(row.get("id"))})
+                    receipt=_fragment_receipt)
                 fragment_id = receipt["fragment_id"]
                 if fragment_id in fragments:
                     raise fail("READ_RELATION_MISMATCH", "Draft hierarchy reused a fragment identity")
                 observed = await read_fragment_with_account_object_fallback(
                     client, account_id=scope["ad_account_id"], draft_id=draft_id,
                     fragment_id=fragment_id, level=level, values=values,
-                    parent_id=parent_id, allow_fallback=draft_only)
+                    parent_id=parent_id, object_id=receipt.get("ad_object_id"),
+                    allow_fallback=draft_only)
                 fallback = observed["fallback"]
                 if fallback is not None:
                     if (fallback.get("level") != level or fallback.get("draft_id") != draft_id
@@ -109,6 +120,9 @@ class AdsManagerDraftPublisher:
                             or fallback.get("pagination_complete") is not True):
                         raise fail("READ_SCOPE_MISMATCH", "Account readback does not confirm the saved paused draft")
                     objects[level] = identity(fallback.get("object_id"))
+                    receipt_object = receipt.get("ad_object_id")
+                    if receipt_object is not None and objects[level] != identity(receipt_object):
+                        raise fail("READ_RELATION_MISMATCH", "Account readback differs from the saved Campaign object receipt")
                     if objects[level] in list(objects.values())[:-1]:
                         raise fail("READ_RELATION_MISMATCH", "Draft levels have duplicate object identities")
                     await self._confirm(operation, {"draft_id": draft_id, "fragment_id": fragment_id,
@@ -152,6 +166,9 @@ class AdsManagerDraftPublisher:
                 if validation_pending:
                     validation_pending_levels.append(level)
                 objects[level] = identity(row.get("ad_object_id"))
+                receipt_object = receipt.get("ad_object_id")
+                if receipt_object is not None and objects[level] != identity(receipt_object):
+                    raise fail("READ_RELATION_MISMATCH", "Draft fragment differs from the saved Campaign object receipt")
                 if objects[level] in list(objects.values())[:-1]:
                     raise fail("READ_RELATION_MISMATCH", "Draft levels have duplicate object identities")
                 await self._confirm(operation, {"draft_id": draft_id, "fragment_id": fragment_id,

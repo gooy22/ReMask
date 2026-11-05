@@ -151,11 +151,11 @@ async def read_diagnostic(adapter, *, profile_id, context, session, payload):
         raise fail("READ_SCOPE_MISMATCH", "Saved draft ownership was not confirmed")
     reads, parent = [], None
     campaign_object_read, account_object_fallbacks = None, []
-    for level, fragment_id, values, _confirmed_object in fragments:
+    for level, fragment_id, values, confirmed_object in fragments:
         observed_result = await read_fragment_with_account_object_fallback(
             client, account_id=target["ad_account_id"], draft_id=draft_id,
             fragment_id=fragment_id, level=level, values=values,
-            parent_id=parent, allow_fallback=True)
+            parent_id=parent, object_id=confirmed_object, allow_fallback=True)
         fallback = observed_result["fallback"]
         if fallback is not None:
             account_object_fallbacks.append(fallback)

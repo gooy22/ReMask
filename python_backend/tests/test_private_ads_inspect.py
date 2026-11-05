@@ -98,22 +98,35 @@ class SavedDraftInspectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result['published'])
         self.assertEqual(await self.owner.state.all_steps('image-launch'), before)
 
-    async def _save_partial_campaign_for_account_readback(self):
+    async def _save_partial_campaign_for_account_readback(self, *, campaign_object_id=None):
         from app.private_ads_draft import fail
         self.payload['launch']['execution_mode'] = 'DRAFT'
-        original = self.client.get
+        original_get, original_post = self.client.get, self.client.post
 
         async def interrupted_campaign(path, params):
             if path == '/addraftfragment_111111':
                 raise fail('READ_PENDING', 'synthetic interrupted Campaign read', True)
-            return await original(path, params)
+            return await original_get(path, params)
+
+        async def campaign_receipt_post(path, params, **options):
+            response = await original_post(path, params, **options)
+            if (campaign_object_id is not None
+                    and path.endswith('/addraft_fragments')
+                    and params.get('ad_object_type') == 'campaign'):
+                return {**response, 'ad_object_id': campaign_object_id}
+            return response
 
         self.client.get = interrupted_campaign
-        with self.assertRaises(ProvisioningError):
-            await self.launch()
+        if campaign_object_id is not None:
+            self.client.post = campaign_receipt_post
+        try:
+            with self.assertRaises(ProvisioningError):
+                await self.launch()
+        finally:
+            self.client.post = original_post
         self.assertEqual(len(self.client.posts), 2)
         self.payload['reconcile_only'] = True
-        return original
+        return original_get
 
     async def _save_partial_campaign_for_distinct_fragment_readback(self):
         from app.private_ads_draft import fail
@@ -145,12 +158,13 @@ class SavedDraftInspectionTests(unittest.IsolatedAsyncioTestCase):
         self.payload['reconcile_only'] = True
         return original_get
 
-    async def test_partial_campaign_reads_numeric_fragment_node_core_without_post(self):
+    async def test_partial_campaign_never_guesses_fragment_id_as_object_without_receipt(self):
         from app.private_ads_http import AdsManagerResponseError
         original = await self._save_partial_campaign_for_distinct_fragment_readback()
-        core_fields = []
+        calls = []
 
-        async def numeric_read(path, params):
+        async def no_fragment_id_guess(path, params):
+            calls.append(path)
             if path.startswith('/addraftfragment_'):
                 raise AdsManagerResponseError({
                     'http_status': 200, 'code': 100, 'error_subcode': 33,
@@ -159,37 +173,28 @@ class SavedDraftInspectionTests(unittest.IsolatedAsyncioTestCase):
             if path == '/addraft_555555/addraft_fragments':
                 return {'data': []}
             if path == '/444444':
-                fields = set(params.get('fields') or [])
-                if {'ad_draft_id', 'ad_object_type'} <= fields:
-                    core_fields.extend(fields)
-                    fragment = self.client.fragments['444444']
-                    return {key: copy.deepcopy(value) for key, value in fragment.items()
-                            if key in fields}
-                raise AdsManagerResponseError({
-                    'http_status': 200, 'code': 100, 'error_subcode': 33,
-                    'type': 'GraphMethodException',
-                })
+                self.fail('A fragment receipt must never be used as an object ID')
             if path == '/act_111111/campaigns':
-                self.fail('Exact numeric fragment read should avoid account-list fallback')
+                fragment = self.client.fragments['444444']
+                values = {row['field']: copy.deepcopy(row['new_value'])
+                          for row in fragment['values']}
+                return {'data': [{'id': '777771', 'account_id': '111111', **values}]}
             return await original(path, params)
 
-        self.client.get = numeric_read
+        self.client.get = no_fragment_id_guess
         before = copy.deepcopy(await self.owner.state.all_steps('image-launch'))
         post_count = len(self.client.posts)
         with patch.object(self.client, 'post',
                           new=AsyncMock(side_effect=AssertionError('Inspection cannot POST'))) as post:
             result = await self.launch()
         post.assert_not_awaited()
+        self.assertNotIn('/444444', calls)
+        self.assertEqual(calls.count('/act_111111/campaigns'), 1)
         self.assertEqual(result['execution_mode'], 'DRAFT_INSPECT')
         self.assertEqual(result['draft_objects'], {'campaign': '777771'})
-        self.assertEqual(result['fragment_reads'][0]['read_source'],
-                         'fragment_numeric_node_core')
-        self.assertTrue(result['fragment_reads'][0]['fragment_relation_verified'])
-        self.assertTrue(result['fragment_reads'][0]['fragment_storage_verified'])
+        self.assertEqual(result['fragment_reads'][0]['read_source'], 'account_campaigns_read')
         self.assertEqual(result['mutation_posts'], 0)
         self.assertIsNone(result['published'])
-        self.assertTrue({'id', 'account_id', 'ad_draft_id', 'ad_object_id',
-                         'ad_object_type', 'values', 'validation_status'} <= set(core_fields))
         self.assertEqual(len(self.client.posts), post_count)
         self.assertEqual(await self.owner.state.all_steps('image-launch'), before)
 
@@ -242,7 +247,8 @@ class SavedDraftInspectionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_partial_campaign_uses_exact_saved_id_before_account_list_without_post(self):
         from app.private_ads_http import AdsManagerResponseError
-        original = await self._save_partial_campaign_for_account_readback()
+        original = await self._save_partial_campaign_for_account_readback(
+            campaign_object_id='777771')
         calls = []
 
         async def direct_read(path, params):
@@ -254,13 +260,13 @@ class SavedDraftInspectionTests(unittest.IsolatedAsyncioTestCase):
                 })
             if path == '/addraft_555555/addraft_fragments':
                 return {'data': []}
-            if path == '/111111':
+            if path == '/777771':
                 fragment = self.client.fragments['111111']
                 values = {row['field']: copy.deepcopy(row['new_value'])
                           for row in fragment['values']}
-                return {'id': '111111', 'account_id': '111111', **values}
+                return {'id': '777771', 'account_id': '111111', **values}
             if path == '/act_111111/campaigns':
-                self.fail('Exact saved ID read should precede account-list fallback')
+                self.fail('Exact saved object ID read should precede account-list fallback')
             return await original(path, params)
 
         self.client.get = direct_read
@@ -270,11 +276,12 @@ class SavedDraftInspectionTests(unittest.IsolatedAsyncioTestCase):
                           new=AsyncMock(side_effect=AssertionError('Inspection cannot POST'))) as post:
             result = await self.launch()
         post.assert_not_awaited()
-        self.assertEqual(calls.count('/111111'), 2)
+        self.assertEqual(calls.count('/777771'), 1)
+        self.assertNotIn('/111111', calls)
         self.assertNotIn('/act_111111/campaigns', calls)
-        self.assertEqual(result['draft_objects'], {'campaign': '111111'})
+        self.assertEqual(result['draft_objects'], {'campaign': '777771'})
         self.assertEqual(result['fragment_reads'][0]['read_source'],
-                         'direct_saved_campaign_id_read')
+                         'direct_saved_campaign_object_read')
         self.assertTrue(result['fragment_reads'][0]['account_fallback_verified'])
         self.assertTrue(result['object_reads'][0]['available'])
         self.assertTrue(result['object_reads'][0]['settings_match'])
@@ -285,7 +292,8 @@ class SavedDraftInspectionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_partial_campaign_saved_id_read_rejects_spec_mismatch_without_list_fallback(self):
         from app.private_ads_http import AdsManagerResponseError
-        original = await self._save_partial_campaign_for_account_readback()
+        original = await self._save_partial_campaign_for_account_readback(
+            campaign_object_id='777771')
         calls = []
 
         async def mismatched_direct_read(path, params):
@@ -297,13 +305,13 @@ class SavedDraftInspectionTests(unittest.IsolatedAsyncioTestCase):
                 })
             if path == '/addraft_555555/addraft_fragments':
                 return {'data': []}
-            if path == '/111111':
+            if path == '/777771':
                 fragment = self.client.fragments['111111']
                 values = {row['field']: copy.deepcopy(row['new_value'])
                           for row in fragment['values']}
-                return {'id': '111111', 'account_id': '111111', **values, 'name': 'different'}
+                return {'id': '777771', 'account_id': '111111', **values, 'name': 'different'}
             if path == '/act_111111/campaigns':
-                self.fail('A mismatched saved ID must not fall through to a name search')
+                self.fail('A mismatched saved object ID must not fall through to a name search')
             return await original(path, params)
 
         self.client.get = mismatched_direct_read
@@ -315,6 +323,8 @@ class SavedDraftInspectionTests(unittest.IsolatedAsyncioTestCase):
                 await self.launch()
         post.assert_not_awaited()
         self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_READ_SPEC_MISMATCH')
+        self.assertIn('/777771', calls)
+        self.assertNotIn('/111111', calls)
         self.assertNotIn('/act_111111/campaigns', calls)
         self.assertEqual(len(self.client.posts), post_count)
         self.assertEqual(await self.owner.state.all_steps('image-launch'), before)
