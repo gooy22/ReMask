@@ -203,7 +203,33 @@ async def inspect_saved_draft(adapter, *, profile_id, context, session, payload)
         observed = await read_fragment_with_account_object_fallback(
             client, account_id=target["ad_account_id"], draft_id=draft_id,
             fragment_id=fragment_id, level=level, values=values,
-            parent_id=parent, allow_fallback=False)
+            parent_id=parent, allow_fallback=True)
+        fallback = observed.get("fallback")
+        if fallback is not None:
+            if (not isinstance(fallback, dict)
+                    or fallback.get("account_id") != target["ad_account_id"]
+                    or fallback.get("status") != "PAUSED"
+                    or fallback.get("settings_match") is not True
+                    or fallback.get("unique_spec_match_count") != 1
+                    or fallback.get("paused_spec_match_count") != 1
+                    or fallback.get("pagination_complete") is not True):
+                raise fail("READ_RELATION_MISMATCH", "Account fallback did not prove one exact paused object")
+            object_id = identity(fallback.get("object_id"))
+            if confirmed_object is not None and object_id != confirmed_object:
+                raise fail("READ_RELATION_MISMATCH", "Fresh account object differs from the saved fragment receipt")
+            if object_id in objects.values():
+                raise fail("READ_RELATION_MISMATCH", "Fresh draft levels have duplicate object identities")
+            objects[level] = object_id
+            reads.append({"level": level, "fragment_id": fragment_id, "ad_object_id": object_id,
+                "read_source": fallback.get("source", "account_object"),
+                "fragment_relation_verified": False, "fragment_storage_verified": False,
+                "account_fallback_verified": True, "unique_spec_match_count": 1,
+                "paused_spec_match_count": 1, "submitted_values": values, "settings_match": True,
+                "validation_status": None, "active_errors_present": False,
+                "active_errors_observed": False, "active_errors_confirmed_empty": False,
+                "active_error_diagnostic": validation_diagnostic(None, observed=False),
+                "publish_status": None, "status": "PAUSED"})
+            continue
         row = observed["row"]
         adapter_scope(row, target["ad_account_id"])
         if (row.get("id") != fragment_id or row.get("ad_draft_id") != draft_id or row.get("ad_object_type") != level
@@ -229,6 +255,8 @@ async def inspect_saved_draft(adapter, *, profile_id, context, session, payload)
             raise fail("READ_RELATION_MISMATCH", "Fresh draft levels have duplicate object identities")
         reads.append({"level": level, "fragment_id": fragment_id, "ad_object_id": objects[level],
             "read_source": observed.get("source"),
+            "fragment_relation_verified": True, "fragment_storage_verified": True,
+            "account_fallback_verified": False,
             "submitted_values": values, "settings_match": True,
             "fresh_values": {entry["field"]: copy.deepcopy(entry.get("new_value")) for entry in row["values"]},
             "validation_status": row.get("validation_status"), "active_errors_present": bool(row.get("active_errors")),
@@ -259,10 +287,15 @@ async def inspect_saved_draft(adapter, *, profile_id, context, session, payload)
                 "diagnostic": exc.diagnostic, "publication_verified": False})
             continue
         _scope(row, target["ad_account_id"], entity)
+        settings_match = all(field in row and _same(row[field], value, field)
+                             for field, value in expected.items())
+        if fragment.get("account_fallback_verified") and (
+            row.get("status") != "PAUSED" or not settings_match
+        ):
+            raise fail("READ_SPEC_MISMATCH", "Direct object read changed from the exact paused saved specification")
         object_reads.append({"level": level, "id": entity, "available": True,
             "values": {field: copy.deepcopy(row[field]) for field in expected if field in row},
-            "settings_match": all(field in row and _same(row[field], value, field)
-                                  for field, value in expected.items()),
+            "settings_match": settings_match,
             "missing_fields": sorted(set(expected) - set(row)),
             "effective_status": row.get("effective_status"), "publication_verified": False})
         if level == "ad":
@@ -286,7 +319,11 @@ async def inspect_saved_draft(adapter, *, profile_id, context, session, payload)
     # The job result persists this evidence. Original mutation receipts and
     # fingerprints remain untouched, even if Meta reports a validation error.
     complete = pending is None and len(fragments) == len(LEVELS)
-    validation_complete = complete and all(
+    fragment_storage_verified = complete and all(
+        row.get("fragment_storage_verified") is True for row in reads)
+    relationships_confirmed = all(
+        row.get("fragment_relation_verified") is True for row in reads)
+    validation_complete = fragment_storage_verified and relationships_confirmed and all(
         row["validation_status"] == "VALIDATED"
         and row["active_errors_confirmed_empty"]
         for row in reads)
@@ -295,10 +332,11 @@ async def inspect_saved_draft(adapter, *, profile_id, context, session, payload)
         for row in reads)
     inspected = [row["level"] for row in reads]
     inspected_objects = inspected + (["creative"] if "ad" in inspected else [])
-    return {"status": "SUCCESS" if complete else "RECONCILE_REQUIRED",
+    return {"status": "SUCCESS" if fragment_storage_verified else "RECONCILE_REQUIRED",
         "execution_mode": "DRAFT_INSPECT", **target, "launch_key": key,
         "draft_id": draft_id, "draft_objects": objects, "fragment_reads": reads,
-        "fragment_storage_verified": complete, "relationships_confirmed": True,
+        "fragment_storage_verified": fragment_storage_verified,
+        "relationships_confirmed": relationships_confirmed,
         "meta_validation_complete": validation_complete,
         "meta_validation_errors_present": validation_errors_present,
         "draft_verified": validation_complete,
