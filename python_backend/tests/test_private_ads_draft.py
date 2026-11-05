@@ -712,6 +712,32 @@ class PublisherTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_READ_SPEC_MISMATCH')
 
+    async def test_unique_full_spec_campaign_among_duplicate_names_allows_paused_child(self):
+        from app.private_ads_http import AdsManagerResponseError
+        self.levels['campaign'].update(objective='OUTCOME_TRAFFIC', daily_budget=500)
+        original = self.client.get
+        async def read(path, params):
+            if path == '/addraftfragment_111111':
+                raise AdsManagerResponseError({
+                    'http_status': 200, 'code': 100, 'error_subcode': 33,
+                    'type': 'GraphMethodException',
+                })
+            if path == '/act_111111/campaigns':
+                saved = dict(self.levels['campaign'])
+                wrong = {'id': '777770', 'account_id': '111111', **saved,
+                         'objective': 'OUTCOME_LEADS'}
+                exact = {'id': '777771', 'account_id': '111111', **saved}
+                return {'data': [wrong, exact]}
+            return await original(path, params)
+        self.client.get = read
+        result = await self.publisher.run(self.client, name='source-flow', levels=self.levels,
+            verify_objects=self.verify, draft_only=True)
+        self.assertEqual(result['status'], 'SUCCESS')
+        self.assertEqual(result['draft_objects']['campaign'], '777771')
+        self.assertEqual(self.client.posts[2][1]['parent_ad_object_id'], '777771')
+        self.assertEqual(len(self.client.posts), 4)
+        self.assertFalse(any(path.endswith('/publish') for path, _ in self.client.posts))
+
     async def test_duplicate_campaign_name_rejects_fallback_before_ad_set_create(self):
         from app.private_ads_http import AdsManagerResponseError
         original = self.client.get

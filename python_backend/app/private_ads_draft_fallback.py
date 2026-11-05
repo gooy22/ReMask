@@ -7,11 +7,14 @@ PAUSED object among any same-name candidates.
 """
 from __future__ import annotations
 
+import logging
+
 from .private_ads_draft import FRAGMENT_FIELDS, fail, identity
 from .private_ads_verify import _same
 
 
 _ALLOWED_EDGES = {"campaign": "campaigns", "ad_set": "adsets", "ad": "ads"}
+log = logging.getLogger(__name__)
 
 
 def is_exact_fragment_read_rejection(error) -> bool:
@@ -90,6 +93,7 @@ async def _read_account_level_object(
         same_name.append(row)
 
     if not same_name:
+        log.warning("saved_account_object_read_unmatched level=%s outcome=no_saved_name same_name_count=0", level)
         raise fail("READ_RELATION_MISMATCH", "Meta did not return an object with the saved name")
     excluded = {"status"}
     if level == "ad":
@@ -99,8 +103,12 @@ async def _read_account_level_object(
     ]
     paused_matches = [row for row in settings_matches if row.get("status") == "PAUSED"]
     if len(paused_matches) > 1:
+        log.warning("saved_account_object_read_unmatched level=%s outcome=ambiguous_paused_spec same_name_count=%d settings_match_count=%d paused_spec_match_count=%d",
+            level, len(same_name), len(settings_matches), len(paused_matches))
         raise fail("READ_RELATION_MISMATCH", "Meta returned multiple exact paused objects for the saved draft")
     if not paused_matches:
+        log.warning("saved_account_object_read_unmatched level=%s outcome=no_paused_spec same_name_count=%d settings_match_count=%d paused_spec_match_count=0",
+            level, len(same_name), len(settings_matches))
         if settings_matches:
             raise fail("DRAFT_DELIVERY_UNSAFE", "Exact saved settings did not have PAUSED status")
         raise fail("READ_SPEC_MISMATCH", "Meta returned no object matching the full saved Launch settings")
@@ -148,7 +156,9 @@ async def _read_account_level_object(
         "status": "PAUSED",
         "settings_match": True,
         "unique_name_match_count": len(same_name),
-        "unique_spec_match_count": 1,
+        "settings_match_count": len(settings_matches),
+        "unique_spec_match_count": len(paused_matches),
+        "paused_spec_match_count": len(paused_matches),
         "pagination_complete": True,
         "validation_unobserved": True,
         "fragment_read_error": fragment_read_error or {},
