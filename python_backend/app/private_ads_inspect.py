@@ -152,9 +152,16 @@ async def saved_draft_intent(adapter, *, profile_id, context, payload):
         values = evidence.get("binding", {}).get("values")
         if not isinstance(values, dict) or not values:
             raise fail("RECONCILE_REQUIRED", "A saved fragment has no exact submitted field binding")
-        confirmed_object = evidence.get("verification", {}).get("ad_object_id")
-        if confirmed_object is not None:
-            identity(confirmed_object)
+        verified_object = evidence.get("verification", {}).get("ad_object_id")
+        receipt_object = receipt.get("ad_object_id")
+        if verified_object is not None:
+            verified_object = identity(verified_object)
+        if receipt_object is not None:
+            receipt_object = identity(receipt_object)
+        if (verified_object is not None and receipt_object is not None
+                and verified_object != receipt_object):
+            raise fail("SAVED_OPERATION_MISMATCH", "Saved Campaign object receipt differs from its verification")
+        confirmed_object = verified_object or receipt_object
         fragments.append((level, identifier, copy.deepcopy(values), confirmed_object))
     return target, key, fingerprint, actor, next(iter(sources)), draft_id, fragments, pending
 
@@ -203,7 +210,7 @@ async def inspect_saved_draft(adapter, *, profile_id, context, session, payload)
         observed = await read_fragment_with_account_object_fallback(
             client, account_id=target["ad_account_id"], draft_id=draft_id,
             fragment_id=fragment_id, level=level, values=values,
-            parent_id=parent, allow_fallback=True)
+            parent_id=parent, object_id=confirmed_object, allow_fallback=True)
         fallback = observed.get("fallback")
         if fallback is not None:
             if (not isinstance(fallback, dict)
