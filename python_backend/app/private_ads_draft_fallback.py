@@ -1,9 +1,8 @@
 """Narrow, read-only recovery for saved paused draft fragments.
 
-The fallback uses only reviewed account-level Campaigns/Ad Sets/Ads reads and
-exact object reads. It runs only after Meta rejects the saved fragment node with
-the known unsupported-object response, then requires one full-spec-matching,
-PAUSED object among any same-name candidates.
+Try the exact fragment node and its owning draft edge first. Only then use
+reviewed account-level object reads, which require one full-spec-matching,
+PAUSED object among same-name candidates.
 """
 from __future__ import annotations
 
@@ -48,6 +47,28 @@ def _account(row, account_id, object_id=None):
 def _matches(row, values, *, exclude=()):
     return all(key in row and _same(row[key], value, key)
                for key, value in values.items() if key not in exclude)
+
+
+async def _read_fragment_from_draft_edge(client, *, draft_id, fragment_id):
+    """Read one exact fragment through the already confirmed owning draft."""
+    response = await client.get(
+        "/addraft_" + identity(draft_id) + "/addraft_fragments",
+        {"fields": sorted(_CORE_FRAGMENT_FIELDS), "limit": 100},
+    )
+    if not isinstance(response, dict) or "error" in response or "errors" in response:
+        raise fail("READ_SCOPE_MISMATCH", "Meta draft fragment edge returned an invalid response")
+    rows = response.get("data")
+    if not isinstance(rows, list) or len(rows) > 100:
+        raise fail("READ_PENDING", "Meta did not return a bounded draft fragment list")
+    paging = response.get("paging")
+    if isinstance(paging, dict) and paging.get("next"):
+        raise fail("READ_PENDING", "Draft fragment list is paginated; uniqueness was not confirmed")
+    if any(not isinstance(row, dict) or "error" in row or "errors" in row for row in rows):
+        raise fail("READ_SCOPE_MISMATCH", "Meta returned an invalid draft fragment")
+    matches = [row for row in rows if row.get("id") == fragment_id]
+    if len(matches) > 1:
+        raise fail("READ_RELATION_MISMATCH", "Meta returned duplicate identities for the saved draft fragment")
+    return matches[0] if matches else None
 
 
 async def _read_account_level_object(
@@ -177,24 +198,43 @@ async def read_fragment_with_account_object_fallback(
     fragment_path = "/addraftfragment_" + identity(fragment_id)
     try:
         row = await client.get(fragment_path, {"fields": FRAGMENT_FIELDS})
-        return {"row": row, "fallback": None}
+        return {"row": row, "fallback": None, "source": "fragment_node"}
     except Exception as error:
-        if (not allow_fallback or level not in _ALLOWED_EDGES
+        if (level not in _ALLOWED_EDGES
                 or not is_exact_fragment_read_rejection(error)):
             raise
         # Meta may reject optional fields on an otherwise readable draft
-        # fragment. Retry the same exact node with the fields needed to verify
-        # ownership, hierarchy, saved settings and paused validation first.
-        # Account-list recovery remains the final read-only fallback.
+        # fragment. Retry the same node with only the fields required to verify
+        # ownership, hierarchy, settings and paused validation.
         try:
             row = await client.get(fragment_path, {"fields": _CORE_FRAGMENT_FIELDS})
-            return {"row": row, "fallback": None}
+            return {"row": row, "fallback": None, "source": "fragment_node_core"}
         except Exception as core_error:
             if not is_exact_fragment_read_rejection(core_error):
                 raise
             error = core_error
         log.info("saved_fragment_core_read_rejected level=%s code=%s subcode=%s",
             level, error.diagnostic.get("code"), error.diagnostic.get("error_subcode"))
+
+        # The fragment was submitted through this exact draft's edge. Read that
+        # edge before trying account-wide name matching, and accept only one
+        # row whose ID equals the durable fragment receipt.
+        try:
+            row = await _read_fragment_from_draft_edge(
+                client, draft_id=draft_id, fragment_id=identity(fragment_id))
+        except Exception as edge_error:
+            if not is_exact_fragment_read_rejection(edge_error):
+                raise
+            error = edge_error
+            log.info("saved_fragment_edge_read_rejected level=%s code=%s subcode=%s",
+                level, error.diagnostic.get("code"), error.diagnostic.get("error_subcode"))
+        else:
+            if row is not None:
+                return {"row": row, "fallback": None, "source": "draft_edge"}
+            log.info("saved_fragment_edge_read_unmatched level=%s", level)
+
+        if not allow_fallback:
+            raise error
         diagnostic = error.diagnostic
         read_error = {
             key: diagnostic[key]
@@ -206,4 +246,4 @@ async def read_fragment_with_account_object_fallback(
             parent_id=parent_id, draft_id=draft_id, fragment_id=fragment_id,
             fragment_read_error=read_error,
         )
-        return {"row": None, "fallback": proof}
+        return {"row": None, "fallback": proof, "source": "account_object"}
