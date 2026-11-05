@@ -115,6 +115,7 @@ async def _read_saved_campaign_by_object_id(
         "pagination_complete": True,
         "validation_unobserved": True,
         "fragment_read_error": fragment_read_error,
+        "object_values": {key: row[key] for key in values if key in row},
         "checked_fields": fields,
     }
     log.info("saved_campaign_object_read_confirmed outcome=exact_paused_match")
