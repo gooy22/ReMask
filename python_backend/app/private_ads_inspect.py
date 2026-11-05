@@ -204,7 +204,7 @@ async def inspect_saved_draft(adapter, *, profile_id, context, session, payload)
     adapter_scope(draft, target["ad_account_id"])
     if draft.get("id") != draft_id or draft.get("author_id") != actor or draft.get("ownership_type") != "USER":
         raise fail("READ_SCOPE_MISMATCH", "Fresh draft ownership differs from the saved intent")
-    objects, reads = {}, []
+    objects, reads, object_reads = {}, [], []
     for level, fragment_id, values, confirmed_object in fragments:
         parent = objects.get("campaign" if level == "ad_set" else "ad_set") if level != "campaign" else None
         observed = await read_fragment_with_account_object_fallback(
@@ -236,6 +236,13 @@ async def inspect_saved_draft(adapter, *, profile_id, context, session, payload)
                 "active_errors_observed": False, "active_errors_confirmed_empty": False,
                 "active_error_diagnostic": validation_diagnostic(None, observed=False),
                 "publish_status": None, "status": "PAUSED"})
+            if fallback.get("source") == "direct_saved_campaign_object_read":
+                observed_values = fallback.get("object_values", {})
+                object_reads.append({"level": level, "id": object_id, "available": True,
+                    "values": copy.deepcopy(observed_values), "settings_match": True,
+                    "missing_fields": sorted(set(values) - set(observed_values)),
+                    "effective_status": None, "publication_verified": False,
+                    "read_source": fallback["source"]})
             continue
         row = observed["row"]
         adapter_scope(row, target["ad_account_id"])
@@ -278,9 +285,12 @@ async def inspect_saved_draft(adapter, *, profile_id, context, session, payload)
     # as unavailable evidence, never interpreted as absence or publication.
     from .private_ads_http import AdsManagerResponseError
     from .private_ads_verify import _same, _scope
-    object_reads = []
+    directly_read = {(row["level"], row["id"]) for row in object_reads
+                     if row.get("read_source") == "direct_saved_campaign_object_read"}
     for fragment in reads:
         level, entity = fragment["level"], fragment["ad_object_id"]
+        if (level, entity) in directly_read:
+            continue
         expected = copy.deepcopy(fragment["submitted_values"])
         expected.pop("creative", None)
         fields = sorted({"id", "account_id", "status", "effective_status", *expected,
