@@ -90,12 +90,6 @@ async def _read_saved_campaign_by_fragment_id(
             return None, error
         raise
     _account(row, account_id, fragment_id)
-    if "status" not in row:
-        log.info("saved_campaign_id_read_unavailable outcome=projection_incomplete missing_count=%d",
-            len(set(values) - set(row)))
-        return None, None
-    if row.get("status") != "PAUSED":
-        raise fail("DRAFT_DELIVERY_UNSAFE", "Direct saved Campaign ID is not PAUSED")
     missing = set(values) - set(row)
     if missing:
         log.info("saved_campaign_id_read_unavailable outcome=projection_incomplete missing_count=%d",
@@ -103,6 +97,8 @@ async def _read_saved_campaign_by_fragment_id(
         return None, None
     if not _matches(row, values, exclude={"status"}):
         raise fail("READ_SPEC_MISMATCH", "Direct saved Campaign ID differs from the full saved specification")
+    if row.get("status") != "PAUSED":
+        raise fail("DRAFT_DELIVERY_UNSAFE", "Direct saved Campaign ID is not PAUSED")
     proof = {
         "source": "direct_saved_campaign_id_read",
         "level": "campaign",
