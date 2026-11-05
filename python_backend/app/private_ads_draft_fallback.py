@@ -14,6 +14,10 @@ from .private_ads_verify import _same
 
 
 _ALLOWED_EDGES = {"campaign": "campaigns", "ad_set": "adsets", "ad": "ads"}
+_CORE_FRAGMENT_FIELDS = [
+    "account_id", "ad_draft_id", "ad_object_id", "ad_object_type", "id",
+    "parent_ad_object_id", "status", "values", "validation_status",
+]
 log = logging.getLogger(__name__)
 
 
@@ -170,16 +174,27 @@ async def read_fragment_with_account_object_fallback(
     client, *, account_id, draft_id, fragment_id, level, values, parent_id=None,
     allow_fallback=False,
 ):
+    fragment_path = "/addraftfragment_" + identity(fragment_id)
     try:
-        row = await client.get(
-            "/addraftfragment_" + identity(fragment_id),
-            {"fields": FRAGMENT_FIELDS},
-        )
+        row = await client.get(fragment_path, {"fields": FRAGMENT_FIELDS})
         return {"row": row, "fallback": None}
     except Exception as error:
         if (not allow_fallback or level not in _ALLOWED_EDGES
                 or not is_exact_fragment_read_rejection(error)):
             raise
+        # Meta may reject optional fields on an otherwise readable draft
+        # fragment. Retry the same exact node with the fields needed to verify
+        # ownership, hierarchy, saved settings and paused validation first.
+        # Account-list recovery remains the final read-only fallback.
+        try:
+            row = await client.get(fragment_path, {"fields": _CORE_FRAGMENT_FIELDS})
+            return {"row": row, "fallback": None}
+        except Exception as core_error:
+            if not is_exact_fragment_read_rejection(core_error):
+                raise
+            error = core_error
+        log.info("saved_fragment_core_read_rejected level=%s code=%s subcode=%s",
+            level, error.diagnostic.get("code"), error.diagnostic.get("error_subcode"))
         diagnostic = error.diagnostic
         read_error = {
             key: diagnostic[key]

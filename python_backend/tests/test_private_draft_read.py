@@ -72,7 +72,7 @@ class DraftReadDiagnosticTests(unittest.IsolatedAsyncioTestCase):
         client.post.assert_not_awaited()
         self.assertTrue(client.read_only)
         self.assertEqual(calls, ['/addraft_444444', '/addraftfragment_555555',
-                                 '/act_111111/campaigns'])
+                                 '/addraftfragment_555555', '/act_111111/campaigns'])
         proof = result['campaign_object_read']
         self.assertEqual(proof['object_id'], '666666')
         self.assertEqual(proof['source'], 'account_campaigns_read')

@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from app.private_ads_draft import fragment_params, fragment_values_match, flatten_params, publication_receipt, publication_status, publish_params
+from app.private_ads_draft import fragment_params, fragment_values_match, flatten_params, publication_receipt, publication_status, publish_params, FRAGMENT_FIELDS
 from app.private_ads_http import context_from_document, AdsManagerResponseError
 from app.private_ads_state import AdsManagerSubmitter
 from app.action_result import ActionResult
@@ -608,6 +608,36 @@ class PublisherTests(unittest.IsolatedAsyncioTestCase):
                 verify_objects=self.verify, draft_only=True)
         self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_VALIDATION_PENDING')
         self.assertEqual(len(self.client.posts), 2)
+        self.assertFalse(any(path.endswith('/publish') for path, _ in self.client.posts))
+
+    async def test_core_fragment_projection_recovers_when_optional_fields_are_rejected(self):
+        original = self.client.get
+        core_fields = []
+        async def read(path, params):
+            if path == '/addraftfragment_111111':
+                fields = set(params.get('fields') or [])
+                if fields == set(FRAGMENT_FIELDS):
+                    raise AdsManagerResponseError({
+                        'http_status': 200, 'code': 100, 'error_subcode': 33,
+                        'type': 'GraphMethodException',
+                    })
+                core_fields.extend(params.get('fields') or [])
+                row = await original(path, params)
+                row.pop('active_errors', None)
+                row.pop('publish_status', None)
+                return row
+            return await original(path, params)
+        self.client.get = read
+        result = await self.publisher.run(self.client, name='source-flow', levels=self.levels,
+            verify_objects=self.verify, draft_only=True)
+        self.assertEqual(result['status'], 'SUCCESS')
+        self.assertEqual(result['account_object_read_fallback_levels'], [])
+        self.assertIn('ad_object_id', core_fields)
+        self.assertIn('validation_status', core_fields)
+        self.assertIn('values', core_fields)
+        self.assertNotIn('active_errors', core_fields)
+        self.assertNotIn('publish_status', core_fields)
+        self.assertEqual(len(self.client.posts), 4)
         self.assertFalse(any(path.endswith('/publish') for path, _ in self.client.posts))
 
     async def test_exact_fragment_read_rejection_recovers_one_paused_campaign_without_recreate(self):
