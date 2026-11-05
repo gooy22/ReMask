@@ -58,11 +58,6 @@ class DraftReadDiagnosticTests(unittest.IsolatedAsyncioTestCase):
                     'http_status':200, 'code':100, 'error_subcode':33,
                     'type':'GraphMethodException',
                 })
-            if path == '/555555':
-                raise AdsManagerResponseError({
-                    'http_status':200, 'code':100, 'error_subcode':33,
-                    'type':'GraphMethodException',
-                })
             if path == '/act_111111/campaigns':
                 return {'data':[{'id':'666666', 'account_id':'111111',
                     'name':'fixture campaign', 'status':'PAUSED'}]}
@@ -79,7 +74,7 @@ class DraftReadDiagnosticTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(client.read_only)
         self.assertEqual(calls, ['/addraft_444444', '/addraftfragment_555555',
                                  '/addraftfragment_555555',
-                                 '/addraft_444444/addraft_fragments', '/555555', '/555555',
+                                 '/addraft_444444/addraft_fragments',
                                  '/act_111111/campaigns'])
         proof = result['campaign_object_read']
         self.assertEqual(proof['object_id'], '666666')
@@ -91,6 +86,53 @@ class DraftReadDiagnosticTests(unittest.IsolatedAsyncioTestCase):
             'http_status':200, 'code':100, 'error_subcode':33,
             'type':'GraphMethodException',
         })
+        self.assertTrue(result['fragment_reads'][0]['relationships_match'])
+        self.assertTrue(result['fragment_reads'][0]['settings_match'])
+        self.assertEqual(result['advertising_mutation_posts'], 0)
+        self.assertFalse(result['persisted'])
+
+    async def test_saved_campaign_object_receipt_is_read_by_its_exact_id(self):
+        from app.private_ads_http import AdsManagerResponseError
+        target = {'ad_account_id':'111111', 'business_id':'222222'}
+        values = {'name':'fixture campaign', 'status':'PAUSED'}
+        intent = (target, 'saved-key', 'fingerprint', '333333', 'source', '444444',
+                  [('campaign', '555555', values, '666666')], {'stage':'FRAGMENT_AD_SET'})
+        client = SimpleNamespace(read_only=False, context=SimpleNamespace(account_id='111111'),
+            post=AsyncMock(side_effect=AssertionError('No POST')))
+        calls = []
+
+        async def get(path, params):
+            calls.append(path)
+            if path == '/addraft_444444':
+                return {'id':'444444', 'account_id':'111111',
+                    'author_id':'333333', 'ownership_type':'USER'}
+            if path in {'/addraftfragment_555555',
+                        '/addraft_444444/addraft_fragments'}:
+                raise AdsManagerResponseError({
+                    'http_status':200, 'code':100, 'error_subcode':33,
+                    'type':'GraphMethodException',
+                })
+            if path == '/666666':
+                return {'id':'666666', 'account_id':'111111',
+                    'name':'fixture campaign', 'status':'PAUSED'}
+            raise AssertionError('Unexpected read path: '+path)
+
+        client.get = AsyncMock(side_effect=get)
+        session = SimpleNamespace(facebook_web=AsyncMock(return_value=object()))
+        open_client = AsyncMock(return_value=client)
+        with patch('app.private_draft_read_diagnostic.saved_draft_intent',
+                new=AsyncMock(return_value=intent)), \
+                patch('app.private_draft_read_diagnostic.AdsManagerPrivateHttp.open', new=open_client):
+            result = await read_diagnostic(object(), profile_id='4', context=object(),
+                session=session, payload={})
+
+        self.assertEqual(calls, ['/addraft_444444', '/addraftfragment_555555',
+                                 '/addraftfragment_555555',
+                                 '/addraft_444444/addraft_fragments', '/666666'])
+        self.assertNotIn('/555555', calls)
+        self.assertEqual(result['campaign_object_read']['object_id'], '666666')
+        self.assertEqual(result['campaign_object_read']['source'],
+                         'direct_saved_campaign_object_read')
         self.assertTrue(result['fragment_reads'][0]['relationships_match'])
         self.assertTrue(result['fragment_reads'][0]['settings_match'])
         self.assertEqual(result['advertising_mutation_posts'], 0)
