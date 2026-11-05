@@ -74,8 +74,9 @@ async def _read_saved_campaign_by_fragment_id(
     client, *, account_id, draft_id, fragment_id, values, fragment_read_error,
 ):
     """Use the durable fragment receipt as a Campaign ID only if it reads exactly."""
-    if not isinstance(values, dict) or values.get("status") != "PAUSED":
-        raise fail("READ_PENDING", "Saved Campaign has no explicit PAUSED specification")
+    if (not isinstance(values, dict) or values.get("status") != "PAUSED"
+            or not isinstance(values.get("name"), str) or not values["name"]):
+        raise fail("READ_PENDING", "Saved Campaign has no exact name and PAUSED specification")
     account_id, draft_id, fragment_id = (
         identity(account_id), identity(draft_id), identity(fragment_id))
     fields = sorted({"id", "account_id", *values.keys()})
