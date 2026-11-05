@@ -321,7 +321,7 @@ async def inspect_saved_draft(adapter, *, profile_id, context, session, payload)
     complete = pending is None and len(fragments) == len(LEVELS)
     fragment_storage_verified = complete and all(
         row.get("fragment_storage_verified") is True for row in reads)
-    relationships_confirmed = bool(reads) and all(
+    relationships_confirmed = all(
         row.get("fragment_relation_verified") is True for row in reads)
     validation_complete = fragment_storage_verified and relationships_confirmed and all(
         row["validation_status"] == "VALIDATED"
