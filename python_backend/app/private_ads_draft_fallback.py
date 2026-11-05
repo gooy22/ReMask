@@ -2,8 +2,8 @@
 
 The fallback uses only reviewed account-level Campaigns/Ad Sets/Ads reads and
 exact object reads. It runs only after Meta rejects the saved fragment node with
-the known unsupported-object response, then requires one uniquely named,
-fully matching PAUSED object.
+the known unsupported-object response, then requires one full-spec-matching,
+PAUSED object among any same-name candidates.
 """
 from __future__ import annotations
 
@@ -89,14 +89,23 @@ async def _read_account_level_object(
         _account(row, account_id)
         same_name.append(row)
 
-    if len(same_name) != 1:
-        raise fail("READ_RELATION_MISMATCH", "Meta did not return one unique object for the saved draft")
-    row = same_name[0]
+    if not same_name:
+        raise fail("READ_RELATION_MISMATCH", "Meta did not return an object with the saved name")
+    excluded = {"status"}
+    if level == "ad":
+        excluded.add("creative")
+    settings_matches = [
+        row for row in same_name if _matches(row, values, exclude=excluded)
+    ]
+    paused_matches = [row for row in settings_matches if row.get("status") == "PAUSED"]
+    if len(paused_matches) > 1:
+        raise fail("READ_RELATION_MISMATCH", "Meta returned multiple exact paused objects for the saved draft")
+    if not paused_matches:
+        if settings_matches:
+            raise fail("DRAFT_DELIVERY_UNSAFE", "Exact saved settings did not have PAUSED status")
+        raise fail("READ_SPEC_MISMATCH", "Meta returned no object matching the full saved Launch settings")
+    row = paused_matches[0]
     object_id = identity(row.get("id"))
-    if row.get("status") != "PAUSED":
-        raise fail("DRAFT_DELIVERY_UNSAFE", "Account object list did not confirm PAUSED status")
-    if not _matches(row, values, exclude={"creative"} if level == "ad" else ()):
-        raise fail("READ_SPEC_MISMATCH", "Account object settings differ from the saved Launch")
 
     creative_id = None
     checked_fields = fields
@@ -138,7 +147,8 @@ async def _read_account_level_object(
         "fragment_id": fragment_id,
         "status": "PAUSED",
         "settings_match": True,
-        "unique_name_match_count": 1,
+        "unique_name_match_count": len(same_name),
+        "unique_spec_match_count": 1,
         "pagination_complete": True,
         "validation_unobserved": True,
         "fragment_read_error": fragment_read_error or {},
