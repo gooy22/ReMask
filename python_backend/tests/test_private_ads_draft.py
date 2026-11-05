@@ -680,6 +680,28 @@ class PublisherTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.client.posts), 4)
         self.assertFalse(any(path.endswith('/publish') for path, _ in self.client.posts))
 
+    async def test_duplicate_names_use_unique_full_spec_paused_candidate(self):
+        from app.private_ads_draft_fallback import _read_account_level_object
+        values = {
+            'name': 'campaign',
+            'status': 'PAUSED',
+            'objective': 'OUTCOME_TRAFFIC',
+            'daily_budget': 500,
+        }
+        client = SimpleNamespace()
+        client.get = AsyncMock(return_value={'data': [
+            {'id': '777771', 'account_id': '111111', 'name': 'campaign',
+             'status': 'PAUSED', 'objective': 'OUTCOME_LEADS', 'daily_budget': 500},
+            {'id': '777772', 'account_id': '111111', **values},
+        ]})
+        proof = await _read_account_level_object(
+            client, account_id='111111', level='campaign', values=values,
+        )
+        self.assertEqual(proof['object_id'], '777772')
+        self.assertEqual(proof['unique_name_match_count'], 2)
+        self.assertEqual(proof['unique_spec_match_count'], 1)
+        self.assertTrue(proof['settings_match'])
+
     async def test_duplicate_campaign_name_rejects_fallback_before_ad_set_create(self):
         from app.private_ads_http import AdsManagerResponseError
         original = self.client.get
