@@ -276,7 +276,7 @@ if (strpos($js, 'REMASK_PRIVATE_SAVED_RETRY_V1') === false) {
                 base?.adset?.bid_strategy === 'LOWEST_COST_WITHOUT_CAP' &&
                 base?.adset?.daily_budget === 500 &&
                 base?.adset?.destination_type === 'WEBSITE' &&
-                base?.adset?.age_min === 23 && base?.adset?.age_max === 33 &&
+                base?.adset?.targeting?.age_min === 23 && base?.adset?.targeting?.age_max === 33 &&
                 Array.isArray(base?.adset?.targeting?.geo_locations?.countries) &&
                 base.adset.targeting.geo_locations.countries.length === 1 &&
                 base.adset.targeting.geo_locations.countries[0] === 'UA' &&
