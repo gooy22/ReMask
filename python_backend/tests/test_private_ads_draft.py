@@ -640,6 +640,71 @@ class PublisherTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.client.posts), 4)
         self.assertFalse(any(path.endswith('/publish') for path, _ in self.client.posts))
 
+    async def test_draft_edge_read_recovers_fragments_after_exact_node_rejections(self):
+        from app.private_ads_http import AdsManagerResponseError
+        original = self.client.get
+        edge_reads = []
+
+        async def read(path, params):
+            if path.startswith("/addraftfragment_"):
+                raise AdsManagerResponseError({
+                    "http_status": 200, "code": 100, "error_subcode": 33,
+                    "type": "GraphMethodException",
+                })
+            if path == "/addraft_555555/addraft_fragments":
+                fields = set(params.get("fields") or [])
+                self.assertEqual(params["limit"], 100)
+                self.assertTrue({"id", "account_id", "ad_draft_id", "ad_object_id",
+                    "ad_object_type", "parent_ad_object_id", "values",
+                    "validation_status"} <= fields)
+                self.assertNotIn("active_errors", fields)
+                self.assertNotIn("publish_status", fields)
+                edge_reads.append(path)
+                rows = [
+                    {key: copy.deepcopy(value) for key, value in row.items() if key in fields}
+                    for row in self.client.fragments.values()
+                ]
+                return {"data": rows}
+            return await original(path, params)
+
+        self.client.get = read
+        result = await self.publisher.run(self.client, name="source-flow", levels=self.levels,
+            verify_objects=self.verify, draft_only=True)
+        self.assertTrue(result["draft_verified"])
+        self.assertEqual(result["account_object_read_fallback_levels"], [])
+        self.assertTrue(result["fragment_storage_verified"])
+        self.assertEqual(result["draft_objects"],
+                         {"campaign": "777771", "ad_set": "777772", "ad": "777773"})
+        self.assertEqual(edge_reads, ["/addraft_555555/addraft_fragments"] * 3)
+        self.assertEqual(len(self.client.posts), 4)
+        self.assertFalse(any(path.endswith("/publish") for path, _ in self.client.posts))
+
+    async def test_paginated_draft_edge_cannot_confirm_a_fragment(self):
+        from app.private_ads_http import AdsManagerResponseError
+        original = self.client.get
+        calls = []
+
+        async def read(path, params):
+            calls.append(path)
+            if path.startswith("/addraftfragment_"):
+                raise AdsManagerResponseError({
+                    "http_status": 200, "code": 100, "error_subcode": 33,
+                    "type": "GraphMethodException",
+                })
+            if path == "/addraft_555555/addraft_fragments":
+                row = copy.deepcopy(self.client.fragments["111111"])
+                return {"data": [row], "paging": {"next": "https://example.invalid/next"}}
+            return await original(path, params)
+
+        self.client.get = read
+        with self.assertRaises(ProvisioningError) as caught:
+            await self.publisher.run(self.client, name="source-flow", levels=self.levels,
+                verify_objects=self.verify, draft_only=True)
+        self.assertEqual(caught.exception.code, "PRIVATE_ADS_DRAFT_READ_PENDING")
+        self.assertEqual(len(self.client.posts), 2)
+        self.assertNotIn("/act_111111/campaigns", calls)
+        self.assertFalse(any(path.endswith("/publish") for path, _ in self.client.posts))
+
     async def test_exact_fragment_read_rejection_recovers_one_paused_campaign_without_recreate(self):
         from app.private_ads_http import AdsManagerResponseError
         original = self.client.get
