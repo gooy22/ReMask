@@ -4585,7 +4585,9 @@ async def retry_failed(job_id: str, consent: dict | None = Body(default=None)) -
                     and fallback_read.get('account_id') == '52569470944909'
                     and fallback_read.get('status') == 'PAUSED'
                     and fallback_read.get('settings_match') is True
-                    and fallback_read.get('unique_name_match_count') == 1
+                    and fallback_read.get('unique_name_match_count', 0) >= 1
+                    and fallback_read.get('unique_spec_match_count') == 1
+                    and fallback_read.get('paused_spec_match_count') == 1
                     and fallback_read.get('pagination_complete') is True
                     and fallback_read.get('validation_unobserved') is True
                     and isinstance(fallback_id, str) and fallback_id.isdigit()
