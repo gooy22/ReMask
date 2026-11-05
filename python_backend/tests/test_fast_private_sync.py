@@ -63,6 +63,18 @@ class FastPrivateSyncTests(unittest.IsolatedAsyncioTestCase):
         self.web.fetch_text.assert_not_awaited()
         self.web.refresh_reviewed_modules.assert_not_awaited()
 
+    async def test_static_rk_response_is_not_cancelled_by_outer_wait_for(self):
+        proof = {"account_rows": [
+            {"id": "222222", "business_id": "111111", "name": "Account"}
+        ], "complete": True, "source": "static_http_exact_business_inventory"}
+        with patch("app.static_meta_inventory.read_ad_account_inventory",
+                   new=AsyncMock(return_value=proof)) as read, patch(
+                   "app.private_inventory.asyncio.wait_for",
+                   side_effect=AssertionError("outer timeout must not cancel Relay body")):
+            result = await self.snapshot()
+        self.assertTrue(result["ready"])
+        read.assert_awaited_once()
+
     async def test_partial_static_rk_cannot_clear_known_account(self):
         async def html_without_inventory(url, **kwargs):
             return 200, "{}", url
