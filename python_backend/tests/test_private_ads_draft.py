@@ -702,6 +702,16 @@ class PublisherTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(proof['unique_spec_match_count'], 1)
         self.assertTrue(proof['settings_match'])
 
+        client.get = AsyncMock(return_value={'data': [{
+            'id': '777773', 'account_id': '111111', 'name': 'campaign',
+            'status': 'PAUSED', 'objective': 'OUTCOME_LEADS', 'daily_budget': 500,
+        }]})
+        with self.assertRaises(ProvisioningError) as caught:
+            await _read_account_level_object(
+                client, account_id='111111', level='campaign', values=values,
+            )
+        self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_READ_SPEC_MISMATCH')
+
     async def test_duplicate_campaign_name_rejects_fallback_before_ad_set_create(self):
         from app.private_ads_http import AdsManagerResponseError
         original = self.client.get
