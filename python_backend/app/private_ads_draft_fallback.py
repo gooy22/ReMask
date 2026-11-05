@@ -1,8 +1,8 @@
 """Narrow, read-only recovery for saved paused draft fragments.
 
-Try the exact fragment node, owning draft edge and numeric receipt as a core
-fragment before reviewed account-level reads. Campaign receipts also get an
-exact object read before account-level matching.
+Try the exact fragment node and owning draft edge before reviewed account-level
+reads. A Campaign object read is allowed only through its separately saved
+ad_object_id receipt.
 """
 from __future__ import annotations
 
@@ -71,78 +71,37 @@ async def _read_fragment_from_draft_edge(client, *, draft_id, fragment_id):
     return matches[0] if matches else None
 
 
-async def _read_fragment_from_numeric_node(
-    client, *, account_id, draft_id, fragment_id, level,
+async def _read_saved_campaign_by_object_id(
+    client, *, account_id, draft_id, fragment_id, object_id, values, fragment_read_error,
 ):
-    """Read the exact fragment through its durable numeric receipt."""
-    account_id, draft_id, fragment_id = (
-        identity(account_id), identity(draft_id), identity(fragment_id))
-    try:
-        row = await client.get(
-            "/" + fragment_id, {"fields": _CORE_FRAGMENT_FIELDS})
-    except Exception as error:
-        if not is_exact_fragment_read_rejection(error):
-            raise
-        diagnostic = error.diagnostic
-        log.info("saved_fragment_numeric_node_read_unavailable level=%s outcome=unsupported code=%s subcode=%s",
-            level, diagnostic.get("code"), diagnostic.get("error_subcode"))
-        return None, error
-
-    if not isinstance(row, dict) or "error" in row or "errors" in row:
-        raise fail("READ_SCOPE_MISMATCH", "Meta direct fragment read returned an invalid response")
-    if not {"ad_draft_id", "ad_object_type"} <= set(row):
-        log.info("saved_fragment_numeric_node_read_unavailable level=%s outcome=not_fragment_projection", level)
-        return None, None
-    if row.get("ad_draft_id") != draft_id or row.get("ad_object_type") != level:
-        raise fail("READ_RELATION_MISMATCH", "Direct fragment ID belongs to another draft or level")
-
-    required = {"id", "account_id", "ad_draft_id", "ad_object_id",
-        "ad_object_type", "values"}
-    if level != "campaign":
-        required.add("parent_ad_object_id")
-    missing = required - set(row)
-    if missing:
-        log.info("saved_fragment_numeric_node_read_unavailable level=%s outcome=projection_incomplete missing_count=%d",
-            level, len(missing))
-        return None, None
-    _account(row, account_id, fragment_id)
-    log.info("saved_fragment_numeric_node_read_confirmed level=%s outcome=exact_fragment", level)
-    return row, None
-
-
-async def _read_saved_campaign_by_fragment_id(
-    client, *, account_id, draft_id, fragment_id, values, fragment_read_error,
-):
-    """Use the durable fragment receipt as a Campaign ID only if it reads exactly."""
+    """Read the Campaign through a separately saved ad_object_id receipt."""
     if (not isinstance(values, dict) or values.get("status") != "PAUSED"
             or not isinstance(values.get("name"), str) or not values["name"]):
         raise fail("READ_PENDING", "Saved Campaign has no exact name and PAUSED specification")
-    account_id, draft_id, fragment_id = (
-        identity(account_id), identity(draft_id), identity(fragment_id))
+    account_id, draft_id, fragment_id, object_id = (
+        identity(account_id), identity(draft_id), identity(fragment_id), identity(object_id))
     fields = sorted({"id", "account_id", *values.keys()})
     try:
-        row = await client.get("/" + fragment_id, {"fields": fields})
+        row = await client.get("/" + object_id, {"fields": fields})
     except Exception as error:
         if is_exact_fragment_read_rejection(error):
             diagnostic = error.diagnostic
-            log.info("saved_campaign_id_read_unavailable outcome=unsupported code=%s subcode=%s",
+            log.info("saved_campaign_object_read_unavailable outcome=unsupported code=%s subcode=%s",
                 diagnostic.get("code"), diagnostic.get("error_subcode"))
             return None, error
         raise
-    _account(row, account_id, fragment_id)
+    _account(row, account_id, object_id)
     missing = set(values) - set(row)
     if missing:
-        log.info("saved_campaign_id_read_unavailable outcome=projection_incomplete missing_count=%d",
+        log.info("saved_campaign_object_read_unavailable outcome=projection_incomplete missing_count=%d",
             len(missing))
         return None, None
-    if not _matches(row, values, exclude={"status"}):
-        raise fail("READ_SPEC_MISMATCH", "Direct saved Campaign ID differs from the full saved specification")
-    if row.get("status") != "PAUSED":
-        raise fail("DRAFT_DELIVERY_UNSAFE", "Direct saved Campaign ID is not PAUSED")
+    if not _matches(row, values):
+        raise fail("READ_SPEC_MISMATCH", "Direct saved Campaign object differs from the full saved specification")
     proof = {
-        "source": "direct_saved_campaign_id_read",
+        "source": "direct_saved_campaign_object_read",
         "level": "campaign",
-        "object_id": fragment_id,
+        "object_id": object_id,
         "creative_id": None,
         "account_id": account_id,
         "draft_id": draft_id,
@@ -158,7 +117,7 @@ async def _read_saved_campaign_by_fragment_id(
         "fragment_read_error": fragment_read_error,
         "checked_fields": fields,
     }
-    log.info("saved_campaign_id_read_confirmed outcome=exact_paused_match")
+    log.info("saved_campaign_object_read_confirmed outcome=exact_paused_match")
     return proof, None
 
 
@@ -284,7 +243,7 @@ async def _read_account_level_object(
 
 async def read_fragment_with_account_object_fallback(
     client, *, account_id, draft_id, fragment_id, level, values, parent_id=None,
-    allow_fallback=False,
+    object_id=None, allow_fallback=False,
 ):
     fragment_path = "/addraftfragment_" + identity(fragment_id)
     try:
@@ -324,30 +283,21 @@ async def read_fragment_with_account_object_fallback(
                 return {"row": row, "fallback": None, "source": "draft_edge"}
             log.info("saved_fragment_edge_read_unmatched level=%s", level)
 
-        if level == "campaign" and allow_fallback:
+        if level == "campaign" and object_id is not None:
             diagnostic = error.diagnostic
             read_error = {
                 key: diagnostic[key]
                 for key in ("http_status", "code", "error_subcode", "type")
                 if key in diagnostic
             }
-            direct_proof, direct_error = await _read_saved_campaign_by_fragment_id(
+            direct_proof, direct_error = await _read_saved_campaign_by_object_id(
                 client, account_id=account_id, draft_id=draft_id, fragment_id=fragment_id,
-                values=values, fragment_read_error=read_error)
+                object_id=object_id, values=values, fragment_read_error=read_error)
             if direct_proof is not None:
                 return {"row": None, "fallback": direct_proof,
-                    "source": "direct_saved_campaign_id_read"}
+                    "source": "direct_saved_campaign_object_read"}
             if direct_error is not None:
                 error = direct_error
-
-        numeric_row, numeric_error = await _read_fragment_from_numeric_node(
-            client, account_id=account_id, draft_id=draft_id,
-            fragment_id=fragment_id, level=level)
-        if numeric_row is not None:
-            return {"row": numeric_row, "fallback": None,
-                "source": "fragment_numeric_node_core"}
-        if numeric_error is not None:
-            error = numeric_error
         if not allow_fallback:
             raise error
         diagnostic = error.diagnostic
