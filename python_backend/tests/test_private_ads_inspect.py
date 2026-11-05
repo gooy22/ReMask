@@ -189,7 +189,7 @@ class SavedDraftInspectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['mutation_posts'], 0)
         self.assertIsNone(result['published'])
         self.assertTrue({'id', 'account_id', 'ad_draft_id', 'ad_object_id',
-                         'ad_object_type', 'values', 'validation_status'} <= core_fields)
+                         'ad_object_type', 'values', 'validation_status'} <= set(core_fields))
         self.assertEqual(len(self.client.posts), post_count)
         self.assertEqual(await self.owner.state.all_steps('image-launch'), before)
 
