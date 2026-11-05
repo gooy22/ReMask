@@ -1,8 +1,7 @@
 """Narrow, read-only recovery for saved paused draft fragments.
 
-Try the exact fragment node and its owning draft edge first. Only then use
-reviewed account-level object reads, which require one full-spec-matching,
-PAUSED object among same-name candidates.
+Try the exact fragment node, owning draft edge and (for Campaigns) the saved
+numeric ID as an object before reviewed account-level reads.
 """
 from __future__ import annotations
 
@@ -69,6 +68,58 @@ async def _read_fragment_from_draft_edge(client, *, draft_id, fragment_id):
     if len(matches) > 1:
         raise fail("READ_RELATION_MISMATCH", "Meta returned duplicate identities for the saved draft fragment")
     return matches[0] if matches else None
+
+
+async def _read_saved_campaign_by_fragment_id(
+    client, *, account_id, draft_id, fragment_id, values, fragment_read_error,
+):
+    """Use the durable fragment receipt as a Campaign ID only if it reads exactly."""
+    if (not isinstance(values, dict) or values.get("status") != "PAUSED"
+            or not isinstance(values.get("name"), str) or not values["name"]):
+        raise fail("READ_PENDING", "Saved Campaign has no exact name and PAUSED specification")
+    account_id, draft_id, fragment_id = (
+        identity(account_id), identity(draft_id), identity(fragment_id))
+    fields = sorted({"id", "account_id", *values.keys()})
+    try:
+        row = await client.get("/" + fragment_id, {"fields": fields})
+    except Exception as error:
+        if is_exact_fragment_read_rejection(error):
+            diagnostic = error.diagnostic
+            log.info("saved_campaign_id_read_unavailable outcome=unsupported code=%s subcode=%s",
+                diagnostic.get("code"), diagnostic.get("error_subcode"))
+            return None, error
+        raise
+    _account(row, account_id, fragment_id)
+    missing = set(values) - set(row)
+    if missing:
+        log.info("saved_campaign_id_read_unavailable outcome=projection_incomplete missing_count=%d",
+            len(missing))
+        return None, None
+    if not _matches(row, values, exclude={"status"}):
+        raise fail("READ_SPEC_MISMATCH", "Direct saved Campaign ID differs from the full saved specification")
+    if row.get("status") != "PAUSED":
+        raise fail("DRAFT_DELIVERY_UNSAFE", "Direct saved Campaign ID is not PAUSED")
+    proof = {
+        "source": "direct_saved_campaign_id_read",
+        "level": "campaign",
+        "object_id": fragment_id,
+        "creative_id": None,
+        "account_id": account_id,
+        "draft_id": draft_id,
+        "fragment_id": fragment_id,
+        "status": "PAUSED",
+        "settings_match": True,
+        "unique_name_match_count": 1,
+        "settings_match_count": 1,
+        "unique_spec_match_count": 1,
+        "paused_spec_match_count": 1,
+        "pagination_complete": True,
+        "validation_unobserved": True,
+        "fragment_read_error": fragment_read_error,
+        "checked_fields": fields,
+    }
+    log.info("saved_campaign_id_read_confirmed outcome=exact_paused_match")
+    return proof, None
 
 
 async def _read_account_level_object(
@@ -241,6 +292,15 @@ async def read_fragment_with_account_object_fallback(
             for key in ("http_status", "code", "error_subcode", "type")
             if key in diagnostic
         }
+        if level == "campaign":
+            direct_proof, direct_error = await _read_saved_campaign_by_fragment_id(
+                client, account_id=account_id, draft_id=draft_id, fragment_id=fragment_id,
+                values=values, fragment_read_error=read_error)
+            if direct_proof is not None:
+                return {"row": None, "fallback": direct_proof,
+                    "source": "direct_saved_campaign_id_read"}
+            if direct_error is not None:
+                error = direct_error
         proof = await _read_account_level_object(
             client, account_id=account_id, level=level, values=values,
             parent_id=parent_id, draft_id=draft_id, fragment_id=fragment_id,
