@@ -130,10 +130,7 @@ class SavedDraftInspectionTests(unittest.IsolatedAsyncioTestCase):
             if path == '/addraft_555555/addraft_fragments':
                 return {'data': []}
             if path == '/111111':
-                raise AdsManagerResponseError({
-                    'http_status': 200, 'code': 100, 'error_subcode': 33,
-                    'type': 'GraphMethodException',
-                })
+                return {'id': '111111', 'account_id': '111111', 'status': 'ACTIVE'}
             if path == '/act_111111/campaigns':
                 campaign_fragment = self.client.fragments['111111']
                 values = {row['field']: copy.deepcopy(row['new_value'])
