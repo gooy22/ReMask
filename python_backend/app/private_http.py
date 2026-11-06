@@ -6,6 +6,7 @@ failure that the trace proves happened before any HTTP/2 request data was sent.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 from contextlib import asynccontextmanager
@@ -156,6 +157,7 @@ class PrivateHttpClient:
         # Keep the imported profile snapshot so a failed Business login-page
         # redirect cannot poison the subsequent read-only identity probe.
         self._profile_cookies = dict(cookies)
+        self._trusted_meta_xs_fingerprints: set[str] = set()
         self.direct_test_until = direct_test_deadline(profile_name, self._actor_id) if not proxy else 0
         self.timeout_seconds = timeout_seconds
         limits = httpx.Limits(max_connections=pool_size,
@@ -185,7 +187,8 @@ class PrivateHttpClient:
             timeout=httpx.Timeout(timeout_seconds), cookies=jar,
             headers={"User-Agent": user_agent,
                      "Accept-Language": "en-US,en;q=0.9", "Accept": "*/*"},
-            event_hooks={'request': [self._log_auth_cookie_evidence, request_hook], 'response': [response_hook]},
+            event_hooks={'request': [self._log_auth_cookie_evidence, request_hook],
+                         'response': [response_hook, self._track_meta_xs_cookie_updates]},
         )
 
     def accept_same_actor_cookie_refresh(self) -> bool:
@@ -323,15 +326,38 @@ class PrivateHttpClient:
                 # profile jar instead of treating the root snapshot as valid.
                 scoped_auth.append((name, value))
         for name, value in scoped_auth:
-            # A path-scoped c_user must still be the selected actor. Meta can
-            # legitimately issue a different path-scoped xs; keep it in the
-            # HTTPX jar so the next same-profile hop sends the browser's full
-            # scoped cookie header instead of flattening it to the root value.
-            if name == "c_user":
-                shared_value = result.get(name)
-                if shared_value is not None and shared_value != value:
-                    return {}
+            shared_value = result.get(name)
+            if name == "c_user" and shared_value is not None and shared_value != value:
+                return {}  # A scoped actor switch must never replace the profile.
+            if (name == "xs" and shared_value is not None and shared_value != value
+                    and hashlib.sha256(value.encode("utf-8")).hexdigest()
+                    not in self._trusted_meta_xs_fingerprints):
+                return {}  # Ignore manually injected or unverified shadow cookies.
         return result
+
+    async def _track_meta_xs_cookie_updates(self, response: httpx.Response) -> None:
+        """Remember only xs values issued by a Facebook response on this session."""
+        try:
+            host = str(response.url.host or "").casefold()
+            if host != "facebook.com" and not host.endswith(".facebook.com"):
+                return
+            for raw in response.headers.get_list("set-cookie"):
+                pair = str(raw or "").split(";", 1)[0].strip()
+                name, separator, value = pair.partition("=")
+                if not separator or name.strip().casefold() != "xs":
+                    continue
+                value = value.strip().strip('"')
+                if (not value or value.casefold() == "deleted"
+                        or re.search(r";\s*max-age\s*=\s*0(?:\s*;|\s*$)", str(raw), re.I)):
+                    continue
+                self._trusted_meta_xs_fingerprints.add(
+                    hashlib.sha256(value.encode("utf-8")).hexdigest()
+                )
+                if len(self._trusted_meta_xs_fingerprints) > 64:
+                    self._trusted_meta_xs_fingerprints.pop()
+        except Exception:
+            # Cookie provenance is only an acceptance aid; never disrupt HTTP.
+            return
 
     def restore_profile_cookies(self) -> None:
         """Reset Facebook cookies to the imported profile for an identity probe."""
@@ -343,6 +369,7 @@ class PrivateHttpClient:
                     jar.clear(cookie.domain, cookie.path, cookie.name)
                 except KeyError:
                     pass
+        self._trusted_meta_xs_fingerprints.clear()
         for name, value in self._profile_cookies.items():
             jar.set_cookie(Cookie(
                 version=0, name=name, value=value, port=None,
