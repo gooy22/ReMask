@@ -1480,7 +1480,7 @@ class FacebookWebSession:
             log.warning('module_refresh unavailable type=%s', type(exc).__name__)
 
     def _restore_profile_cookie_snapshot_if_lost(self, session, *, stage: str) -> bool:
-        """Restore every imported cookie if a response altered the profile snapshot."""
+        """Keep complete same-actor Meta rotations; restore a missing or foreign cookie set."""
         saved = getattr(session, "_profile_cookies", None)
         read_snapshot = getattr(session, "facebook_cookie_snapshot", None)
         restore = getattr(session, "restore_profile_cookies", None)
@@ -1493,14 +1493,19 @@ class FacebookWebSession:
         current = read_snapshot()
         if not isinstance(current, dict):
             current = {}
-        exact = (
-            all(name in current and str(current.get(name)) == str(value)
-                for name, value in saved.items())
-            and str(current.get("c_user") or "") == actor
-            and str(current.get("xs") or "") == xs
-        )
-        if exact:
+
+        accept_refresh = getattr(session, "accept_same_actor_cookie_refresh", None)
+        if callable(accept_refresh) and accept_refresh():
+            refreshed = getattr(session, "_profile_cookies", {})
+            if isinstance(refreshed, dict) and any(
+                str(refreshed.get(name)) != str(value) for name, value in saved.items()
+            ):
+                log.info(
+                    "[%s] profile_cookie_snapshot_refreshed stage=%s expected_count=%d refreshed_count=%d actor_match=true xs_present=true",
+                    self.profile.name, stage, len(saved), len(refreshed),
+                )
             return False
+
         try:
             if not callable(restore):
                 raise RuntimeError("profile snapshot restore is unavailable")
@@ -1516,10 +1521,11 @@ class FacebookWebSession:
                 request_may_have_been_sent=True,
                 transport_stage="fetch_cookie_restore",
             ) from None
+        if not isinstance(restored, dict):
+            restored = {}
         valid = (
-            isinstance(restored, dict)
-            and all(name in restored and str(restored.get(name)) == str(value)
-                    for name, value in saved.items())
+            all(name in restored and str(restored.get(name)) == str(value)
+                for name, value in saved.items())
             and str(restored.get("c_user") or "") == actor
             and str(restored.get("xs") or "") == xs
         )

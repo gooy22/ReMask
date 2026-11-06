@@ -188,26 +188,27 @@ class PrivateHttpClient:
             event_hooks={'request': [self._log_auth_cookie_evidence, request_hook], 'response': [response_hook]},
         )
 
-    def _profile_cookie_snapshot_for_wire(self) -> dict[str, str]:
-        """Keep the imported profile cookie set stable across unverified redirects."""
+    def accept_same_actor_cookie_refresh(self) -> bool:
+        """Adopt Meta-set cookies only while the selected actor and cookie set remain intact."""
         original = dict(self._profile_cookies)
         snapshot = self.facebook_cookie_snapshot()
-        complete = (
+        complete_same_actor = (
             bool(original)
             and bool(snapshot)
             and snapshot.get("c_user") == self._actor_id
             and bool(str(snapshot.get("xs") or "").strip())
-            and all(snapshot.get(name) == value for name, value in original.items())
+            and all(name in snapshot for name in original)
         )
-        if not complete:
-            # Redirect/login responses can remove or replace arbitrary profile
-            # cookies while the response still carries c_user and xs. Restore
-            # the whole imported set before the next request.
+        if not complete_same_actor:
+            return False
+        self._profile_cookies = dict(snapshot)
+        return True
+
+    def _profile_cookie_snapshot_for_wire(self) -> dict[str, str]:
+        """Preserve complete same-actor Meta refreshes across subsequent requests."""
+        if not self.accept_same_actor_cookie_refresh():
             self.restore_profile_cookies()
-        # The serialized wire header is always the exact resolver-loaded
-        # profile set. Do not promote an unverified Set-Cookie response into
-        # the profile snapshot.
-        return original
+        return dict(self._profile_cookies)
 
     @staticmethod
     def _serialize_profile_cookie_header(cookies: dict[str, str]) -> str | None:

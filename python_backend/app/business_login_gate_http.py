@@ -764,12 +764,9 @@ async def _request_facebook(
             and bool(expected_cookie_snapshot)
             and bool(expected_actor_id)
             and bool(expected_xs)
-            and all(
-                name in current and str(current.get(name)) == value
-                for name, value in expected_cookie_snapshot.items()
-            )
+            and all(name in current for name in expected_cookie_snapshot)
             and str(current.get("c_user") or "") == expected_actor_id
-            and str(current.get("xs") or "").strip() == expected_xs
+            and bool(str(current.get("xs") or "").strip())
         )
 
     def restore_cookie_snapshot_if_lost() -> None:
@@ -777,6 +774,9 @@ async def _request_facebook(
             return
         current = session.facebook_cookie_snapshot()
         if snapshot_matches_expected(current):
+            accept_refresh = getattr(session, "accept_same_actor_cookie_refresh", None)
+            if callable(accept_refresh):
+                accept_refresh()
             return
         restore_profile_cookies()
 
@@ -794,6 +794,9 @@ async def _request_facebook(
                 current_cookies = session.facebook_cookie_snapshot()
                 if not snapshot_matches_expected(current_cookies):
                     return 0, current_url, "", {}
+            accept_refresh = getattr(session, "accept_same_actor_cookie_refresh", None)
+            if callable(accept_refresh):
+                accept_refresh()
         headers = {
             "User-Agent": str(profile.user_agent or ""),
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -976,7 +979,8 @@ async def continue_business_login_gate(
                 str(profile_snapshot.get("c_user") or "") != actor_id
                 or not profile_xs
                 or str(before.get("c_user") or "") != actor_id
-                or str(before.get("xs") or "").strip() != profile_xs
+                or not str(before.get("xs") or "").strip()
+                or any(name not in before for name in profile_snapshot)
             )
         )
         if (
@@ -997,11 +1001,14 @@ async def continue_business_login_gate(
             or not str(before.get("xs") or "").strip()
             or (
                 isinstance(profile_snapshot, dict)
-                and str(before.get("xs") or "").strip() != profile_xs
+                and any(name not in before for name in profile_snapshot)
             )
         ):
             set_outcome("profile_session_mismatch")
             return None
+        accept_refresh = getattr(session, "accept_same_actor_cookie_refresh", None)
+        if callable(accept_refresh):
+            accept_refresh()
 
         action_status, action_url, action_body, _ = await _request_facebook(
             session, profile, continuation["method"], continuation["url"],
