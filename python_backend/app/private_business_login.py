@@ -185,7 +185,7 @@ def native_business_login_continuation(body, return_url, *, diagnostic=None):
                     next_url = '/'
                 if not isinstance(next_url, str):
                     continue
-                if request_id is None:
+                if request_id is None and not profile_business_home_scope:
                     request_id = str(uuid4())
                 if not isinstance(request_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,160}', request_id):
                     continue
@@ -251,7 +251,8 @@ def native_business_login_continuation(body, return_url, *, diagnostic=None):
     if len(candidates) == 1:
         report['reason'] = 'native_fb_continuation'
         return candidates[0]
-    if not candidates and report.get('reason') == 'root_missing' and ROOT in body:
+    if (not candidates and report.get('reason') == 'root_missing' and ROOT in body
+            and not profile_business_home_scope):
         # Some current Business gates render this reviewed native FB button
         # client-side and omit its serialized React props from the HTML. Match
         # the same native handoff using only the exact account-scoped Ads Manager
@@ -272,7 +273,8 @@ def native_business_login_continuation(body, return_url, *, diagnostic=None):
         report['reason'] = 'native_fb_scoped_fallback'
         return handoff
     if (not candidates and native_facebook_flows == 1
-            and report.get('reason') == 'request_id_or_destination'):
+            and report.get('reason') == 'request_id_or_destination'
+            and not profile_business_home_scope):
         # The current gate rendered a reviewed Facebook-only continuation
         # control, but its serialized destination/request ID no longer matches
         # the old client shape. Fall back to the exact account URL supplied by
