@@ -440,6 +440,7 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
             raise AssertionError(f'unexpected profile probe {request.url.host}{request.url.path}')
 
         await self.mock(client, handler)
+        client._client.event_hooks["response"].append(client._track_meta_xs_cookie_updates)
         with self.assertRaises(AuthenticationError):
             await web.bootstrap(allow_business_loginpage_probe=True)
         profile_probe = next(row for row in requests if row[0] == 'www.facebook.com')
