@@ -1039,6 +1039,7 @@ class FacebookWebSession:
         allow_business_loginpage_probe: bool = False,
         require_actor_match: bool = True,
         prefer_business_home: bool = False,
+        business_home_only: bool = False,
         business_loginpage_return_url: str = "",
     ) -> FacebookBootstrap:
 
@@ -1129,18 +1130,25 @@ class FacebookWebSession:
             # retain their independent profile-page identity bootstrap.
             token_patterns = list(self.FB_DTSG_PATTERNS)
 
+            # Business GraphQL operations keep the reviewed Business Home
+            # bootstrap and follow its actual redirect chain. Do not switch to
+            # unrelated profile or Ads Manager documents if that page has no DTSG.
             bootstrap_urls = (
-                self.BUSINESS_HOME_URL,
-                "https://business.facebook.com/latest/settings",
-                "https://business.facebook.com/latest/overview",
-                "https://www.facebook.com/adsmanager/manage/campaigns",
-                "https://www.facebook.com/marketplace/",
-                "https://www.facebook.com/",
-                "https://www.facebook.com/me",
-                "https://www.facebook.com/settings",
-                "https://m.facebook.com/",
-                "https://mbasic.facebook.com/",
-                "https://mbasic.facebook.com/profile.php",
+                (self.BUSINESS_HOME_URL,)
+                if business_home_only
+                else (
+                    self.BUSINESS_HOME_URL,
+                    "https://business.facebook.com/latest/settings",
+                    "https://business.facebook.com/latest/overview",
+                    "https://www.facebook.com/adsmanager/manage/campaigns",
+                    "https://www.facebook.com/marketplace/",
+                    "https://www.facebook.com/",
+                    "https://www.facebook.com/me",
+                    "https://www.facebook.com/settings",
+                    "https://m.facebook.com/",
+                    "https://mbasic.facebook.com/",
+                    "https://mbasic.facebook.com/profile.php",
+                )
             )
 
             body = ""
@@ -2708,9 +2716,10 @@ class FacebookWebSession:
                     if scoped_ads_manager_return_url:
                         bootstrap = await self.bootstrap(
                             business_loginpage_return_url=scoped_ads_manager_return_url,
+                            business_home_only=True,
                         )
                     else:
-                        bootstrap = await self.bootstrap()
+                        bootstrap = await self.bootstrap(business_home_only=True)
                 else:
                     bootstrap = await self.bootstrap(
                         allow_business_loginpage_probe=True,
