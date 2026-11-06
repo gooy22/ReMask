@@ -110,6 +110,7 @@ class PrivateResponse:
         self.url = response.url
         self.charset = response.charset_encoding
         self.http_version = response.http_version
+        self.extensions = response.extensions
         self.content = _Body(response, metric)
 
     async def text_prefix(self, size: int, *, idle_timeout_seconds: float = 1.5) -> str:
@@ -514,7 +515,7 @@ class PrivateHttpClient:
                                 response.status_code, response.http_version,
                             )
                             if cookie_jar_guard is not None:
-                                cookie_jar_guard(response)
+                                cookie_jar_guard()
                             response_yielded = True
                             yield PrivateResponse(response, metric)
                     break
