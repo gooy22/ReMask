@@ -189,30 +189,25 @@ class PrivateHttpClient:
         )
 
     def _profile_cookie_snapshot_for_wire(self) -> dict[str, str]:
-        """Use this profile's shared Facebook cookies, restoring its snapshot if a response removed one."""
+        """Keep the imported profile cookie set stable across unverified redirects."""
+        original = dict(self._profile_cookies)
         snapshot = self.facebook_cookie_snapshot()
-        original_names = set(self._profile_cookies)
-        usable = (
-            bool(snapshot)
+        complete = (
+            bool(original)
+            and bool(snapshot)
             and snapshot.get("c_user") == self._actor_id
             and bool(str(snapshot.get("xs") or "").strip())
-            and original_names.issubset(snapshot)
+            and all(snapshot.get(name) == value for name, value in original.items())
         )
-        if not usable:
+        if not complete:
+            # Redirect/login responses can remove or replace arbitrary profile
+            # cookies while the response still carries c_user and xs. Restore
+            # the whole imported set before the next request.
             self.restore_profile_cookies()
-            snapshot = self.facebook_cookie_snapshot()
-            usable = (
-                bool(snapshot)
-                and snapshot.get("c_user") == self._actor_id
-                and bool(str(snapshot.get("xs") or "").strip())
-                and original_names.issubset(snapshot)
-            )
-        if not usable:
-            return dict(self._profile_cookies)
-        # Accept same-actor Meta cookie refreshes and use that exact root-scope
-        # snapshot on the next request. Host/path cookies cannot shadow it.
-        self._profile_cookies = dict(snapshot)
-        return dict(snapshot)
+        # The serialized wire header is always the exact resolver-loaded
+        # profile set. Do not promote an unverified Set-Cookie response into
+        # the profile snapshot.
+        return original
 
     @staticmethod
     def _serialize_profile_cookie_header(cookies: dict[str, str]) -> str | None:
