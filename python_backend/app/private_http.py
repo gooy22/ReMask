@@ -222,6 +222,29 @@ class PrivateHttpClient:
             pairs.append(f"{name}={value}")
         return "; ".join(pairs) if pairs else None
 
+    @staticmethod
+    def _cookie_header_carries_profile_snapshot(
+        header: str, cookies: dict[str, str], actor_id: str,
+    ) -> bool:
+        if not header or not cookies or len(header) > 131072:
+            return False
+        values_by_name: dict[str, list[str]] = {}
+        for part in header.split(";"):
+            name, separator, value = part.strip().partition("=")
+            if not separator:
+                continue
+            values_by_name.setdefault(name, []).append(value.strip().strip('"'))
+        for name, expected in cookies.items():
+            values = values_by_name.get(str(name), [])
+            if not values or str(expected) not in values:
+                return False
+        actor_values = values_by_name.get("c_user", [])
+        xs_values = values_by_name.get("xs", [])
+        if (not actor_values or any(value != actor_id for value in actor_values)
+                or not xs_values or not any(value.strip() for value in xs_values)):
+            return False
+        return True
+
     async def _log_auth_cookie_evidence(self, request: httpx.Request) -> None:
         """Canonicalize and record the final Facebook Cookie header without exposing values."""
         try:
@@ -232,11 +255,15 @@ class PrivateHttpClient:
             profile_cookies = self._profile_cookie_snapshot_for_wire()
             canonical_header = self._serialize_profile_cookie_header(profile_cookies)
             original_header = request.headers.get("cookie", "")
-            rebuilt = canonical_header is not None and original_header != canonical_header
-            if canonical_header is not None:
-                # HTTPX's request hook runs after cookie selection and before
-                # transport send. Override any jar shadowing with the canonical
-                # profile-bound root-scope cookie set for this Facebook host.
+            jar_header_matches_profile = self._cookie_header_carries_profile_snapshot(
+                original_header, profile_cookies, self._actor_id,
+            )
+            rebuilt = canonical_header is not None and not jar_header_matches_profile
+            if canonical_header is not None and rebuilt:
+                # If HTTPX omitted a saved profile cookie or exposed another
+                # c_user, send the verified profile snapshot. Otherwise retain
+                # its host/path-aware header, including same-actor Meta-issued
+                # cookies from the current redirect chain.
                 request.headers["cookie"] = canonical_header
             header = request.headers.get("cookie", "")
             evidence = cookie_evidence(header, self._actor_id)
@@ -276,7 +303,7 @@ class PrivateHttpClient:
         return self._client.is_closed
 
     def facebook_cookie_snapshot(self) -> dict[str, str]:
-        """Return shared-scope cookies only when scoped auth cookies agree."""
+        """Return shared-scope cookies when scoped actor cookies stay on the selected profile."""
         result: dict[str, str] = {}
         scoped_auth: list[tuple[str, str]] = []
         for cookie in self._client.cookies.jar:
@@ -296,9 +323,14 @@ class PrivateHttpClient:
                 # profile jar instead of treating the root snapshot as valid.
                 scoped_auth.append((name, value))
         for name, value in scoped_auth:
-            shared_value = result.get(name)
-            if shared_value is not None and shared_value != value:
-                return {}
+            # A path-scoped c_user must still be the selected actor. Meta can
+            # legitimately issue a different path-scoped xs; keep it in the
+            # HTTPX jar so the next same-profile hop sends the browser's full
+            # scoped cookie header instead of flattening it to the root value.
+            if name == "c_user":
+                shared_value = result.get(name)
+                if shared_value is not None and shared_value != value:
+                    return {}
         return result
 
     def restore_profile_cookies(self) -> None:
