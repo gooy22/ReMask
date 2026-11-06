@@ -359,19 +359,6 @@ async function pythonWorkerMapLimit(items, limit, worker) {
   await Promise.all(runners);
 }
 
-function pythonWorkerItemCanBusinessGateRevalidation(item) {
-  if (!item || String(item.status || '').toUpperCase() !== 'FAILED' ||
-      item.recovery_mode !== 'read_only_business_preflight' ||
-      String(item.error_code || '').toUpperCase() !== 'BUSINESS_LOGIN_GATE') return false;
-  const failedTasks = (Array.isArray(item.tasks) ? item.tasks : []).filter(function(task) {
-    return task && String(task.status || '').toUpperCase() === 'FAILED';
-  });
-  return failedTasks.length === 1 &&
-    String(failedTasks[0].action || '').trim().toLowerCase() === 'provisioning' &&
-    ['BUSINESS_LOGIN_GATE','META_AUTH_TOKEN_UNAVAILABLE','SESSION_EXPIRED','META_LOGIN_REQUIRED']
-      .includes(String(failedTasks[0].error_code || '').toUpperCase());
-}
-
 function pythonWorkerItemCanRetry(item) {
   if (!item || String(item.status || '').toUpperCase() !== 'FAILED') return false;
   const tasks = Array.isArray(item.tasks) ? item.tasks : [];
@@ -386,6 +373,19 @@ function pythonWorkerItemCanRetry(item) {
   return item.retryable === true || tasks.some(function(task) {
     return task && String(task.status || '').toUpperCase() === 'FAILED' && task.retryable === true;
   });
+}
+
+function pythonWorkerItemCanBusinessGateRevalidation(item) {
+  if (!item || String(item.status || '').toUpperCase() !== 'FAILED' ||
+      item.recovery_mode !== 'read_only_business_preflight' ||
+      String(item.error_code || '').toUpperCase() !== 'BUSINESS_LOGIN_GATE') return false;
+  const failedTasks = (Array.isArray(item.tasks) ? item.tasks : []).filter(function(task) {
+    return task && String(task.status || '').toUpperCase() === 'FAILED';
+  });
+  return failedTasks.length === 1 &&
+    String(failedTasks[0].action || '').trim().toLowerCase() === 'provisioning' &&
+    ['BUSINESS_LOGIN_GATE','META_AUTH_TOKEN_UNAVAILABLE','SESSION_EXPIRED','META_LOGIN_REQUIRED']
+      .includes(String(failedTasks[0].error_code || '').toUpperCase());
 }
 
 function pythonWorkerItemBlockedByKnownProfileStatus(item) {
