@@ -1029,12 +1029,21 @@ async def continue_business_login_gate(
                 if action_status in {401, 403}:
                     set_outcome("meta_rejected_saved_account")
                     return None
+        login_forms = saved_login_diagnostic.get("forms")
+        inert_login_page = (
+            isinstance(login_forms, list)
+            and len(login_forms) == 1
+            and isinstance(login_forms[0], dict)
+            and login_forms[0].get("credential_input") is False
+            and login_forms[0].get("interactive") is False
+            and login_forms[0].get("action_kind") == "login"
+        )
         inert_login_read_probe = (
             _login_route(action_url)
             and action_status == 200
             and saved_login is None
             and saved_login_outcome == "no_saved_account_control"
-            and saved_login_diagnostic.get("credential_input_present") is False
+            and inert_login_page
             and saved_login_diagnostic.get("challenge_present") is False
         )
         if inert_login_read_probe:
