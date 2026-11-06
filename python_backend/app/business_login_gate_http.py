@@ -6,11 +6,14 @@ are left for supported reauthentication.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
 from html.parser import HTMLParser
 from urllib.parse import urlencode, urljoin, urlsplit
+
+from .meta_auth_document import auth_gate as _auth_gate
 
 log = logging.getLogger("remask.business_login_gate")
 
@@ -750,6 +753,17 @@ async def _request_facebook(
         if isinstance(profile_cookie_snapshot, dict)
         else str(profile_cookies.get("xs") or "").strip()
     )
+
+    def restore_cookie_snapshot_if_lost() -> None:
+        if not callable(restore_profile_cookies):
+            return
+        current = session.facebook_cookie_snapshot()
+        if (
+            str(current.get("c_user") or "") != expected_actor_id
+            or not str(current.get("xs") or "").strip()
+        ):
+            restore_profile_cookies()
+
     for hop in range(4):
         # The caller checked the selected actor and xs before this first request.
         # A same-profile Facebook response can change the cookie jar; before a
@@ -795,6 +809,7 @@ async def _request_facebook(
             "headers": headers,
             "allow_redirects": False,
             "request_timeout_seconds": 15,
+            "cookie_jar_guard": restore_cookie_snapshot_if_lost,
         }
         if current_method == "POST":
             headers["Origin"] = f"https://{urlsplit(current_url).hostname}"
@@ -834,6 +849,12 @@ async def _request_facebook(
             str(urlsplit(next_url).hostname or "").casefold(),
             _navigation_fetch_site(current_referer, current_url),
         )
+        if hop == 0 and last_status == 302:
+            log.info(
+                "business_login_gate_redirect_settle profile=%s seconds=3",
+                getattr(profile, "name", "unknown"),
+            )
+            await asyncio.sleep(3.0)
         if last_status in {301, 302, 303} and current_method == "POST":
             current_method = "GET"
             current_fields = []
@@ -987,8 +1008,9 @@ async def continue_business_login_gate(
             set_outcome("meta_rejected_continuation")
             return None
         saved_login_outcome = ""
+        saved_login = None
+        saved_login_diagnostic = {}
         if _login_route(action_url):
-            saved_login_diagnostic = {}
             saved_login, saved_login_outcome = _saved_account_login_continuation(
                 action_body, action_url, actor_id,
                 diagnostic=saved_login_diagnostic,
@@ -1007,7 +1029,22 @@ async def continue_business_login_gate(
                 if action_status in {401, 403}:
                     set_outcome("meta_rejected_saved_account")
                     return None
-        if _auth_navigation(action_url) and not is_business_login_gate_url(action_url):
+        inert_login_read_probe = (
+            _login_route(action_url)
+            and action_status == 200
+            and saved_login is None
+            and saved_login_outcome == "no_saved_account_control"
+            and saved_login_diagnostic.get("credential_input_present") is False
+            and saved_login_diagnostic.get("challenge_present") is False
+        )
+        if inert_login_read_probe:
+            log.info(
+                "business_login_gate_login_page_read_probe profile=%s status=200 credentials=false challenge=false",
+                profile_name,
+            )
+        if (_auth_navigation(action_url)
+                and not is_business_login_gate_url(action_url)
+                and not inert_login_read_probe):
             parts = urlsplit(action_url)
             host = str(parts.hostname or "").casefold()
             path = str(parts.path or "/").casefold().rstrip("/") or "/"
@@ -1033,6 +1070,12 @@ async def continue_business_login_gate(
         if (
             str(after.get("c_user") or "") != actor_id
             or not str(after.get("xs") or "").strip()
+        ) and callable(restore_profile_cookies):
+            restore_profile_cookies()
+            after = session.facebook_cookie_snapshot()
+        if (
+            str(after.get("c_user") or "") != actor_id
+            or not str(after.get("xs") or "").strip()
         ):
             set_outcome("profile_session_changed")
             await web.close()
@@ -1047,6 +1090,7 @@ async def continue_business_login_gate(
             and str(after.get("c_user") or "") == actor_id
             and bool(str(after.get("xs") or "").strip())
             and not _auth_navigation(final_url)
+            and not _auth_gate(final_url, response_body)
         ):
             set_outcome("recovered")
             return {
