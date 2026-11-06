@@ -769,8 +769,11 @@ async def _request_facebook(
             and bool(str(current.get("xs") or "").strip())
         )
 
+    def meta_auth_directive_pending() -> bool:
+        return bool(getattr(session, "_meta_redirect_auth_cookie_directive_pending", False))
+
     def restore_cookie_snapshot_if_lost() -> None:
-        if not callable(restore_profile_cookies):
+        if not callable(restore_profile_cookies) or meta_auth_directive_pending():
             return
         current = session.facebook_cookie_snapshot()
         if snapshot_matches_expected(current):
@@ -788,12 +791,17 @@ async def _request_facebook(
         if hop > 0:
             current_cookies = session.facebook_cookie_snapshot()
             if not snapshot_matches_expected(current_cookies):
-                if not callable(restore_profile_cookies):
-                    return 0, current_url, "", {}
-                restore_profile_cookies()
-                current_cookies = session.facebook_cookie_snapshot()
-                if not snapshot_matches_expected(current_cookies):
-                    return 0, current_url, "", {}
+                if meta_auth_directive_pending():
+                    current_actor = str(current_cookies.get("c_user") or "")
+                    if current_actor and current_actor != expected_actor_id:
+                        return 0, current_url, "", {}
+                else:
+                    if not callable(restore_profile_cookies):
+                        return 0, current_url, "", {}
+                    restore_profile_cookies()
+                    current_cookies = session.facebook_cookie_snapshot()
+                    if not snapshot_matches_expected(current_cookies):
+                        return 0, current_url, "", {}
             accept_refresh = getattr(session, "accept_same_actor_cookie_refresh", None)
             if callable(accept_refresh):
                 accept_refresh()
@@ -983,21 +991,27 @@ async def continue_business_login_gate(
                 or any(name not in before for name in profile_snapshot)
             )
         )
+        meta_auth_directive_pending = bool(
+            getattr(session, "_meta_redirect_auth_cookie_directive_pending", False)
+        )
         if (
             profile_snapshot_mismatch
             or str(before.get("c_user") or "") != actor_id
             or not str(before.get("xs") or "").strip()
-        ):
-            # Meta can clear, shadow, or replace root-scope cookies during the
-            # Ads Manager -> Business gate redirect. Restore only this session's
-            # original profile snapshot, then recheck the same actor and xs
-            # before sending the read-only continuation.
+        ) and not meta_auth_directive_pending:
+            # Recover only from an unannounced cookie-jar loss. Once Meta has
+            # issued an auth-cookie directive, never resurrect the old snapshot.
             restore_profile_cookies = getattr(session, "restore_profile_cookies", None)
             if callable(restore_profile_cookies):
                 restore_profile_cookies()
                 before = session.facebook_cookie_snapshot()
-        if (
-            str(before.get("c_user") or "") != actor_id
+        current_actor = str(before.get("c_user") or "")
+        if meta_auth_directive_pending:
+            if current_actor and current_actor != actor_id:
+                set_outcome("profile_session_mismatch")
+                return None
+        elif (
+            current_actor != actor_id
             or not str(before.get("xs") or "").strip()
             or (
                 isinstance(profile_snapshot, dict)
@@ -1087,10 +1101,13 @@ async def continue_business_login_gate(
             )
             return None
         after = session.facebook_cookie_snapshot()
+        meta_auth_directive_pending = bool(
+            getattr(session, "_meta_redirect_auth_cookie_directive_pending", False)
+        )
         if (
             str(after.get("c_user") or "") != actor_id
             or not str(after.get("xs") or "").strip()
-        ) and callable(restore_profile_cookies):
+        ) and callable(restore_profile_cookies) and not meta_auth_directive_pending:
             restore_profile_cookies()
             after = session.facebook_cookie_snapshot()
         if (

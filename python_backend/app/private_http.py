@@ -389,12 +389,8 @@ class PrivateHttpClient:
                     self.profile_name, response.status_code, host,
                     ",".join(sorted(auth_directives)),
                 )
-            elif not is_redirect:
-                # A completed document ends the redirect handoff. Any following
-                # identity probe can deliberately revalidate the saved snapshot.
-                self._meta_redirect_auth_cookie_directive_pending = False
         except Exception:
-            # Cookie provenance is only an acceptance aid; never disrupt HTTP.
+            # Cookie tracking is only an acceptance aid; never disrupt HTTP.
             return
 
     def restore_profile_cookies(self) -> None:

@@ -14,7 +14,7 @@ from h2.events import DataReceived, RequestReceived, StreamEnded
 
 from app.private_http import PrivateHttpClient, buffered_response
 from app.session import MetaSession, ProfileContext, ProfileResolver
-from fb_worker import FacebookBootstrap, FacebookWebSession, RemoteRequestError, WebProfile
+from fb_worker import AuthenticationError, FacebookBootstrap, FacebookWebSession, RemoteRequestError, WebProfile
 
 
 class Chunks(httpx.AsyncByteStream):
@@ -411,7 +411,7 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
         await web.close()
         self.assertEqual(web.profile.cookies, original)
 
-    async def test_business_loginpage_cookie_deletion_does_not_poison_profile_probe(self):
+    async def test_business_loginpage_auth_cookie_deletion_is_not_restored(self):
         actor = '123456789'
         profile = WebProfile('fixture', {'c_user': actor, 'xs': 'imported-xs'},
             'http://127.0.0.1:1', 'fixture-UA')
@@ -440,15 +440,12 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
             raise AssertionError(f'unexpected profile probe {request.url.host}{request.url.path}')
 
         await self.mock(client, handler)
-        bootstrap = await web.bootstrap(allow_business_loginpage_probe=True)
-        self.assertTrue(bootstrap.profile_actor_verified)
-        self.assertEqual(bootstrap.actor_id, actor)
-        self.assertEqual(bootstrap.fb_dtsg, 'fixture-token')
+        with self.assertRaises(AuthenticationError):
+            await web.bootstrap(allow_business_loginpage_probe=True)
         profile_probe = next(row for row in requests if row[0] == 'www.facebook.com')
         self.assertIn(f'c_user={actor}', profile_probe[2])
-        self.assertIn('xs=imported-xs', profile_probe[2])
-        self.assertEqual(client.facebook_cookie_snapshot(),
-            {'c_user': actor, 'xs': 'imported-xs'})
+        self.assertNotIn('xs=imported-xs', profile_probe[2])
+        self.assertNotIn('xs', client.facebook_cookie_snapshot())
 
     async def test_meta_cookie_refresh_is_saved_to_same_profile(self):
         context = ProfileContext(
