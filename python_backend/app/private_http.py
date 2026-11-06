@@ -110,6 +110,7 @@ class PrivateResponse:
         self.url = response.url
         self.charset = response.charset_encoding
         self.http_version = response.http_version
+        self.extensions = response.extensions
         self.content = _Body(response, metric)
 
     async def text_prefix(self, size: int, *, idle_timeout_seconds: float = 1.5) -> str:
@@ -364,6 +365,7 @@ class PrivateHttpClient:
             )
             auth_directives: set[str] = set()
             auth_deletions: set[str] = set()
+            auth_deletion_scopes: dict[str, dict[str, str]] = {}
             auth_scope_evidence: set[str] = set()
             for raw in response.headers.get_list("set-cookie"):
                 pair = str(raw or "").split(";", 1)[0].strip()
@@ -403,6 +405,11 @@ class PrivateHttpClient:
                     auth_scope_evidence.add(
                         f"{cookie_name}:{action}:{domain_scope}:{path_scope}"
                     )
+                    if is_cookie_deletion:
+                        auth_deletion_scopes[cookie_name] = {
+                            "domain": domain_scope,
+                            "path": path_scope,
+                        }
                 if cookie_name != "xs" or is_cookie_deletion:
                     continue
                 self._trusted_meta_xs_fingerprints.add(
@@ -411,8 +418,17 @@ class PrivateHttpClient:
                 if len(self._trusted_meta_xs_fingerprints) > 64:
                     self._trusted_meta_xs_fingerprints.pop()
             if is_redirect and (auth_directives or auth_deletions):
-                # Honor Meta's redirect response. Never re-inject an auth cookie
-                # that its Set-Cookie directive removed from this cookie jar.
+                # Keep the directive metadata on this response so a narrowly
+                # scoped document-navigation guard can distinguish this hop
+                # from a stale session-wide marker. Cookie values are excluded.
+                response.extensions["remask_meta_auth_cookie_directive"] = {
+                    "sets": sorted(auth_directives),
+                    "deletions": sorted(auth_deletions),
+                    "deletion_scopes": auth_deletion_scopes,
+                }
+                # Honor Meta's redirect response by default. The only exception
+                # is explicitly authorized by the caller for one reviewed
+                # Business Home loginpage continuation.
                 self._meta_redirect_auth_cookie_directive_pending = True
                 log.info(
                     "[%s] private_http_meta_redirect_auth_cookie_directive status=%d host=%s names=%s deleted=%s scope=%s",
