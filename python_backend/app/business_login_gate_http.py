@@ -1216,7 +1216,7 @@ async def continue_business_login_gate(
             or not str(after.get("xs") or "").strip()
         ):
             set_outcome("profile_session_changed")
-            await web.close()
+            # The owning bootstrap controls session cleanup after this read-only handoff.
             return None
 
         status, final_url, response_body, response_headers = await _request_facebook(
