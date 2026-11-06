@@ -898,6 +898,20 @@ async def continue_business_login_gate(
                     value = diagnostic.get(key)
                     if type(value) is bool:
                         gate_diagnostic[key] = value
+            for key in (
+                "native_prop_keys",
+                "native_request_id_node_type",
+                "native_referrer_uri_node_type",
+            ):
+                value = diagnostic.get(key)
+                if key == "native_prop_keys" and isinstance(value, list):
+                    safe_names = [
+                        name for name in value[:80]
+                        if isinstance(name, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", name)
+                    ]
+                    gate_diagnostic[key] = safe_names
+                elif isinstance(value, str) and re.fullmatch(r"[A-Za-z_]{1,32}", value):
+                    gate_diagnostic[key] = value
             outcome = (
                 "native_" + reason
                 if re.fullmatch(r"[a-z_]{1,64}", reason)
