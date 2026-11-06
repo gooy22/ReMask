@@ -1209,13 +1209,20 @@ class FacebookWebSession:
                         def restore_cookies_after_redirect_headers(response):
                             nonlocal meta_auth_cookie_deletion_seen
                             response_status["value"] = int(response.status)
-                            directive = getattr(response, "extensions", {}).get(
-                                "remask_meta_auth_cookie_directive", {}
+                            extensions = getattr(response, "extensions", {})
+                            directive = (
+                                extensions.get("remask_meta_auth_cookie_directive", {})
+                                if isinstance(extensions, dict)
+                                else {}
                             )
-                            deletions = {
-                                str(name).casefold()
-                                for name in directive.get("deletions", [])
-                            } if isinstance(directive, dict) else set()
+                            deletions = (
+                                {
+                                    str(name).casefold()
+                                    for name in directive.get("deletions", [])
+                                }
+                                if isinstance(directive, dict)
+                                else set()
+                            )
                             if deletions.intersection({"c_user", "xs"}):
                                 meta_auth_cookie_deletion_seen = True
                             if response_status["value"] in redirect_statuses:
