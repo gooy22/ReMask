@@ -940,8 +940,6 @@ async def _request_facebook(
         if last_status not in {301, 302, 303, 307, 308} or not location:
             return last_status, last_url, last_body, last_headers
         next_url = urljoin(last_url, location)
-        source_parts = urlsplit(last_url)
-        target_parts = urlsplit(next_url)
         auth_cookie_deletions = (
             {
                 str(name).casefold()
