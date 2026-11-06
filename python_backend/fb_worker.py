@@ -1693,7 +1693,7 @@ class FacebookWebSession:
                     and str(previous_parts.hostname or "").casefold() == next_host
                     and (previous_parts.port or 443) == (next_port or 443)
                 )
-                if (ads_manager_document and redirect_count == 0
+                if (document_request and redirect_count == 0
                         and response.status == 302):
                     await asyncio.sleep(3)
                 request_headers["Referer"] = previous_url
