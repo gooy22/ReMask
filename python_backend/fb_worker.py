@@ -630,7 +630,7 @@ class FacebookWebSession:
                             "Sec-Fetch-Site": "same-origin",
                         },
                         allow_redirects=False,
-                        cookie_jar_guard=lambda _response=None: self._restore_profile_cookie_snapshot_if_lost(
+                        cookie_jar_guard=lambda: self._restore_profile_cookie_snapshot_if_lost(
                             session,
                             stage=f"dtsg_refresh_headers_{query_key}_{query_value}",
                         ),
@@ -1203,14 +1203,56 @@ class FacebookWebSession:
                             session, stage="bootstrap_target_and_redirect_hop",
                         )
                         redirect_statuses = {301, 302, 303, 307, 308}
-                        response_status = {"value": None}
+                        response_status = {
+                            "value": None,
+                            "business_home_restore": False,
+                        }
 
                         def restore_cookies_after_redirect_headers(response):
                             response_status["value"] = int(response.status)
+                            allow_business_home_restore = False
+                            request_parts = urlsplit(current_url)
+                            if (
+                                redirect_count == 0
+                                and response_status["value"] == 302
+                                and request_parts.scheme == "https"
+                                and str(request_parts.hostname or "").casefold()
+                                == "business.facebook.com"
+                                and request_parts.path.rstrip("/") == "/latest/home"
+                            ):
+                                target_url = urljoin(
+                                    str(response.url),
+                                    str(response.headers.get("Location") or ""),
+                                )
+                                target = urlsplit(target_url)
+                                directive = getattr(response, "extensions", {}).get(
+                                    "remask_meta_auth_cookie_directive", {}
+                                )
+                                deletions = set(directive.get("deletions", []))
+                                sets = set(directive.get("sets", []))
+                                scopes = directive.get("deletion_scopes", {})
+                                allow_business_home_restore = (
+                                    target.scheme == "https"
+                                    and str(target.hostname or "").casefold()
+                                    == "business.facebook.com"
+                                    and target.path == "/business/loginpage/"
+                                    and deletions == {"c_user", "xs"}
+                                    and not sets
+                                    and all(
+                                        scopes.get(name) == {
+                                            "domain": "shared", "path": "root",
+                                        }
+                                        for name in ("c_user", "xs")
+                                    )
+                                )
+                            response_status["business_home_restore"] = (
+                                allow_business_home_restore
+                            )
                             if response_status["value"] in redirect_statuses:
                                 self._restore_profile_cookie_snapshot_if_lost(
                                     session,
                                     stage=f"bootstrap_response_headers_{redirect_count + 1}",
+                                    allow_business_home_loginpage_auth_restore=allow_business_home_restore,
                                 )
 
                         try:
@@ -1233,6 +1275,9 @@ class FacebookWebSession:
                                 self._restore_profile_cookie_snapshot_if_lost(
                                     session,
                                     stage=f"bootstrap_response_body_{redirect_count + 1}",
+                                    allow_business_home_loginpage_auth_restore=(
+                                        response_status["business_home_restore"]
+                                    ),
                                 )
                         candidate_url = str(response.url)
                         candidate_status = int(response.status)
@@ -1697,52 +1742,11 @@ class FacebookWebSession:
             redirect_limit = 5 if manual_facebook_redirects else 0
             for redirect_count in range(redirect_limit + 1):
                 response_header_cookie_guard = None
-                allow_business_home_restore_for_response = False
                 if document_request or ads_manager_document:
                     response_header_stage = f"response_headers_{redirect_count + 1}"
-
-                    def restore_document_response_cookies(response, stage=response_header_stage):
-                        nonlocal allow_business_home_restore_for_response
-                        allow_business_home_restore = False
-                        if (
-                            document_request
-                            and redirect_count == 0
-                            and hostname == "business.facebook.com"
-                            and parts.path.rstrip("/") == "/latest/home"
-                            and response.status_code == 302
-                        ):
-                            target_url = urljoin(
-                                str(response.url),
-                                str(response.headers.get("Location") or ""),
-                            )
-                            target = urlsplit(target_url)
-                            directive = response.extensions.get(
-                                "remask_meta_auth_cookie_directive", {}
-                            )
-                            deletions = set(directive.get("deletions", []))
-                            sets = set(directive.get("sets", []))
-                            scopes = directive.get("deletion_scopes", {})
-                            allow_business_home_restore = (
-                                target.scheme == "https"
-                                and target.hostname == "business.facebook.com"
-                                and target.path == "/business/loginpage/"
-                                and deletions == {"c_user", "xs"}
-                                and not sets
-                                and all(
-                                    scopes.get(name) == {
-                                        "domain": "shared", "path": "root",
-                                    }
-                                    for name in ("c_user", "xs")
-                                )
-                            )
-                        allow_business_home_restore_for_response = allow_business_home_restore
-                        self._restore_profile_cookie_snapshot_if_lost(
-                            session,
-                            stage=stage,
-                            allow_business_home_loginpage_auth_restore=allow_business_home_restore,
-                        )
-
-                    response_header_cookie_guard = restore_document_response_cookies
+                    response_header_cookie_guard = lambda stage=response_header_stage: (
+                        self._restore_profile_cookie_snapshot_if_lost(session, stage=stage)
+                    )
                 try:
                     response, raw = await buffered_response(
                         "GET",
@@ -1764,9 +1768,7 @@ class FacebookWebSession:
                 finally:
                     if document_request or ads_manager_document:
                         self._restore_profile_cookie_snapshot_if_lost(
-                            session,
-                            stage=f"response_body_{redirect_count + 1}",
-                            allow_business_home_loginpage_auth_restore=allow_business_home_restore_for_response,
+                            session, stage=f"response_body_{redirect_count + 1}"
                         )
                 if not manual_facebook_redirects or response.status not in {
                     301, 302, 303, 307, 308,
