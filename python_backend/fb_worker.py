@@ -1113,7 +1113,7 @@ class FacebookWebSession:
                             )
                             read_prefix = getattr(response, "text_prefix", None)
                             if callable(read_prefix):
-                                return await read_prefix(256 * 1024)
+                                return await read_prefix(256 * 1024, idle_timeout_seconds=4.0)
                         return await response.text()
 
                     request_headers = {
