@@ -1104,14 +1104,16 @@ class FacebookWebSession:
                     async def read_bootstrap_body(response):
                         response_url = str(getattr(response, "url", "") or "")
                         if is_business_login_gate_url(response_url):
-                            # Meta's loginpage handoff can keep its HTML stream
-                            # open indefinitely. Its body is not used to bootstrap
-                            # this profile; let the remaining read-only routes run.
+                            # Meta's loginpage handoff may keep its stream open
+                            # after sending the useful continuation control. Read
+                            # only a short prefix so the reviewed parser can act.
                             log.info(
-                                "[%s] skip Business loginpage body during bootstrap",
+                                "[%s] read bounded Business loginpage prefix during bootstrap",
                                 self.profile.name,
                             )
-                            return ""
+                            read_prefix = getattr(response, "text_prefix", None)
+                            if callable(read_prefix):
+                                return await read_prefix(128 * 1024)
                         return await response.text()
 
                     request_headers = {
