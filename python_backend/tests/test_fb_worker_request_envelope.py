@@ -390,7 +390,7 @@ class BusinessAuthenticationPrecheckTests(unittest.IsolatedAsyncioTestCase):
     async def test_create_business_recovers_home_400_with_authenticated_creation_page(self):
         session, http = self.session()
         session.fetch_text = AsyncMock(side_effect=[
-            (400, "Bad Request", session.ADS_MANAGER_URL),
+            (400, "Bad Request", session.BUSINESS_HOME_URL),
             (200, '["DTSGInitialData",[],{"token":"creation-token"}] {"__hsi":"creation-context"}',
              "https://business.facebook.com/create"),
         ])
@@ -399,7 +399,7 @@ class BusinessAuthenticationPrecheckTests(unittest.IsolatedAsyncioTestCase):
             friendly_name="useBusinessCreationMutationMutation", before_submit=checkpoint)
         self.assertTrue(result["data"]["ok"])
         self.assertEqual([call.args[0] for call in session.fetch_text.await_args_list],
-                         [session.ADS_MANAGER_URL, "https://business.facebook.com/create"])
+                         [session.BUSINESS_HOME_URL, "https://business.facebook.com/create"])
         checkpoint.assert_awaited_once()
         self.assertEqual(len(http.posts), 1)
         self.assertEqual(http.posts[0]["data"]["fb_dtsg"], "creation-token")
@@ -409,7 +409,7 @@ class BusinessAuthenticationPrecheckTests(unittest.IsolatedAsyncioTestCase):
     async def test_create_business_unconfirmed_surfaces_keep_diagnostics_without_post(self):
         session, http = self.session()
         session.fetch_text = AsyncMock(side_effect=[
-            (400, "Bad Request", session.ADS_MANAGER_URL),
+            (400, "Bad Request", session.BUSINESS_HOME_URL),
             (200, "no auth context", "https://business.facebook.com/create?secret=not-for-logs"),
             (200, "no current-user proof", "https://www.facebook.com/marketplace/"),
         ])
@@ -428,7 +428,7 @@ class BusinessAuthenticationPrecheckTests(unittest.IsolatedAsyncioTestCase):
     async def test_business_route_failures_do_not_block_one_create_with_fresh_exact_actor_auth(self):
         session, http = self.session()
         session.fetch_text = AsyncMock(side_effect=[
-            (400, "Bad Request", session.ADS_MANAGER_URL),
+            (400, "Bad Request", session.BUSINESS_HOME_URL),
             (400, "Bad Request", "https://business.facebook.com/create"),
             (200, '["CurrentUserInitialData",[],{"USER_ID":"123456789"}] '
                   '["DTSGInitialData",[],{"token":"fresh-profile-token"}]',
@@ -454,7 +454,7 @@ class BusinessAuthenticationPrecheckTests(unittest.IsolatedAsyncioTestCase):
         ):
             session, http = self.session()
             session.fetch_text = AsyncMock(side_effect=[
-                (400, "Bad Request", session.ADS_MANAGER_URL),
+                (400, "Bad Request", session.BUSINESS_HOME_URL),
                 (400, "Bad Request", "https://business.facebook.com/create"),
                 (200, body, final_url),
             ])
@@ -471,7 +471,7 @@ class BusinessAuthenticationPrecheckTests(unittest.IsolatedAsyncioTestCase):
         document = '["CurrentUserInitialData",[],{"USER_ID":"123456789"}] '
         document += '["DTSGInitialData",[],{"token":"fresh-profile-token"}]'
         session.fetch_text = AsyncMock(side_effect=[
-            (400, "Bad Request", session.ADS_MANAGER_URL),
+            (400, "Bad Request", session.BUSINESS_HOME_URL),
             (400, "Bad Request", "https://business.facebook.com/create"),
             (200, document.replace('"', '&quot;'), "https://www.facebook.com/marketplace/"),
         ])
@@ -483,7 +483,7 @@ class BusinessAuthenticationPrecheckTests(unittest.IsolatedAsyncioTestCase):
         for body in ("Request header or cookie too large", "Proxy authentication required"):
             session, http = self.session()
             session.fetch_text = AsyncMock(side_effect=[
-                (400, body, session.ADS_MANAGER_URL),
+                (400, body, session.BUSINESS_HOME_URL),
                 (400, body, "https://business.facebook.com/create"),
             ])
             with self.assertRaises(RemoteRequestError):
@@ -523,7 +523,7 @@ class BusinessAuthenticationPrecheckTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_business_rate_limit_does_not_probe_another_surface(self):
         session, http = self.session()
-        session.fetch_text = AsyncMock(return_value=(429, "rate limited", session.ADS_MANAGER_URL))
+        session.fetch_text = AsyncMock(return_value=(429, "rate limited", session.BUSINESS_HOME_URL))
         with self.assertRaises(RemoteRequestError) as caught:
             await session.graphql("123456789", {}, friendly_name="useBusinessCreationMutationMutation")
         self.assertEqual(caught.exception.http_status, 429)
