@@ -1893,6 +1893,30 @@ class FacebookWebSession:
                 and bootstrap.profile_actor_verified):
             return bootstrap
         source = str(getattr(bootstrap, "source_url", "") or "").strip()
+        source_parts = urlsplit(source)
+        source_is_ajax_dtsg = (
+            source_parts.hostname == "www.facebook.com"
+            and source_parts.path.rstrip("/") == "/ajax/dtsg"
+            and parse_qs(source_parts.query).get("__a") == ["true"]
+        )
+        current_actor = str(self.profile.cookies.get("c_user") or "").strip()
+        if (
+            business_loginpage_probe == "READ_BM"
+            and not business_id
+            and source_is_ajax_dtsg
+            and current_actor.isdigit()
+            and bootstrap.actor_id == current_actor
+            and bool(str(bootstrap.fb_dtsg or "").strip())
+        ):
+            # READ_BM is a pinned, read-only query. Let its exact GraphQL
+            # response confirm Business access instead of reopening Business
+            # Home as a second document precheck. That extra navigation can
+            # redirect independently even when the session token is usable.
+            log.info(
+                "[%s] exact READ_BM will confirm Business access; skipping duplicate Business Home precheck",
+                self.profile.name,
+            )
+            return bootstrap
         target = (
             "https://business.facebook.com/latest/settings/ad_accounts/?business_id=" + business_id
             if business_id else self.BUSINESS_HOME_URL
