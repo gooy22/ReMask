@@ -18,7 +18,13 @@ import httpx
 from app.private_ads_document import _extract_sprinkle_config
 
 from app.private_http import PrivateHttpClient
-from app.business_login_gate_http import continue_business_login_gate, is_business_login_gate_url
+from app.business_login_gate_http import (
+    _last_referrer_policy,
+    _navigation_fetch_site,
+    _navigation_referrer,
+    continue_business_login_gate,
+    is_business_login_gate_url,
+)
 from app.meta_auth_document import auth_route_gate as _auth_route_gate, has_login_form as _has_login_form
 
 
@@ -113,7 +119,7 @@ class FacebookWebSession:
     Все приватные GraphQL-запросы проходят через этот объект.
     """
 
-    ADS_MANAGER_URL = "https://business.facebook.com/latest/home"
+    BUSINESS_HOME_URL = "https://business.facebook.com/latest/home"
 
     GRAPHQL_URL = "https://business.facebook.com/api/graphql/"
 
@@ -463,6 +469,34 @@ class FacebookWebSession:
             if getattr(session, "_meta_redirect_auth_cookie_directive_pending", False):
                 return
             restore_fn()
+
+    def _apply_document_redirect_context(
+        self, request_headers: dict[str, str], response: Any,
+        destination: str, *, hop: int,
+    ) -> None:
+        """Rebuild browser navigation headers only after a manual redirect."""
+        source_url = str(getattr(response, "url", "") or "")
+        response_headers = getattr(response, "headers", {}) or {}
+        get_list = getattr(response_headers, "get_list", None)
+        if callable(get_list):
+            policies = get_list("referrer-policy")
+        else:
+            policy_value = response_headers.get("referrer-policy", "")
+            policies = [str(policy_value)] if policy_value else []
+        policy = _last_referrer_policy(policies)
+        referer = _navigation_referrer(source_url, destination, policy)
+        if referer:
+            request_headers["Referer"] = referer
+        else:
+            request_headers.pop("Referer", None)
+        fetch_site = _navigation_fetch_site(source_url, destination)
+        request_headers["Sec-Fetch-Site"] = fetch_site
+        source_host = str(urlsplit(source_url).hostname or "").casefold()
+        target_host = str(urlsplit(destination).hostname or "").casefold()
+        log.info(
+            "[%s] bootstrap redirect context hop=%d source_host=%s target_host=%s sec_fetch_site=%s referer_present=%s",
+            self.profile.name, hop, source_host, target_host, fetch_site, bool(referer),
+        )
 
     @classmethod
     def _first_match(
@@ -852,6 +886,10 @@ class FacebookWebSession:
                         # Keep auth redirects as evidence, but do not follow them.
                         final_url_override = next_url
                         break
+                    self._apply_document_redirect_context(
+                        request_headers, response, next_url,
+                        hop=redirect_count + 1,
+                    )
                     current_url = next_url
                 if response is None:
                     raise asyncio.TimeoutError("profile probe returned no response")
@@ -1092,10 +1130,9 @@ class FacebookWebSession:
             token_patterns = list(self.FB_DTSG_PATTERNS)
 
             bootstrap_urls = (
-                self.ADS_MANAGER_URL,
+                self.BUSINESS_HOME_URL,
                 "https://business.facebook.com/latest/settings",
                 "https://business.facebook.com/latest/overview",
-                "https://adsmanager.facebook.com/adsmanager/manage/campaigns",
                 "https://www.facebook.com/adsmanager/manage/campaigns",
                 "https://www.facebook.com/marketplace/",
                 "https://www.facebook.com/",
@@ -1229,7 +1266,7 @@ class FacebookWebSession:
                         # first-party redirect chain. The guard above restores
                         # the imported snapshot only if the actor or cookie set
                         # becomes invalid.
-                        if (bootstrap_url == self.ADS_MANAGER_URL
+                        if (bootstrap_url == self.BUSINESS_HOME_URL
                                 and redirect_count == 0
                                 and candidate_status == 302):
                             source_host = str(urlsplit(candidate_url).hostname or "").casefold()
@@ -1239,6 +1276,10 @@ class FacebookWebSession:
                                 self.profile.name, source_host, target_host,
                             )
                             await asyncio.sleep(3.0)
+                        self._apply_document_redirect_context(
+                            request_headers, response, next_url,
+                            hop=redirect_count + 1,
+                        )
                         current_url = next_url
                     else:
                         attempts.append(f"{bootstrap_url}: redirect limit")
@@ -1375,9 +1416,9 @@ class FacebookWebSession:
             if not fb_dtsg:
                 detail = " | ".join(attempts[-8:]) or "no bootstrap response"
                 error = AuthenticationError(
-                    "Facebook browser session has no usable fb_dtsg. "
-                    "The saved cookies may be expired/incomplete, or Facebook "
-                    "did not expose a DTSG token on page bootstrap or /ajax/dtsg/. "
+                    "Meta did not expose a usable fb_dtsg token on the available "
+                    "bootstrap pages or read-only /ajax/dtsg/ request. "
+                    "The cause is not established; no GraphQL POST was sent. "
                     f"Attempts: {detail}"
                 )
                 error.meta_payload = {"business_precheck": auth_attempts,
@@ -1846,7 +1887,7 @@ class FacebookWebSession:
         source = str(getattr(bootstrap, "source_url", "") or "").strip()
         target = (
             "https://business.facebook.com/latest/settings/ad_accounts/?business_id=" + business_id
-            if business_id else self.ADS_MANAGER_URL
+            if business_id else self.BUSINESS_HOME_URL
         )
         if not business_id and (not source or urlsplit(source).hostname == "business.facebook.com"):
             return bootstrap
@@ -2850,7 +2891,7 @@ class FacebookWebSession:
             bootstrap_source_url
             if same_business_origin
             else (
-                self.ADS_MANAGER_URL
+                self.BUSINESS_HOME_URL
                 if "business.facebook.com" in endpoint_parts.netloc
                 else origin + "/"
             )
@@ -3177,7 +3218,7 @@ class FacebookWebSession:
                     self.timeout_seconds * 1000,
                 )
                 await page.goto(
-                    self.ADS_MANAGER_URL,
+                    self.BUSINESS_HOME_URL,
                     wait_until="commit",
                     timeout=navigation_timeout_ms,
                 )

@@ -154,8 +154,8 @@ class PrivateHttpClient:
         self.profile_name = profile_name
         self._actor_id = str(cookies.get('c_user') or '')
         self._user_agent = str(user_agent or '')
-        # Keep the imported profile snapshot so a failed Business login-page
-        # redirect cannot poison the subsequent read-only identity probe.
+        # Keep the imported snapshot for same-actor rotation checks.
+        # Explicit Meta redirect deletions are tracked separately and honored.
         self._profile_cookies = dict(cookies)
         self._trusted_meta_xs_fingerprints: set[str] = set()
         self._meta_redirect_auth_cookie_directive_pending = False
@@ -364,6 +364,7 @@ class PrivateHttpClient:
             )
             auth_directives: set[str] = set()
             auth_deletions: set[str] = set()
+            auth_scope_evidence: set[str] = set()
             for raw in response.headers.get_list("set-cookie"):
                 pair = str(raw or "").split(";", 1)[0].strip()
                 name, separator, value = pair.partition("=")
@@ -379,6 +380,29 @@ class PrivateHttpClient:
                 if is_redirect and cookie_name in {"c_user", "xs"}:
                     destination = auth_deletions if is_cookie_deletion else auth_directives
                     destination.add(cookie_name)
+                    attributes: dict[str, str] = {}
+                    for attribute in str(raw).split(";")[1:]:
+                        key, _, attribute_value = attribute.strip().partition("=")
+                        key = key.strip().casefold()
+                        if key in {"domain", "path"}:
+                            attributes[key] = attribute_value.strip()
+                    domain = attributes.get("domain", "").lstrip(".").casefold().rstrip(".")
+                    domain_scope = (
+                        "shared" if domain == "facebook.com"
+                        else "facebook_subdomain" if domain.endswith(".facebook.com")
+                        else "host" if not domain
+                        else "other"
+                    )
+                    path = attributes.get("path", "")
+                    path_scope = (
+                        "root" if path == "/"
+                        else "narrow" if path.startswith("/")
+                        else "default"
+                    )
+                    action = "delete" if is_cookie_deletion else "set"
+                    auth_scope_evidence.add(
+                        f"{cookie_name}:{action}:{domain_scope}:{path_scope}"
+                    )
                 if cookie_name != "xs" or is_cookie_deletion:
                     continue
                 self._trusted_meta_xs_fingerprints.add(
@@ -386,57 +410,16 @@ class PrivateHttpClient:
                 )
                 if len(self._trusted_meta_xs_fingerprints) > 64:
                     self._trusted_meta_xs_fingerprints.pop()
-            business_loginpage_handoff = False
-            if is_redirect:
-                location = str(response.headers.get("location") or "").strip()
-                if location:
-                    try:
-                        target_url = response.url.join(location)
-                        target_host = str(target_url.host or "").casefold()
-                        target_path = str(target_url.path or "/").casefold().rstrip("/")
-                        source_path = str(response.url.path or "/").casefold().rstrip("/")
-                        native_business_login_handoff = (
-                            host == "business.facebook.com"
-                            and source_path == "/business/loginrequest/fb"
-                            and target_host == "www.facebook.com"
-                            and target_path == "/login"
-                        )
-                        adsmanager_login_handoff = (
-                            host == "www.facebook.com"
-                            and source_path == "/adsmanager/manage/campaigns"
-                            and target_host == "www.facebook.com"
-                            and (
-                                target_path == "/login"
-                                or target_path == "/login.php"
-                                or target_path.startswith("/login/")
-                            )
-                        )
-                        business_loginpage_handoff = (
-                            (
-                                target_host == "business.facebook.com"
-                                and target_path == "/business/loginpage"
-                            )
-                            or native_business_login_handoff
-                            or adsmanager_login_handoff
-                        )
-                    except Exception:
-                        business_loginpage_handoff = False
-            if is_redirect and auth_deletions and business_loginpage_handoff:
-                # Keep the last verified profile snapshot across the Business
-                # loginpage handoff; Meta's deletion headers can truncate the
-                # jar before the manual redirect hop is sent.
-                self._meta_redirect_auth_cookie_directive_pending = False
-                log.info(
-                    "[%s] private_http_meta_redirect_auth_cookie_deletion_preserved status=%d host=%s names=%s",
-                    self.profile_name, response.status_code, host,
-                    ",".join(sorted(auth_deletions)),
-                )
-            elif is_redirect and (auth_directives or auth_deletions):
+            if is_redirect and (auth_directives or auth_deletions):
+                # Honor Meta's redirect response. Never re-inject an auth cookie
+                # that its Set-Cookie directive removed from this cookie jar.
                 self._meta_redirect_auth_cookie_directive_pending = True
                 log.info(
-                    "[%s] private_http_meta_redirect_auth_cookie_directive status=%d host=%s names=%s",
+                    "[%s] private_http_meta_redirect_auth_cookie_directive status=%d host=%s names=%s deleted=%s scope=%s",
                     self.profile_name, response.status_code, host,
                     ",".join(sorted(auth_directives | auth_deletions)),
+                    ",".join(sorted(auth_deletions)),
+                    ",".join(sorted(auth_scope_evidence)),
                 )
         except Exception:
             # Cookie tracking is only an acceptance aid; never disrupt HTTP.
