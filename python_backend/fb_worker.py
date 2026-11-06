@@ -1900,21 +1900,26 @@ class FacebookWebSession:
             and parse_qs(source_parts.query).get("__a") == ["true"]
         )
         current_actor = str(self.profile.cookies.get("c_user") or "").strip()
+        exact_inventory_read = (
+            (business_loginpage_probe == "READ_BM" and not str(business_id or "").strip())
+            or (
+                business_loginpage_probe == "READ_RK"
+                and str(business_id or "").strip().isdigit()
+            )
+        )
         if (
-            business_loginpage_probe == "READ_BM"
-            and not business_id
+            exact_inventory_read
             and source_is_ajax_dtsg
             and current_actor.isdigit()
             and bootstrap.actor_id == current_actor
             and bool(str(bootstrap.fb_dtsg or "").strip())
         ):
-            # READ_BM is a pinned, read-only query. Let its exact GraphQL
-            # response confirm Business access instead of reopening Business
-            # Home as a second document precheck. That extra navigation can
-            # redirect independently even when the session token is usable.
+            # READ_BM and READ_RK are pinned, read-only queries. Let the exact
+            # GraphQL response confirm Business access instead of reopening a
+            # separate Business document that can redirect independently.
             log.info(
-                "[%s] exact READ_BM will confirm Business access; skipping duplicate Business Home precheck",
-                self.profile.name,
+                "[%s] exact %s will confirm Business access; skipping duplicate Business document precheck",
+                self.profile.name, business_loginpage_probe,
             )
             return bootstrap
         target = (
