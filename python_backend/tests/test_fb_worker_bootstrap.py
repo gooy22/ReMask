@@ -733,6 +733,7 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
                 "https://adsmanager.facebook.com/adsmanager/manage/campaigns"
                 f"?act={account}&business_id={business}"
             ),
+            business_home_only=True,
         )
         session._business_bootstrap.assert_awaited_once()
         self.assertEqual(session._business_bootstrap.await_args.kwargs["business_loginpage_probe"], "READ_FP")
@@ -1195,7 +1196,7 @@ class PreviousSessionReadRecoveryTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(result, {"data": {"business": {"id": "987654321"}}})
-        session.bootstrap.assert_awaited_once_with()
+        session.bootstrap.assert_awaited_once_with(business_home_only=True)
         session._retry_scoped_read_with_previous_session.assert_awaited_once()
         self.assertIsNone(session._retry_scoped_read_with_previous_session.await_args.kwargs["read_timeout_seconds"])
         session._ensure_session.assert_awaited_once()
