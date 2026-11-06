@@ -59,9 +59,19 @@ def native_business_login_continuation(body, return_url, *, diagnostic=None):
     expected_acts = expected_query.get('act', [])
     # Initial Prepare must read Business Home before a new profile has an
     # ad account. Permit only this exact, query-free same-profile bootstrap
-    # scope; account-scoped Ads Manager reads retain their act requirement.
+    # scope when the response carries the reviewed native gate bundle.
+    # Account-scoped Ads Manager reads retain their act requirement.
+    script_urls = _script_urls(body, 'https://business.facebook.com/', limit=200)
+    reviewed_native_gate = (
+        ROOT in body
+        and (
+            bool(SOURCES.intersection(script_urls))
+            or any(_reviewed_native_bundle_url(url) for url in script_urls)
+        )
+    )
     profile_business_home_scope = (
-        expected.scheme.casefold() == 'https'
+        reviewed_native_gate
+        and expected.scheme.casefold() == 'https'
         and expected_host == 'business.facebook.com'
         and expected_port in (None, 443)
         and expected.username is None
@@ -124,7 +134,6 @@ def native_business_login_continuation(body, return_url, *, diagnostic=None):
         report['reason'] = 'credential_controls'
         return None
     report['reason'] = 'source_unreviewed'
-    script_urls = _script_urls(body, 'https://business.facebook.com/', limit=200)
     if not (SOURCES.intersection(script_urls)
             or any(_reviewed_native_bundle_url(url) for url in script_urls)):
         return None
