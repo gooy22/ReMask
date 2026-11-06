@@ -401,12 +401,23 @@ class PrivateHttpClient:
                             and target_host == "www.facebook.com"
                             and target_path == "/login"
                         )
+                        adsmanager_login_handoff = (
+                            host == "www.facebook.com"
+                            and source_path == "/adsmanager/manage/campaigns"
+                            and target_host == "www.facebook.com"
+                            and (
+                                target_path == "/login"
+                                or target_path == "/login.php"
+                                or target_path.startswith("/login/")
+                            )
+                        )
                         business_loginpage_handoff = (
                             (
                                 target_host == "business.facebook.com"
                                 and target_path == "/business/loginpage"
                             )
                             or native_business_login_handoff
+                            or adsmanager_login_handoff
                         )
                     except Exception:
                         business_loginpage_handoff = False
