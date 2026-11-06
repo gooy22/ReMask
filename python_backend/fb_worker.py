@@ -1101,6 +1101,19 @@ class FacebookWebSession:
             for bootstrap_url in bootstrap_urls:
                 try:
                     from app.private_http import buffered_response
+                    async def read_bootstrap_body(response):
+                        response_url = str(getattr(response, "url", "") or "")
+                        if is_business_login_gate_url(response_url):
+                            # Meta's loginpage handoff can keep its HTML stream
+                            # open indefinitely. Its body is not used to bootstrap
+                            # this profile; let the remaining read-only routes run.
+                            log.info(
+                                "[%s] skip Business loginpage body during bootstrap",
+                                self.profile.name,
+                            )
+                            return ""
+                        return await response.text()
+
                     request_headers = {
                         "Accept": (
                             "text/html,application/xhtml+xml,"
@@ -1151,7 +1164,7 @@ class FacebookWebSession:
                                 16 * 1024 * 1024 + 1,
                                 retry_read=True,
                                 validate=restore_cookies_after_redirect_headers,
-                                reader=lambda response: response.text(),
+                                reader=read_bootstrap_body,
                             )
                         finally:
                             if response_status["value"] in redirect_statuses:
