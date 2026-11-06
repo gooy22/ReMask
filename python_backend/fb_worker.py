@@ -570,13 +570,12 @@ class FacebookWebSession:
             for query_value in query_values:
                 attempt_name = f"{endpoint}?{query_key}={query_value}"
                 try:
-                    # Each DTSG refresh probe is independent. Meta may delete
-                    # c_user/xs on a prior response; start from the resolver's
-                    # imported profile snapshot and restore it as soon as new
-                    # response headers alter the shared cookie jar.
-                    restore_profile_cookies = getattr(session, "restore_profile_cookies", None)
-                    if callable(restore_profile_cookies):
-                        restore_profile_cookies()
+                    # Each DTSG refresh probe stays bound to the selected actor. Keep
+                    # complete same-actor cookie updates and restore the
+                    # imported snapshot only if the required set is lost.
+                    self._restore_profile_cookie_snapshot_if_lost(
+                        session, stage="dtsg_refresh_target_start",
+                    )
                     async with session.get(
                         endpoint,
                         params={
@@ -752,12 +751,12 @@ class FacebookWebSession:
             "https://mbasic.facebook.com/profile.php",
         )
         for target in targets:
-            # Business login-page redirects can delete root-scope auth cookies
-            # before the profile identity check. Each probe starts from the
-            # exact imported profile snapshot.
-            restore_cookies = getattr(session, "restore_profile_cookies", None)
-            if callable(restore_cookies):
-                restore_cookies()
+            # Keep complete same-actor cookie rotations across identity probes.
+            # Restore the imported set only if the actor or required cookies
+            # disappear during the preceding Meta redirect.
+            self._restore_profile_cookie_snapshot_if_lost(
+                session, stage="verified_profile_target_start",
+            )
             try:
                 from app.private_http import buffered_response
                 probe_timeout_seconds = 15.0 if target.startswith("https://adsmanager.facebook.com/") else 8.0
@@ -788,8 +787,10 @@ class FacebookWebSession:
                     # Each hop is a separate bounded GET from the exact saved
                     # profile snapshot; never let an automatic redirect consume
                     # the next request with a changed cookie jar.
-                    if callable(restore_cookies):
-                        restore_cookies()
+                    self._restore_profile_cookie_snapshot_if_lost(
+                        session,
+                        stage=f"verified_profile_redirect_hop_{redirect_count + 1}",
+                    )
                     response, body = await asyncio.wait_for(
                         buffered_response(
                             "GET",
@@ -1151,11 +1152,9 @@ class FacebookWebSession:
                             attempts.append(f"{bootstrap_url}: redirect loop")
                             break
                         visited_urls.add(current_url)
-                        restore_profile_cookies = getattr(
-                            session, "restore_profile_cookies", None
+                        self._restore_profile_cookie_snapshot_if_lost(
+                            session, stage="bootstrap_target_and_redirect_hop",
                         )
-                        if callable(restore_profile_cookies):
-                            restore_profile_cookies()
                         redirect_statuses = {301, 302, 303, 307, 308}
                         response_status = {"value": None}
 
@@ -1224,9 +1223,10 @@ class FacebookWebSession:
                         if redirect_count == 5:
                             attempts.append(f"{bootstrap_url}: redirect limit")
                             break
-                        # Restore the imported profile snapshot before each
-                        # first-party hop. Meta can shadow root auth cookies with
-                        # Set-Cookie on a redirect response.
+                        # Preserve complete same-actor Meta cookie updates across this
+                        # first-party redirect chain. The guard above restores
+                        # the imported snapshot only if the actor or cookie set
+                        # becomes invalid.
                         if (bootstrap_url == self.ADS_MANAGER_URL
                                 and redirect_count == 0
                                 and candidate_status == 302):
