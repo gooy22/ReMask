@@ -1288,10 +1288,9 @@ class FacebookWebSession:
                         if redirect_count == 5:
                             attempts.append(f"{bootstrap_url}: redirect limit")
                             break
-                        # Preserve complete same-actor Meta cookie updates across this
-                        # first-party redirect chain. The guard above restores
-                        # the imported snapshot only if the actor or cookie set
-                        # becomes invalid.
+                        # Preserve same-actor Meta updates across this redirect chain.
+                        # The guard only recovers unannounced jar loss; it never
+                        # restores auth cookies after Meta issues a directive.
                         if (bootstrap_url == self.BUSINESS_HOME_URL
                                 and redirect_count == 0
                                 and candidate_status == 302):
@@ -1590,7 +1589,7 @@ class FacebookWebSession:
     def _restore_profile_cookie_snapshot_if_lost(
         self, session, *, stage: str,
     ) -> bool:
-        """Keep complete same-actor Meta rotations; restore a missing or foreign cookie set."""
+        """Preserve same-actor rotations; never restore after Meta auth-cookie directives."""
         saved = getattr(session, "_profile_cookies", None)
         read_snapshot = getattr(session, "facebook_cookie_snapshot", None)
         restore = getattr(session, "restore_profile_cookies", None)
@@ -2033,10 +2032,8 @@ class FacebookWebSession:
                         } or page_read_probe or page_create_probe)):
                     expected_actor = str(self.profile.cookies.get("c_user") or "").strip()
                     if expected_actor.isdigit() and expected_actor == bootstrap.actor_id:
-                        # Business loginpage can clear auth cookies before
-                        # returning a generic gate. Restore the imported
-                        # profile snapshot if c_user/xs were removed or changed,
-                        # then let the exact GraphQL response decide access.
+                        # Recover only unannounced jar loss here. A Meta auth-cookie
+                        # directive remains authoritative and is never overwritten.
                         self._restore_invalid_profile_cookie_snapshot(
                             await self._ensure_session(), expected_actor,
                         )
