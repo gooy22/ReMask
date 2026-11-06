@@ -246,12 +246,11 @@ def native_business_login_continuation(body, return_url, *, diagnostic=None):
                         or not handoff_target_allowed):
                     report['reason'] = 'destination_scope_mismatch'
                     continue
-                if profile_business_home_scope:
-                    # Keep the native request ID from Meta, but always resume
-                    # the new-profile bootstrap at the exact /latest/home URL
-                    # requested by Prepare. Some gates advertise only '/' as
-                    # their referrer even though this is a scoped Business Home
-                    # flow; never broaden that navigation to the account root.
+                if profile_business_home_scope and business_home:
+                    # Keep the native request ID from Meta, but replace a root
+                    # Business Home referrer with Prepare's exact /latest/home
+                    # URL. Preserve Meta's own reviewed /latest/home destination
+                    # (including nav_ref) when it already stays in this scope.
                     actual = expected
                 query = dict(parse_qsl(actual.query))
                 query.update(biz_login_source='biz_unified_f3_fb_login_button', join_id=str(uuid4()))
