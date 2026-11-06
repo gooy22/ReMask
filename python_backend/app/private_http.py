@@ -426,9 +426,9 @@ class PrivateHttpClient:
                     "deletions": sorted(auth_deletions),
                     "deletion_scopes": auth_deletion_scopes,
                 }
-                # Honor Meta's redirect response by default. The only exception
-                # is explicitly authorized by the caller for one reviewed
-                # Business Home loginpage continuation.
+                # Honor Meta's redirect response by default. Narrow exceptions
+                # are explicitly authorized by callers for reviewed same-profile
+                # Business handoff continuations.
                 self._meta_redirect_auth_cookie_directive_pending = True
                 log.info(
                     "[%s] private_http_meta_redirect_auth_cookie_directive status=%d host=%s names=%s deleted=%s scope=%s",
