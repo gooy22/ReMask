@@ -1892,6 +1892,23 @@ class FacebookWebSession:
                 "READ_FP", "FP_CATEGORY", "FP_PRECHECK", "CREATE_FP"}
                 and bootstrap.profile_actor_verified):
             return bootstrap
+        current_actor = str(self.profile.cookies.get("c_user") or "").strip()
+        if (
+            business_loginpage_probe == "READ_BM"
+            and not business_id
+            and current_actor.isdigit()
+            and bootstrap.actor_id == current_actor
+            and bool(str(bootstrap.fb_dtsg or "").strip())
+        ):
+            # READ_BM is a pinned, read-only query. Let its exact GraphQL
+            # response confirm Business access instead of reopening Business
+            # Home as a second document precheck. That extra navigation can
+            # redirect independently even when the session token is usable.
+            log.info(
+                "[%s] exact READ_BM will confirm Business access; skipping duplicate Business Home precheck",
+                self.profile.name,
+            )
+            return bootstrap
         source = str(getattr(bootstrap, "source_url", "") or "").strip()
         target = (
             "https://business.facebook.com/latest/settings/ad_accounts/?business_id=" + business_id
