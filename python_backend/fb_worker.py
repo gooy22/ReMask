@@ -1558,7 +1558,11 @@ class FacebookWebSession:
             current = {}
 
         accept_refresh = getattr(session, "accept_same_actor_cookie_refresh", None)
-        if callable(accept_refresh) and accept_refresh():
+        if (
+            not allow_business_home_loginpage_auth_restore
+            and callable(accept_refresh)
+            and accept_refresh()
+        ):
             refreshed = getattr(session, "_profile_cookies", {})
             if isinstance(refreshed, dict) and any(
                 str(refreshed.get(name)) != str(value) for name, value in saved.items()
@@ -1693,10 +1697,12 @@ class FacebookWebSession:
             redirect_limit = 5 if manual_facebook_redirects else 0
             for redirect_count in range(redirect_limit + 1):
                 response_header_cookie_guard = None
+                allow_business_home_restore_for_response = False
                 if document_request or ads_manager_document:
                     response_header_stage = f"response_headers_{redirect_count + 1}"
 
                     def restore_document_response_cookies(response, stage=response_header_stage):
+                        nonlocal allow_business_home_restore_for_response
                         allow_business_home_restore = False
                         if (
                             document_request
@@ -1729,6 +1735,7 @@ class FacebookWebSession:
                                     for name in ("c_user", "xs")
                                 )
                             )
+                        allow_business_home_restore_for_response = allow_business_home_restore
                         self._restore_profile_cookie_snapshot_if_lost(
                             session,
                             stage=stage,
@@ -1757,7 +1764,9 @@ class FacebookWebSession:
                 finally:
                     if document_request or ads_manager_document:
                         self._restore_profile_cookie_snapshot_if_lost(
-                            session, stage=f"response_body_{redirect_count + 1}"
+                            session,
+                            stage=f"response_body_{redirect_count + 1}",
+                            allow_business_home_loginpage_auth_restore=allow_business_home_restore_for_response,
                         )
                 if not manual_facebook_redirects or response.status not in {
                     301, 302, 303, 307, 308,
