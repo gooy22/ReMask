@@ -151,6 +151,7 @@ class PrivateHttpClient:
         self.proxy = proxy
         self.profile_name = profile_name
         self._actor_id = str(cookies.get('c_user') or '')
+        self._user_agent = str(user_agent or '')
         # Keep the imported profile snapshot so a failed Business login-page
         # redirect cannot poison the subsequent read-only identity probe.
         self._profile_cookies = dict(cookies)
@@ -186,17 +187,62 @@ class PrivateHttpClient:
             event_hooks={'request': [self._log_auth_cookie_evidence, request_hook], 'response': [response_hook]},
         )
 
-    async def _log_auth_cookie_evidence(self, request: httpx.Request) -> None:
-        """Log whether the prepared Facebook request carries this profile's auth cookies.
+    def _profile_cookie_snapshot_for_wire(self) -> dict[str, str]:
+        """Use this profile's shared Facebook cookies, restoring its snapshot if a response removed one."""
+        snapshot = self.facebook_cookie_snapshot()
+        original_names = set(self._profile_cookies)
+        usable = (
+            bool(snapshot)
+            and snapshot.get("c_user") == self._actor_id
+            and bool(str(snapshot.get("xs") or "").strip())
+            and original_names.issubset(snapshot)
+        )
+        if not usable:
+            self.restore_profile_cookies()
+            snapshot = self.facebook_cookie_snapshot()
+            usable = (
+                bool(snapshot)
+                and snapshot.get("c_user") == self._actor_id
+                and bool(str(snapshot.get("xs") or "").strip())
+                and original_names.issubset(snapshot)
+            )
+        if not usable:
+            return dict(self._profile_cookies)
+        # Accept same-actor Meta cookie refreshes and use that exact root-scope
+        # snapshot on the next request. Host/path cookies cannot shadow it.
+        self._profile_cookies = dict(snapshot)
+        return dict(snapshot)
 
-        Never log cookie values or fingerprints. This distinguishes an absent or
-        shadowed Cookie header from a Meta-side identity rejection.
-        """
+    @staticmethod
+    def _serialize_profile_cookie_header(cookies: dict[str, str]) -> str | None:
+        pairs = []
+        for name, value in cookies.items():
+            name, value = str(name), str(value)
+            if not re.fullmatch(r"[A-Za-z0-9_.-]{1,256}", name):
+                return None
+            if any(ord(char) < 33 or ord(char) > 126 or char in '";,\\\\' for char in value):
+                return None
+            pairs.append(f"{name}={value}")
+        return "; ".join(pairs) if pairs else None
+
+    async def _log_auth_cookie_evidence(self, request: httpx.Request) -> None:
+        """Canonicalize and record the final Facebook Cookie header without exposing values."""
         try:
             host = request.url.host.lower()
-            if host != "facebook.com" and not host.endswith(".facebook.com"):
+            if ((host != "facebook.com" and not host.endswith(".facebook.com"))
+                    or request.url.scheme.lower() != "https"):
                 return
-            evidence = cookie_evidence(request.headers.get("cookie", ""), self._actor_id)
+            profile_cookies = self._profile_cookie_snapshot_for_wire()
+            canonical_header = self._serialize_profile_cookie_header(profile_cookies)
+            original_header = request.headers.get("cookie", "")
+            rebuilt = canonical_header is not None and original_header != canonical_header
+            if canonical_header is not None:
+                # HTTPX's request hook runs after cookie selection and before
+                # transport send. Override any jar shadowing with the canonical
+                # profile-bound root-scope cookie set for this Facebook host.
+                request.headers["cookie"] = canonical_header
+            header = request.headers.get("cookie", "")
+            evidence = cookie_evidence(header, self._actor_id)
             names = set(evidence.get("header_auth_cookie_names", []))
             path = request.url.path
             if path not in {
@@ -206,8 +252,10 @@ class PrivateHttpClient:
                 "/login.php", "/checkpoint", "/checkpoint/",
             }:
                 path = "unreviewed"
+            wire_exact = canonical_header is not None and header == canonical_header
+            user_agent_matches = request.headers.get("user-agent", "") == self._user_agent
             log.info(
-                "[%s] private_http_auth_header method=%s host=%s path=%s actor_cookie_state=%s xs_present=%s cookie_count=%s",
+                "[%s] private_http_auth_header method=%s host=%s path=%s actor_cookie_state=%s xs_present=%s cookie_count=%s cookie_wire_exact=%s cookie_header_rebuilt=%s user_agent_matches=%s",
                 self.profile_name,
                 request.method,
                 host,
@@ -215,6 +263,9 @@ class PrivateHttpClient:
                 evidence.get("header_auth_state", "unavailable"),
                 "xs" in names,
                 evidence.get("header_cookie_count", 0),
+                wire_exact,
+                rebuilt,
+                user_agent_matches,
             )
         except Exception as exc:
             log.info(
