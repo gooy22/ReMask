@@ -693,6 +693,22 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(cookie_session.restored)
         session.fetch_text.assert_awaited_once()
 
+    async def test_read_bm_uses_pinned_query_instead_of_reopening_business_home(self):
+        actor = "123456789"
+        session = FacebookWebSession(WebProfile(name="29",
+            cookies={"c_user": actor, "xs": "fixture-xs"}, proxy=None, user_agent="fixture"))
+        bootstrap = FacebookBootstrap(actor_id=actor, fb_dtsg="fixture-token",
+            source_url="https://www.facebook.com/ajax/dtsg/?__a=true",
+            profile_actor_verified=False)
+        session.fetch_text = AsyncMock()
+
+        result = await session._business_bootstrap(
+            bootstrap, business_loginpage_probe="READ_BM",
+        )
+
+        self.assertIs(result, bootstrap)
+        session.fetch_text.assert_not_awaited()
+
     async def test_bootstrap_accepts_exact_account_only_saved_context_return(self):
         actor, account = "123456789", "555666777"
         session = FacebookWebSession(WebProfile(name="27",
