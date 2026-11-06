@@ -568,7 +568,15 @@ class FacebookWebSession:
 
         for endpoint, referer, query_key, query_values in endpoint_specs:
             for query_value in query_values:
+                attempt_name = f"{endpoint}?{query_key}={query_value}"
                 try:
+                    # Each DTSG refresh probe is independent. Meta may delete
+                    # c_user/xs on a prior response; start from the resolver's
+                    # imported profile snapshot and restore it as soon as new
+                    # response headers alter the shared cookie jar.
+                    restore_profile_cookies = getattr(session, "restore_profile_cookies", None)
+                    if callable(restore_profile_cookies):
+                        restore_profile_cookies()
                     async with session.get(
                         endpoint,
                         params={
@@ -587,12 +595,17 @@ class FacebookWebSession:
                             "Sec-Fetch-Site": "same-origin",
                         },
                         allow_redirects=False,
+                        cookie_jar_guard=lambda: self._restore_profile_cookie_snapshot_if_lost(
+                            session,
+                            stage=f"dtsg_refresh_headers_{query_key}_{query_value}",
+                        ),
                     ) as response:
                         raw = await response.text()
-                        location = str(response.headers.get("Location") or "")
-                        attempt_name = (
-                            f"{endpoint}?{query_key}={query_value}"
+                        self._restore_profile_cookie_snapshot_if_lost(
+                            session,
+                            stage=f"dtsg_refresh_body_{query_key}_{query_value}",
                         )
+                        location = str(response.headers.get("Location") or "")
 
                         if response.status in {301, 302, 303, 307, 308}:
                             attempts.append(
