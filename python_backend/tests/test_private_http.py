@@ -442,7 +442,9 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
         await self.mock(client, handler)
         client._client.event_hooks["response"].append(client._track_meta_xs_cookie_updates)
         with self.assertRaises(AuthenticationError):
-            await web.bootstrap(allow_business_loginpage_probe=True)
+            await web.bootstrap(
+                allow_business_loginpage_probe=True, prefer_business_home=True,
+            )
         profile_probe = next(row for row in requests if row[0] == 'www.facebook.com')
         self.assertIn(f'c_user={actor}', profile_probe[2])
         self.assertNotIn('xs=imported-xs', profile_probe[2])
