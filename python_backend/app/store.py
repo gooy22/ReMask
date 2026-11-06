@@ -1787,9 +1787,22 @@ class JobStore:
             # Frequent UI polls must not run two child SELECTs per profile.
             # Join through durable job_items so one bound job_id parameter covers
             # arbitrarily large jobs without SQLite's IN-list variable limit.
-            item_rows=con.execute(
-                'SELECT * FROM job_items WHERE job_id=? ORDER BY created_at',(job_id,)
-            ).fetchall()
+            try:
+                item_rows=con.execute(
+                    "SELECT i.*, p.status AS _terminal_profile_status "
+                    "FROM job_items AS i "
+                    "LEFT JOIN profile_terminal_statuses AS p "
+                    "ON p.profile_id=i.profile_id "
+                    "AND p.status IN ('CHECKPOINT','BUSINESS_LOGIN_GATE') "
+                    "WHERE i.job_id=? ORDER BY i.created_at",
+                    (job_id,),
+                ).fetchall()
+            except sqlite3.OperationalError as exc:
+                if "no such table: profile_terminal_statuses" not in str(exc):
+                    raise
+                item_rows=con.execute(
+                    'SELECT * FROM job_items WHERE job_id=? ORDER BY created_at',(job_id,)
+                ).fetchall()
             tasks_by_item={}
             for tr in con.execute(
                 'SELECT t.* FROM job_tasks AS t '
@@ -1814,23 +1827,10 @@ class JobStore:
                     p['result']=json.loads(p['result_json'])
                 p.pop('result_json',None)
                 steps_by_item.setdefault(p['item_id'],[]).append(p)
-            terminal_status_by_profile = {}
-            try:
-                for row in con.execute(
-                    "SELECT p.profile_id,p.status FROM profile_terminal_statuses AS p "
-                    "JOIN job_items AS i ON i.profile_id=p.profile_id "
-                    "WHERE i.job_id=? AND p.status IN ('CHECKPOINT','BUSINESS_LOGIN_GATE')",
-                    (job_id,),
-                ).fetchall():
-                    terminal_status_by_profile[str(row['profile_id'] or '')] = str(
-                        row['status'] or ''
-                    ).upper()
-            except sqlite3.OperationalError as exc:
-                if "no such table: profile_terminal_statuses" not in str(exc):
-                    raise
             items=[]
             for ir in item_rows:
                 item=dict(ir)
+                terminal_status = str(item.pop('_terminal_profile_status', '') or '').upper()
                 item['retryable']=bool(item.get('retryable'))
                 tasks=tasks_by_item.get(item['id'],[])
                 # Expose a manual verification retry for the legacy false-quota
@@ -1867,8 +1867,7 @@ class JobStore:
                             task['recovery_mode']='retry_private_launch_before_submit'
                 item['provisioning_steps']=steps_by_item.get(item['id'],[])
                 if (
-                    terminal_status_by_profile.get(str(item.get('profile_id') or ''))
-                        == 'BUSINESS_LOGIN_GATE'
+                    terminal_status == 'BUSINESS_LOGIN_GATE'
                     and self._business_gate_preflight_retry_available(
                         item, tasks, item['provisioning_steps']
                     )
