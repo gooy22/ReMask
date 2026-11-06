@@ -1085,6 +1085,7 @@ async def continue_business_login_gate(
                 or not profile_xs
                 or str(before.get("c_user") or "") != actor_id
                 or not str(before.get("xs") or "").strip()
+                or str(before.get("xs") or "").strip() != profile_xs
                 or any(name not in before for name in profile_snapshot)
             )
         )
