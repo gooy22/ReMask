@@ -393,7 +393,7 @@ def native_business_login_continuation(body, return_url, *, diagnostic=None):
         report['reason'] = 'native_fb_scoped_fallback'
         return handoff
     if (not candidates and native_facebook_flows == 1
-            and report.get('reason') == 'request_id_or_destination'
+            and report.get('reason') in {'request_id_or_destination', 'destination_scope_mismatch'}
             and not profile_business_home_scope):
         # The current gate rendered a reviewed Facebook-only continuation
         # control, but its serialized destination/request ID no longer matches
