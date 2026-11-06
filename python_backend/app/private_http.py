@@ -78,6 +78,28 @@ class _Body:
             self._metric.delivered += len(data)
         return bytes(data)
 
+    async def read_some(self, size: int) -> bytes:
+        """Return the next available decoded chunk without waiting for EOF."""
+        size = max(0, int(size))
+        if size == 0:
+            return b""
+        if self._pending:
+            data = self._pending[:size]
+            self._pending = self._pending[len(data):]
+        else:
+            while True:
+                try:
+                    chunk = await anext(self._chunks)
+                except StopAsyncIteration:
+                    return b""
+                if chunk:
+                    break
+            data = chunk[:size]
+            self._pending = chunk[len(data):]
+        if self._metric is not None:
+            self._metric.delivered += len(data)
+        return bytes(data)
+
 
 class PrivateResponse:
     def __init__(self, response: httpx.Response, metric=None) -> None:
@@ -87,6 +109,29 @@ class PrivateResponse:
         self.charset = response.charset_encoding
         self.http_version = response.http_version
         self.content = _Body(response, metric)
+
+    async def text_prefix(self, size: int, *, idle_timeout_seconds: float = 1.5) -> str:
+        """Read a bounded body prefix, stopping when the response goes idle."""
+        limit = max(0, min(int(size), 256 * 1024))
+        if limit == 0:
+            return ""
+        raw = bytearray()
+        try:
+            async with asyncio.timeout(max(0.05, float(idle_timeout_seconds))):
+                while len(raw) < limit:
+                    chunk = await self.content.read_some(limit - len(raw))
+                    if not chunk:
+                        break
+                    raw.extend(chunk)
+        except asyncio.TimeoutError:
+            # Some Meta handoff documents keep their response stream open after
+            # sending the useful form/control. The caller can safely inspect the
+            # prefix; the enclosing response context will close the remainder.
+            pass
+        try:
+            return bytes(raw).decode(self.charset or "utf-8", errors="replace")
+        except LookupError:
+            return bytes(raw).decode("utf-8", errors="replace")
 
     async def text(self) -> str:
         # Bootstrap/GraphQL bodies have a finite decompressed budget too.
