@@ -394,9 +394,19 @@ class PrivateHttpClient:
                         target_url = response.url.join(location)
                         target_host = str(target_url.host or "").casefold()
                         target_path = str(target_url.path or "/").casefold().rstrip("/")
+                        source_path = str(response.url.path or "/").casefold().rstrip("/")
+                        native_business_login_handoff = (
+                            host == "business.facebook.com"
+                            and source_path == "/business/loginrequest/fb"
+                            and target_host == "www.facebook.com"
+                            and target_path == "/login"
+                        )
                         business_loginpage_handoff = (
-                            target_host == "business.facebook.com"
-                            and target_path == "/business/loginpage"
+                            (
+                                target_host == "business.facebook.com"
+                                and target_path == "/business/loginpage"
+                            )
+                            or native_business_login_handoff
                         )
                     except Exception:
                         business_loginpage_handoff = False
