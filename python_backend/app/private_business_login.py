@@ -166,6 +166,9 @@ def native_business_login_continuation(body, return_url, *, diagnostic=None):
                         or _literal(pair.child_by_field_name('value')) != ROOT):
                     continue
                 props = _pairs(root['props'])
+                report['native_prop_keys'] = sorted(str(name) for name in props)[:80]
+                report['native_request_id_node_type'] = getattr(props.get('requestId'), 'type', 'missing')
+                report['native_referrer_uri_node_type'] = getattr(props.get('referrerURI'), 'type', 'missing')
                 report['reason'] = 'unsupported_flow'
                 def scalar(name, default=None):
                     return _literal(props[name]) if name in props else default
