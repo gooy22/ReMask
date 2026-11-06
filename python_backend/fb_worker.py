@@ -630,7 +630,7 @@ class FacebookWebSession:
                             "Sec-Fetch-Site": "same-origin",
                         },
                         allow_redirects=False,
-                        cookie_jar_guard=lambda: self._restore_profile_cookie_snapshot_if_lost(
+                        cookie_jar_guard=lambda _response=None: self._restore_profile_cookie_snapshot_if_lost(
                             session,
                             stage=f"dtsg_refresh_headers_{query_key}_{query_value}",
                         ),
@@ -1539,7 +1539,10 @@ class FacebookWebSession:
             # the reviewed snapshot and do not expose source/session values.
             log.warning('module_refresh unavailable type=%s', type(exc).__name__)
 
-    def _restore_profile_cookie_snapshot_if_lost(self, session, *, stage: str) -> bool:
+    def _restore_profile_cookie_snapshot_if_lost(
+        self, session, *, stage: str,
+        allow_business_home_loginpage_auth_restore: bool = False,
+    ) -> bool:
         """Keep complete same-actor Meta rotations; restore a missing or foreign cookie set."""
         saved = getattr(session, "_profile_cookies", None)
         read_snapshot = getattr(session, "facebook_cookie_snapshot", None)
@@ -1567,11 +1570,16 @@ class FacebookWebSession:
             return False
 
         if getattr(session, "_meta_redirect_auth_cookie_directive_pending", False):
+            if not allow_business_home_loginpage_auth_restore:
+                log.info(
+                    "[%s] profile_cookie_snapshot_restore_skipped stage=%s reason=meta_redirect_auth_cookie_directive",
+                    self.profile.name, stage,
+                )
+                return False
             log.info(
-                "[%s] profile_cookie_snapshot_restore_skipped stage=%s reason=meta_redirect_auth_cookie_directive",
+                "[%s] profile_cookie_snapshot_restore_allowed stage=%s reason=first_business_home_loginpage_redirect actor_match=true",
                 self.profile.name, stage,
             )
-            return False
 
         try:
             if not callable(restore):
@@ -1687,9 +1695,47 @@ class FacebookWebSession:
                 response_header_cookie_guard = None
                 if document_request or ads_manager_document:
                     response_header_stage = f"response_headers_{redirect_count + 1}"
-                    response_header_cookie_guard = lambda stage=response_header_stage: (
-                        self._restore_profile_cookie_snapshot_if_lost(session, stage=stage)
-                    )
+
+                    def restore_document_response_cookies(response, stage=response_header_stage):
+                        allow_business_home_restore = False
+                        if (
+                            document_request
+                            and redirect_count == 0
+                            and hostname == "business.facebook.com"
+                            and parts.path.rstrip("/") == "/latest/home"
+                            and response.status_code == 302
+                        ):
+                            target_url = urljoin(
+                                str(response.url),
+                                str(response.headers.get("Location") or ""),
+                            )
+                            target = urlsplit(target_url)
+                            directive = response.extensions.get(
+                                "remask_meta_auth_cookie_directive", {}
+                            )
+                            deletions = set(directive.get("deletions", []))
+                            sets = set(directive.get("sets", []))
+                            scopes = directive.get("deletion_scopes", {})
+                            allow_business_home_restore = (
+                                target.scheme == "https"
+                                and target.hostname == "business.facebook.com"
+                                and target.path == "/business/loginpage/"
+                                and deletions == {"c_user", "xs"}
+                                and not sets
+                                and all(
+                                    scopes.get(name) == {
+                                        "domain": "shared", "path": "root",
+                                    }
+                                    for name in ("c_user", "xs")
+                                )
+                            )
+                        self._restore_profile_cookie_snapshot_if_lost(
+                            session,
+                            stage=stage,
+                            allow_business_home_loginpage_auth_restore=allow_business_home_restore,
+                        )
+
+                    response_header_cookie_guard = restore_document_response_cookies
                 try:
                     response, raw = await buffered_response(
                         "GET",
