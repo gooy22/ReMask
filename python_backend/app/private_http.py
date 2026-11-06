@@ -363,31 +363,59 @@ class PrivateHttpClient:
                 and bool(response.headers.get("location"))
             )
             auth_directives: set[str] = set()
+            auth_deletions: set[str] = set()
             for raw in response.headers.get_list("set-cookie"):
                 pair = str(raw or "").split(";", 1)[0].strip()
                 name, separator, value = pair.partition("=")
                 cookie_name = name.strip().casefold()
                 if not separator:
                     continue
-                if is_redirect and cookie_name in {"c_user", "xs"}:
-                    auth_directives.add(cookie_name)
-                if cookie_name != "xs":
-                    continue
                 value = value.strip().strip('"')
-                if (not value or value.casefold() == "deleted"
-                        or re.search(r";\s*max-age\s*=\s*0(?:\s*;|\s*$)", str(raw), re.I)):
+                is_cookie_deletion = (
+                    not value
+                    or value.casefold() == "deleted"
+                    or re.search(r";\s*max-age\s*=\s*0(?:\s*;|\s*$)", str(raw), re.I)
+                )
+                if is_redirect and cookie_name in {"c_user", "xs"}:
+                    destination = auth_deletions if is_cookie_deletion else auth_directives
+                    destination.add(cookie_name)
+                if cookie_name != "xs" or is_cookie_deletion:
                     continue
                 self._trusted_meta_xs_fingerprints.add(
                     hashlib.sha256(value.encode("utf-8")).hexdigest()
                 )
                 if len(self._trusted_meta_xs_fingerprints) > 64:
                     self._trusted_meta_xs_fingerprints.pop()
-            if is_redirect and auth_directives:
+            business_loginpage_handoff = False
+            if is_redirect:
+                location = str(response.headers.get("location") or "").strip()
+                if location:
+                    try:
+                        target_url = response.url.join(location)
+                        target_host = str(target_url.host or "").casefold()
+                        target_path = str(target_url.path or "/").casefold().rstrip("/")
+                        business_loginpage_handoff = (
+                            target_host == "business.facebook.com"
+                            and target_path == "/business/loginpage"
+                        )
+                    except Exception:
+                        business_loginpage_handoff = False
+            if is_redirect and auth_deletions and business_loginpage_handoff:
+                # Keep the last verified profile snapshot across the Business
+                # loginpage handoff; Meta's deletion headers can truncate the
+                # jar before the manual redirect hop is sent.
+                self._meta_redirect_auth_cookie_directive_pending = False
+                log.info(
+                    "[%s] private_http_meta_redirect_auth_cookie_deletion_preserved status=%d host=%s names=%s",
+                    self.profile_name, response.status_code, host,
+                    ",".join(sorted(auth_deletions)),
+                )
+            elif is_redirect and (auth_directives or auth_deletions):
                 self._meta_redirect_auth_cookie_directive_pending = True
                 log.info(
                     "[%s] private_http_meta_redirect_auth_cookie_directive status=%d host=%s names=%s",
                     self.profile_name, response.status_code, host,
-                    ",".join(sorted(auth_directives)),
+                    ",".join(sorted(auth_directives | auth_deletions)),
                 )
         except Exception:
             # Cookie tracking is only an acceptance aid; never disrupt HTTP.

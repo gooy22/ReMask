@@ -411,9 +411,10 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
         await web.close()
         self.assertEqual(web.profile.cookies, original)
 
-    async def test_business_loginpage_auth_cookie_deletion_is_not_restored(self):
+    async def test_business_loginpage_auth_cookie_deletion_restores_profile_snapshot(self):
         actor = '123456789'
-        profile = WebProfile('fixture', {'c_user': actor, 'xs': 'imported-xs'},
+        original = {'c_user': actor, 'xs': 'imported-xs'}
+        profile = WebProfile('fixture', dict(original),
             'http://127.0.0.1:1', 'fixture-UA')
         web = FacebookWebSession(profile)
         self.addAsyncCleanup(web.close)
@@ -441,14 +442,20 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
 
         await self.mock(client, handler)
         client._client.event_hooks["response"].append(client._track_meta_xs_cookie_updates)
-        with self.assertRaises(AuthenticationError):
-            await web.bootstrap(
-                allow_business_loginpage_probe=True, prefer_business_home=True,
-            )
+        bootstrap = await web.bootstrap(
+            allow_business_loginpage_probe=True, prefer_business_home=True,
+        )
+        self.assertEqual(bootstrap.actor_id, actor)
+        self.assertTrue(bootstrap.profile_actor_verified)
+        gate_hop = next(row for row in requests if row[1] == '/business/loginpage/')
+        self.assertIn(f'c_user={actor}', gate_hop[2])
+        self.assertIn('xs=imported-xs', gate_hop[2])
         profile_probe = next(row for row in requests if row[0] == 'www.facebook.com')
         self.assertIn(f'c_user={actor}', profile_probe[2])
-        self.assertNotIn('xs=imported-xs', profile_probe[2])
-        self.assertNotIn('xs', client.facebook_cookie_snapshot())
+        self.assertIn('xs=imported-xs', profile_probe[2])
+        self.assertEqual(client.facebook_cookie_snapshot(), original)
+        await web.close()
+        self.assertEqual(web.profile.cookies, original)
 
     async def test_meta_cookie_refresh_is_saved_to_same_profile(self):
         context = ProfileContext(
