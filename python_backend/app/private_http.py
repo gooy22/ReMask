@@ -195,12 +195,15 @@ class PrivateHttpClient:
         """Adopt Meta-set cookies only while the selected actor and cookie set remain intact."""
         original = dict(self._profile_cookies)
         snapshot = self.facebook_cookie_snapshot()
+        # Meta may legitimately remove or rotate non-auth cookies during a
+        # redirect. Keep that same-actor jar as long as both session auth
+        # cookies remain valid; restoring every original cookie here would
+        # overwrite Meta's update and resend stale values on the next hop.
         complete_same_actor = (
             bool(original)
             and bool(snapshot)
             and snapshot.get("c_user") == self._actor_id
             and bool(str(snapshot.get("xs") or "").strip())
-            and all(name in snapshot for name in original)
         )
         if not complete_same_actor:
             return False
