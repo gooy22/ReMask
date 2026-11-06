@@ -1067,6 +1067,7 @@ async def continue_business_login_gate(
 
     try:
         session = await web._ensure_session()
+        restore_profile_cookies = getattr(session, "restore_profile_cookies", None)
         before = session.facebook_cookie_snapshot()
         profile_snapshot = getattr(session, "_profile_cookies", None)
         profile_xs = (
