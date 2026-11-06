@@ -1479,7 +1479,7 @@ class FacebookWebSession:
             log.warning('module_refresh unavailable type=%s', type(exc).__name__)
 
     def _restore_profile_cookie_snapshot_if_lost(self, session, *, stage: str) -> bool:
-        """Restore the resolver-loaded profile snapshot before another request."""
+        """Restore every imported cookie if a response altered the profile snapshot."""
         saved = getattr(session, "_profile_cookies", None)
         read_snapshot = getattr(session, "facebook_cookie_snapshot", None)
         restore = getattr(session, "restore_profile_cookies", None)
@@ -1487,20 +1487,18 @@ class FacebookWebSession:
             return False
         actor = str(saved.get("c_user") or "")
         xs = str(saved.get("xs") or "")
-        # The persisted snapshot must contain both session identity cookies before
-        # it can serve as a safe rollback point.
         if not actor or not xs:
             return False
         current = read_snapshot()
         if not isinstance(current, dict):
             current = {}
-        lost = (
-            len(current) < len(saved)
-            or any(name not in current for name in saved)
-            or str(current.get("c_user") or "") != actor
-            or str(current.get("xs") or "") != xs
+        exact = (
+            all(name in current and str(current.get(name)) == str(value)
+                for name, value in saved.items())
+            and str(current.get("c_user") or "") == actor
+            and str(current.get("xs") or "") == xs
         )
-        if not lost:
+        if exact:
             return False
         try:
             if not callable(restore):
@@ -1519,8 +1517,8 @@ class FacebookWebSession:
             ) from None
         valid = (
             isinstance(restored, dict)
-            and len(restored) >= len(saved)
-            and all(name in restored for name in saved)
+            and all(name in restored and str(restored.get(name)) == str(value)
+                    for name, value in saved.items())
             and str(restored.get("c_user") or "") == actor
             and str(restored.get("xs") or "") == xs
         )
@@ -1531,7 +1529,7 @@ class FacebookWebSession:
                 transport_stage="fetch_cookie_restore",
             )
         log.warning(
-            "[%s] profile_cookie_snapshot_restored stage=%s expected_count=%d restored_count=%d",
+            "[%s] profile_cookie_snapshot_restored stage=%s expected_count=%d restored_count=%d exact=true",
             self.profile.name, stage, len(saved), len(restored),
         )
         return True
