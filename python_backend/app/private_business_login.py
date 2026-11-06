@@ -190,7 +190,8 @@ def native_business_login_continuation(body, return_url, *, diagnostic=None):
                     continue
                 if request_id is None and not profile_business_home_scope:
                     request_id = str(uuid4())
-                if not isinstance(request_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,160}', request_id):
+                if not isinstance(request_id, str) or not re.fullmatch(r'[A-Za-z0-9._~:-]{1,160}', request_id):
+                    report['reason'] = 'request_id_invalid'
                     continue
                 actual = urlsplit(urljoin('https://business.facebook.com/', next_url))
                 actual_query = parse_qs(actual.query, keep_blank_values=True)
@@ -235,7 +236,7 @@ def native_business_login_continuation(body, return_url, *, diagnostic=None):
                 # bootstrap. Do not let that unscoped path fall through to the
                 # root Business Home or an account-scoped destination.
                 handoff_target_allowed = (
-                    latest_home
+                    business_home or latest_home
                     if profile_business_home_scope
                     else business_home or latest_home or exact_account_scope
                 )
@@ -243,7 +244,15 @@ def native_business_login_continuation(body, return_url, *, diagnostic=None):
                         {'business.facebook.com', 'adsmanager.facebook.com'}
                         or actual.fragment
                         or not handoff_target_allowed):
+                    report['reason'] = 'destination_scope_mismatch'
                     continue
+                if profile_business_home_scope:
+                    # Keep the native request ID from Meta, but always resume
+                    # the new-profile bootstrap at the exact /latest/home URL
+                    # requested by Prepare. Some gates advertise only '/' as
+                    # their referrer even though this is a scoped Business Home
+                    # flow; never broaden that navigation to the account root.
+                    actual = expected
                 query = dict(parse_qsl(actual.query))
                 query.update(biz_login_source='biz_unified_f3_fb_login_button', join_id=str(uuid4()))
                 next_url = urlunsplit((actual.scheme, actual.netloc, actual.path, urlencode(query), ''))
