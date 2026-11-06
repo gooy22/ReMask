@@ -57,6 +57,18 @@ def native_business_login_continuation(body, return_url, *, diagnostic=None):
         return None
     expected_business_ids = expected_query.get('business_id', [])
     expected_acts = expected_query.get('act', [])
+    # Initial Prepare must read Business Home before a new profile has an
+    # ad account. Permit only this exact, query-free same-profile bootstrap
+    # scope; account-scoped Ads Manager reads retain their act requirement.
+    profile_business_home_scope = (
+        expected.scheme.casefold() == 'https'
+        and expected_host == 'business.facebook.com'
+        and expected_port in (None, 443)
+        and expected.username is None
+        and expected.password is None
+        and expected.path == '/latest/home'
+        and not expected_query
+    )
     allowed_hosts = {'business.facebook.com', 'adsmanager.facebook.com'}
     allowed_paths = {
         '/adsmanager/manage/campaigns',
@@ -69,12 +81,22 @@ def native_business_login_continuation(body, return_url, *, diagnostic=None):
             expected.username is None and expected.password is None
             and expected_port in (None, 443)
         ),
-        'scope_path_allowed': expected.path in allowed_paths,
-        'scope_query_keys_allowed': set(expected_query) <= {'act', 'business_id'},
-        'scope_act_count_valid': len(expected_acts) == 1,
+        'scope_path_allowed': (
+            expected.path in allowed_paths or profile_business_home_scope
+        ),
+        'scope_query_keys_allowed': (
+            set(expected_query) <= {'act', 'business_id'}
+            or profile_business_home_scope
+        ),
+        'scope_act_count_valid': (
+            len(expected_acts) == 1 or profile_business_home_scope
+        ),
         'scope_act_format_valid': (
-            len(expected_acts) == 1
-            and re.fullmatch(r'[0-9]{5,30}', expected_acts[0]) is not None
+            (
+                len(expected_acts) == 1
+                and re.fullmatch(r'[0-9]{5,30}', expected_acts[0]) is not None
+            )
+            or profile_business_home_scope
         ),
         'scope_business_count_valid': len(expected_business_ids) <= 1,
         'scope_business_format_valid': (
@@ -197,10 +219,18 @@ def native_business_login_continuation(body, return_url, *, diagnostic=None):
                     and actual_query.get('act', []) == expected_query['act']
                     and actual_query.get('business_id', []) == expected_business_ids
                 )
+                # A no-RK profile may resume only to the same Business Home
+                # bootstrap. Do not let that unscoped path fall through to the
+                # root Business Home or an account-scoped destination.
+                handoff_target_allowed = (
+                    latest_home
+                    if profile_business_home_scope
+                    else business_home or latest_home or exact_account_scope
+                )
                 if (actual.scheme != 'https' or actual.netloc not in
                         {'business.facebook.com', 'adsmanager.facebook.com'}
                         or actual.fragment
-                        or not (business_home or latest_home or exact_account_scope)):
+                        or not handoff_target_allowed):
                     continue
                 query = dict(parse_qsl(actual.query))
                 query.update(biz_login_source='biz_unified_f3_fb_login_button', join_id=str(uuid4()))
