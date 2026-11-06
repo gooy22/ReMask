@@ -846,7 +846,10 @@ async def _request_facebook(
             and bool(expected_cookie_snapshot)
             and bool(expected_actor_id)
             and bool(expected_xs)
-            and all(name in current for name in expected_cookie_snapshot)
+            and all(
+                str(current.get(name) or "") == value
+                for name, value in expected_cookie_snapshot.items()
+            )
             and str(current.get("c_user") or "") == expected_actor_id
             and bool(str(current.get("xs") or "").strip())
         )
@@ -1205,6 +1208,17 @@ async def continue_business_login_gate(
         meta_auth_directive_pending = bool(
             getattr(session, "_meta_redirect_auth_cookie_directive_pending", False)
         )
+        if str(after.get("c_user") or "") and str(after.get("c_user") or "") != actor_id:
+            # A different nonempty actor came back from Meta. Never overwrite
+            # that response with the selected profile's old cookie snapshot.
+            close_web = getattr(web, "close", None)
+            if callable(close_web):
+                try:
+                    await close_web()
+                except Exception:
+                    pass
+            set_outcome("profile_session_changed")
+            return None
         if (
             str(after.get("c_user") or "") != actor_id
             or not str(after.get("xs") or "").strip()
