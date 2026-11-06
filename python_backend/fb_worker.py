@@ -1246,9 +1246,16 @@ class FacebookWebSession:
                     candidate_url = str(response.url)
                     candidate_status = int(response.status)
                     if is_business_login_gate_url(candidate_url):
+                        get_referrer_policies = getattr(response_headers, "get_list", None)
+                        gate_referrer_policy = ", ".join(
+                            get_referrer_policies("referrer-policy")
+                            if callable(get_referrer_policies)
+                            else [str(response_headers.get("referrer-policy") or "")]
+                        )
                         recovered = await self._maybe_continue_business_login_gate(
                             gate_url=candidate_url, body=candidate_body,
                             return_url=business_loginpage_return_url or bootstrap_url,
+                            referrer_policy=gate_referrer_policy,
                         )
                         if recovered:
                             candidate_status = int(recovered["status"])
@@ -1445,6 +1452,7 @@ class FacebookWebSession:
 
     async def _maybe_continue_business_login_gate(
         self, *, gate_url: str, body: str, return_url: str,
+        referrer_policy: str = "",
     ) -> dict | None:
         if self._business_login_gate_attempted:
             return None
@@ -1452,6 +1460,7 @@ class FacebookWebSession:
         self.invalidate_bootstrap()
         result = await continue_business_login_gate(
             self, gate_url=gate_url, body=body, return_url=return_url,
+            referrer_policy=referrer_policy,
         )
         log.info("[%s] business_login_handoff outcome=%s",
             self.profile.name,

@@ -11,7 +11,7 @@ import json
 import logging
 import re
 from html.parser import HTMLParser
-from urllib.parse import urlencode, urljoin, urlsplit
+from urllib.parse import urlencode, urljoin, urlsplit, urlunsplit
 
 from .meta_auth_document import auth_gate as _auth_gate
 
@@ -82,6 +82,84 @@ def _navigation_fetch_site(referer: str, destination: str) -> str:
     if source_facebook and target_facebook:
         return "same-site"
     return "cross-site"
+
+
+
+
+_REFERRER_POLICIES = frozenset({
+    "no-referrer", "no-referrer-when-downgrade", "same-origin", "origin",
+    "strict-origin", "origin-when-cross-origin",
+    "strict-origin-when-cross-origin", "unsafe-url",
+})
+
+
+def _last_referrer_policy(values) -> str:
+    """Return the last valid Referrer-Policy token from one or more headers."""
+    if isinstance(values, str):
+        values = (values,)
+    policy = ""
+    for value in values or ():
+        for token in str(value or "").split(","):
+            candidate = token.strip().casefold()
+            if candidate in _REFERRER_POLICIES:
+                policy = candidate
+    return policy
+
+
+def _navigation_referrer(source: str, destination: str, policy: str) -> str:
+    """Serialize the initiating page's Referer for a navigation hop."""
+    if not source:
+        return ""
+    try:
+        src = urlsplit(str(source))
+        dst = urlsplit(str(destination))
+        if (src.scheme.casefold() not in {"http", "https"}
+                or dst.scheme.casefold() not in {"http", "https"}
+                or not src.hostname or not dst.hostname
+                or src.username is not None or src.password is not None):
+            return ""
+        source_host = src.hostname.casefold()
+        target_host = dst.hostname.casefold()
+        source_port = src.port or (443 if src.scheme.casefold() == "https" else 80)
+        target_port = dst.port or (443 if dst.scheme.casefold() == "https" else 80)
+    except (TypeError, ValueError):
+        return ""
+
+    same_origin = (
+        src.scheme.casefold(), source_host, source_port
+    ) == (
+        dst.scheme.casefold(), target_host, target_port
+    )
+    downgrade = src.scheme.casefold() == "https" and dst.scheme.casefold() != "https"
+    selected = str(policy or "strict-origin-when-cross-origin").strip().casefold()
+    if selected not in _REFERRER_POLICIES:
+        selected = "strict-origin-when-cross-origin"
+
+    full_url = urlunsplit((src.scheme, src.netloc, src.path or "/", src.query, ""))
+    host = f"[{source_host}]" if ":" in source_host else source_host
+    default_port = 443 if src.scheme.casefold() == "https" else 80
+    origin = f"{src.scheme}://{host}"
+    if source_port != default_port:
+        origin += f":{source_port}"
+    origin += "/"
+
+    if selected == "no-referrer":
+        return ""
+    if selected == "same-origin":
+        return full_url if same_origin else ""
+    if selected == "origin":
+        return origin
+    if selected == "strict-origin":
+        return "" if downgrade else origin
+    if selected == "origin-when-cross-origin":
+        return full_url if same_origin else origin
+    if selected == "no-referrer-when-downgrade":
+        return "" if downgrade else full_url
+    if selected == "unsafe-url":
+        return full_url
+    if downgrade:
+        return ""
+    return full_url if same_origin else origin
 
 
 def is_business_login_gate_url(value: str) -> bool:
@@ -735,11 +813,15 @@ async def _request_facebook(
     fields: list[tuple[str, str]] | None = None,
     referer: str = "",
     allow_login_redirect: bool = False,
+    referrer_policy: str = "",
 ):
     current_method = method.upper()
     current_url = url
     current_fields = list(fields or [])
     current_referer = referer
+    current_referrer_policy = (
+        _last_referrer_policy(referrer_policy) or "strict-origin-when-cross-origin"
+    )
     last_status = 0
     last_url = url
     last_body = ""
@@ -817,8 +899,11 @@ async def _request_facebook(
             "Sec-Fetch-User": "?1",
             "Upgrade-Insecure-Requests": "1",
         }
-        if current_referer:
-            headers["Referer"] = current_referer
+        request_referrer = _navigation_referrer(
+            current_referer, current_url, current_referrer_policy,
+        )
+        if request_referrer:
+            headers["Referer"] = request_referrer
         kwargs = {
             "proxy": profile.proxy,
             "headers": headers,
@@ -832,10 +917,15 @@ async def _request_facebook(
             kwargs["content"] = urlencode(current_fields)
         elif current_fields:
             kwargs["params"] = current_fields
+        response_referrer_policies = []
         async with session.request(current_method, current_url, **kwargs) as response:
             last_status = int(response.status)
             last_url = str(response.url)
             location = str(response.headers.get("Location") or "")
+            get_list = getattr(response.headers, "get_list", None)
+            response_referrer_policies = (
+                get_list("referrer-policy") if callable(get_list) else []
+            )
             last_headers = {str(key):str(value) for key,value in response.headers.items()}
             last_body = await _bounded_response(response)
         if last_status not in {301, 302, 303, 307, 308} or not location:
@@ -855,7 +945,9 @@ async def _request_facebook(
             )
             if not can_follow_existing_login:
                 return last_status, next_url, last_body, last_headers
-        current_referer = last_url
+        updated_referrer_policy = _last_referrer_policy(response_referrer_policies)
+        if updated_referrer_policy:
+            current_referrer_policy = updated_referrer_policy
         current_url = next_url
         log.info(
             "business_login_gate_redirect profile=%s hop=%d method=%s status=%d source_host=%s target_host=%s sec_fetch_site=%s",
@@ -881,6 +973,7 @@ async def continue_business_login_gate(
     gate_url: str,
     body: str,
     return_url: str,
+    referrer_policy: str = "",
 ) -> dict | None:
     """Submit one safe Meta continuation, then verify the original read-only URL."""
     def set_outcome(value: str) -> None:
@@ -1024,10 +1117,10 @@ async def continue_business_login_gate(
         if callable(accept_refresh):
             accept_refresh()
 
-        action_status, action_url, action_body, _ = await _request_facebook(
+        action_status, action_url, action_body, action_headers = await _request_facebook(
             session, profile, continuation["method"], continuation["url"],
             fields=continuation["fields"], referer=gate_url,
-            allow_login_redirect=True,
+            allow_login_redirect=True, referrer_policy=referrer_policy,
         )
         if action_status in {401, 403}:
             set_outcome("meta_rejected_continuation")
@@ -1050,6 +1143,13 @@ async def continue_business_login_gate(
                     session, profile, saved_login["method"], saved_login["url"],
                     fields=saved_login["fields"], referer=action_url,
                     allow_login_redirect=True,
+                    referrer_policy=(
+                        _last_referrer_policy([
+                            value for key, value in action_headers.items()
+                            if str(key).casefold() == "referrer-policy"
+                        ])
+                        or referrer_policy
+                    ),
                 )
                 if action_status in {401, 403}:
                     set_outcome("meta_rejected_saved_account")
@@ -1120,6 +1220,7 @@ async def continue_business_login_gate(
 
         status, final_url, response_body, response_headers = await _request_facebook(
             session, profile, "GET", return_url, referer=gate_url,
+            referrer_policy=referrer_policy,
         )
         after = session.facebook_cookie_snapshot()
         if (
