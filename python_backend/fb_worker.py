@@ -1194,6 +1194,7 @@ class FacebookWebSession:
                     }
                     current_url = bootstrap_url
                     visited_urls = set()
+                    meta_auth_cookie_deletion_seen = False
                     for redirect_count in range(6):
                         if current_url in visited_urls:
                             attempts.append(f"{bootstrap_url}: redirect loop")
@@ -1204,7 +1205,6 @@ class FacebookWebSession:
                         )
                         redirect_statuses = {301, 302, 303, 307, 308}
                         response_status = {"value": None}
-                        meta_auth_cookie_deletion_seen = False
 
                         def restore_cookies_after_redirect_headers(response):
                             nonlocal meta_auth_cookie_deletion_seen
