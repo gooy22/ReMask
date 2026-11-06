@@ -1092,6 +1092,7 @@ class FacebookWebSession:
                 self.ADS_MANAGER_URL,
                 "https://business.facebook.com/latest/settings",
                 "https://business.facebook.com/latest/overview",
+                "https://adsmanager.facebook.com/adsmanager/manage/campaigns",
                 "https://www.facebook.com/adsmanager/manage/campaigns",
                 "https://www.facebook.com/marketplace/",
                 "https://www.facebook.com/",
