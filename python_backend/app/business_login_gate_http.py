@@ -964,9 +964,11 @@ async def _request_facebook(
             restore_same_profile_cookies_for_business_login_redirect
             and last_status == 302
             and current_method == "GET"
+            and _facebook_url(last_url)
             and str(source_parts.hostname or "").casefold() == "business.facebook.com"
             and str(source_parts.path or "").casefold().rstrip("/")
                 == "/business/loginrequest/fb"
+            and _facebook_url(next_url)
             and str(target_parts.hostname or "").casefold() == "www.facebook.com"
             and _login_route(next_url)
             and _exact_shared_root_auth_cookie_deletion(response_auth_cookie_directive)
