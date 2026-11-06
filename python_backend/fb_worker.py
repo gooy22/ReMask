@@ -460,6 +460,8 @@ class FacebookWebSession:
         actor = str(snapshot.get("c_user") or snapshot.get("i_user") or "").strip()
         if (actor != str(expected_actor).strip()
                 or not str(snapshot.get("xs") or "").strip()):
+            if getattr(session, "_meta_redirect_auth_cookie_directive_pending", False):
+                return
             restore_fn()
 
     @classmethod
@@ -1504,6 +1506,13 @@ class FacebookWebSession:
                     "[%s] profile_cookie_snapshot_refreshed stage=%s expected_count=%d refreshed_count=%d actor_match=true xs_present=true",
                     self.profile.name, stage, len(saved), len(refreshed),
                 )
+            return False
+
+        if getattr(session, "_meta_redirect_auth_cookie_directive_pending", False):
+            log.info(
+                "[%s] profile_cookie_snapshot_restore_skipped stage=%s reason=meta_redirect_auth_cookie_directive",
+                self.profile.name, stage,
+            )
             return False
 
         try:

@@ -158,6 +158,7 @@ class PrivateHttpClient:
         # redirect cannot poison the subsequent read-only identity probe.
         self._profile_cookies = dict(cookies)
         self._trusted_meta_xs_fingerprints: set[str] = set()
+        self._meta_redirect_auth_cookie_directive_pending = False
         self.direct_test_until = direct_test_deadline(profile_name, self._actor_id) if not proxy else 0
         self.timeout_seconds = timeout_seconds
         limits = httpx.Limits(max_connections=pool_size,
@@ -213,6 +214,8 @@ class PrivateHttpClient:
     def _profile_cookie_snapshot_for_wire(self) -> dict[str, str]:
         """Preserve complete same-actor Meta refreshes across subsequent requests."""
         if not self.accept_same_actor_cookie_refresh():
+            if self._meta_redirect_auth_cookie_directive_pending:
+                return dict(self.facebook_cookie_snapshot())
             self.restore_profile_cookies()
         return dict(self._profile_cookies)
 
@@ -265,7 +268,18 @@ class PrivateHttpClient:
                 original_header, profile_cookies, self._actor_id,
             )
             rebuilt = canonical_header is not None and not jar_header_matches_profile
-            if canonical_header is not None and rebuilt:
+            if self._meta_redirect_auth_cookie_directive_pending:
+                rebuilt = False
+                actor_values = []
+                for part in original_header.split(";"):
+                    name, separator, value = part.strip().partition("=")
+                    if separator and name.strip() == "c_user":
+                        actor_values.append(value.strip().strip('"'))
+                if any(value != self._actor_id for value in actor_values):
+                    # A server-issued actor change must never cross profiles.
+                    request.headers["cookie"] = ""
+                    rebuilt = False
+            elif canonical_header is not None and rebuilt:
                 # If HTTPX omitted a saved profile cookie or exposed another
                 # c_user, send the verified profile snapshot. Otherwise retain
                 # its host/path-aware header, including same-actor Meta-issued
@@ -339,15 +353,25 @@ class PrivateHttpClient:
         return result
 
     async def _track_meta_xs_cookie_updates(self, response: httpx.Response) -> None:
-        """Remember only xs values issued by a Facebook response on this session."""
+        """Track Meta-issued xs cookies and auth-cookie directives on redirects."""
         try:
             host = str(response.url.host or "").casefold()
             if host != "facebook.com" and not host.endswith(".facebook.com"):
                 return
+            is_redirect = (
+                response.status_code in {301, 302, 303, 307, 308}
+                and bool(response.headers.get("location"))
+            )
+            auth_directives: set[str] = set()
             for raw in response.headers.get_list("set-cookie"):
                 pair = str(raw or "").split(";", 1)[0].strip()
                 name, separator, value = pair.partition("=")
-                if not separator or name.strip().casefold() != "xs":
+                cookie_name = name.strip().casefold()
+                if not separator:
+                    continue
+                if is_redirect and cookie_name in {"c_user", "xs"}:
+                    auth_directives.add(cookie_name)
+                if cookie_name != "xs":
                     continue
                 value = value.strip().strip('"')
                 if (not value or value.casefold() == "deleted"
@@ -358,6 +382,17 @@ class PrivateHttpClient:
                 )
                 if len(self._trusted_meta_xs_fingerprints) > 64:
                     self._trusted_meta_xs_fingerprints.pop()
+            if is_redirect and auth_directives:
+                self._meta_redirect_auth_cookie_directive_pending = True
+                log.info(
+                    "[%s] private_http_meta_redirect_auth_cookie_directive status=%d host=%s names=%s",
+                    self.profile_name, response.status_code, host,
+                    ",".join(sorted(auth_directives)),
+                )
+            elif not is_redirect:
+                # A completed document ends the redirect handoff. Any following
+                # identity probe can deliberately revalidate the saved snapshot.
+                self._meta_redirect_auth_cookie_directive_pending = False
         except Exception:
             # Cookie provenance is only an acceptance aid; never disrupt HTTP.
             return
@@ -373,6 +408,7 @@ class PrivateHttpClient:
                 except KeyError:
                     pass
         self._trusted_meta_xs_fingerprints.clear()
+        self._meta_redirect_auth_cookie_directive_pending = False
         for name, value in self._profile_cookies.items():
             jar.set_cookie(Cookie(
                 version=0, name=name, value=value, port=None,
