@@ -362,15 +362,30 @@ async function pythonWorkerMapLimit(items, limit, worker) {
 function pythonWorkerItemCanRetry(item) {
   if (!item || String(item.status || '').toUpperCase() !== 'FAILED') return false;
   const tasks = Array.isArray(item.tasks) ? item.tasks : [];
+  const businessGatePreflight = pythonWorkerItemCanBusinessGateRevalidation(item);
   if (pythonWorkerItemBlockedByKnownProfileStatus(item)) return false;
   // A stale aggregate flag must not turn a security checkpoint into a retry.
-  if (pythonWorkerIsProfileAuthBlockedCode(item.error_code) || tasks.some(function(task) {
+  if ((pythonWorkerIsProfileAuthBlockedCode(item.error_code) || tasks.some(function(task) {
     return task && String(task.status || '').toUpperCase() === 'FAILED' &&
       pythonWorkerIsProfileAuthBlockedCode(task.error_code);
-  })) return false;
+  })) && !businessGatePreflight) return false;
+  if (businessGatePreflight) return true;
   return item.retryable === true || tasks.some(function(task) {
     return task && String(task.status || '').toUpperCase() === 'FAILED' && task.retryable === true;
   });
+}
+
+function pythonWorkerItemCanBusinessGateRevalidation(item) {
+  if (!item || String(item.status || '').toUpperCase() !== 'FAILED' ||
+      item.recovery_mode !== 'read_only_business_preflight' ||
+      String(item.error_code || '').toUpperCase() !== 'BUSINESS_LOGIN_GATE') return false;
+  const failedTasks = (Array.isArray(item.tasks) ? item.tasks : []).filter(function(task) {
+    return task && String(task.status || '').toUpperCase() === 'FAILED';
+  });
+  return failedTasks.length === 1 &&
+    String(failedTasks[0].action || '').trim().toLowerCase() === 'provisioning' &&
+    ['BUSINESS_LOGIN_GATE','META_AUTH_TOKEN_UNAVAILABLE','SESSION_EXPIRED','META_LOGIN_REQUIRED']
+      .includes(String(failedTasks[0].error_code || '').toUpperCase());
 }
 
 function pythonWorkerItemBlockedByKnownProfileStatus(item) {
@@ -380,6 +395,7 @@ function pythonWorkerItemBlockedByKnownProfileStatus(item) {
   const profileId = String(item && item.profile_id || '').trim();
   const session = profileId ? sessions.get(profileId) : null;
   const status = String(session && session.status || '').toUpperCase();
+  if (status === 'BUSINESS_LOGIN_GATE' && pythonWorkerItemCanBusinessGateRevalidation(item)) return false;
   return ['CHECKPOINT','BUSINESS_LOGIN_GATE','LOGIN_REQUIRED','TWO_FACTOR','LIMITED','IN_PROGRESS'].includes(status);
 }
 
@@ -1019,6 +1035,9 @@ function pythonWorkerUserFailureText(item) {
     return 'Чекпоинт Meta: аккаунт остановлен. Повтор и новые задачи запрещены.';
   }
   if (/BUSINESS_LOGIN_GATE$/.test(code) || code === 'PROFILE_META_BLOCKED') {
+    if (pythonWorkerItemCanBusinessGateRevalidation(item)) {
+      return 'Meta вернула Business login; повтор сначала проверит доступ без CREATE.';
+    }
     return 'Meta остановила доступ. Новые действия по профилю запрещены.';
   }
   if (code === 'PRIVATE_LAUNCH_PLAN_CHANGED') {
