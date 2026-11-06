@@ -747,22 +747,38 @@ async def _request_facebook(
     restore_profile_cookies = getattr(session, "restore_profile_cookies", None)
     profile_cookie_snapshot = getattr(session, "_profile_cookies", None)
     profile_cookies = getattr(profile, "cookies", {})
-    expected_actor_id = str(profile_cookies.get("c_user") or "")
-    expected_xs = (
-        str(profile_cookie_snapshot.get("xs") or "").strip()
-        if isinstance(profile_cookie_snapshot, dict)
-        else str(profile_cookies.get("xs") or "").strip()
+    source_snapshot = (
+        profile_cookie_snapshot
+        if isinstance(profile_cookie_snapshot, dict) and profile_cookie_snapshot
+        else profile_cookies if isinstance(profile_cookies, dict) else {}
     )
+    expected_cookie_snapshot = {
+        str(name): str(value) for name, value in source_snapshot.items()
+    }
+    expected_actor_id = str(expected_cookie_snapshot.get("c_user") or "")
+    expected_xs = str(expected_cookie_snapshot.get("xs") or "").strip()
+
+    def snapshot_matches_expected(current) -> bool:
+        return (
+            isinstance(current, dict)
+            and bool(expected_cookie_snapshot)
+            and bool(expected_actor_id)
+            and bool(expected_xs)
+            and all(
+                name in current and str(current.get(name)) == value
+                for name, value in expected_cookie_snapshot.items()
+            )
+            and str(current.get("c_user") or "") == expected_actor_id
+            and str(current.get("xs") or "").strip() == expected_xs
+        )
 
     def restore_cookie_snapshot_if_lost() -> None:
         if not callable(restore_profile_cookies):
             return
         current = session.facebook_cookie_snapshot()
-        if (
-            str(current.get("c_user") or "") != expected_actor_id
-            or not str(current.get("xs") or "").strip()
-        ):
-            restore_profile_cookies()
+        if snapshot_matches_expected(current):
+            return
+        restore_profile_cookies()
 
     for hop in range(4):
         # The caller checked the selected actor and xs before this first request.
@@ -771,25 +787,13 @@ async def _request_facebook(
         # the selected profile snapshot.
         if hop > 0:
             current_cookies = session.facebook_cookie_snapshot()
-            current_actor = str(current_cookies.get("c_user") or "")
-            current_xs = str(current_cookies.get("xs") or "").strip()
-            if not expected_actor_id or current_actor != expected_actor_id or not current_xs:
+            if not snapshot_matches_expected(current_cookies):
                 if not callable(restore_profile_cookies):
                     return 0, current_url, "", {}
                 restore_profile_cookies()
                 current_cookies = session.facebook_cookie_snapshot()
-                current_actor = str(current_cookies.get("c_user") or "")
-                current_xs = str(current_cookies.get("xs") or "").strip()
-                if current_actor != expected_actor_id or current_xs != expected_xs:
+                if not snapshot_matches_expected(current_cookies):
                     return 0, current_url, "", {}
-            elif current_xs != expected_xs:
-                # Meta may rotate xs during the same-actor login handoff. Keep
-                # that token when c_user still pins this request to the selected
-                # profile; never accept a different actor.
-                log.info(
-                    "business_login_gate_cookie_refresh_preserved profile=%s hop=%d actor_matches=true xs_rotated=true",
-                    getattr(profile, "name", "unknown"), hop,
-                )
         headers = {
             "User-Agent": str(profile.user_agent or ""),
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
