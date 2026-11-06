@@ -259,6 +259,115 @@ def native_business_login_continuation(body, return_url, *, diagnostic=None):
                                   urlencode({'next':next_url, 'f3_request_id':request_id}))
             except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
                 continue
+    if not candidates and profile_business_home_scope and reviewed_native_gate:
+        # Meta sometimes leaves the reviewed component name outside its JSON
+        # script while serializing the same native props in a neighboring
+        # script. Recover only the unique Facebook-only, no-save handoff object;
+        # the exact business-home scope and request ID are still validated below.
+        prop_candidates = []
+        required_props = {"requestId", "referrerURI", "loginOptions", "saveSession"}
+        for script in _JSON_SCRIPT_RE.finditer(body):
+            source = script.group(1)
+            if not all(name in source for name in required_props):
+                continue
+            try:
+                tree = Parser(_LANGUAGE).parse(source.encode())
+            except (ValueError, TypeError, RecursionError):
+                continue
+            for row in _walk(tree.root_node):
+                if row.type != 'object':
+                    continue
+                try:
+                    props = _pairs(row)
+                    if not required_props.issubset(props):
+                        continue
+                    options = props.get('loginOptions')
+                    scalar = lambda name, default=None: (
+                        _literal(props[name]) if name in props else default
+                    )
+                    if (options is None or options.type != 'array'
+                            or 'FB' not in [_literal(child) for child in options.named_children]
+                            or scalar('saveSession') is not False
+                            or any(scalar(name) not in (False, None) for name in
+                                   ('addNewProfileAM', 'fromProfileSwitcherAddAccount',
+                                    'isFromInvitationFlow', 'igInvite'))):
+                        continue
+                    request_id = scalar('requestId')
+                    next_url = scalar('referrerURI')
+                    report['native_prop_keys'] = sorted(str(name) for name in props)[:80]
+                    report['native_request_id_node_type'] = getattr(props.get('requestId'), 'type', 'missing')
+                    report['native_referrer_uri_node_type'] = getattr(props.get('referrerURI'), 'type', 'missing')
+                    if (not isinstance(request_id, str)
+                            or not re.fullmatch(r'[A-Za-z0-9._~:-]{1,160}', request_id)
+                            or not isinstance(next_url, str)):
+                        continue
+
+                    actual = urlsplit(urljoin('https://business.facebook.com/', next_url))
+                    actual_query = parse_qs(actual.query, keep_blank_values=True)
+                    business_home = (
+                        actual.netloc == 'business.facebook.com'
+                        and actual.path in ('', '/')
+                        and set(actual_query) <= {'nav_ref'}
+                        and all(
+                            len(values) == 1
+                            and re.fullmatch(r'[A-Za-z0-9_-]{0,160}', values[0])
+                            for values in actual_query.values()
+                        )
+                    )
+                    latest_home_query_safe = (
+                        set(actual_query) <= {'nav_ref', 'act', 'business_id'}
+                        and all(
+                            len(values) == 1
+                            and (
+                                (key == 'nav_ref' and re.fullmatch(r'[A-Za-z0-9_-]{0,160}', values[0]))
+                                or (key in {'act', 'business_id'} and re.fullmatch(r'[0-9]{5,30}', values[0]))
+                            )
+                            for key, values in actual_query.items()
+                        )
+                    )
+                    latest_home_scope_safe = (
+                        (not actual_query.get('act') or actual_query.get('act') == expected_acts)
+                        and (
+                            not actual_query.get('business_id')
+                            or actual_query.get('business_id') == expected_business_ids
+                        )
+                    )
+                    latest_home = (
+                        actual.netloc == 'business.facebook.com'
+                        and actual.path.rstrip('/') == '/latest/home'
+                        and latest_home_query_safe
+                        and latest_home_scope_safe
+                    )
+                    if (actual.scheme != 'https'
+                            or actual.netloc != 'business.facebook.com'
+                            or actual.fragment
+                            or not (business_home or latest_home)):
+                        continue
+                    if business_home:
+                        actual = expected
+                    query = dict(parse_qsl(actual.query))
+                    query.update(
+                        biz_login_source='biz_unified_f3_fb_login_button',
+                        join_id=str(uuid4()),
+                    )
+                    next_url = urlunsplit((
+                        actual.scheme, actual.netloc, actual.path, urlencode(query), ''
+                    ))
+                    prop_candidates.append(
+                        'https://business.facebook.com/business/loginrequest/fb/?'
+                        + urlencode({'next': next_url, 'f3_request_id': request_id})
+                    )
+                    native_facebook_flows += 1
+                except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
+                    continue
+        prop_candidates = list(dict.fromkeys(prop_candidates))
+        if len(prop_candidates) == 1:
+            candidates.extend(prop_candidates)
+        elif len(prop_candidates) > 1:
+            report['reason'] = 'ambiguous_native_props'
+        else:
+            report['reason'] = 'native_props_not_found'
+
     if len(candidates) == 1:
         report['reason'] = 'native_fb_continuation'
         return candidates[0]
