@@ -63,23 +63,6 @@ def _facebook_url(value: str) -> bool:
     )
 
 
-def _exact_shared_root_auth_cookie_deletion(directive) -> bool:
-    if not isinstance(directive, dict):
-        return False
-    sets = {str(name).casefold() for name in directive.get("sets", [])}
-    deletions = {str(name).casefold() for name in directive.get("deletions", [])}
-    scopes = directive.get("deletion_scopes")
-    return (
-        not sets
-        and deletions == {"c_user", "xs"}
-        and isinstance(scopes, dict)
-        and all(
-            scopes.get(name) == {"domain": "shared", "path": "root"}
-            for name in ("c_user", "xs")
-        )
-    )
-
-
 def _navigation_fetch_site(referer: str, destination: str) -> str:
     if not referer:
         return "none"
@@ -831,7 +814,6 @@ async def _request_facebook(
     referer: str = "",
     allow_login_redirect: bool = False,
     referrer_policy: str = "",
-    restore_same_profile_cookies_for_business_login_redirect: bool = False,
 ):
     current_method = method.upper()
     current_url = url
@@ -958,40 +940,20 @@ async def _request_facebook(
         if last_status not in {301, 302, 303, 307, 308} or not location:
             return last_status, last_url, last_body, last_headers
         next_url = urljoin(last_url, location)
-        source_parts = urlsplit(last_url)
-        target_parts = urlsplit(next_url)
-        same_profile_business_login_handoff = (
-            restore_same_profile_cookies_for_business_login_redirect
-            and last_status == 302
-            and current_method == "GET"
-            and _facebook_url(last_url)
-            and str(source_parts.hostname or "").casefold() == "business.facebook.com"
-            and str(source_parts.path or "").casefold().rstrip("/")
-                == "/business/loginrequest/fb"
-            and _facebook_url(next_url)
-            and str(target_parts.hostname or "").casefold() == "www.facebook.com"
-            and _login_route(next_url)
-            and _exact_shared_root_auth_cookie_deletion(response_auth_cookie_directive)
+        auth_cookie_deletions = (
+            {
+                str(name).casefold()
+                for name in (response_auth_cookie_directive or {}).get("deletions", [])
+            }
+            if isinstance(response_auth_cookie_directive, dict)
+            else set()
         )
-        if same_profile_business_login_handoff:
-            current_cookies = session.facebook_cookie_snapshot()
-            current_actor = str(current_cookies.get("c_user") or "")
-            current_xs = str(current_cookies.get("xs") or "").strip()
-            if (
-                current_actor not in {"", expected_actor_id}
-                or current_xs not in {"", expected_xs}
-                or not callable(restore_profile_cookies)
-            ):
-                return last_status, next_url, last_body, last_headers
-            restore_profile_cookies()
-            restored_cookies = session.facebook_cookie_snapshot()
-            if not snapshot_matches_expected(restored_cookies):
-                return last_status, next_url, last_body, last_headers
+        if auth_cookie_deletions.intersection({"c_user", "xs"}):
             log.info(
-                "business_login_gate_auth_cookie_snapshot_restore profile=%s "
-                "stage=business_loginrequest_fb_to_www_login actor_match=true cookie_count=%d",
-                getattr(profile, "name", "unknown"), len(restored_cookies),
+                "business_login_gate_redirect_stopped profile=%s reason=meta_auth_cookie_deletion",
+                getattr(profile, "name", "unknown"),
             )
+            return last_status, next_url, last_body, last_headers
         if not _facebook_url(next_url):
             return last_status, next_url, last_body, last_headers
         if _auth_navigation(next_url):
@@ -1151,6 +1113,12 @@ async def continue_business_login_gate(
         meta_auth_directive_pending = bool(
             getattr(session, "_meta_redirect_auth_cookie_directive_pending", False)
         )
+        if meta_auth_directive_pending and (
+            str(before.get("c_user") or "") != actor_id
+            or not str(before.get("xs") or "").strip()
+        ):
+            set_outcome("meta_auth_cookie_deletion_received")
+            return None
         if (
             profile_snapshot_mismatch
             or str(before.get("c_user") or "") != actor_id
@@ -1186,7 +1154,6 @@ async def continue_business_login_gate(
             fields=continuation["fields"], referer=gate_url,
             allow_login_redirect=True,
             referrer_policy=referrer_policy,
-            restore_same_profile_cookies_for_business_login_redirect=True,
         )
         if action_status in {401, 403}:
             set_outcome("meta_rejected_continuation")
