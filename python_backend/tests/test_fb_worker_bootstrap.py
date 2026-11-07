@@ -1228,7 +1228,7 @@ class PreviousSessionReadRecoveryTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(result, {"data": {"business": {"id": "987654321"}}})
-        session.bootstrap.assert_awaited_once_with(business_home_only=True)
+        session.bootstrap.assert_awaited_once_with()
         session._retry_scoped_read_with_previous_session.assert_awaited_once()
         self.assertIsNone(session._retry_scoped_read_with_previous_session.await_args.kwargs["read_timeout_seconds"])
         session._ensure_session.assert_awaited_once()
