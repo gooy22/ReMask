@@ -1153,9 +1153,9 @@ class FacebookWebSession:
             # retain their independent profile-page identity bootstrap.
             token_patterns = list(self.FB_DTSG_PATTERNS)
 
-            # Business GraphQL operations keep the reviewed Business Home
-            # bootstrap and follow its actual redirect chain. Do not switch to
-            # unrelated profile or Ads Manager documents if that page has no DTSG.
+            # Business Home remains the first document for Business GraphQL. If it has
+            # no usable DTSG, retain the pre-existing fallback surfaces; actor
+            # matching and exact Business reads still gate any provisioning write.
             bootstrap_urls = (
                 (self.BUSINESS_HOME_URL,)
                 if business_home_only
@@ -2849,10 +2849,9 @@ class FacebookWebSession:
                     if scoped_ads_manager_return_url:
                         bootstrap = await self.bootstrap(
                             business_loginpage_return_url=scoped_ads_manager_return_url,
-                            business_home_only=True,
                         )
                     else:
-                        bootstrap = await self.bootstrap(business_home_only=True)
+                        bootstrap = await self.bootstrap()
                 else:
                     bootstrap = await self.bootstrap(
                         allow_business_loginpage_probe=True,
