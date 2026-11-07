@@ -43,7 +43,8 @@ class BusinessGatePrepareAdmissionTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(api.store, "create_job", new=create), \
                 patch.object(api.store, "job_view",
                              new=AsyncMock(return_value={"status": "QUEUED", "items_total": 1})), \
-                patch.object(api.pool, "enqueue_job", new=enqueue):
+                patch.object(api.pool, "enqueue_job", new=enqueue), \
+                patch.object(api.mirror, "save_job", new=AsyncMock()):
             async with httpx.AsyncClient(
                     transport=httpx.ASGITransport(app=api.app),
                     base_url="http://fixture",
