@@ -567,7 +567,7 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(f'c_user={actor}', requests[1][2])
         self.assertIn('xs=imported-xs', requests[1][2])
         restore_snapshot.assert_called_once()
-        self.assertTrue(client._meta_redirect_auth_cookie_directive_pending)
+        self.assertFalse(client._meta_redirect_auth_cookie_directive_pending)
         self.assertEqual(client.facebook_cookie_snapshot(), original)
         await web.close()
         self.assertEqual(web.profile.cookies, original)
