@@ -3,6 +3,10 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 import main as api
+from app.runner import (
+    _prepare_result_confirms_business_and_rk,
+    _single_prepare_for_business_gate,
+)
 
 
 def prepare_request(*, count=1, action="prepare"):
@@ -33,6 +37,30 @@ def prepare_request(*, count=1, action="prepare"):
 
 
 class BusinessGatePrepareAdmissionTests(unittest.IsolatedAsyncioTestCase):
+    def test_worker_allows_only_single_bundle_prepare_under_business_gate(self):
+        profile = prepare_request()
+        tasks = profile["profiles"][0]["tasks"]
+        self.assertTrue(_single_prepare_for_business_gate("31", tasks))
+        self.assertFalse(
+            _single_prepare_for_business_gate(
+                "31", prepare_request(count=2)["profiles"][0]["tasks"])
+        )
+        self.assertFalse(
+            _single_prepare_for_business_gate(
+                "31", prepare_request(action="provisioning")["profiles"][0]["tasks"])
+        )
+
+    def test_worker_clears_gate_only_after_confirmed_business_and_rk_readback(self):
+        result = {
+            "desired": {"ad_accounts": 1},
+            "actual": {
+                "bundles": [{"business_id": "123456", "ad_account_id": "987654"}],
+            },
+        }
+        self.assertTrue(_prepare_result_confirms_business_and_rk(result))
+        result["actual"]["bundles"][0]["ad_account_id"] = ""
+        self.assertFalse(_prepare_result_confirms_business_and_rk(result))
+
     async def post_job(self, request, terminal_status):
         create = AsyncMock(return_value=("prepare-job", True))
         enqueue = AsyncMock(return_value=1)
