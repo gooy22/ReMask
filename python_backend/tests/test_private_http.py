@@ -450,14 +450,12 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
                     FacebookWebSession, '_maybe_continue_business_login_gate',
                     new_callable=AsyncMock, return_value=None,
                 ), patch.object(
-                    FacebookWebSession, '_verified_profile_bootstrap',
-                    new_callable=AsyncMock,
-                    side_effect=AuthenticationError('test stops before identity verification'),
+                    web, '_verified_profile_bootstrap',
+                    new=AsyncMock(wraps=web._verified_profile_bootstrap),
                 ) as verify_profile:
-                    with self.assertRaisesRegex(AuthenticationError, 'test stops'):
-                        await web.bootstrap(
-                            allow_business_loginpage_probe=True, prefer_business_home=True,
-                        )
+                    bootstrap = await web.bootstrap(
+                        allow_business_loginpage_probe=True, prefer_business_home=True,
+                    )
 
         self.assertGreaterEqual(len(requests), 3)
         first = requests[0]
