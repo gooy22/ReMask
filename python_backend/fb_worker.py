@@ -1226,56 +1226,14 @@ class FacebookWebSession:
                             session, stage="bootstrap_target_and_redirect_hop",
                         )
                         redirect_statuses = {301, 302, 303, 307, 308}
-                        response_status = {
-                            "value": None,
-                            "business_home_restore": False,
-                        }
+                        response_status = {"value": None}
 
                         def restore_cookies_after_redirect_headers(response):
                             response_status["value"] = int(response.status)
-                            allow_business_home_restore = False
-                            request_parts = urlsplit(current_url)
-                            if (
-                                redirect_count == 0
-                                and response_status["value"] == 302
-                                and request_parts.scheme == "https"
-                                and str(request_parts.hostname or "").casefold()
-                                == "business.facebook.com"
-                                and request_parts.path.rstrip("/") == "/latest/home"
-                            ):
-                                target_url = urljoin(
-                                    str(response.url),
-                                    str(response.headers.get("Location") or ""),
-                                )
-                                target = urlsplit(target_url)
-                                directive = getattr(response, "extensions", {}).get(
-                                    "remask_meta_auth_cookie_directive", {}
-                                )
-                                deletions = set(directive.get("deletions", []))
-                                sets = set(directive.get("sets", []))
-                                scopes = directive.get("deletion_scopes", {})
-                                allow_business_home_restore = (
-                                    target.scheme == "https"
-                                    and str(target.hostname or "").casefold()
-                                    == "business.facebook.com"
-                                    and target.path == "/business/loginpage/"
-                                    and deletions == {"c_user", "xs"}
-                                    and not sets
-                                    and all(
-                                        scopes.get(name) == {
-                                            "domain": "shared", "path": "root",
-                                        }
-                                        for name in ("c_user", "xs")
-                                    )
-                                )
-                            response_status["business_home_restore"] = (
-                                allow_business_home_restore
-                            )
                             if response_status["value"] in redirect_statuses:
                                 self._restore_profile_cookie_snapshot_if_lost(
                                     session,
                                     stage=f"bootstrap_response_headers_{redirect_count + 1}",
-                                    allow_business_home_loginpage_auth_restore=allow_business_home_restore,
                                 )
 
                         try:
@@ -1298,15 +1256,33 @@ class FacebookWebSession:
                                 self._restore_profile_cookie_snapshot_if_lost(
                                     session,
                                     stage=f"bootstrap_response_body_{redirect_count + 1}",
-                                    allow_business_home_loginpage_auth_restore=(
-                                        response_status["business_home_restore"]
-                                    ),
                                 )
                         candidate_url = str(response.url)
                         candidate_status = int(response.status)
                         self._restore_invalid_profile_cookie_snapshot(
                             session, actor_id
                         )
+                        response_extensions = getattr(response, "extensions", {}) or {}
+                        meta_auth_directive = response_extensions.get(
+                            "remask_meta_auth_cookie_directive", {}
+                        ) or {}
+                        if not isinstance(meta_auth_directive, dict):
+                            meta_auth_directive = {}
+                        directive_deletions = set(meta_auth_directive.get("deletions", []) or [])
+                        directive_sets = set(meta_auth_directive.get("sets", []) or [])
+                        deleted_auth_cookies = (
+                            directive_deletions & {"c_user", "xs"}
+                        ) - directive_sets
+                        if deleted_auth_cookies:
+                            error = AuthenticationError(
+                                "Meta explicitly deleted a selected profile authentication cookie during bootstrap; no authenticated follow-up or provisioning request was sent."
+                            )
+                            error.meta_payload = {
+                                "auth_cookie_deletions": sorted(deleted_auth_cookies)
+                            }
+                            error.request_may_have_been_sent = False
+                            error.transport_stage = "bootstrap"
+                            raise error
                         response_headers = getattr(response, "headers", {}) or {}
                         location = str(
                             response_headers.get("location")
@@ -1609,7 +1585,6 @@ class FacebookWebSession:
 
     def _restore_profile_cookie_snapshot_if_lost(
         self, session, *, stage: str,
-        allow_business_home_loginpage_auth_restore: bool = False,
     ) -> bool:
         """Keep complete same-actor Meta rotations; restore a missing or foreign cookie set."""
         saved = getattr(session, "_profile_cookies", None)
@@ -1626,11 +1601,7 @@ class FacebookWebSession:
             current = {}
 
         accept_refresh = getattr(session, "accept_same_actor_cookie_refresh", None)
-        if (
-            not allow_business_home_loginpage_auth_restore
-            and callable(accept_refresh)
-            and accept_refresh()
-        ):
+        if callable(accept_refresh) and accept_refresh():
             refreshed = getattr(session, "_profile_cookies", {})
             if isinstance(refreshed, dict) and any(
                 str(refreshed.get(name)) != str(value) for name, value in saved.items()
@@ -1642,16 +1613,11 @@ class FacebookWebSession:
             return False
 
         if getattr(session, "_meta_redirect_auth_cookie_directive_pending", False):
-            if not allow_business_home_loginpage_auth_restore:
-                log.info(
-                    "[%s] profile_cookie_snapshot_restore_skipped stage=%s reason=meta_redirect_auth_cookie_directive",
-                    self.profile.name, stage,
-                )
-                return False
             log.info(
-                "[%s] profile_cookie_snapshot_restore_allowed stage=%s reason=first_business_home_loginpage_redirect actor_match=true",
+                "[%s] profile_cookie_snapshot_restore_skipped stage=%s reason=meta_redirect_auth_cookie_directive",
                 self.profile.name, stage,
             )
+            return False
 
         try:
             if not callable(restore):
