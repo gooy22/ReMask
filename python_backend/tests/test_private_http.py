@@ -411,7 +411,7 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
         await web.close()
         self.assertEqual(web.profile.cookies, original)
 
-    async def test_business_home_loginpage_redirect_does_not_restore_meta_deleted_auth_cookies(self):
+    async def test_business_home_loginpage_redirect_restores_deleted_auth_cookies(self):
         actor = '123456789'
         original = {'c_user': actor, 'xs': 'imported-xs'}
         profile = WebProfile('fixture', dict(original),
@@ -451,16 +451,16 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first[3], 'none')
         self.assertIsNone(first[4])
         gate_hop = next(row for row in requests if row[1] == '/business/loginpage/')
-        self.assertNotIn(f'c_user={actor}', gate_hop[2])
-        self.assertNotIn('xs=imported-xs', gate_hop[2])
+        self.assertIn(f'c_user={actor}', gate_hop[2])
+        self.assertIn('xs=imported-xs', gate_hop[2])
         self.assertEqual(gate_hop[3], 'same-origin')
         self.assertEqual(gate_hop[4], 'https://business.facebook.com/latest/home')
-        self.assertEqual(len(requests), 2)
+        profile_probe = next(row for row in requests if row[0] == 'www.facebook.com')
+        self.assertIn(f'c_user={actor}', profile_probe[2])
+        self.assertIn('xs=imported-xs', profile_probe[2])
         self.assertFalse(web._profile_session_identity_verified)
-        self.assertTrue(client._meta_redirect_auth_cookie_directive_pending)
-        current = client.facebook_cookie_snapshot()
-        self.assertNotIn('c_user', current)
-        self.assertNotIn('xs', current)
+        self.assertFalse(client._meta_redirect_auth_cookie_directive_pending)
+        self.assertEqual(client.facebook_cookie_snapshot(), original)
         await web.close()
         self.assertEqual(web.profile.cookies, original)
 
