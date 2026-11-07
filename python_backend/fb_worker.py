@@ -1268,21 +1268,24 @@ class FacebookWebSession:
                         ) or {}
                         if not isinstance(meta_auth_directive, dict):
                             meta_auth_directive = {}
-                        directive_deletions = set(meta_auth_directive.get("deletions", []) or [])
-                        directive_sets = set(meta_auth_directive.get("sets", []) or [])
                         deleted_auth_cookies = (
-                            directive_deletions & {"c_user", "xs"}
-                        ) - directive_sets
+                            set(meta_auth_directive.get("deletions", []) or [])
+                            & {"c_user", "xs"}
+                        )
                         if deleted_auth_cookies:
-                            error = AuthenticationError(
-                                "Meta explicitly deleted a selected profile authentication cookie during bootstrap; no authenticated follow-up or provisioning request was sent."
-                            )
-                            error.meta_payload = {
-                                "auth_cookie_deletions": sorted(deleted_auth_cookies)
-                            }
-                            error.request_may_have_been_sent = False
-                            error.transport_stage = "bootstrap"
-                            raise error
+                            current_cookies = session.facebook_cookie_snapshot()
+                            current_actor = str(current_cookies.get("c_user") or "").strip()
+                            current_xs = str(current_cookies.get("xs") or "").strip()
+                            if current_actor != actor_id or not current_xs:
+                                error = AuthenticationError(
+                                    "Meta removed a required selected-profile authentication cookie during bootstrap; no authenticated follow-up or provisioning request was sent."
+                                )
+                                error.meta_payload = {
+                                    "auth_cookie_deletions": sorted(deleted_auth_cookies)
+                                }
+                                error.request_may_have_been_sent = False
+                                error.transport_stage = "bootstrap"
+                                raise error
                         response_headers = getattr(response, "headers", {}) or {}
                         location = str(
                             response_headers.get("location")
