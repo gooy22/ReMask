@@ -163,9 +163,9 @@ class MetaTransportRouter:
         return controller
 
     async def facebook_business_browser(self):
-        self._require_browser_allowed()
+        private_fallback = self._require_browser_allowed()
         factory = getattr(self.session, "facebook_business_browser", None)
-        if callable(factory):
+        if callable(factory) and not private_fallback:
             browser = await factory()
             self._shared_browser = browser
             return browser
@@ -176,29 +176,33 @@ class MetaTransportRouter:
 
         from ..facebook_business_browser import FacebookBusinessBrowser
 
-        browser = FacebookBusinessBrowser(self.context)
+        browser = FacebookBusinessBrowser(
+            self.context,
+            allow_private_http_fallback=private_fallback,
+        )
         await browser.open()
         self._shared_browser = browser
         return browser
 
     def browser_lease(self, **kwargs: Any):
         """Create an isolated Chromium lease behind the transport facade."""
-        self._require_browser_allowed()
+        private_fallback = self._require_browser_allowed()
         factory = getattr(self.session, "browser_lease", None)
-        if callable(factory):
+        if callable(factory) and not private_fallback:
             return factory(**kwargs)
 
         from ..facebook_business_browser import FacebookBusinessBrowser
 
         return FacebookBusinessBrowser(
             self.context,
+            allow_private_http_fallback=private_fallback,
             **kwargs,
         )
 
-    def _require_browser_allowed(self) -> None:
+    def _require_browser_allowed(self) -> bool:
         if self.private_only and self._page_access_browser_fallback_authorized:
             self._page_access_browser_fallback_authorized = False
-            return
+            return True
         if self.private_only:
             from ..facebook_business_browser import BrowserBusinessError
             raise BrowserBusinessError(
@@ -206,6 +210,7 @@ class MetaTransportRouter:
                 "The required private contract or inventory proof is unavailable; Prepare uses HTTP only.",
                 retryable=True, diagnostic={"transport": "private_http", "browser_started": False},
             )
+        return False
 
     async def close_business_browser(self) -> None:
         closer = getattr(self.session, "close_business_browser", None)
