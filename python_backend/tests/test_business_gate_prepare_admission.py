@@ -13,7 +13,6 @@ def prepare_request(*, count=1, action="prepare"):
     profile_id = "31"
     scope = f"prepare:{profile_id}"
     return {
-        "action": "create",
         "idempotency_key": "workspace-prepare-test-nonce",
         "profiles": [{
             "profile_id": profile_id,
