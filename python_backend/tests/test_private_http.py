@@ -411,7 +411,7 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
         await web.close()
         self.assertEqual(web.profile.cookies, original)
 
-    async def test_business_home_loginpage_redirect_honors_auth_cookie_deletion_and_stops(self):
+    async def test_business_home_loginpage_handoff_follows_exact_redirect_without_restoring_cookies(self):
         actor = '123456789'
         original = {'c_user': actor, 'xs': 'imported-xs'}
         profile = WebProfile('fixture', dict(original),
@@ -425,7 +425,7 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
         async def handler(request):
             cookie = request.headers.get('cookie', '')
             requests.append((
-                request.url.host, request.url.path, cookie,
+                request.method, request.url.host, request.url.path, cookie,
                 request.headers.get('Sec-Fetch-Site'),
                 request.headers.get('Referer'),
             ))
@@ -435,27 +435,131 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
                     ('Set-Cookie', 'c_user=; Domain=.facebook.com; Path=/; Max-Age=0; Secure'),
                     ('Set-Cookie', 'xs=; Domain=.facebook.com; Path=/; Max-Age=0; Secure'),
                 ])
-            raise AssertionError(f'unexpected follow-up request {request.url.host}{request.url.path}')
+            if request.url.path == '/business/loginpage/':
+                return httpx.Response(200, text='<html><body>Business handoff</body></html>')
+            raise AssertionError(f'unexpected request {request.url.host}{request.url.path}')
 
         await self.mock(client, handler)
         client._client.event_hooks["response"].append(client._track_meta_xs_cookie_updates)
-        with self.assertRaises(AuthenticationError) as caught:
+        restore = patch.object(
+            client, 'restore_profile_cookies', wraps=client.restore_profile_cookies
+        )
+        with restore as restore_snapshot:
+            with patch.object(
+                FacebookWebSession, '_maybe_continue_business_login_gate',
+                new_callable=AsyncMock, return_value=None,
+            ), patch.object(
+                FacebookWebSession, '_verified_profile_bootstrap',
+                new_callable=AsyncMock,
+                side_effect=AuthenticationError('test stops before identity verification'),
+            ) as verify_profile:
+                with self.assertRaisesRegex(AuthenticationError, 'test stops'):
+                    await web.bootstrap(
+                        allow_business_loginpage_probe=True, prefer_business_home=True,
+                    )
+
+        self.assertEqual(len(requests), 2)
+        first, handoff = requests
+        self.assertEqual(first[:3], ('GET', 'business.facebook.com', '/latest/home'))
+        self.assertIn(f'c_user={actor}', first[3])
+        self.assertIn('xs=imported-xs', first[3])
+        self.assertEqual(handoff[:3], (
+            'GET', 'business.facebook.com', '/business/loginpage/',
+        ))
+        self.assertNotIn('c_user=', handoff[3])
+        self.assertNotIn('xs=', handoff[3])
+        self.assertEqual(handoff[4], 'same-origin')
+        self.assertEqual(
+            handoff[5], 'https://business.facebook.com/latest/home',
+        )
+        restore_snapshot.assert_not_called()
+        verify_profile.assert_awaited_once()
+        self.assertFalse(web._profile_session_identity_verified)
+        self.assertTrue(client._meta_redirect_auth_cookie_directive_pending)
+        await web.close()
+        self.assertEqual(web.profile.cookies, original)
+
+    async def test_business_home_auth_cookie_deletion_to_checkpoint_stops_without_followup(self):
+        actor = '123456789'
+        original = {'c_user': actor, 'xs': 'imported-xs'}
+        profile = WebProfile('fixture', dict(original),
+            'http://127.0.0.1:1', 'fixture-UA')
+        web = FacebookWebSession(profile)
+        self.addAsyncCleanup(web.close)
+        web.BUSINESS_HOME_URL = 'https://business.facebook.com/latest/home'
+        client = await web._ensure_session()
+        requests = []
+
+        async def handler(request):
+            requests.append(request.url.path)
+            return httpx.Response(302, headers=[
+                ('Location', 'https://business.facebook.com/checkpoint/'),
+                ('Set-Cookie', 'c_user=; Domain=.facebook.com; Path=/; Max-Age=0; Secure'),
+                ('Set-Cookie', 'xs=; Domain=.facebook.com; Path=/; Max-Age=0; Secure'),
+            ])
+
+        await self.mock(client, handler)
+        client._client.event_hooks["response"].append(client._track_meta_xs_cookie_updates)
+        with self.assertRaisesRegex(
+            AuthenticationError, 'Meta removed a required selected-profile'
+        ):
             await web.bootstrap(
                 allow_business_loginpage_probe=True, prefer_business_home=True,
             )
-        self.assertIn('Meta removed a required selected-profile authentication cookie',
-            str(caught.exception))
-        self.assertEqual(len(requests), 1)
-        first = requests[0]
-        self.assertEqual(first[0], 'business.facebook.com')
-        self.assertEqual(first[1], '/latest/home')
-        self.assertIn(f'c_user={actor}', first[2])
-        self.assertIn('xs=imported-xs', first[2])
-        self.assertEqual(first[3], 'none')
-        self.assertIsNone(first[4])
-        self.assertNotIn('c_user', client.facebook_cookie_snapshot())
-        self.assertNotIn('xs', client.facebook_cookie_snapshot())
+        self.assertEqual(requests, ['/latest/home'])
         self.assertFalse(web._profile_session_identity_verified)
+        self.assertTrue(client._meta_redirect_auth_cookie_directive_pending)
+        await web.close()
+        self.assertEqual(web.profile.cookies, original)
+
+    async def test_business_handoff_redirect_does_not_restore_deleted_auth_cookies(self):
+        actor = '123456789'
+        original = {'c_user': actor, 'xs': 'imported-xs'}
+        profile = WebProfile('fixture', dict(original),
+            'http://127.0.0.1:1', 'fixture-UA')
+        web = FacebookWebSession(profile)
+        self.addAsyncCleanup(web.close)
+        client = await web._ensure_session()
+        requests = []
+
+        async def handler(request):
+            cookie = request.headers.get('cookie', '')
+            requests.append((request.url.host, request.url.path, cookie))
+            if request.url.path == '/business/loginrequest/fb/':
+                return httpx.Response(302, headers=[
+                    ('Location', 'https://www.facebook.com/login/'),
+                    ('Set-Cookie', 'c_user=; Domain=.facebook.com; Path=/; Max-Age=0; Secure'),
+                    ('Set-Cookie', 'xs=; Domain=.facebook.com; Path=/; Max-Age=0; Secure'),
+                ])
+            if request.url.path == '/login/':
+                return httpx.Response(200, text='<form id="login_form">')
+            raise AssertionError(f'unexpected request {request.url.host}{request.url.path}')
+
+        await self.mock(client, handler)
+        client._client.event_hooks["response"].append(client._track_meta_xs_cookie_updates)
+        restore = patch.object(
+            client, 'restore_profile_cookies', wraps=client.restore_profile_cookies
+        )
+        with restore as restore_snapshot:
+            from app.business_login_gate_http import _request_facebook
+            result = await _request_facebook(
+                client, profile, 'GET',
+                'https://business.facebook.com/business/loginrequest/fb/',
+                referer='https://business.facebook.com/business/loginpage/',
+                allow_login_redirect=True,
+            )
+
+        self.assertEqual(result[0], 200)
+        self.assertEqual(len(requests), 2)
+        self.assertEqual(requests[0][:2], (
+            'business.facebook.com', '/business/loginrequest/fb/',
+        ))
+        self.assertIn(f'c_user={actor}', requests[0][2])
+        self.assertIn('xs=imported-xs', requests[0][2])
+        self.assertEqual(requests[1][:2], ('www.facebook.com', '/login/'))
+        self.assertNotIn('c_user=', requests[1][2])
+        self.assertNotIn('xs=', requests[1][2])
+        restore_snapshot.assert_not_called()
         self.assertTrue(client._meta_redirect_auth_cookie_directive_pending)
         await web.close()
         self.assertEqual(web.profile.cookies, original)

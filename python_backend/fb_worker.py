@@ -1277,15 +1277,70 @@ class FacebookWebSession:
                             current_actor = str(current_cookies.get("c_user") or "").strip()
                             current_xs = str(current_cookies.get("xs") or "").strip()
                             if current_actor != actor_id or not current_xs:
-                                error = AuthenticationError(
-                                    "Meta removed a required selected-profile authentication cookie during bootstrap; no authenticated follow-up or provisioning request was sent."
+                                redirect_headers = getattr(response, "headers", {}) or {}
+                                redirect_location = str(
+                                    redirect_headers.get("location")
+                                    or redirect_headers.get("Location")
+                                    or ""
+                                ).strip()
+                                exact_auth_deletion = (
+                                    {str(name).casefold() for name in
+                                     (meta_auth_directive.get("deletions") or [])}
+                                    == {"c_user", "xs"}
+                                    and not {
+                                        str(name).casefold() for name in
+                                        (meta_auth_directive.get("sets") or [])
+                                    }
+                                    and isinstance(
+                                        meta_auth_directive.get("deletion_scopes"), dict
+                                    )
+                                    and all(
+                                        meta_auth_directive["deletion_scopes"].get(name)
+                                        == {"domain": "shared", "path": "root"}
+                                        for name in ("c_user", "xs")
+                                    )
                                 )
-                                error.meta_payload = {
-                                    "auth_cookie_deletions": sorted(deleted_auth_cookies)
-                                }
-                                error.request_may_have_been_sent = False
-                                error.transport_stage = "bootstrap"
-                                raise error
+                                exact_business_handoff = False
+                                try:
+                                    source_parts = urlsplit(candidate_url)
+                                    handoff_url = urljoin(candidate_url, redirect_location)
+                                    target_parts = urlsplit(handoff_url)
+                                    exact_business_handoff = (
+                                        redirect_count == 0
+                                        and bootstrap_url == self.BUSINESS_HOME_URL
+                                        and candidate_status == 302
+                                        and source_parts.scheme == "https"
+                                        and str(source_parts.hostname or "").casefold()
+                                            == "business.facebook.com"
+                                        and source_parts.port in (None, 443)
+                                        and not source_parts.username
+                                        and not source_parts.password
+                                        and source_parts.path == "/latest/home"
+                                        and target_parts.scheme == "https"
+                                        and str(target_parts.hostname or "").casefold()
+                                            == "business.facebook.com"
+                                        and target_parts.port in (None, 443)
+                                        and not target_parts.username
+                                        and not target_parts.password
+                                        and target_parts.path == "/business/loginpage/"
+                                        and exact_auth_deletion
+                                    )
+                                except ValueError:
+                                    exact_business_handoff = False
+                                if not exact_business_handoff:
+                                    error = AuthenticationError(
+                                        "Meta removed a required selected-profile authentication cookie during bootstrap; no authenticated follow-up or provisioning request was sent."
+                                    )
+                                    error.meta_payload = {
+                                        "auth_cookie_deletions": sorted(deleted_auth_cookies)
+                                    }
+                                    error.request_may_have_been_sent = False
+                                    error.transport_stage = "bootstrap"
+                                    raise error
+                                log.info(
+                                    "[%s] bootstrap following exact Business login handoff without restoring deleted auth cookies actor_cookie_present=%s xs_present=%s",
+                                    self.profile.name, bool(current_actor), bool(current_xs),
+                                )
                         response_headers = getattr(response, "headers", {}) or {}
                         location = str(
                             response_headers.get("location")
