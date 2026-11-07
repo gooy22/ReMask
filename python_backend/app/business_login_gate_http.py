@@ -1186,6 +1186,7 @@ async def continue_business_login_gate(
             fields=continuation["fields"], referer=gate_url,
             allow_login_redirect=True,
             referrer_policy=referrer_policy,
+            restore_same_profile_cookies_for_business_login_redirect=True,
         )
         if action_status in {401, 403}:
             set_outcome("meta_rejected_continuation")
