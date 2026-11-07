@@ -4369,6 +4369,42 @@ def _single_paused_private_launch_draft_request(request: CreateJobRequest) -> bo
     return bool(checker(str(getattr(profile, "profile_id", "") or ""), getattr(task, "payload", None)))
 
 
+def _single_explicit_prepare_for_business_gate(request: CreateJobRequest) -> bool:
+    """Allow one UI Prepare bundle to reach worker validation after a saved Business gate.
+
+    This does not clear the saved status or change the worker's Meta auth and
+    inventory checks. Checkpoints and all other job shapes remain blocked.
+    """
+    profiles = getattr(request, "profiles", None)
+    if not isinstance(profiles, list) or len(profiles) != 1:
+        return False
+    profile = profiles[0]
+    profile_id = str(getattr(profile, "profile_id", "") or "").strip()
+    if not profile_id:
+        return False
+    tasks = getattr(profile, "tasks", None)
+    if not isinstance(tasks, list) or len(tasks) != 1:
+        return False
+    task = tasks[0]
+    if str(getattr(task, "action", "") or "").strip().lower() != "prepare":
+        return False
+    scope = f"prepare:{profile_id}"
+    if str(getattr(task, "idempotency_key", "") or "").strip() != scope:
+        return False
+    if not str(getattr(request, "idempotency_key", "") or "").strip().startswith(
+        "workspace-prepare-"
+    ):
+        return False
+    payload = getattr(task, "payload", None)
+    if not isinstance(payload, dict) or str(payload.get("scope_key") or "").strip() != scope:
+        return False
+    desired = payload.get("desired")
+    if not isinstance(desired, dict) or desired.get("business") is not True:
+        return False
+    count = desired.get("ad_accounts", 1)
+    return isinstance(count, int) and not isinstance(count, bool) and count == 1
+
+
 @app.post('/api/v1/jobs',response_model=JobAccepted,dependencies=[Depends(require_key)])
 async def create_job(request: CreateJobRequest) -> JobAccepted:
     requested_profile_ids = [str(profile.profile_id) for profile in request.profiles]
@@ -4383,7 +4419,13 @@ async def create_job(request: CreateJobRequest) -> JobAccepted:
             for profile_id in blocked_profiles
         )
     )
-    if blocked_profiles and not paused_draft_revalidation:
+    business_gate_prepare_revalidation = (
+        len(blocked_profiles) == 1
+        and _single_explicit_prepare_for_business_gate(request)
+        and str((terminal_statuses.get(blocked_profiles[0]) or {}).get("status") or "").upper()
+        == "BUSINESS_LOGIN_GATE"
+    )
+    if blocked_profiles and not paused_draft_revalidation and not business_gate_prepare_revalidation:
         blocked_set = set(blocked_profiles)
         allowed_profiles = [
             profile for profile in request.profiles
@@ -4401,6 +4443,14 @@ async def create_job(request: CreateJobRequest) -> JobAccepted:
         # Keep healthy profiles in the batch and return the blocked IDs in
         # JobAccepted.blocked_profiles; no task is queued for a terminal profile.
         request = request.model_copy(update={"profiles": allowed_profiles})
+    elif business_gate_prepare_revalidation:
+        # Keep the profile in this one explicit Prepare job. The worker must
+        # still validate access and exact inventory before any Meta mutation.
+        log.info(
+            "explicit Prepare admitted for Business-gate revalidation profile=%s",
+            blocked_profiles[0],
+        )
+        blocked_profiles = []
 
     # Server-side canonicalization: stale Workspace tabs are not allowed to
     # turn ordinary Add BM back into a Page/RK flow. Persist the normalized
