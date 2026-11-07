@@ -411,7 +411,7 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
         await web.close()
         self.assertEqual(web.profile.cookies, original)
 
-    async def test_business_home_loginpage_handoff_follows_exact_redirect_without_restoring_cookies(self):
+    async def test_business_home_loginpage_handoff_restores_same_profile_cookie_snapshot(self):
         actor = '123456789'
         original = {'c_user': actor, 'xs': 'imported-xs'}
         profile = WebProfile('fixture', dict(original),
@@ -437,7 +437,7 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
                 ])
             if request.url.path == '/business/loginpage/':
                 return httpx.Response(200, text='<html><body>Business handoff</body></html>')
-            raise AssertionError(f'unexpected request {request.url.host}{request.url.path}')
+            return httpx.Response(200, text=self.authenticated_document(actor))
 
         await self.mock(client, handler)
         client._client.event_hooks["response"].append(client._track_meta_xs_cookie_updates)
@@ -445,37 +445,43 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
             client, 'restore_profile_cookies', wraps=client.restore_profile_cookies
         )
         with restore as restore_snapshot:
-            with patch.object(
-                FacebookWebSession, '_maybe_continue_business_login_gate',
-                new_callable=AsyncMock, return_value=None,
-            ), patch.object(
-                FacebookWebSession, '_verified_profile_bootstrap',
-                new_callable=AsyncMock,
-                side_effect=AuthenticationError('test stops before identity verification'),
-            ) as verify_profile:
-                with self.assertRaisesRegex(AuthenticationError, 'test stops'):
-                    await web.bootstrap(
-                        allow_business_loginpage_probe=True, prefer_business_home=True,
-                    )
+            with patch("asyncio.sleep", new_callable=AsyncMock) as settle:
+                with patch.object(
+                    FacebookWebSession, '_maybe_continue_business_login_gate',
+                    new_callable=AsyncMock, return_value=None,
+                ), patch.object(
+                    FacebookWebSession, '_verified_profile_bootstrap',
+                    new_callable=AsyncMock,
+                    side_effect=AuthenticationError('test stops before identity verification'),
+                ) as verify_profile:
+                    with self.assertRaisesRegex(AuthenticationError, 'test stops'):
+                        await web.bootstrap(
+                            allow_business_loginpage_probe=True, prefer_business_home=True,
+                        )
 
-        self.assertEqual(len(requests), 2)
-        first, handoff = requests
+        self.assertGreaterEqual(len(requests), 3)
+        first = requests[0]
         self.assertEqual(first[:3], ('GET', 'business.facebook.com', '/latest/home'))
         self.assertIn(f'c_user={actor}', first[3])
         self.assertIn('xs=imported-xs', first[3])
-        self.assertEqual(handoff[:3], (
-            'GET', 'business.facebook.com', '/business/loginpage/',
-        ))
-        self.assertNotIn('c_user=', handoff[3])
-        self.assertNotIn('xs=', handoff[3])
+        self.assertEqual(first[4], 'none')
+        self.assertIsNone(first[5])
+        handoff = next(row for row in requests if row[2] == '/business/loginpage/')
+        self.assertIn(f'c_user={actor}', handoff[3])
+        self.assertIn('xs=imported-xs', handoff[3])
         self.assertEqual(handoff[4], 'same-origin')
         self.assertEqual(
             handoff[5], 'https://business.facebook.com/latest/home',
         )
-        restore_snapshot.assert_not_called()
+        profile_probe = next(row for row in requests if row[1] == 'www.facebook.com')
+        self.assertIn(f'c_user={actor}', profile_probe[3])
+        self.assertIn('xs=imported-xs', profile_probe[3])
+        restore_snapshot.assert_called_once()
+        settle.assert_awaited_once_with(3.0)
         verify_profile.assert_awaited_once()
         self.assertFalse(web._profile_session_identity_verified)
-        self.assertTrue(client._meta_redirect_auth_cookie_directive_pending)
+        self.assertFalse(client._meta_redirect_auth_cookie_directive_pending)
+        self.assertEqual(client.facebook_cookie_snapshot(), original)
         await web.close()
         self.assertEqual(web.profile.cookies, original)
 
