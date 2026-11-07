@@ -583,20 +583,14 @@ class FacebookWebSession:
     ) -> tuple[str, str]:
         endpoint_specs = (
             (
-                "https://www.facebook.com/ajax/dtsg/",
-                "https://www.facebook.com/",
+                "https://business.facebook.com/ajax/dtsg/",
+                "https://business.facebook.com/",
                 "__a",
                 ("true", "1"),
             ),
             (
-                "https://m.facebook.com/ajax/dtsg/",
-                "https://m.facebook.com/",
-                "__ajax__",
-                ("true",),
-            ),
-            (
-                "https://business.facebook.com/ajax/dtsg/",
-                "https://business.facebook.com/",
+                "https://www.facebook.com/ajax/dtsg/",
+                "https://www.facebook.com/",
                 "__a",
                 ("true", "1"),
             ),
@@ -605,12 +599,28 @@ class FacebookWebSession:
         for endpoint, referer, query_key, query_values in endpoint_specs:
             for query_value in query_values:
                 attempt_name = f"{endpoint}?{query_key}={query_value}"
+                if getattr(
+                    session,
+                    "_meta_redirect_auth_cookie_directive_pending",
+                    False,
+                ):
+                    attempts.append(
+                        f"{attempt_name}: skipped after prior Meta auth-cookie directive"
+                    )
+                    return "", ""
                 try:
-                    # Each DTSG refresh probe stays bound to the selected actor. Keep
-                    # complete same-actor cookie updates and restore the
-                    # imported snapshot only if the required set is lost.
+                    # Each DTSG refresh probe stays bound to the selected actor.
+                    # Keep Meta-issued cookie changes and never try another host
+                    # after Meta explicitly deletes an auth cookie.
                     self._restore_profile_cookie_snapshot_if_lost(
                         session, stage="dtsg_refresh_target_start",
+                    )
+                    auth_cookie_directive_before = bool(
+                        getattr(
+                            session,
+                            "_meta_redirect_auth_cookie_directive_pending",
+                            False,
+                        )
                     )
                     async with session.get(
                         endpoint,
@@ -647,6 +657,19 @@ class FacebookWebSession:
                                 f"{attempt_name}: redirect HTTP "
                                 f"{response.status} to {location or '<empty>'}"
                             )
+                            if (
+                                not auth_cookie_directive_before
+                                and getattr(
+                                    session,
+                                    "_meta_redirect_auth_cookie_directive_pending",
+                                    False,
+                                )
+                            ):
+                                attempts.append(
+                                    f"{attempt_name}: stopping host fallback after "
+                                    "Meta auth-cookie directive"
+                                )
+                                return "", ""
                             continue
 
                         if response.status >= 400:
