@@ -765,7 +765,6 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
                 "https://adsmanager.facebook.com/adsmanager/manage/campaigns"
                 f"?act={account}&business_id={business}"
             ),
-            business_home_only=True,
         )
         session._business_bootstrap.assert_awaited_once()
         self.assertEqual(session._business_bootstrap.await_args.kwargs["business_loginpage_probe"], "READ_FP")
