@@ -24,52 +24,6 @@ from .work_queue import ProfileWorkQueue, WorkerInstanceLease
 
 log=logging.getLogger('remask.python_worker')
 Handler=Callable[[ProfileSession,dict[str,Any]],Awaitable[dict[str,Any]]]
-def _single_prepare_for_business_gate(profile_id: str, tasks: Any) -> bool:
-    """Match the only Prepare shape admitted past a saved Business gate."""
-    if not isinstance(tasks, list) or len(tasks) != 1 or not isinstance(tasks[0], dict):
-        return False
-    task = tasks[0]
-    clean_profile = str(profile_id or "").strip()
-    scope = f"prepare:{clean_profile}"
-    payload = task.get("payload")
-    desired = payload.get("desired") if isinstance(payload, dict) else None
-    count = desired.get("ad_accounts", 1) if isinstance(desired, dict) else None
-    return (
-        bool(clean_profile)
-        and str(task.get("action") or "").strip().lower() == "prepare"
-        and str(task.get("idempotency_key") or "").strip() == scope
-        and str(payload.get("scope_key") or "").strip() == scope
-        and isinstance(desired, dict)
-        and desired.get("business") is True
-        and isinstance(count, int)
-        and not isinstance(count, bool)
-        and count == 1
-    )
-
-
-def _prepare_result_confirms_business_and_rk(result: Any) -> bool:
-    """Clear a stale Business gate only after this Prepare readbacks its bundle."""
-    if not isinstance(result, dict):
-        return False
-    desired = result.get("desired")
-    actual = result.get("actual")
-    if not isinstance(desired, dict) or not isinstance(actual, dict):
-        return False
-    expected = desired.get("ad_accounts")
-    bundles = actual.get("bundles")
-    if not isinstance(expected, int) or isinstance(expected, bool) or expected < 1:
-        return False
-    if not isinstance(bundles, list):
-        return False
-    confirmed = [
-        row for row in bundles
-        if isinstance(row, dict)
-        and str(row.get("business_id") or "").isdigit()
-        and str(row.get("ad_account_id") or "").isdigit()
-    ]
-    return len(confirmed) >= expected
-
-
 
 
 def _fan_page_error_summary(value: Any) -> str:
@@ -511,7 +465,6 @@ class WorkerPool:
                 and callable(draft_checker)
                 and bool(draft_checker(profile_id,tasks[0].get('payload')))
             )
-            business_gate_prepare_revalidation = _single_prepare_for_business_gate(profile_id, tasks)
             terminal_reader = getattr(self.store, 'terminal_profile_statuses', None)
             terminal = (await terminal_reader([profile_id])).get(profile_id, {}) if callable(terminal_reader) else {}
             terminal_status = str(terminal.get('status') or '').upper()
@@ -521,9 +474,7 @@ class WorkerPool:
                     await fail_checkpoint(item_id)
                     log.info('worker_item_blocked_terminal_checkpoint item=%s profile=%s',item_id,profile_id)
                     return
-            if (terminal_status == 'BUSINESS_LOGIN_GATE'
-                    and not paused_draft_revalidation
-                    and not business_gate_prepare_revalidation):
+            if terminal_status == 'BUSINESS_LOGIN_GATE' and not paused_draft_revalidation:
                 fail_terminal = getattr(self.store, 'fail_item_for_terminal_access', None)
                 if callable(fail_terminal):
                     await fail_terminal(item_id, terminal_status)
@@ -745,22 +696,13 @@ class WorkerPool:
                                     )
                             else:
                                 result=await self.registry.execute(action,session,task['payload'])
-                            clear_business_gate = (
+                            if (
                                 terminal_status == 'BUSINESS_LOGIN_GATE'
-                                and (
-                                    (
-                                        paused_draft_revalidation
-                                        and isinstance(result, dict)
-                                        and isinstance(result.get('preflight'), dict)
-                                        and result['preflight'].get('draft_ready') is True
-                                    )
-                                    or (
-                                        business_gate_prepare_revalidation
-                                        and _prepare_result_confirms_business_and_rk(result)
-                                    )
-                                )
-                            )
-                            if clear_business_gate:
+                                and paused_draft_revalidation
+                                and isinstance(result, dict)
+                                and isinstance(result.get('preflight'), dict)
+                                and result['preflight'].get('draft_ready') is True
+                            ):
                                 clear_gate = getattr(self.store, 'clear_terminal_business_login_gate', None)
                                 if callable(clear_gate):
                                     await clear_gate(profile_id)

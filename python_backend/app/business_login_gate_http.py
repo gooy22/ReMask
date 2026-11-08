@@ -6,14 +6,11 @@ are left for supported reauthentication.
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import re
 from html.parser import HTMLParser
-from urllib.parse import urlencode, urljoin, urlsplit, urlunsplit
-
-from .meta_auth_document import auth_gate as _auth_gate
+from urllib.parse import urlencode, urljoin, urlsplit
 
 log = logging.getLogger("remask.business_login_gate")
 
@@ -63,23 +60,6 @@ def _facebook_url(value: str) -> bool:
     )
 
 
-def _exact_shared_root_auth_cookie_deletion(directive) -> bool:
-    if not isinstance(directive, dict):
-        return False
-    sets = {str(name).casefold() for name in directive.get("sets", [])}
-    deletions = {str(name).casefold() for name in directive.get("deletions", [])}
-    scopes = directive.get("deletion_scopes")
-    return (
-        not sets
-        and deletions == {"c_user", "xs"}
-        and isinstance(scopes, dict)
-        and all(
-            scopes.get(name) == {"domain": "shared", "path": "root"}
-            for name in ("c_user", "xs")
-        )
-    )
-
-
 def _navigation_fetch_site(referer: str, destination: str) -> str:
     if not referer:
         return "none"
@@ -99,84 +79,6 @@ def _navigation_fetch_site(referer: str, destination: str) -> str:
     if source_facebook and target_facebook:
         return "same-site"
     return "cross-site"
-
-
-
-
-_REFERRER_POLICIES = frozenset({
-    "no-referrer", "no-referrer-when-downgrade", "same-origin", "origin",
-    "strict-origin", "origin-when-cross-origin",
-    "strict-origin-when-cross-origin", "unsafe-url",
-})
-
-
-def _last_referrer_policy(values) -> str:
-    """Return the last valid Referrer-Policy token from one or more headers."""
-    if isinstance(values, str):
-        values = (values,)
-    policy = ""
-    for value in values or ():
-        for token in str(value or "").split(","):
-            candidate = token.strip().casefold()
-            if candidate in _REFERRER_POLICIES:
-                policy = candidate
-    return policy
-
-
-def _navigation_referrer(source: str, destination: str, policy: str) -> str:
-    """Serialize the initiating page's Referer for a navigation hop."""
-    if not source:
-        return ""
-    try:
-        src = urlsplit(str(source))
-        dst = urlsplit(str(destination))
-        if (src.scheme.casefold() not in {"http", "https"}
-                or dst.scheme.casefold() not in {"http", "https"}
-                or not src.hostname or not dst.hostname
-                or src.username is not None or src.password is not None):
-            return ""
-        source_host = src.hostname.casefold()
-        target_host = dst.hostname.casefold()
-        source_port = src.port or (443 if src.scheme.casefold() == "https" else 80)
-        target_port = dst.port or (443 if dst.scheme.casefold() == "https" else 80)
-    except (TypeError, ValueError):
-        return ""
-
-    same_origin = (
-        src.scheme.casefold(), source_host, source_port
-    ) == (
-        dst.scheme.casefold(), target_host, target_port
-    )
-    downgrade = src.scheme.casefold() == "https" and dst.scheme.casefold() != "https"
-    selected = str(policy or "strict-origin-when-cross-origin").strip().casefold()
-    if selected not in _REFERRER_POLICIES:
-        selected = "strict-origin-when-cross-origin"
-
-    full_url = urlunsplit((src.scheme, src.netloc, src.path or "/", src.query, ""))
-    host = f"[{source_host}]" if ":" in source_host else source_host
-    default_port = 443 if src.scheme.casefold() == "https" else 80
-    origin = f"{src.scheme}://{host}"
-    if source_port != default_port:
-        origin += f":{source_port}"
-    origin += "/"
-
-    if selected == "no-referrer":
-        return ""
-    if selected == "same-origin":
-        return full_url if same_origin else ""
-    if selected == "origin":
-        return origin
-    if selected == "strict-origin":
-        return "" if downgrade else origin
-    if selected == "origin-when-cross-origin":
-        return full_url if same_origin else origin
-    if selected == "no-referrer-when-downgrade":
-        return "" if downgrade else full_url
-    if selected == "unsafe-url":
-        return full_url
-    if downgrade:
-        return ""
-    return full_url if same_origin else origin
 
 
 def is_business_login_gate_url(value: str) -> bool:
@@ -830,16 +732,11 @@ async def _request_facebook(
     fields: list[tuple[str, str]] | None = None,
     referer: str = "",
     allow_login_redirect: bool = False,
-    referrer_policy: str = "",
-    restore_same_profile_cookies_for_business_login_redirect: bool = False,
 ):
     current_method = method.upper()
     current_url = url
     current_fields = list(fields or [])
     current_referer = referer
-    current_referrer_policy = (
-        _last_referrer_policy(referrer_policy) or "strict-origin-when-cross-origin"
-    )
     last_status = 0
     last_url = url
     last_body = ""
@@ -847,45 +744,12 @@ async def _request_facebook(
     restore_profile_cookies = getattr(session, "restore_profile_cookies", None)
     profile_cookie_snapshot = getattr(session, "_profile_cookies", None)
     profile_cookies = getattr(profile, "cookies", {})
-    source_snapshot = (
-        profile_cookie_snapshot
-        if isinstance(profile_cookie_snapshot, dict) and profile_cookie_snapshot
-        else profile_cookies if isinstance(profile_cookies, dict) else {}
+    expected_actor_id = str(profile_cookies.get("c_user") or "")
+    expected_xs = (
+        str(profile_cookie_snapshot.get("xs") or "").strip()
+        if isinstance(profile_cookie_snapshot, dict)
+        else str(profile_cookies.get("xs") or "").strip()
     )
-    expected_cookie_snapshot = {
-        str(name): str(value) for name, value in source_snapshot.items()
-    }
-    expected_actor_id = str(expected_cookie_snapshot.get("c_user") or "")
-    expected_xs = str(expected_cookie_snapshot.get("xs") or "").strip()
-
-    def snapshot_matches_expected(current) -> bool:
-        return (
-            isinstance(current, dict)
-            and bool(expected_cookie_snapshot)
-            and bool(expected_actor_id)
-            and bool(expected_xs)
-            and all(
-                str(current.get(name) or "") == value
-                for name, value in expected_cookie_snapshot.items()
-            )
-            and str(current.get("c_user") or "") == expected_actor_id
-            and bool(str(current.get("xs") or "").strip())
-        )
-
-    def meta_auth_directive_pending() -> bool:
-        return bool(getattr(session, "_meta_redirect_auth_cookie_directive_pending", False))
-
-    def restore_cookie_snapshot_if_lost() -> None:
-        if not callable(restore_profile_cookies) or meta_auth_directive_pending():
-            return
-        current = session.facebook_cookie_snapshot()
-        if snapshot_matches_expected(current):
-            accept_refresh = getattr(session, "accept_same_actor_cookie_refresh", None)
-            if callable(accept_refresh):
-                accept_refresh()
-            return
-        restore_profile_cookies()
-
     for hop in range(4):
         # The caller checked the selected actor and xs before this first request.
         # A same-profile Facebook response can change the cookie jar; before a
@@ -893,21 +757,25 @@ async def _request_facebook(
         # the selected profile snapshot.
         if hop > 0:
             current_cookies = session.facebook_cookie_snapshot()
-            if not snapshot_matches_expected(current_cookies):
-                if meta_auth_directive_pending():
-                    current_actor = str(current_cookies.get("c_user") or "")
-                    if current_actor and current_actor != expected_actor_id:
-                        return 0, current_url, "", {}
-                else:
-                    if not callable(restore_profile_cookies):
-                        return 0, current_url, "", {}
-                    restore_profile_cookies()
-                    current_cookies = session.facebook_cookie_snapshot()
-                    if not snapshot_matches_expected(current_cookies):
-                        return 0, current_url, "", {}
-            accept_refresh = getattr(session, "accept_same_actor_cookie_refresh", None)
-            if callable(accept_refresh):
-                accept_refresh()
+            current_actor = str(current_cookies.get("c_user") or "")
+            current_xs = str(current_cookies.get("xs") or "").strip()
+            if not expected_actor_id or current_actor != expected_actor_id or not current_xs:
+                if not callable(restore_profile_cookies):
+                    return 0, current_url, "", {}
+                restore_profile_cookies()
+                current_cookies = session.facebook_cookie_snapshot()
+                current_actor = str(current_cookies.get("c_user") or "")
+                current_xs = str(current_cookies.get("xs") or "").strip()
+                if current_actor != expected_actor_id or current_xs != expected_xs:
+                    return 0, current_url, "", {}
+            elif current_xs != expected_xs:
+                # Meta may rotate xs during the same-actor login handoff. Keep
+                # that token when c_user still pins this request to the selected
+                # profile; never accept a different actor.
+                log.info(
+                    "business_login_gate_cookie_refresh_preserved profile=%s hop=%d actor_matches=true xs_rotated=true",
+                    getattr(profile, "name", "unknown"), hop,
+                )
         headers = {
             "User-Agent": str(profile.user_agent or ""),
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -920,17 +788,13 @@ async def _request_facebook(
             "Sec-Fetch-User": "?1",
             "Upgrade-Insecure-Requests": "1",
         }
-        request_referrer = _navigation_referrer(
-            current_referer, current_url, current_referrer_policy,
-        )
-        if request_referrer:
-            headers["Referer"] = request_referrer
+        if current_referer:
+            headers["Referer"] = current_referer
         kwargs = {
             "proxy": profile.proxy,
             "headers": headers,
             "allow_redirects": False,
             "request_timeout_seconds": 15,
-            "cookie_jar_guard": restore_cookie_snapshot_if_lost,
         }
         if current_method == "POST":
             headers["Origin"] = f"https://{urlsplit(current_url).hostname}"
@@ -938,60 +802,15 @@ async def _request_facebook(
             kwargs["content"] = urlencode(current_fields)
         elif current_fields:
             kwargs["params"] = current_fields
-        response_referrer_policies = []
-        response_auth_cookie_directive = None
         async with session.request(current_method, current_url, **kwargs) as response:
             last_status = int(response.status)
             last_url = str(response.url)
             location = str(response.headers.get("Location") or "")
-            response_extensions = getattr(response, "extensions", None)
-            if isinstance(response_extensions, dict):
-                response_auth_cookie_directive = response_extensions.get(
-                    "remask_meta_auth_cookie_directive"
-                )
-            get_list = getattr(response.headers, "get_list", None)
-            response_referrer_policies = (
-                get_list("referrer-policy") if callable(get_list) else []
-            )
             last_headers = {str(key):str(value) for key,value in response.headers.items()}
             last_body = await _bounded_response(response)
         if last_status not in {301, 302, 303, 307, 308} or not location:
             return last_status, last_url, last_body, last_headers
         next_url = urljoin(last_url, location)
-        source_parts = urlsplit(last_url)
-        target_parts = urlsplit(next_url)
-        same_profile_business_login_handoff = (
-            restore_same_profile_cookies_for_business_login_redirect
-            and last_status == 302
-            and current_method == "GET"
-            and _facebook_url(last_url)
-            and str(source_parts.hostname or "").casefold() == "business.facebook.com"
-            and str(source_parts.path or "").casefold().rstrip("/")
-                == "/business/loginrequest/fb"
-            and _facebook_url(next_url)
-            and str(target_parts.hostname or "").casefold() == "www.facebook.com"
-            and _login_route(next_url)
-            and _exact_shared_root_auth_cookie_deletion(response_auth_cookie_directive)
-        )
-        if same_profile_business_login_handoff:
-            current_cookies = session.facebook_cookie_snapshot()
-            current_actor = str(current_cookies.get("c_user") or "")
-            current_xs = str(current_cookies.get("xs") or "").strip()
-            if (
-                current_actor not in {"", expected_actor_id}
-                or current_xs not in {"", expected_xs}
-                or not callable(restore_profile_cookies)
-            ):
-                return last_status, next_url, last_body, last_headers
-            restore_profile_cookies()
-            restored_cookies = session.facebook_cookie_snapshot()
-            if not snapshot_matches_expected(restored_cookies):
-                return last_status, next_url, last_body, last_headers
-            log.info(
-                "business_login_gate_auth_cookie_snapshot_restore profile=%s "
-                "stage=business_loginrequest_fb_to_www_login actor_match=true cookie_count=%d",
-                getattr(profile, "name", "unknown"), len(restored_cookies),
-            )
         if not _facebook_url(next_url):
             return last_status, next_url, last_body, last_headers
         if _auth_navigation(next_url):
@@ -1006,9 +825,6 @@ async def _request_facebook(
             )
             if not can_follow_existing_login:
                 return last_status, next_url, last_body, last_headers
-        updated_referrer_policy = _last_referrer_policy(response_referrer_policies)
-        if updated_referrer_policy:
-            current_referrer_policy = updated_referrer_policy
         current_referer = last_url
         current_url = next_url
         log.info(
@@ -1018,12 +834,6 @@ async def _request_facebook(
             str(urlsplit(next_url).hostname or "").casefold(),
             _navigation_fetch_site(current_referer, current_url),
         )
-        if hop == 0 and last_status == 302:
-            log.info(
-                "business_login_gate_redirect_settle profile=%s seconds=3",
-                getattr(profile, "name", "unknown"),
-            )
-            await asyncio.sleep(3.0)
         if last_status in {301, 302, 303} and current_method == "POST":
             current_method = "GET"
             current_fields = []
@@ -1035,7 +845,6 @@ async def continue_business_login_gate(
     gate_url: str,
     body: str,
     return_url: str,
-    referrer_policy: str = "",
 ) -> dict | None:
     """Submit one safe Meta continuation, then verify the original read-only URL."""
     def set_outcome(value: str) -> None:
@@ -1089,20 +898,6 @@ async def continue_business_login_gate(
                     value = diagnostic.get(key)
                     if type(value) is bool:
                         gate_diagnostic[key] = value
-            for key in (
-                "native_prop_keys",
-                "native_request_id_node_type",
-                "native_referrer_uri_node_type",
-            ):
-                value = diagnostic.get(key)
-                if key == "native_prop_keys" and isinstance(value, list):
-                    safe_names = [
-                        name for name in value[:80]
-                        if isinstance(name, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", name)
-                    ]
-                    gate_diagnostic[key] = safe_names
-                elif isinstance(value, str) and re.fullmatch(r"[A-Za-z_]{1,32}", value):
-                    gate_diagnostic[key] = value
             outcome = (
                 "native_" + reason
                 if re.fullmatch(r"[a-z_]{1,64}", reason)
@@ -1129,7 +924,6 @@ async def continue_business_login_gate(
 
     try:
         session = await web._ensure_session()
-        restore_profile_cookies = getattr(session, "restore_profile_cookies", None)
         before = session.facebook_cookie_snapshot()
         profile_snapshot = getattr(session, "_profile_cookies", None)
         profile_xs = (
@@ -1143,58 +937,44 @@ async def continue_business_login_gate(
                 str(profile_snapshot.get("c_user") or "") != actor_id
                 or not profile_xs
                 or str(before.get("c_user") or "") != actor_id
-                or not str(before.get("xs") or "").strip()
                 or str(before.get("xs") or "").strip() != profile_xs
-                or any(name not in before for name in profile_snapshot)
             )
-        )
-        meta_auth_directive_pending = bool(
-            getattr(session, "_meta_redirect_auth_cookie_directive_pending", False)
         )
         if (
             profile_snapshot_mismatch
             or str(before.get("c_user") or "") != actor_id
             or not str(before.get("xs") or "").strip()
-        ) and not meta_auth_directive_pending:
-            # Recover only from an unannounced cookie-jar loss. Once Meta has
-            # issued an auth-cookie directive, never resurrect the old snapshot.
+        ):
+            # Meta can clear, shadow, or replace root-scope cookies during the
+            # Ads Manager -> Business gate redirect. Restore only this session's
+            # original profile snapshot, then recheck the same actor and xs
+            # before sending the read-only continuation.
             restore_profile_cookies = getattr(session, "restore_profile_cookies", None)
             if callable(restore_profile_cookies):
                 restore_profile_cookies()
                 before = session.facebook_cookie_snapshot()
-        current_actor = str(before.get("c_user") or "")
-        if meta_auth_directive_pending:
-            if current_actor and current_actor != actor_id:
-                set_outcome("profile_session_mismatch")
-                return None
-        elif (
-            current_actor != actor_id
+        if (
+            str(before.get("c_user") or "") != actor_id
             or not str(before.get("xs") or "").strip()
             or (
                 isinstance(profile_snapshot, dict)
-                and any(name not in before for name in profile_snapshot)
+                and str(before.get("xs") or "").strip() != profile_xs
             )
         ):
             set_outcome("profile_session_mismatch")
             return None
-        accept_refresh = getattr(session, "accept_same_actor_cookie_refresh", None)
-        if callable(accept_refresh):
-            accept_refresh()
 
-        action_status, action_url, action_body, action_headers = await _request_facebook(
+        action_status, action_url, action_body, _ = await _request_facebook(
             session, profile, continuation["method"], continuation["url"],
             fields=continuation["fields"], referer=gate_url,
             allow_login_redirect=True,
-            referrer_policy=referrer_policy,
-            restore_same_profile_cookies_for_business_login_redirect=True,
         )
         if action_status in {401, 403}:
             set_outcome("meta_rejected_continuation")
             return None
         saved_login_outcome = ""
-        saved_login = None
-        saved_login_diagnostic = {}
         if _login_route(action_url):
+            saved_login_diagnostic = {}
             saved_login, saved_login_outcome = _saved_account_login_continuation(
                 action_body, action_url, actor_id,
                 diagnostic=saved_login_diagnostic,
@@ -1209,18 +989,11 @@ async def continue_business_login_gate(
                     session, profile, saved_login["method"], saved_login["url"],
                     fields=saved_login["fields"], referer=action_url,
                     allow_login_redirect=True,
-                    referrer_policy=(
-                        _last_referrer_policy([
-                            value for key, value in action_headers.items()
-                            if str(key).casefold() == "referrer-policy"
-                        ])
-                        or referrer_policy
-                    ),
                 )
                 if action_status in {401, 403}:
                     set_outcome("meta_rejected_saved_account")
                     return None
-        if _auth_navigation(action_url):
+        if _auth_navigation(action_url) and not is_business_login_gate_url(action_url):
             parts = urlsplit(action_url)
             host = str(parts.hostname or "").casefold()
             path = str(parts.path or "/").casefold().rstrip("/") or "/"
@@ -1243,37 +1016,16 @@ async def continue_business_login_gate(
             )
             return None
         after = session.facebook_cookie_snapshot()
-        meta_auth_directive_pending = bool(
-            getattr(session, "_meta_redirect_auth_cookie_directive_pending", False)
-        )
-        if str(after.get("c_user") or "") and str(after.get("c_user") or "") != actor_id:
-            # A different nonempty actor came back from Meta. Never overwrite
-            # that response with the selected profile's old cookie snapshot.
-            close_web = getattr(web, "close", None)
-            if callable(close_web):
-                try:
-                    await close_web()
-                except Exception:
-                    pass
-            set_outcome("profile_session_changed")
-            return None
-        if (
-            str(after.get("c_user") or "") != actor_id
-            or not str(after.get("xs") or "").strip()
-        ) and callable(restore_profile_cookies) and not meta_auth_directive_pending:
-            restore_profile_cookies()
-            after = session.facebook_cookie_snapshot()
         if (
             str(after.get("c_user") or "") != actor_id
             or not str(after.get("xs") or "").strip()
         ):
             set_outcome("profile_session_changed")
-            # The owning bootstrap controls session cleanup after this read-only handoff.
+            await web.close()
             return None
 
         status, final_url, response_body, response_headers = await _request_facebook(
             session, profile, "GET", return_url, referer=gate_url,
-            referrer_policy=referrer_policy,
         )
         after = session.facebook_cookie_snapshot()
         if (
@@ -1281,7 +1033,6 @@ async def continue_business_login_gate(
             and str(after.get("c_user") or "") == actor_id
             and bool(str(after.get("xs") or "").strip())
             and not _auth_navigation(final_url)
-            and not _auth_gate(final_url, response_body)
         ):
             set_outcome("recovered")
             return {
