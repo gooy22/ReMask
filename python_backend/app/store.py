@@ -1708,6 +1708,77 @@ class JobStore:
                 return False
         return True
 
+    @staticmethod
+    def _business_gate_preflight_retry_available(item, tasks, provisioning_steps) -> bool:
+        if (
+            not isinstance(item, dict)
+            or str(item.get('status') or '').upper() != 'FAILED'
+            or str(item.get('error_code') or '').upper() != 'BUSINESS_LOGIN_GATE'
+            or not isinstance(tasks, list)
+            or len(tasks) != 1
+            or not isinstance(tasks[0], dict)
+            or not isinstance(provisioning_steps, list)
+        ):
+            return False
+        task = tasks[0]
+        if (
+            str(task.get('action') or '').strip().lower() != 'provisioning'
+            or str(task.get('status') or '').upper() != 'FAILED'
+            or str(task.get('error_code') or '').upper() not in {
+                'BUSINESS_LOGIN_GATE',
+                'META_AUTH_TOKEN_UNAVAILABLE',
+                'SESSION_EXPIRED',
+                'META_LOGIN_REQUIRED',
+            }
+        ):
+            return False
+        payload = task.get('payload')
+        raw_steps = payload.get('steps') if isinstance(payload, dict) else None
+        if not isinstance(raw_steps, list):
+            return False
+        requested_steps = {
+            str(value or '').strip().upper()
+            for value in raw_steps
+            if str(value or '').strip()
+        }
+        if (
+            not {'BUSINESS', 'AD_ACCOUNT'}.issubset(requested_steps)
+            or requested_steps - {'PROXY_CHECK', 'BUSINESS', 'AD_ACCOUNT'}
+        ):
+            return False
+
+        def has_asset_id(value, depth=0):
+            if depth > 20:
+                return True
+            if isinstance(value, dict):
+                for key, child in value.items():
+                    name = str(key).strip().casefold()
+                    if name in {'business_id', 'ad_account_id', 'account_id', 'entity_id'}:
+                        if child not in (None, '', False, 0):
+                            return True
+                    if has_asset_id(child, depth + 1):
+                        return True
+            elif isinstance(value, (list, tuple)):
+                return any(has_asset_id(child, depth + 1) for child in value)
+            return False
+
+        if has_asset_id(task.get('result')):
+            return False
+        for row in provisioning_steps:
+            if not isinstance(row, dict):
+                return False
+            step = str(row.get('step') or '').strip().upper()
+            if step not in {'BUSINESS', 'AD_ACCOUNT'}:
+                continue
+            status = str(row.get('status') or '').upper()
+            if status not in {'FAILED', 'SKIPPED', 'QUEUED'}:
+                return False
+            if row.get('entity_id') not in (None, '', False, 0):
+                return False
+            if has_asset_id(row.get('result')):
+                return False
+        return True
+
     def _job_view_sync(self, job_id: str) -> dict[str, Any] | None:
         with self._connect() as con:
             job=con.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone()
@@ -1716,9 +1787,22 @@ class JobStore:
             # Frequent UI polls must not run two child SELECTs per profile.
             # Join through durable job_items so one bound job_id parameter covers
             # arbitrarily large jobs without SQLite's IN-list variable limit.
-            item_rows=con.execute(
-                'SELECT * FROM job_items WHERE job_id=? ORDER BY created_at',(job_id,)
-            ).fetchall()
+            try:
+                item_rows=con.execute(
+                    "SELECT i.*, p.status AS _terminal_profile_status "
+                    "FROM job_items AS i "
+                    "LEFT JOIN profile_terminal_statuses AS p "
+                    "ON p.profile_id=i.profile_id "
+                    "AND p.status IN ('CHECKPOINT','BUSINESS_LOGIN_GATE') "
+                    "WHERE i.job_id=? ORDER BY i.created_at",
+                    (job_id,),
+                ).fetchall()
+            except sqlite3.OperationalError as exc:
+                if "no such table: profile_terminal_statuses" not in str(exc):
+                    raise
+                item_rows=con.execute(
+                    'SELECT * FROM job_items WHERE job_id=? ORDER BY created_at',(job_id,)
+                ).fetchall()
             tasks_by_item={}
             for tr in con.execute(
                 'SELECT t.* FROM job_tasks AS t '
@@ -1746,6 +1830,7 @@ class JobStore:
             items=[]
             for ir in item_rows:
                 item=dict(ir)
+                terminal_status = str(item.pop('_terminal_profile_status', '') or '').upper()
                 item['retryable']=bool(item.get('retryable'))
                 tasks=tasks_by_item.get(item['id'],[])
                 # Expose a manual verification retry for the legacy false-quota
@@ -1781,6 +1866,26 @@ class JobStore:
                             task['retryable']=True
                             task['recovery_mode']='retry_private_launch_before_submit'
                 item['provisioning_steps']=steps_by_item.get(item['id'],[])
+                if (
+                    terminal_status == 'BUSINESS_LOGIN_GATE'
+                    and self._business_gate_preflight_retry_available(
+                        item, tasks, item['provisioning_steps']
+                    )
+                ):
+                    item['retryable'] = True
+                    item['recovery_mode'] = 'read_only_business_preflight'
+                    for task in tasks:
+                        if (
+                            str(task.get('status') or '').upper() == 'FAILED'
+                            and str(task.get('error_code') or '').upper() in {
+                                'BUSINESS_LOGIN_GATE',
+                                'META_AUTH_TOKEN_UNAVAILABLE',
+                                'SESSION_EXPIRED',
+                                'META_LOGIN_REQUIRED',
+                            }
+                        ):
+                            task['retryable'] = True
+                            task['recovery_mode'] = 'read_only_business_preflight'
                 items.append(item)
             data=dict(job)
             data['items']=items
@@ -2168,6 +2273,7 @@ class JobStore:
         excluded_profile_ids: set[str] | None = None,
         allow_business_login_gate_profile_ids: set[str] | None = None,
         allow_saved_campaign_readback_retry_item_ids: set[str] | None = None,
+        allow_business_gate_revalidation_item_ids: set[str] | None = None,
     ) -> int:
         excluded=tuple(sorted({
             str(value).strip()
@@ -2184,8 +2290,14 @@ class JobStore:
             for value in (allow_saved_campaign_readback_retry_item_ids or set())
             if str(value).strip()
         }))
+        allow_business_gate_revalidation=tuple(sorted({
+            str(value).strip()
+            for value in (allow_business_gate_revalidation_item_ids or set())
+            if str(value).strip()
+        }))
         return await asyncio.to_thread(
-            self._retry_failed_sync, job_id, excluded, allow_business_gate, allow_saved_campaign
+            self._retry_failed_sync, job_id, excluded, allow_business_gate,
+            allow_saved_campaign, allow_business_gate_revalidation
         )
 
     def _retry_failed_sync(
@@ -2194,11 +2306,13 @@ class JobStore:
         excluded_profile_ids: tuple[str, ...] = (),
         allow_business_login_gate_profile_ids: tuple[str, ...] = (),
         allow_saved_campaign_readback_retry_item_ids: tuple[str, ...] = (),
+        allow_business_gate_revalidation_item_ids: tuple[str, ...] = (),
     ) -> int:
         now=_now()
         excluded=set(excluded_profile_ids)
         allow_business_gate_profiles=set(allow_business_login_gate_profile_ids)
         allow_saved_campaign_item_ids=set(allow_saved_campaign_readback_retry_item_ids)
+        allow_business_gate_revalidation_items=set(allow_business_gate_revalidation_item_ids)
         with self._connect() as con:
             rows=con.execute(
                 "SELECT id,profile_id,retryable,error_code,attempt FROM job_items "
@@ -2230,11 +2344,16 @@ class JobStore:
             private_launch_gate_recovery_ids = set()
             saved_campaign_readback_recovery_ids = set()
             saved_campaign_readback_gate_recovery_ids = set()
+            business_gate_revalidation_recovery_ids = set()
             for row in rows:
                 profile=str(row['profile_id'] or '')
                 allow_gate_retry=(
                     profile in allow_business_gate_profiles
                     and terminal_status_by_profile.get(profile) == 'BUSINESS_LOGIN_GATE'
+                )
+                allow_business_gate_revalidation_retry = (
+                    str(row['id']) in allow_business_gate_revalidation_items
+                    and row['error_code'] == 'BUSINESS_LOGIN_GATE'
                 )
                 allow_meta_login_retry = (
                     allow_gate_retry
@@ -2257,7 +2376,8 @@ class JobStore:
                     or (row['error_code'] not in {
                         'PRIVATE_ADS_DRAFT_SESSION_RENEWAL_UNAVAILABLE',
                         'PRIVATE_ADS_DRAFT_META_LOGIN_REQUIRED',
-                    } and not saved_campaign_retry_requested)
+                    } and not saved_campaign_retry_requested
+                    and not allow_business_gate_revalidation_retry)
                 ):
                     continue
                 task_rows = con.execute(
@@ -2280,6 +2400,26 @@ class JobStore:
                     'id':row['id'],'job_id':job_id,'profile_id':row['profile_id'],'status':'FAILED',
                     'attempt':row['attempt'],'error_code':row['error_code'],
                 }
+                if allow_business_gate_revalidation_retry:
+                    step_rows = con.execute(
+                        "SELECT step,status,error_code,entity_id,result_json "
+                        "FROM provisioning_steps WHERE item_id=?",
+                        (row['id'],),
+                    ).fetchall()
+                    provisioning_steps = []
+                    try:
+                        for step_row in step_rows:
+                            step = dict(step_row)
+                            raw_result = step.pop('result_json')
+                            if raw_result:
+                                step['result'] = json.loads(raw_result)
+                            provisioning_steps.append(step)
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        continue
+                    if self._business_gate_preflight_retry_available(
+                        item, tasks, provisioning_steps
+                    ):
+                        business_gate_revalidation_recovery_ids.add(str(row['id']))
                 if self._private_launch_pre_submit_renewal_retry_available(
                         con,item,tasks,allow_business_login_gate=allow_gate_retry,
                         allow_meta_login_retry=allow_meta_login_retry,job_id=job_id):
@@ -2306,6 +2446,7 @@ class JobStore:
                      }))
                     or str(row['id']) in private_launch_gate_recovery_ids
                     or str(row['id']) in saved_campaign_readback_gate_recovery_ids
+                    or str(row['id']) in business_gate_revalidation_recovery_ids
                 )
             ]
             for item_id in ids:
@@ -2334,10 +2475,17 @@ class JobStore:
                              'PRIVATE_ADS_DRAFT_READ_SPEC_MISMATCH',
                              'PRIVATE_ADS_DRAFT_VALIDATION_PENDING'
                            ) AND ?=1)
+                           OR (error_code IN (
+                             'BUSINESS_LOGIN_GATE',
+                             'META_AUTH_TOKEN_UNAVAILABLE',
+                             'SESSION_EXPIRED',
+                             'META_LOGIN_REQUIRED'
+                           ) AND ?=1)
                          )""",
                     (now,item_id,1 if item_id in recovery_ids else 0,
                      1 if item_id in private_launch_recovery_ids else 0,
-                     1 if item_id in saved_campaign_readback_recovery_ids else 0),
+                     1 if item_id in saved_campaign_readback_recovery_ids else 0,
+                     1 if item_id in business_gate_revalidation_recovery_ids else 0),
                 )
             if ids:
                 con.execute(

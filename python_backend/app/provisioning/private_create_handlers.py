@@ -176,7 +176,9 @@ async def business_handler(session, params, state, *args, **kwargs):
     if action.saved.get("business_name") and _clean(action.saved["business_name"]).casefold() != name.casefold():
         raise ProvisioningError("BUSINESS_CHECKPOINT_MISMATCH", "Saved CREATE belongs to another BM name.")
     expected = _id(action.saved.get("business_id") or action.saved.get("create_response_business_id") or state.get("business_id"))
-    before = await asyncio.wait_for(_business_inventory(action.web, expected), timeout=30)
+    # The service applies the private-create watchdog to this whole step.
+    # A nested 30s timeout cancelled the live session bootstrap before that budget.
+    before = await _business_inventory(action.web, expected)
     await action.checkpoint({"activity": "BM_PRIVATE_INVENTORY_PRECHECK",
         "inventory_verification": before.get("diagnostics", []), "inventory_complete": before["complete"]})
     named = [business for business, row_name in before["rows"].items() if row_name.casefold() == name.casefold()]
@@ -221,7 +223,9 @@ async def business_handler(session, params, state, *args, **kwargs):
             raise ProvisioningError(getattr(exc, "code", "PRIVATE_BM_NOT_SUBMITTED"), str(exc), retryable=bool(getattr(exc, "retryable", True))) from exc
         await action.checkpoint({"phase": "CREATE_RESULT_UNKNOWN"})
     for attempt in range(3):
-        proof = await asyncio.wait_for(_business_inventory(action.web, expected), timeout=30)
+        # Keep post-create verification under the same step watchdog; a nested
+        # timeout can turn a completed response into an unnecessary unknown result.
+        proof = await _business_inventory(action.web, expected)
         matches = [business for business, row_name in proof["rows"].items()
             if row_name.casefold() == name.casefold() and business not in before["rows"]]
         found = expected if expected in proof["rows"] else (matches[0] if not expected and len(matches) == 1 else "")

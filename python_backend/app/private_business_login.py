@@ -57,6 +57,28 @@ def native_business_login_continuation(body, return_url, *, diagnostic=None):
         return None
     expected_business_ids = expected_query.get('business_id', [])
     expected_acts = expected_query.get('act', [])
+    # Initial Prepare must read Business Home before a new profile has an
+    # ad account. Permit only this exact, query-free same-profile bootstrap
+    # scope when the response carries the reviewed native gate bundle.
+    # Account-scoped Ads Manager reads retain their act requirement.
+    script_urls = _script_urls(body, 'https://business.facebook.com/', limit=200)
+    reviewed_native_gate = (
+        ROOT in body
+        and (
+            bool(SOURCES.intersection(script_urls))
+            or any(_reviewed_native_bundle_url(url) for url in script_urls)
+        )
+    )
+    profile_business_home_scope = (
+        reviewed_native_gate
+        and expected.scheme.casefold() == 'https'
+        and expected_host == 'business.facebook.com'
+        and expected_port in (None, 443)
+        and expected.username is None
+        and expected.password is None
+        and expected.path == '/latest/home'
+        and not expected_query
+    )
     allowed_hosts = {'business.facebook.com', 'adsmanager.facebook.com'}
     allowed_paths = {
         '/adsmanager/manage/campaigns',
@@ -69,12 +91,22 @@ def native_business_login_continuation(body, return_url, *, diagnostic=None):
             expected.username is None and expected.password is None
             and expected_port in (None, 443)
         ),
-        'scope_path_allowed': expected.path in allowed_paths,
-        'scope_query_keys_allowed': set(expected_query) <= {'act', 'business_id'},
-        'scope_act_count_valid': len(expected_acts) == 1,
+        'scope_path_allowed': (
+            expected.path in allowed_paths or profile_business_home_scope
+        ),
+        'scope_query_keys_allowed': (
+            set(expected_query) <= {'act', 'business_id'}
+            or profile_business_home_scope
+        ),
+        'scope_act_count_valid': (
+            len(expected_acts) == 1 or profile_business_home_scope
+        ),
         'scope_act_format_valid': (
-            len(expected_acts) == 1
-            and re.fullmatch(r'[0-9]{5,30}', expected_acts[0]) is not None
+            (
+                len(expected_acts) == 1
+                and re.fullmatch(r'[0-9]{5,30}', expected_acts[0]) is not None
+            )
+            or profile_business_home_scope
         ),
         'scope_business_count_valid': len(expected_business_ids) <= 1,
         'scope_business_format_valid': (
@@ -102,7 +134,6 @@ def native_business_login_continuation(body, return_url, *, diagnostic=None):
         report['reason'] = 'credential_controls'
         return None
     report['reason'] = 'source_unreviewed'
-    script_urls = _script_urls(body, 'https://business.facebook.com/', limit=200)
     if not (SOURCES.intersection(script_urls)
             or any(_reviewed_native_bundle_url(url) for url in script_urls)):
         return None
@@ -135,6 +166,9 @@ def native_business_login_continuation(body, return_url, *, diagnostic=None):
                         or _literal(pair.child_by_field_name('value')) != ROOT):
                     continue
                 props = _pairs(root['props'])
+                report['native_prop_keys'] = sorted(str(name) for name in props)[:80]
+                report['native_request_id_node_type'] = getattr(props.get('requestId'), 'type', 'missing')
+                report['native_referrer_uri_node_type'] = getattr(props.get('referrerURI'), 'type', 'missing')
                 report['reason'] = 'unsupported_flow'
                 def scalar(name, default=None):
                     return _literal(props[name]) if name in props else default
@@ -154,9 +188,10 @@ def native_business_login_continuation(body, return_url, *, diagnostic=None):
                     next_url = '/'
                 if not isinstance(next_url, str):
                     continue
-                if request_id is None:
+                if request_id is None and not profile_business_home_scope:
                     request_id = str(uuid4())
-                if not isinstance(request_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,160}', request_id):
+                if not isinstance(request_id, str) or not re.fullmatch(r'[A-Za-z0-9._~:-]{1,160}', request_id):
+                    report['reason'] = 'request_id_invalid'
                     continue
                 actual = urlsplit(urljoin('https://business.facebook.com/', next_url))
                 actual_query = parse_qs(actual.query, keep_blank_values=True)
@@ -197,11 +232,26 @@ def native_business_login_continuation(body, return_url, *, diagnostic=None):
                     and actual_query.get('act', []) == expected_query['act']
                     and actual_query.get('business_id', []) == expected_business_ids
                 )
+                # A no-RK profile may resume only to the same Business Home
+                # bootstrap. Do not let that unscoped path fall through to the
+                # root Business Home or an account-scoped destination.
+                handoff_target_allowed = (
+                    business_home or latest_home
+                    if profile_business_home_scope
+                    else business_home or latest_home or exact_account_scope
+                )
                 if (actual.scheme != 'https' or actual.netloc not in
                         {'business.facebook.com', 'adsmanager.facebook.com'}
                         or actual.fragment
-                        or not (business_home or latest_home or exact_account_scope)):
+                        or not handoff_target_allowed):
+                    report['reason'] = 'destination_scope_mismatch'
                     continue
+                if profile_business_home_scope and business_home:
+                    # Keep the native request ID from Meta, but replace a root
+                    # Business Home referrer with Prepare's exact /latest/home
+                    # URL. Preserve Meta's own reviewed /latest/home destination
+                    # (including nav_ref) when it already stays in this scope.
+                    actual = expected
                 query = dict(parse_qsl(actual.query))
                 query.update(biz_login_source='biz_unified_f3_fb_login_button', join_id=str(uuid4()))
                 next_url = urlunsplit((actual.scheme, actual.netloc, actual.path, urlencode(query), ''))
@@ -209,10 +259,120 @@ def native_business_login_continuation(body, return_url, *, diagnostic=None):
                                   urlencode({'next':next_url, 'f3_request_id':request_id}))
             except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
                 continue
+    if not candidates and profile_business_home_scope and reviewed_native_gate:
+        # Meta sometimes leaves the reviewed component name outside its JSON
+        # script while serializing the same native props in a neighboring
+        # script. Recover only the unique Facebook-only, no-save handoff object;
+        # the exact business-home scope and request ID are still validated below.
+        prop_candidates = []
+        required_props = {"requestId", "referrerURI", "loginOptions", "saveSession"}
+        for script in _JSON_SCRIPT_RE.finditer(body):
+            source = script.group(1)
+            if not all(name in source for name in required_props):
+                continue
+            try:
+                tree = Parser(_LANGUAGE).parse(source.encode())
+            except (ValueError, TypeError, RecursionError):
+                continue
+            for row in _walk(tree.root_node):
+                if row.type != 'object':
+                    continue
+                try:
+                    props = _pairs(row)
+                    if not required_props.issubset(props):
+                        continue
+                    options = props.get('loginOptions')
+                    scalar = lambda name, default=None: (
+                        _literal(props[name]) if name in props else default
+                    )
+                    if (options is None or options.type != 'array'
+                            or 'FB' not in [_literal(child) for child in options.named_children]
+                            or scalar('saveSession') is not False
+                            or any(scalar(name) not in (False, None) for name in
+                                   ('addNewProfileAM', 'fromProfileSwitcherAddAccount',
+                                    'isFromInvitationFlow', 'igInvite'))):
+                        continue
+                    request_id = scalar('requestId')
+                    next_url = scalar('referrerURI')
+                    report['native_prop_keys'] = sorted(str(name) for name in props)[:80]
+                    report['native_request_id_node_type'] = getattr(props.get('requestId'), 'type', 'missing')
+                    report['native_referrer_uri_node_type'] = getattr(props.get('referrerURI'), 'type', 'missing')
+                    if (not isinstance(request_id, str)
+                            or not re.fullmatch(r'[A-Za-z0-9._~:-]{1,160}', request_id)
+                            or not isinstance(next_url, str)):
+                        continue
+
+                    actual = urlsplit(urljoin('https://business.facebook.com/', next_url))
+                    actual_query = parse_qs(actual.query, keep_blank_values=True)
+                    business_home = (
+                        actual.netloc == 'business.facebook.com'
+                        and actual.path in ('', '/')
+                        and set(actual_query) <= {'nav_ref'}
+                        and all(
+                            len(values) == 1
+                            and re.fullmatch(r'[A-Za-z0-9_-]{0,160}', values[0])
+                            for values in actual_query.values()
+                        )
+                    )
+                    latest_home_query_safe = (
+                        set(actual_query) <= {'nav_ref', 'act', 'business_id'}
+                        and all(
+                            len(values) == 1
+                            and (
+                                (key == 'nav_ref' and re.fullmatch(r'[A-Za-z0-9_-]{0,160}', values[0]))
+                                or (key in {'act', 'business_id'} and re.fullmatch(r'[0-9]{5,30}', values[0]))
+                            )
+                            for key, values in actual_query.items()
+                        )
+                    )
+                    latest_home_scope_safe = (
+                        (not actual_query.get('act') or actual_query.get('act') == expected_acts)
+                        and (
+                            not actual_query.get('business_id')
+                            or actual_query.get('business_id') == expected_business_ids
+                        )
+                    )
+                    latest_home = (
+                        actual.netloc == 'business.facebook.com'
+                        and actual.path.rstrip('/') == '/latest/home'
+                        and latest_home_query_safe
+                        and latest_home_scope_safe
+                    )
+                    if (actual.scheme != 'https'
+                            or actual.netloc != 'business.facebook.com'
+                            or actual.fragment
+                            or not (business_home or latest_home)):
+                        continue
+                    if business_home:
+                        actual = expected
+                    query = dict(parse_qsl(actual.query))
+                    query.update(
+                        biz_login_source='biz_unified_f3_fb_login_button',
+                        join_id=str(uuid4()),
+                    )
+                    next_url = urlunsplit((
+                        actual.scheme, actual.netloc, actual.path, urlencode(query), ''
+                    ))
+                    prop_candidates.append(
+                        'https://business.facebook.com/business/loginrequest/fb/?'
+                        + urlencode({'next': next_url, 'f3_request_id': request_id})
+                    )
+                    native_facebook_flows += 1
+                except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
+                    continue
+        prop_candidates = list(dict.fromkeys(prop_candidates))
+        if len(prop_candidates) == 1:
+            candidates.extend(prop_candidates)
+        elif len(prop_candidates) > 1:
+            report['reason'] = 'ambiguous_native_props'
+        else:
+            report['reason'] = 'native_props_not_found'
+
     if len(candidates) == 1:
         report['reason'] = 'native_fb_continuation'
         return candidates[0]
-    if not candidates and report.get('reason') == 'root_missing' and ROOT in body:
+    if (not candidates and report.get('reason') == 'root_missing' and ROOT in body
+            and not profile_business_home_scope):
         # Some current Business gates render this reviewed native FB button
         # client-side and omit its serialized React props from the HTML. Match
         # the same native handoff using only the exact account-scoped Ads Manager
@@ -233,7 +393,8 @@ def native_business_login_continuation(body, return_url, *, diagnostic=None):
         report['reason'] = 'native_fb_scoped_fallback'
         return handoff
     if (not candidates and native_facebook_flows == 1
-            and report.get('reason') == 'request_id_or_destination'):
+            and report.get('reason') in {'request_id_or_destination', 'destination_scope_mismatch'}
+            and not profile_business_home_scope):
         # The current gate rendered a reviewed Facebook-only continuation
         # control, but its serialized destination/request ID no longer matches
         # the old client shape. Fall back to the exact account URL supplied by

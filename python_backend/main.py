@@ -1287,6 +1287,31 @@ async def _require_fp_auth_ready(profile_ids: list[str]) -> None:
         )
 
 
+def _view_business_gate_preflight_retry_item(item: dict[str, Any]) -> bool:
+    if not isinstance(item, dict):
+        return False
+    if (
+        str(item.get('status') or '').upper() != 'FAILED'
+        or str(item.get('error_code') or '').upper() != 'BUSINESS_LOGIN_GATE'
+        or item.get('recovery_mode') != 'read_only_business_preflight'
+    ):
+        return False
+    tasks = item.get('tasks') or []
+    if not isinstance(tasks, list) or len(tasks) != 1 or not isinstance(tasks[0], dict):
+        return False
+    task = tasks[0]
+    return (
+        str(task.get('action') or '').strip().lower() == 'provisioning'
+        and str(task.get('status') or '').upper() == 'FAILED'
+        and str(task.get('error_code') or '').upper() in {
+            'BUSINESS_LOGIN_GATE',
+            'META_AUTH_TOKEN_UNAVAILABLE',
+            'SESSION_EXPIRED',
+            'META_LOGIN_REQUIRED',
+        }
+    )
+
+
 def _view_terminal_auth_retry_profile_ids(view: dict[str, Any]) -> list[str]:
     """Profiles whose failed item is blocked by a terminal Facebook auth state."""
     out: list[str] = []
@@ -1428,7 +1453,10 @@ async def profile_preflight(profile_id: str, purpose: str = 'business'):
     clean_profile=str(profile_id or '').strip()
     if not clean_profile:
         raise HTTPException(status_code=400,detail='profile_id is required')
-    await _require_profile_not_checkpoint(clean_profile)
+    if purpose == 'business':
+        await _require_profile_not_checkpoint_for_revalidation(clean_profile)
+    else:
+        await _require_profile_not_checkpoint(clean_profile)
 
     try:
         context=await pool.resolver.resolve(clean_profile)
@@ -1450,6 +1478,14 @@ async def profile_preflight(profile_id: str, purpose: str = 'business'):
                     clean_profile, result['bm_route_ready'], result['facebook_session_ready'],
                     result['private_business']['contract_ready'], result['private_business']['inventory_complete'],
                     result['private_business']['error_code'], result['total_ms'])
+                if (
+                    result.get('profile_id') == clean_profile
+                    and result.get('purpose') == 'business'
+                    and result.get('facebook_session_ready') is True
+                    and result.get('bm_route_ready') is True
+                    and result.get('auth_blocked') is not True
+                ):
+                    await store.clear_terminal_business_login_gate(clean_profile)
                 return result
         if purpose == 'fan_pages':
             from app.private_page_preflight import private_page_preflight
@@ -4333,6 +4369,42 @@ def _single_paused_private_launch_draft_request(request: CreateJobRequest) -> bo
     return bool(checker(str(getattr(profile, "profile_id", "") or ""), getattr(task, "payload", None)))
 
 
+def _single_explicit_prepare_for_business_gate(request: CreateJobRequest) -> bool:
+    """Allow one UI Prepare bundle to reach worker validation after a saved Business gate.
+
+    This does not clear the saved status or change the worker's Meta auth and
+    inventory checks. Checkpoints and all other job shapes remain blocked.
+    """
+    profiles = getattr(request, "profiles", None)
+    if not isinstance(profiles, list) or len(profiles) != 1:
+        return False
+    profile = profiles[0]
+    profile_id = str(getattr(profile, "profile_id", "") or "").strip()
+    if not profile_id:
+        return False
+    tasks = getattr(profile, "tasks", None)
+    if not isinstance(tasks, list) or len(tasks) != 1:
+        return False
+    task = tasks[0]
+    if str(getattr(task, "action", "") or "").strip().lower() != "prepare":
+        return False
+    scope = f"prepare:{profile_id}"
+    if str(getattr(task, "idempotency_key", "") or "").strip() != scope:
+        return False
+    if not str(getattr(request, "idempotency_key", "") or "").strip().startswith(
+        "workspace-prepare-"
+    ):
+        return False
+    payload = getattr(task, "payload", None)
+    if not isinstance(payload, dict) or str(payload.get("scope_key") or "").strip() != scope:
+        return False
+    desired = payload.get("desired")
+    if not isinstance(desired, dict) or desired.get("business") is not True:
+        return False
+    count = desired.get("ad_accounts", 1)
+    return isinstance(count, int) and not isinstance(count, bool) and count == 1
+
+
 @app.post('/api/v1/jobs',response_model=JobAccepted,dependencies=[Depends(require_key)])
 async def create_job(request: CreateJobRequest) -> JobAccepted:
     requested_profile_ids = [str(profile.profile_id) for profile in request.profiles]
@@ -4347,7 +4419,13 @@ async def create_job(request: CreateJobRequest) -> JobAccepted:
             for profile_id in blocked_profiles
         )
     )
-    if blocked_profiles and not paused_draft_revalidation:
+    business_gate_prepare_revalidation = (
+        len(blocked_profiles) == 1
+        and _single_explicit_prepare_for_business_gate(request)
+        and str((terminal_statuses.get(blocked_profiles[0]) or {}).get("status") or "").upper()
+        == "BUSINESS_LOGIN_GATE"
+    )
+    if blocked_profiles and not paused_draft_revalidation and not business_gate_prepare_revalidation:
         blocked_set = set(blocked_profiles)
         allowed_profiles = [
             profile for profile in request.profiles
@@ -4365,6 +4443,14 @@ async def create_job(request: CreateJobRequest) -> JobAccepted:
         # Keep healthy profiles in the batch and return the blocked IDs in
         # JobAccepted.blocked_profiles; no task is queued for a terminal profile.
         request = request.model_copy(update={"profiles": allowed_profiles})
+    elif business_gate_prepare_revalidation:
+        # Keep the profile in this one explicit Prepare job. The worker must
+        # still validate access and exact inventory before any Meta mutation.
+        log.info(
+            "explicit Prepare admitted for Business-gate revalidation profile=%s",
+            blocked_profiles[0],
+        )
+        blocked_profiles = []
 
     # Server-side canonicalization: stale Workspace tabs are not allowed to
     # turn ordinary Add BM back into a Page/RK flow. Persist the normalized
@@ -4465,6 +4551,50 @@ async def retry_failed(job_id: str, consent: dict | None = Body(default=None)) -
         if profile:
             failed_items_by_profile.setdefault(profile, []).append(item)
     private_draft_gate_retry_profiles = set()
+    business_gate_preflight_retry_item_ids: set[str] = set()
+    business_gate_preflighted_profiles: set[str] = set()
+    for profile in sorted(business_gate_profiles):
+        failed = failed_items_by_profile.get(profile, [])
+        if len(failed) != 1 or not _view_business_gate_preflight_retry_item(failed[0]):
+            continue
+        item = failed[0]
+        try:
+            readiness = await profile_preflight(profile, purpose='business')
+        except HTTPException as exc:
+            log.info(
+                'business gate retry preflight blocked profile=%s status=%s',
+                profile, exc.status_code,
+            )
+            continue
+        except Exception as exc:
+            log.info(
+                'business gate retry preflight failed profile=%s error_type=%s',
+                profile, type(exc).__name__,
+            )
+            continue
+        if not (
+            readiness.get('profile_id') == profile
+            and readiness.get('purpose') == 'business'
+            and readiness.get('facebook_session_ready') is True
+            and readiness.get('bm_route_ready') is True
+            and readiness.get('auth_blocked') is not True
+        ):
+            log.info(
+                'business gate retry preflight did not confirm access profile=%s code=%s',
+                profile, str(readiness.get('auth_error_code') or
+                             readiness.get('private_business', {}).get('error_code') or
+                             'SESSION_NOT_READY')[:80],
+            )
+            continue
+        item_id = str(item.get('id') or '').strip()
+        if not item_id:
+            continue
+        business_gate_preflight_retry_item_ids.add(item_id)
+        business_gate_preflighted_profiles.add(profile)
+        terminal_statuses.pop(profile, None)
+        terminal_profiles.discard(profile)
+        business_gate_profiles.discard(profile)
+
     for profile in business_gate_profiles:
         failed = failed_items_by_profile.get(profile, [])
         if len(failed) != 1:
@@ -4649,12 +4779,14 @@ async def retry_failed(job_id: str, consent: dict | None = Body(default=None)) -
     auth_retry_profiles=[
         profile for profile in _view_terminal_auth_retry_profile_ids(current_view)
         if profile not in terminal_profiles
+        and profile not in business_gate_preflighted_profiles
     ]
     status_reader=getattr(store,'latest_profile_session_statuses',None)
     profile_statuses=await status_reader() if callable(status_reader) else []
     status_blocked_profiles=_view_failed_profiles_with_known_session_blocks(
         current_view, profile_statuses
     )
+    status_blocked_profiles.difference_update(business_gate_preflighted_profiles)
     if auth_retry_profiles:
         _auth_ready,auth_blocked=await _partition_auth_retry_profiles(auth_retry_profiles)
     else:
@@ -4679,6 +4811,7 @@ async def retry_failed(job_id: str, consent: dict | None = Body(default=None)) -
         excluded_profile_ids=excluded_profiles,
         allow_business_login_gate_profile_ids=private_draft_gate_retry_profiles,
         allow_saved_campaign_readback_retry_item_ids=saved_campaign_readback_retry_item_ids,
+        allow_business_gate_revalidation_item_ids=business_gate_preflight_retry_item_ids,
     )
     view=await store.job_view(job_id)
     recovered_gate_profiles = set()

@@ -318,10 +318,13 @@ class ProvisioningService:
                         if is_private_create:
                             timeout_label = "Meta " + step.value + " private HTTP runtime watchdog"
 
+                        watchdog = asyncio.timeout(step_timeout)
                         try:
                             try:
-                                result = await asyncio.wait_for(
-                                    self._run_handler(handler, step,
+                                async with watchdog:
+                                    result = await self._run_handler(
+                                        handler,
+                                        step,
                                         session,
                                         step_params,
                                         state,
@@ -334,15 +337,19 @@ class ProvisioningService:
                                         step_state=prior,
                                         profile_resolver=self.profile_resolver,
                                         meta_transport=meta_transport,
-                                    ),
-                                    timeout=step_timeout,
-                                )
+                                    )
                             finally:
                                 # Count every mutation attempt, including a safe
                                 # pre-submit failure, so an immediate manual Retry
                                 # cannot hammer the same FB profile in a burst.
                                 _mark_profile_mutation_finished(profile_id)
                         except asyncio.TimeoutError as exc:
+                            # Distinguish the outer step watchdog from a shorter
+                            # timeout raised by the private HTTP request itself.
+                            # Only the watchdog's own expiry gets the step timeout
+                            # code; nested request timeouts keep their true cause.
+                            if not watchdog.expired():
+                                raise
                             raise ProvisioningError(
                                 timeout_code,
                                 (
