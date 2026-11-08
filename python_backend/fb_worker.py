@@ -1228,15 +1228,16 @@ class FacebookWebSession:
                         redirect_statuses = {301, 302, 303, 307, 308}
                         response_status = {
                             "value": None,
-                            "business_home_restore": False,
+                            "business_bootstrap_restore": False,
                         }
 
                         def restore_cookies_after_redirect_headers(response):
                             response_status["value"] = int(response.status)
-                            allow_business_home_restore = False
+                            allow_business_bootstrap_restore = False
                             if redirect_count == 0 and response_status["value"] == 302:
                                 try:
                                     request_parts = urlsplit(current_url)
+                                    bootstrap_parts = urlsplit(bootstrap_url)
                                     source_parts = urlsplit(str(response.url))
                                     target_url = urljoin(
                                         str(response.url),
@@ -1285,22 +1286,28 @@ class FacebookWebSession:
                                             for name in ("c_user", "xs")
                                         )
                                     )
-                                    allow_business_home_restore = (
-                                        request_parts.scheme == "https"
+                                    reviewed_bootstrap_source = (
+                                        bootstrap_url in bootstrap_urls
+                                        and current_url == bootstrap_url
+                                        and request_parts.scheme == "https"
                                         and str(request_parts.hostname or "").casefold()
-                                            == "business.facebook.com"
+                                            == str(bootstrap_parts.hostname or "").casefold()
                                         and request_parts.port in (None, 443)
                                         and not request_parts.username
                                         and not request_parts.password
-                                        and request_parts.path == "/latest/home"
-                                        and not request_parts.query
-                                        and source_parts.scheme == "https"
+                                        and request_parts.path == bootstrap_parts.path
+                                        and request_parts.query == bootstrap_parts.query
+                                        and source_parts.scheme == request_parts.scheme
                                         and str(source_parts.hostname or "").casefold()
-                                            == "business.facebook.com"
+                                            == str(request_parts.hostname or "").casefold()
                                         and source_parts.port in (None, 443)
                                         and not source_parts.username
                                         and not source_parts.password
-                                        and source_parts.path == "/latest/home"
+                                        and source_parts.path == request_parts.path
+                                        and source_parts.query == request_parts.query
+                                    )
+                                    allow_business_bootstrap_restore = (
+                                        reviewed_bootstrap_source
                                         and target_parts.scheme == "https"
                                         and str(target_parts.hostname or "").casefold()
                                             == "business.facebook.com"
@@ -1315,16 +1322,16 @@ class FacebookWebSession:
                                         and current_xs in {"", expected_xs}
                                     )
                                 except (TypeError, ValueError):
-                                    allow_business_home_restore = False
-                            response_status["business_home_restore"] = (
-                                allow_business_home_restore
+                                    allow_business_bootstrap_restore = False
+                            response_status["business_bootstrap_restore"] = (
+                                allow_business_bootstrap_restore
                             )
                             if response_status["value"] in redirect_statuses:
                                 self._restore_profile_cookie_snapshot_if_lost(
                                     session,
                                     stage=f"bootstrap_response_headers_{redirect_count + 1}",
                                     allow_business_home_loginpage_auth_restore=(
-                                        allow_business_home_restore
+                                        allow_business_bootstrap_restore
                                     ),
                                 )
 
@@ -1349,7 +1356,7 @@ class FacebookWebSession:
                                     session,
                                     stage=f"bootstrap_response_body_{redirect_count + 1}",
                                     allow_business_home_loginpage_auth_restore=(
-                                        response_status["business_home_restore"]
+                                        response_status["business_bootstrap_restore"]
                                     ),
                                 )
                         candidate_url = str(response.url)
@@ -1395,33 +1402,10 @@ class FacebookWebSession:
                                         for name in ("c_user", "xs")
                                     )
                                 )
-                                exact_business_handoff = False
-                                try:
-                                    source_parts = urlsplit(candidate_url)
-                                    handoff_url = urljoin(candidate_url, redirect_location)
-                                    target_parts = urlsplit(handoff_url)
-                                    exact_business_handoff = (
-                                        redirect_count == 0
-                                        and bootstrap_url == self.BUSINESS_HOME_URL
-                                        and candidate_status == 302
-                                        and source_parts.scheme == "https"
-                                        and str(source_parts.hostname or "").casefold()
-                                            == "business.facebook.com"
-                                        and source_parts.port in (None, 443)
-                                        and not source_parts.username
-                                        and not source_parts.password
-                                        and source_parts.path == "/latest/home"
-                                        and target_parts.scheme == "https"
-                                        and str(target_parts.hostname or "").casefold()
-                                            == "business.facebook.com"
-                                        and target_parts.port in (None, 443)
-                                        and not target_parts.username
-                                        and not target_parts.password
-                                        and target_parts.path == "/business/loginpage/"
-                                        and exact_auth_deletion
-                                    )
-                                except ValueError:
-                                    exact_business_handoff = False
+                                exact_business_handoff = bool(
+                                    response_status["business_bootstrap_restore"]
+                                    and exact_auth_deletion
+                                )
                                 if not exact_business_handoff:
                                     error = AuthenticationError(
                                         "Meta removed a required selected-profile authentication cookie during bootstrap; no authenticated follow-up or provisioning request was sent."
@@ -1433,7 +1417,7 @@ class FacebookWebSession:
                                     error.transport_stage = "bootstrap"
                                     raise error
                                 log.info(
-                                    "[%s] bootstrap following exact Business login handoff without restoring deleted auth cookies actor_cookie_present=%s xs_present=%s",
+                                    "[%s] bootstrap continuing after exact same-profile read-only loginpage handoff actor_cookie_present=%s xs_present=%s",
                                     self.profile.name, bool(current_actor), bool(current_xs),
                                 )
                         response_headers = getattr(response, "headers", {}) or {}
@@ -1759,6 +1743,10 @@ class FacebookWebSession:
             getattr(session, "_meta_redirect_auth_cookie_directive_pending", False)
         )
 
+        allow_authorized_body_restore = (
+            allow_business_home_loginpage_auth_restore
+            and stage.startswith("bootstrap_response_body_")
+        )
         if allow_business_home_loginpage_auth_restore:
             profile_cookies = getattr(self.profile, "cookies", {})
             selected_actor = str(
@@ -1768,7 +1756,7 @@ class FacebookWebSession:
                 profile_cookies.get("xs") or ""
             ).strip() if isinstance(profile_cookies, dict) else ""
             if (
-                not directive_pending
+                (not directive_pending and not allow_authorized_body_restore)
                 or selected_actor != actor
                 or selected_xs != xs
                 or current_actor not in {"", actor}
@@ -1781,7 +1769,10 @@ class FacebookWebSession:
                 return False
 
         accept_refresh = getattr(session, "accept_same_actor_cookie_refresh", None)
-        if not (allow_business_home_loginpage_auth_restore and directive_pending):
+        if not (
+            allow_business_home_loginpage_auth_restore
+            and (directive_pending or allow_authorized_body_restore)
+        ):
             if callable(accept_refresh) and accept_refresh():
                 refreshed = getattr(session, "_profile_cookies", {})
                 if isinstance(refreshed, dict) and any(
@@ -1802,7 +1793,7 @@ class FacebookWebSession:
 
         if directive_pending and allow_business_home_loginpage_auth_restore:
             log.info(
-                "[%s] profile_cookie_snapshot_restore_allowed stage=%s reason=exact_first_business_home_loginpage_handoff actor_match=true",
+                "[%s] profile_cookie_snapshot_restore_allowed stage=%s reason=exact_same_profile_readonly_bootstrap_loginpage_handoff actor_match=true",
                 self.profile.name, stage,
             )
 
