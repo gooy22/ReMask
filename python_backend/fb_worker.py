@@ -58,6 +58,26 @@ class RemoteRequestError(AutomationError):
         self.transport_stage = str(transport_stage or "").strip()
 
 
+def _verified_jazoest(fb_dtsg: str, sprinkle_config: Any) -> str:
+    """Build jazoest only from a validated SprinkleConfig in the current bootstrap."""
+    token = str(fb_dtsg or "")
+    config = sprinkle_config if isinstance(sprinkle_config, dict) else {}
+    version = config.get("version")
+    randomize = config.get("should_randomize")
+    if (
+        not token
+        or config.get("param_name") != "jazoest"
+        or type(randomize) is not bool
+        or isinstance(version, bool)
+        or not isinstance(version, (str, int))
+        or not str(version).isdigit()
+    ):
+        return ""
+    units = token.encode("utf-16-le", errors="surrogatepass")
+    total = sum(units[i] + 256 * units[i + 1] for i in range(0, len(units), 2))
+    return ("" if randomize else str(version)) + str(total)
+
+
 # ---------------------------------------------------------------------------
 # Profile / Facebook web-session context
 # ---------------------------------------------------------------------------
@@ -2773,8 +2793,11 @@ class FacebookWebSession:
         if bootstrap.lsd:
             form["lsd"] = bootstrap.lsd
 
-        if bootstrap.jazoest:
-            form["jazoest"] = bootstrap.jazoest
+        jazoest = str(bootstrap.jazoest or "").strip()
+        if not jazoest:
+            jazoest = _verified_jazoest(bootstrap.fb_dtsg, bootstrap.sprinkle_config)
+        if jazoest:
+            form["jazoest"] = jazoest
 
         if friendly_name:
             form["fb_api_req_friendly_name"] = friendly_name
