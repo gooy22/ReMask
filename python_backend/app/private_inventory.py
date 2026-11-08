@@ -342,10 +342,7 @@ async def private_inventory_snapshot(
     if discover_businesses and execute_read_queries and callable(getattr(web, 'graphql', None)):
         try:
             from .static_meta_inventory import read_business_inventory
-            # Let the private HTTP request's own timeout/retry policy run.
-            # This snapshot already has one outer wall-clock deadline; a nested
-            # 18s wait_for cancels proxy TLS setup before its pre-send retry.
-            proof = await read_business_inventory(web)
+            proof = await asyncio.wait_for(read_business_inventory(web), timeout=18)
             businesses.update({str(key): str(name) for key, name in proof.get('rows', {}).items()
                 if _clean_id(key) and str(key) != personal_scope_id})
             discovery_complete = proof.get('complete') is True

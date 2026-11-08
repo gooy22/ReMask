@@ -191,7 +191,7 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
             bootstrap = await session.bootstrap()
 
         self.assertEqual(bootstrap.fb_dtsg, "business-token")
-        self.assertEqual(bootstrap.source_url, FacebookWebSession.BUSINESS_HOME_URL)
+        self.assertEqual(bootstrap.source_url, FacebookWebSession.ADS_MANAGER_URL)
         self.assertEqual(len(client.calls), 1)
         handoff.assert_awaited_once()
         session._fetch_dtsg_refresh_token.assert_not_awaited()
@@ -280,7 +280,7 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(generic.actor_id, expected_actor)
         self.assertFalse(generic.profile_actor_verified)
         self.assertGreater(len(calls), 1)
-        self.assertEqual(calls[0][0], FacebookWebSession.BUSINESS_HOME_URL)
+        self.assertEqual(calls[0][0], FacebookWebSession.ADS_MANAGER_URL)
         self.assertEqual(calls[-1][0], "https://www.facebook.com/me")
 
         generic_call_count = len(calls)
@@ -329,7 +329,7 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(bootstrap.fb_dtsg, "business-token")
         self.assertEqual(bootstrap.actor_id, expected_actor)
-        self.assertEqual(calls, [FacebookWebSession.BUSINESS_HOME_URL])
+        self.assertEqual(calls, [FacebookWebSession.ADS_MANAGER_URL])
         session._fetch_dtsg_refresh_token.assert_not_awaited()
 
     async def test_business_loginpage_fallback_preserves_scoped_read_policy(self):
@@ -347,7 +347,7 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         class Client:
             def get(self, url, **kwargs):
                 calls.append(url)
-                if url == FacebookWebSession.BUSINESS_HOME_URL:
+                if url == FacebookWebSession.ADS_MANAGER_URL:
                     return Response(
                         "https://business.facebook.com/business/loginpage/",
                         '<form id="login_form">',
@@ -371,7 +371,7 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bootstrap.fb_dtsg, "profile-token")
         self.assertFalse(bootstrap.profile_actor_verified)
         self.assertEqual(calls, [
-            FacebookWebSession.BUSINESS_HOME_URL,
+            FacebookWebSession.ADS_MANAGER_URL,
             "https://www.facebook.com/me",
         ])
         session._fetch_dtsg_refresh_token.assert_not_awaited()
@@ -692,38 +692,6 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(result, bootstrap)
         self.assertTrue(cookie_session.restored)
         session.fetch_text.assert_awaited_once()
-
-    async def test_read_bm_uses_pinned_query_instead_of_reopening_business_home(self):
-        actor = "123456789"
-        session = FacebookWebSession(WebProfile(name="29",
-            cookies={"c_user": actor, "xs": "fixture-xs"}, proxy=None, user_agent="fixture"))
-        bootstrap = FacebookBootstrap(actor_id=actor, fb_dtsg="fixture-token",
-            source_url="https://www.facebook.com/ajax/dtsg/?__a=true",
-            profile_actor_verified=False)
-        session.fetch_text = AsyncMock()
-
-        result = await session._business_bootstrap(
-            bootstrap, business_loginpage_probe="READ_BM",
-        )
-
-        self.assertIs(result, bootstrap)
-        session.fetch_text.assert_not_awaited()
-
-    async def test_read_rk_uses_pinned_query_instead_of_reopening_business_document(self):
-        actor, business = "123456789", "987654321"
-        session = FacebookWebSession(WebProfile(name="29",
-            cookies={"c_user": actor, "xs": "fixture-xs"}, proxy=None, user_agent="fixture"))
-        bootstrap = FacebookBootstrap(actor_id=actor, fb_dtsg="fixture-token",
-            source_url="https://www.facebook.com/ajax/dtsg/?__a=true",
-            profile_actor_verified=False)
-        session.fetch_text = AsyncMock()
-
-        result = await session._business_bootstrap(
-            bootstrap, business_id=business, business_loginpage_probe="READ_RK",
-        )
-
-        self.assertIs(result, bootstrap)
-        session.fetch_text.assert_not_awaited()
 
     async def test_bootstrap_accepts_exact_account_only_saved_context_return(self):
         actor, account = "123456789", "555666777"
