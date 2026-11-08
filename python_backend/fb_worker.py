@@ -588,6 +588,9 @@ class FacebookWebSession:
 
         for endpoint, referer, query_key, query_values in endpoint_specs:
             for query_value in query_values:
+                restore_profile_cookies = getattr(session, "restore_profile_cookies", None)
+                if callable(restore_profile_cookies):
+                    restore_profile_cookies()
                 try:
                     async with session.get(
                         endpoint,
@@ -649,6 +652,10 @@ class FacebookWebSession:
                     attempts.append(
                         f"{endpoint}?{query_key}={query_value}: network "
                         f"{exc.__class__.__name__}"
+                    )
+                finally:
+                    self._restore_profile_cookie_snapshot_if_lost(
+                        session, stage=f"dtsg_refresh_{query_key}_{query_value}"
                     )
 
         return "", ""
