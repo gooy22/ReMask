@@ -1379,12 +1379,6 @@ class FacebookWebSession:
                             current_actor = str(current_cookies.get("c_user") or "").strip()
                             current_xs = str(current_cookies.get("xs") or "").strip()
                             if current_actor != actor_id or not current_xs:
-                                redirect_headers = getattr(response, "headers", {}) or {}
-                                redirect_location = str(
-                                    redirect_headers.get("location")
-                                    or redirect_headers.get("Location")
-                                    or ""
-                                ).strip()
                                 exact_auth_deletion = (
                                     {str(name).casefold() for name in
                                      (meta_auth_directive.get("deletions") or [])}
