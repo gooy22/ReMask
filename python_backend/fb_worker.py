@@ -1761,6 +1761,15 @@ class FacebookWebSession:
                     self.profile.name, stage,
                 )
                 return False
+            if allow_authorized_body_restore and all(
+                name in current and str(current.get(name)) == str(value)
+                for name, value in saved.items()
+            ):
+                log.info(
+                    "[%s] profile_cookie_snapshot_restore_skipped stage=%s reason=snapshot_already_intact",
+                    self.profile.name, stage,
+                )
+                return False
 
         accept_refresh = getattr(session, "accept_same_actor_cookie_refresh", None)
         if not (
