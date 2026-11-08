@@ -142,6 +142,51 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         session.refresh_reviewed_modules = AsyncMock()
         return session, client
 
+    async def test_dtsg_refresh_restores_profile_cookies_between_requests(self):
+        actor = "123456789"
+        saved = {"c_user": actor, "xs": "fixture-xs", "datr": "fixture-datr"}
+        calls = []
+
+        class Response:
+            status = 200
+            headers = {}
+            async def text(self): return "{}"
+            async def __aenter__(self): return self
+            async def __aexit__(self, *args): return False
+
+        class Client:
+            def __init__(self):
+                self._profile_cookies = dict(saved)
+                self.current = dict(saved)
+                self.restore_count = 0
+            def facebook_cookie_snapshot(self): return dict(self.current)
+            def restore_profile_cookies(self):
+                self.current = dict(saved)
+                self.restore_count += 1
+            def get(self, url, **kwargs):
+                calls.append((url, dict(self.current)))
+                # Model a response that removes auth cookies from the HTTP jar.
+                self.current = {}
+                return Response()
+
+        session = FacebookWebSession(WebProfile(
+            name="31", cookies=dict(saved), proxy="http://127.0.0.1:8080",
+            user_agent="fixture"))
+        client = Client()
+
+        token, source = await session._fetch_dtsg_refresh_token(
+            client, actor, [],
+        )
+
+        self.assertEqual((token, source), ("", ""))
+        self.assertEqual(len(calls), 5)
+        self.assertTrue(all(
+            cookies.get("c_user") == actor and cookies.get("xs") == saved["xs"]
+            for _, cookies in calls
+        ))
+        self.assertEqual(client.current, saved)
+        self.assertEqual(client.restore_count, 10)
+
     async def test_business_login_fallback_does_not_claim_cookie_expiry(self):
         session, client = self.session('<form id="login_form">',
             'https://business.facebook.com/business/loginpage/?secret=must-not-leak')
