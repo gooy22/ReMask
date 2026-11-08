@@ -75,6 +75,25 @@ class FastPrivateSyncTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["ready"])
         read.assert_awaited_once()
 
+    async def test_bm_inventory_response_is_not_cancelled_by_outer_wait_for(self):
+        business = {"rows": {"111111": "BM"}, "complete": True}
+        accounts = {"account_rows": [
+            {"id": "222222", "business_id": "111111", "name": "Account"}
+        ], "complete": True, "source": "static_http_exact_business_inventory"}
+        with patch("app.static_meta_inventory.read_business_inventory",
+                   new=AsyncMock(return_value=business)) as read, patch(
+                   "app.static_meta_inventory.read_ad_account_inventory",
+                   new=AsyncMock(return_value=accounts)), patch(
+                   "app.private_inventory.asyncio.wait_for",
+                   side_effect=AssertionError("outer timeout must not cancel BM inventory")):
+            result = await private_inventory_snapshot(
+                self.web, known_accounts_by_business={},
+                known_business_ids=set(), execute_read_queries=True, fast_sync=True,
+            )
+        self.assertTrue(result["discovery_complete"])
+        self.assertEqual(result["discovered_business_ids"], ["111111"])
+        read.assert_awaited_once()
+
     async def test_partial_static_rk_cannot_clear_known_account(self):
         async def html_without_inventory(url, **kwargs):
             return 200, "{}", url
