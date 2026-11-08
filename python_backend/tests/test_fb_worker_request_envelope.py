@@ -196,6 +196,7 @@ class FacebookRequestEnvelopeTests(unittest.IsolatedAsyncioTestCase):
                 actor_id="123456789",
                 lsd="lsd-token",
                 request_context={"__aaid": "42", "__hsi": "fresh-session", "__rev": "200", "__spin_t": "999"},
+                sprinkle_config={"param_name": "jazoest", "version": 2, "should_randomize": False},
                 source_url=(
                     "https://business.facebook.com/latest/home"
                     "?asset_id=1348798761652037&ir_qe_exposed=1"
@@ -231,6 +232,7 @@ class FacebookRequestEnvelopeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(form["__spin_t"], "999")
         self.assertEqual(form["__req"], "1")
         self.assertEqual(form["fb_dtsg"], "dtsg")
+        self.assertEqual(form["jazoest"], "2" + str(sum(map(ord, "dtsg"))))
         self.assertEqual(form["dpr"], "2")
         self.assertNotIn("__dyn", form)
         await session.graphql("28057338880523368", {}, request_envelope={"__req": "cached"})
