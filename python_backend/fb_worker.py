@@ -1089,12 +1089,14 @@ class FacebookWebSession:
     ) -> FacebookBootstrap:
 
         business_loginpage_return_url = str(business_loginpage_return_url or "").strip()
+        account_only_bootstrap = False
         if business_loginpage_return_url:
             parts = urlsplit(business_loginpage_return_url)
             params = parse_qs(parts.query, keep_blank_values=True)
             account_ids = params.get("act", [])
             business_ids = params.get("business_id", [])
             account_only_scope = set(params) == {"act"} and not business_ids
+            account_only_bootstrap = account_only_scope
             exact_business_scope = (
                 set(params) == {"act", "business_id"}
                 and len(business_ids) == 1
@@ -1197,10 +1199,19 @@ class FacebookWebSession:
                 if business_loginpage_return_url and not business_home_only
                 else ()
             )
-            bootstrap_urls = (
-                (self.BUSINESS_HOME_URL,)
-                if business_home_only
-                else scoped_bootstrap_urls + (
+            if business_home_only:
+                bootstrap_urls = (self.BUSINESS_HOME_URL,)
+            elif account_only_bootstrap:
+                # READ_BM's account-only handoff follows the known-good kit path:
+                # selected Ads Manager account, then Business Home. Generic
+                # profile fallbacks consumed the live-inventory deadline before
+                # the pinned READ_BM query could receive a response.
+                bootstrap_urls = (
+                    business_loginpage_return_url,
+                    self.BUSINESS_HOME_URL,
+                )
+            else:
+                bootstrap_urls = scoped_bootstrap_urls + (
                     self.BUSINESS_HOME_URL,
                     "https://business.facebook.com/latest/settings",
                     "https://business.facebook.com/latest/overview",
@@ -1213,7 +1224,6 @@ class FacebookWebSession:
                     "https://mbasic.facebook.com/",
                     "https://mbasic.facebook.com/profile.php",
                 )
-            )
 
             body = ""
             final_url = ""
