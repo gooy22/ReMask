@@ -1309,113 +1309,14 @@ class FacebookWebSession:
                             session, stage="bootstrap_target_and_redirect_hop",
                         )
                         redirect_statuses = {301, 302, 303, 307, 308}
-                        response_status = {
-                            "value": None,
-                            "business_bootstrap_restore": False,
-                        }
+                        response_status = {"value": None}
 
                         def restore_cookies_after_redirect_headers(response):
                             response_status["value"] = int(response.status)
-                            allow_business_bootstrap_restore = False
-                            if redirect_count == 0 and response_status["value"] == 302:
-                                try:
-                                    request_parts = urlsplit(current_url)
-                                    bootstrap_parts = urlsplit(bootstrap_url)
-                                    source_parts = urlsplit(str(response.url))
-                                    target_url = urljoin(
-                                        str(response.url),
-                                        str(response.headers.get("Location") or ""),
-                                    )
-                                    target_parts = urlsplit(target_url)
-                                    extensions = getattr(response, "extensions", {}) or {}
-                                    directive = (
-                                        extensions.get("remask_meta_auth_cookie_directive", {})
-                                        if isinstance(extensions, dict)
-                                        else {}
-                                    )
-                                    if not isinstance(directive, dict):
-                                        directive = {}
-                                    deletions = {
-                                        str(name).casefold()
-                                        for name in directive.get("deletions", [])
-                                    }
-                                    sets = {
-                                        str(name).casefold()
-                                        for name in directive.get("sets", [])
-                                    }
-                                    scopes = directive.get("deletion_scopes", {})
-                                    saved_cookies = getattr(session, "_profile_cookies", {})
-                                    current_cookies = session.facebook_cookie_snapshot()
-                                    expected_actor = str(
-                                        saved_cookies.get("c_user") or ""
-                                    ).strip() if isinstance(saved_cookies, dict) else ""
-                                    expected_xs = str(
-                                        saved_cookies.get("xs") or ""
-                                    ).strip() if isinstance(saved_cookies, dict) else ""
-                                    current_actor = str(
-                                        current_cookies.get("c_user") or ""
-                                    ).strip()
-                                    current_xs = str(
-                                        current_cookies.get("xs") or ""
-                                    ).strip()
-                                    exact_deletion = (
-                                        deletions == {"c_user", "xs"}
-                                        and not sets
-                                        and isinstance(scopes, dict)
-                                        and all(
-                                            scopes.get(name) == {
-                                                "domain": "shared", "path": "root",
-                                            }
-                                            for name in ("c_user", "xs")
-                                        )
-                                    )
-                                    reviewed_bootstrap_source = (
-                                        bootstrap_url in bootstrap_urls
-                                        and current_url == bootstrap_url
-                                        and request_parts.scheme == "https"
-                                        and str(request_parts.hostname or "").casefold()
-                                            == str(bootstrap_parts.hostname or "").casefold()
-                                        and request_parts.port in (None, 443)
-                                        and not request_parts.username
-                                        and not request_parts.password
-                                        and request_parts.path == bootstrap_parts.path
-                                        and request_parts.query == bootstrap_parts.query
-                                        and source_parts.scheme == request_parts.scheme
-                                        and str(source_parts.hostname or "").casefold()
-                                            == str(request_parts.hostname or "").casefold()
-                                        and source_parts.port in (None, 443)
-                                        and not source_parts.username
-                                        and not source_parts.password
-                                        and source_parts.path == request_parts.path
-                                        and source_parts.query == request_parts.query
-                                    )
-                                    allow_business_bootstrap_restore = (
-                                        reviewed_bootstrap_source
-                                        and target_parts.scheme == "https"
-                                        and str(target_parts.hostname or "").casefold()
-                                            == "business.facebook.com"
-                                        and target_parts.port in (None, 443)
-                                        and not target_parts.username
-                                        and not target_parts.password
-                                        and target_parts.path == "/business/loginpage/"
-                                        and exact_deletion
-                                        and expected_actor == actor_id
-                                        and bool(expected_xs)
-                                        and current_actor in {"", expected_actor}
-                                        and current_xs in {"", expected_xs}
-                                    )
-                                except (TypeError, ValueError):
-                                    allow_business_bootstrap_restore = False
-                            response_status["business_bootstrap_restore"] = (
-                                allow_business_bootstrap_restore
-                            )
                             if response_status["value"] in redirect_statuses:
                                 self._restore_profile_cookie_snapshot_if_lost(
                                     session,
                                     stage=f"bootstrap_response_headers_{redirect_count + 1}",
-                                    allow_business_home_loginpage_auth_restore=(
-                                        allow_business_bootstrap_restore
-                                    ),
                                 )
 
                         try:
@@ -1438,15 +1339,9 @@ class FacebookWebSession:
                                 self._restore_profile_cookie_snapshot_if_lost(
                                     session,
                                     stage=f"bootstrap_response_body_{redirect_count + 1}",
-                                    allow_business_home_loginpage_auth_restore=(
-                                        response_status["business_bootstrap_restore"]
-                                    ),
                                 )
                         candidate_url = str(response.url)
                         candidate_status = int(response.status)
-                        self._restore_invalid_profile_cookie_snapshot(
-                            session, actor_id
-                        )
                         response_extensions = getattr(response, "extensions", {}) or {}
                         meta_auth_directive = response_extensions.get(
                             "remask_meta_auth_cookie_directive", {}
@@ -1454,7 +1349,8 @@ class FacebookWebSession:
                         if not isinstance(meta_auth_directive, dict):
                             meta_auth_directive = {}
                         deleted_auth_cookies = (
-                            set(meta_auth_directive.get("deletions", []) or [])
+                            {str(name).casefold() for name in
+                             (meta_auth_directive.get("deletions") or [])}
                             & {"c_user", "xs"}
                         )
                         if deleted_auth_cookies:
@@ -1462,42 +1358,19 @@ class FacebookWebSession:
                             current_actor = str(current_cookies.get("c_user") or "").strip()
                             current_xs = str(current_cookies.get("xs") or "").strip()
                             if current_actor != actor_id or not current_xs:
-                                exact_auth_deletion = (
-                                    {str(name).casefold() for name in
-                                     (meta_auth_directive.get("deletions") or [])}
-                                    == {"c_user", "xs"}
-                                    and not {
-                                        str(name).casefold() for name in
-                                        (meta_auth_directive.get("sets") or [])
-                                    }
-                                    and isinstance(
-                                        meta_auth_directive.get("deletion_scopes"), dict
-                                    )
-                                    and all(
-                                        meta_auth_directive["deletion_scopes"].get(name)
-                                        == {"domain": "shared", "path": "root"}
-                                        for name in ("c_user", "xs")
-                                    )
+                                error = AuthenticationError(
+                                    "Meta removed a required selected-profile authentication cookie during bootstrap; no authenticated follow-up or provisioning request was sent."
                                 )
-                                exact_business_handoff = bool(
-                                    response_status["business_bootstrap_restore"]
-                                    and exact_auth_deletion
-                                )
-                                if not exact_business_handoff:
-                                    error = AuthenticationError(
-                                        "Meta removed a required selected-profile authentication cookie during bootstrap; no authenticated follow-up or provisioning request was sent."
-                                    )
-                                    error.meta_payload = {
-                                        "auth_cookie_deletions": sorted(deleted_auth_cookies)
-                                    }
-                                    error.request_may_have_been_sent = False
-                                    error.transport_stage = "bootstrap"
-                                    raise error
-                                log.info(
-                                    "[%s] bootstrap continuing after exact same-profile read-only loginpage handoff actor_cookie_present=%s xs_present=%s",
-                                    self.profile.name, bool(current_actor), bool(current_xs),
-                                )
-                        response_headers = getattr(response, "headers", {}) or {}
+                                error.meta_payload = {
+                                    "auth_cookie_deletions": sorted(deleted_auth_cookies)
+                                }
+                                error.request_may_have_been_sent = False
+                                error.transport_stage = "bootstrap"
+                                raise error
+                        self._restore_invalid_profile_cookie_snapshot(
+                            session, actor_id
+                        )
+                        response_headers = getattr(response, "headers", {}) or {};
                         location = str(
                             response_headers.get("location")
                             or response_headers.get("Location")
@@ -1529,9 +1402,9 @@ class FacebookWebSession:
                             attempts.append(f"{bootstrap_url}: redirect limit")
                             break
                         # Preserve complete same-actor Meta cookie updates across this
-                        # first-party redirect chain. The guard above restores
-                        # the imported snapshot only if the actor or cookie set
-                        # becomes invalid.
+                        # first-party redirect chain. If Meta explicitly removes a
+                        # required auth cookie, the guard above stops the bootstrap
+                        # before following the redirect.
                         if (bootstrap_url == self.BUSINESS_HOME_URL
                                 and redirect_count == 0
                                 and candidate_status == 302):
@@ -1800,9 +1673,8 @@ class FacebookWebSession:
 
     def _restore_profile_cookie_snapshot_if_lost(
         self, session, *, stage: str,
-        allow_business_home_loginpage_auth_restore: bool = False,
     ) -> bool:
-        """Keep same-actor refreshes; restore only a verified lost profile snapshot."""
+        """Restore a lost profile snapshot only when Meta has not rejected it."""
         saved = getattr(session, "_profile_cookies", None)
         read_snapshot = getattr(session, "facebook_cookie_snapshot", None)
         restore = getattr(session, "restore_profile_cookies", None)
@@ -1812,77 +1684,25 @@ class FacebookWebSession:
         xs = str(saved.get("xs") or "").strip()
         if not actor or not xs:
             return False
-        current = read_snapshot()
-        if not isinstance(current, dict):
-            current = {}
-        current_actor = str(current.get("c_user") or "").strip()
-        current_xs = str(current.get("xs") or "").strip()
-        directive_pending = bool(
-            getattr(session, "_meta_redirect_auth_cookie_directive_pending", False)
-        )
-
-        allow_authorized_body_restore = (
-            allow_business_home_loginpage_auth_restore
-            and stage.startswith("bootstrap_response_body_")
-        )
-        if allow_business_home_loginpage_auth_restore:
-            profile_cookies = getattr(self.profile, "cookies", {})
-            selected_actor = str(
-                profile_cookies.get("c_user") or ""
-            ).strip() if isinstance(profile_cookies, dict) else ""
-            selected_xs = str(
-                profile_cookies.get("xs") or ""
-            ).strip() if isinstance(profile_cookies, dict) else ""
-            if (
-                (not directive_pending and not allow_authorized_body_restore)
-                or selected_actor != actor
-                or selected_xs != xs
-                or current_actor not in {"", actor}
-                or current_xs not in {"", xs}
-            ):
-                log.info(
-                    "[%s] profile_cookie_snapshot_restore_skipped stage=%s reason=business_handoff_snapshot_mismatch",
-                    self.profile.name, stage,
-                )
-                return False
-            if allow_authorized_body_restore and all(
-                name in current and str(current.get(name)) == str(value)
-                for name, value in saved.items()
-            ):
-                log.info(
-                    "[%s] profile_cookie_snapshot_restore_skipped stage=%s reason=snapshot_already_intact",
-                    self.profile.name, stage,
-                )
-                return False
 
         accept_refresh = getattr(session, "accept_same_actor_cookie_refresh", None)
-        if not (
-            allow_business_home_loginpage_auth_restore
-            and (directive_pending or allow_authorized_body_restore)
-        ):
-            if callable(accept_refresh) and accept_refresh():
-                refreshed = getattr(session, "_profile_cookies", {})
-                if isinstance(refreshed, dict) and any(
-                    str(refreshed.get(name)) != str(value) for name, value in saved.items()
-                ):
-                    log.info(
-                        "[%s] profile_cookie_snapshot_refreshed stage=%s expected_count=%d refreshed_count=%d actor_match=true xs_present=true",
-                        self.profile.name, stage, len(saved), len(refreshed),
-                    )
-                return False
+        if callable(accept_refresh) and accept_refresh():
+            refreshed = getattr(session, "_profile_cookies", {})
+            if isinstance(refreshed, dict) and any(
+                str(refreshed.get(name)) != str(value) for name, value in saved.items()
+            ):
+                log.info(
+                    "[%s] profile_cookie_snapshot_refreshed stage=%s expected_count=%d refreshed_count=%d actor_match=true xs_present=true",
+                    self.profile.name, stage, len(saved), len(refreshed),
+                )
+            return False
 
-        if directive_pending and not allow_business_home_loginpage_auth_restore:
+        if getattr(session, "_meta_redirect_auth_cookie_directive_pending", False):
             log.info(
-                "[%s] profile_cookie_snapshot_restore_skipped stage=%s reason=meta_redirect_auth_cookie_directive",
+                "[%s] profile_cookie_snapshot_restore_skipped stage=%s reason=meta_auth_cookie_directive",
                 self.profile.name, stage,
             )
             return False
-
-        if directive_pending and allow_business_home_loginpage_auth_restore:
-            log.info(
-                "[%s] profile_cookie_snapshot_restore_allowed stage=%s reason=exact_same_profile_readonly_bootstrap_loginpage_handoff actor_match=true",
-                self.profile.name, stage,
-            )
 
         try:
             if not callable(restore):
