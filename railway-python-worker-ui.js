@@ -397,6 +397,24 @@ function pythonWorkerFailureDetails(item) {
   if (/^\d{5,30}$/.test(candidate)) parts.push('РК-кандидат ' + candidate);
   const businessId = String(result.business_id || '');
   if (/^\d{5,30}$/.test(businessId)) parts.push('BM ' + businessId);
+  /* REMASK_META_PAGE_CREATE_RESULT_DETAILS_V1 */
+  const createResponse = result.create_response && typeof result.create_response === 'object'
+    ? result.create_response : {};
+  const metaCode = String(createResponse.meta_error_code || createResponse.top_error_code || '').trim();
+  if (/^\d{1,30}$/.test(metaCode)) parts.push('Код Meta: ' + metaCode);
+  const metaErrors = Array.isArray(createResponse.graphql_errors) ? createResponse.graphql_errors.slice(0, 2) : [];
+  for (const error of metaErrors) {
+    if (!error || typeof error !== 'object') continue;
+    const code = String(error.code || '').replace(/[^A-Za-z0-9_]/g, '').slice(0, 40);
+    const message = String(error.message || '')
+      .replace(/https?:\/\/\S+/gi, '[URL]')
+      .replace(/\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b/g, '[redacted]')
+      .replace(/\b(?:cookie|access[_ -]?token|authorization|password|secret|fb_dtsg|jazoest|lsd|xs|c_user)\b\s*[:=]\s*\S+/gi, '[redacted]')
+      .replace(/[A-Za-z0-9_./+=-]{48,}/g, '[redacted]')
+      .replace(/\s+/g, ' ').trim().slice(0, 180);
+    const detail = [code, message].filter(Boolean).join(': ');
+    if (detail) parts.push('Ответ Meta: ' + detail);
+  }
   const verification = Array.isArray(result.capture_candidate_verification)
     ? result.capture_candidate_verification : Array.isArray(result.post_create_verification)
       ? result.post_create_verification : [];
@@ -2764,9 +2782,12 @@ async function pythonWorkerPoll() {
         })
         .map(function(item) {
           const profileId = String(item.profile_id || '').trim();
-          const retryLabel = pythonWorkerItemCanRetry(item)
-            ? 'Повтор доступен.'
-            : 'Повтор недоступен.';
+          const failureCode = pythonWorkerItemErrorCode(item);
+          const retryLabel = /^(?:FAN_PAGE_CREATE_RESULT_UNKNOWN|PAGE_CREATE_RESULT_UNKNOWN)$/.test(failureCode)
+            ? 'Повтор разрешает только сверку результата; повторный CREATE заблокирован.'
+            : pythonWorkerItemCanRetry(item)
+              ? 'Повтор доступен.'
+              : 'Повтор недоступен.';
           return [
             profileId ? 'Профиль ' + profileId + ':' : '',
             pythonWorkerUserFailureText(item),
