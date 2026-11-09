@@ -2985,7 +2985,7 @@ class FacebookWebSession:
                 or not str(friendly_name or "").strip().endswith("Query")
             ):
                 raise RemoteRequestError(
-                    "Account handoff scope is limited to read-only READ_BM/READ_RK/READ_FP queries.",
+                    "Exact account handoff scope is limited to read-only READ_BM/READ_RK/READ_FP queries.",
                     request_may_have_been_sent=False,
                     transport_stage="business_auth_precheck",
                 )
