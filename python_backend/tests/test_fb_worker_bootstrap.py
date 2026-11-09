@@ -700,15 +700,21 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         bootstrap = FacebookBootstrap(actor_id=actor, fb_dtsg="fixture-token",
             source_url="https://www.facebook.com/ajax/dtsg/?__a=true",
             profile_actor_verified=False)
+        body = (
+            '<script>CurrentUserInitialData = {"USER_ID":"123456789"};</script>'
+            '["DTSGInitialData",[],{"token":"business-token"}]'
+        )
         session.fetch_text = AsyncMock(return_value=(
-            200, "<html>Business Home</html>", FacebookWebSession.BUSINESS_HOME_URL,
+            200, body, FacebookWebSession.BUSINESS_HOME_URL,
         ))
+        session.refresh_reviewed_modules = AsyncMock()
 
         result = await session._business_bootstrap(
             bootstrap, business_loginpage_probe="READ_BM",
         )
 
-        self.assertIs(result, bootstrap)
+        self.assertEqual(result.fb_dtsg, "business-token")
+        self.assertEqual(result.source_url, FacebookWebSession.BUSINESS_HOME_URL)
         session.fetch_text.assert_awaited_once_with(FacebookWebSession.BUSINESS_HOME_URL)
 
     async def test_read_rk_reopens_exact_business_document_after_non_business_dtsg(self):
@@ -722,15 +728,19 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
             "https://business.facebook.com/latest/settings/ad_accounts/"
             f"?business_id={business}"
         )
-        session.fetch_text = AsyncMock(return_value=(
-            200, "<html>Business Accounts</html>", target,
-        ))
+        body = (
+            '<script>CurrentUserInitialData = {"USER_ID":"123456789"};</script>'
+            '["DTSGInitialData",[],{"token":"business-token"}]'
+        )
+        session.fetch_text = AsyncMock(return_value=(200, body, target))
+        session.refresh_reviewed_modules = AsyncMock()
 
         result = await session._business_bootstrap(
             bootstrap, business_id=business, business_loginpage_probe="READ_RK",
         )
 
-        self.assertIs(result, bootstrap)
+        self.assertEqual(result.fb_dtsg, "business-token")
+        self.assertEqual(result.source_url, target)
         session.fetch_text.assert_awaited_once_with(target)
 
     async def test_scoped_ads_manager_url_is_first_business_bootstrap_document(self):
@@ -797,9 +807,12 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
             "https://business.facebook.com/latest/settings/ad_accounts/"
             f"?business_id={business}"
         )
-        session.fetch_text = AsyncMock(return_value=(
-            200, "<html>Business Accounts</html>", target,
-        ))
+        body = (
+            '<script>CurrentUserInitialData = {"USER_ID":"123456789"};</script>'
+            '["DTSGInitialData",[],{"token":"business-token"}]'
+        )
+        session.fetch_text = AsyncMock(return_value=(200, body, target))
+        session.refresh_reviewed_modules = AsyncMock()
         bootstrap = FacebookBootstrap(
             actor_id=actor,
             fb_dtsg="read-token",
@@ -810,7 +823,8 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
             bootstrap, business_id=business, business_loginpage_probe="READ_RK",
         )
 
-        self.assertIs(result, bootstrap)
+        self.assertEqual(result.fb_dtsg, "business-token")
+        self.assertEqual(result.source_url, target)
         session.fetch_text.assert_awaited_once_with(target)
 
     async def test_bootstrap_accepts_exact_account_only_saved_context_return(self):
