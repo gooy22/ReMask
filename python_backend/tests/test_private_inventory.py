@@ -52,6 +52,31 @@ class PrivateInventoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(web.graphql.await_args.kwargs['friendly_name'],
             'NorthStarBusinessUnifiedScopingSelectorPopoverContainerAllFirstLevelScopesQuery')
 
+    async def test_unique_saved_account_is_only_a_read_bm_navigation_hint(self):
+        web = FakeWeb(inventory([account()]))
+        web.graphql = AsyncMock(return_value=self.selector([('111111', 'BM One')]))
+        await private_inventory_snapshot(web,
+            known_accounts_by_business={'111111': {'act_222222'}},
+            known_business_ids={'111111'}, execute_read_queries=True)
+        self.assertEqual(
+            web.graphql.await_args.kwargs['business_loginpage_account_id'], '222222',
+        )
+        self.assertEqual(web.graphql.await_args.kwargs['business_context_id'], '')
+
+    async def test_ambiguous_saved_accounts_are_not_used_as_bootstrap_scope(self):
+        web = FakeWeb(inventory([account()]))
+        web.graphql = AsyncMock(return_value=self.selector([
+            ('111111', 'BM One'), ('333333', 'BM Two'),
+        ]))
+        await private_inventory_snapshot(web,
+            known_accounts_by_business={
+                '111111': {'222222'}, '333333': {'444444'},
+            },
+            known_business_ids={'111111', '333333'}, execute_read_queries=True)
+        self.assertNotIn(
+            'business_loginpage_account_id', web.graphql.await_args.kwargs,
+        )
+
     async def test_complete_empty_selector_is_explicitly_empty_without_html_guessing(self):
         web = FakeWeb({})
         web.graphql = AsyncMock(return_value=self.selector([]))
