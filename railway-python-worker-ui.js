@@ -402,6 +402,24 @@ function pythonWorkerFailureDetails(item) {
     ? result.create_response : {};
   const metaCode = String(createResponse.meta_error_code || createResponse.top_error_code || '').trim();
   if (/^\d{1,30}$/.test(metaCode)) parts.push('Код Meta: ' + metaCode);
+  const metaCategory = String(createResponse.meta_error_category || '').trim().toLowerCase();
+  if (['user', 'system', 'integrity'].includes(metaCategory)) parts.push('Категория Meta: ' + metaCategory);
+  const seenMetaDetails = new Set();
+  const addMetaDetail = function(detail) {
+    const value = String(detail || '').replace(/\s+/g, ' ').trim().slice(0, 180);
+    if (value && !seenMetaDetails.has(value)) {
+      seenMetaDetails.add(value);
+      parts.push('Ответ Meta: ' + value);
+    }
+  };
+  for (const field of ['error_message', 'top_error_message', 'name_error']) {
+    const message = String(createResponse[field] || '')
+      .replace(/https?:\/\/\S+/gi, '[URL]')
+      .replace(/\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b/g, '[redacted]')
+      .replace(/\b(?:cookie|access[_ -]?token|authorization|password|secret|fb_dtsg|jazoest|lsd|xs|c_user)\b\s*[:=]\s*\S+/gi, '[redacted]')
+      .replace(/[A-Za-z0-9_./+=-]{48,}/g, '[redacted]');
+    addMetaDetail(message);
+  }
   const metaErrors = Array.isArray(createResponse.graphql_errors) ? createResponse.graphql_errors.slice(0, 2) : [];
   for (const error of metaErrors) {
     if (!error || typeof error !== 'object') continue;
@@ -410,10 +428,8 @@ function pythonWorkerFailureDetails(item) {
       .replace(/https?:\/\/\S+/gi, '[URL]')
       .replace(/\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b/g, '[redacted]')
       .replace(/\b(?:cookie|access[_ -]?token|authorization|password|secret|fb_dtsg|jazoest|lsd|xs|c_user)\b\s*[:=]\s*\S+/gi, '[redacted]')
-      .replace(/[A-Za-z0-9_./+=-]{48,}/g, '[redacted]')
-      .replace(/\s+/g, ' ').trim().slice(0, 180);
-    const detail = [code, message].filter(Boolean).join(': ');
-    if (detail) parts.push('Ответ Meta: ' + detail);
+      .replace(/[A-Za-z0-9_./+=-]{48,}/g, '[redacted]');
+    addMetaDetail([code, message].filter(Boolean).join(': '));
   }
   const verification = Array.isArray(result.capture_candidate_verification)
     ? result.capture_candidate_verification : Array.isArray(result.post_create_verification)
@@ -1064,13 +1080,13 @@ function pythonWorkerUserFailureText(item) {
     return 'Meta временно ограничила создание страниц. Повторять сейчас не нужно.';
   }
   if (/2455031|field_exception/i.test(combined)) {
-    return 'Meta вернула внутреннюю ошибку при создании страницы. Результат не подтверждён; повтор остановлен до сверки.';
+    return 'Meta вернула ошибку создания страницы; сохранённый ответ доступен в технических подробностях.';
   }
   if (/CREATE_AD_ACCOUNT_RESULT_UNKNOWN|AD_ACCOUNT_CREATE_RESULT_UNKNOWN/.test(code)) {
     return 'Meta не подтвердила создание рекламного кабинета. Повтор отключён, чтобы не создать дубль.';
   }
   if (/CREATE_PAGE_RESULT_UNKNOWN|FAN_PAGE_CREATE_RESULT_UNKNOWN/.test(code)) {
-    return 'Meta не подтвердила создание страницы. Повтор отключён до сверки результата.';
+    return 'Meta не подтвердила создание страницы.';
   }
   if (/CREATE_BUSINESS_RESULT_UNKNOWN|BUSINESS_CREATE_RESULT_UNKNOWN/.test(code)) {
     return 'Meta не подтвердила создание Business Manager. Повтор отключён, чтобы не создать дубль.';
@@ -2784,7 +2800,7 @@ async function pythonWorkerPoll() {
           const profileId = String(item.profile_id || '').trim();
           const failureCode = pythonWorkerItemErrorCode(item);
           const retryLabel = /^(?:FAN_PAGE_CREATE_RESULT_UNKNOWN|PAGE_CREATE_RESULT_UNKNOWN)$/.test(failureCode)
-            ? 'Повтор разрешает только сверку результата; повторный CREATE заблокирован.'
+            ? 'Повтор сверяет сохранённый результат; новый CREATE не отправляется.'
             : pythonWorkerItemCanRetry(item)
               ? 'Повтор доступен.'
               : 'Повтор недоступен.';
