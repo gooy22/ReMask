@@ -45,6 +45,31 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
         await self.store.finalize_item(item)
         return job,item
 
+    async def test_bundle_page_checkpoint_left_running_is_exposed_with_exact_meta_error(self):
+        job,item=self._seed(task_status='RUNNING')
+        task=(await self.store.tasks(item))[0]
+        business='1098333359694394'
+        message=f'Page CREATE is retained for BM {business}; exact Page ownership is unconfirmed.'
+        await self.store.set_task_failed(task['id'],'FAN_PAGE_CREATE_RESULT_UNKNOWN',message,retryable=True)
+        await self.store.finalize_item(item)
+
+        stable_item='workspace-business-page-actor-'+business
+        scope='workspace-business-page:'+business
+        await self.provisioning_state.set_running(stable_item,'4',scope,ProvisioningStep.FAN_PAGES)
+        await self.provisioning_state.checkpoint(stable_item,'4',scope,ProvisioningStep.FAN_PAGES,{
+            'phase':'PAGE_CREATE_RESULT_UNKNOWN','business_id':business,
+            'create_response':{'meta_error_code':'2455031','meta_error_category':'user',
+                'error_message':'Meta rejected the Page field.'},
+        })
+
+        view=await self.store.job_view(job)
+        page_step=next(step for step in view['items'][0]['provisioning_steps']
+            if step.get('step')=='FAN_PAGES' and step.get('nested_prepare_step') is True)
+        self.assertEqual(page_step['status'],'FAILED')
+        self.assertEqual(page_step['checkpoint_status'],'RUNNING')
+        self.assertEqual(page_step['result']['business_id'],business)
+        self.assertEqual(page_step['result']['create_response']['meta_error_code'],'2455031')
+
     async def test_false_quota_view_offers_manual_verification_without_queuing_or_altering_checkpoint(self):
         job,item=await self._seed_quota_details()
         saved=(await self.provisioning_state.step(item,ProvisioningStep.AD_ACCOUNT))['result']
