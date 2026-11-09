@@ -736,11 +736,16 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
             '["DTSGInitialData",[],{"token":"scoped-token"}]'
         )
         session, client = self.session(body, scoped_url)
+        session._bootstrap = FacebookBootstrap(
+            actor_id=actor, fb_dtsg="cached-generic-token",
+            source_url=FacebookWebSession.BUSINESS_HOME_URL,
+        )
         bootstrap = await session.bootstrap(
             business_loginpage_return_url=scoped_url,
         )
         self.assertEqual(client.calls[0], scoped_url)
         self.assertEqual(bootstrap.fb_dtsg, "scoped-token")
+        self.assertEqual(bootstrap._business_loginpage_return_url, scoped_url)
 
         home_session, home_client = self.session(body, FacebookWebSession.BUSINESS_HOME_URL)
         await home_session.bootstrap(
