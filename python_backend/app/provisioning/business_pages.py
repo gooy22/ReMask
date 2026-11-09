@@ -214,14 +214,21 @@ async def ensure_business_page(session, params, state, resolver=None):
         log.info('BUNDLE_PAGE execute profile=%s business=%s action=CREATE_PAGE item=%s reserved_pages=%s browser_started=False',
             session.context.profile_id, store.business_id, item, sorted(excluded))
         await state.set_running(item, creator, scope, ProvisioningStep.FAN_PAGES)
-        result = await fan_pages_handler(session, {
-            'names': [config['name']], 'count': 1, 'business_id': store.business_id,
-            'business_suite_page_create': True,
-            'defer_business_attach': True, 'reserved_page_ids': sorted(set(known) | excluded),
-            'foreign_page_ids': sorted(excluded),
-            'category': params.get('category') or 'Digital creator', 'confirm_main_business': False,
-            'require_policy_consent': True, 'policies_accepted': params.get('policies_accepted') is not False,
-        }, {}, provisioning_state=state, item_id=item, profile_id=creator, scope_key=scope)
+        try:
+            result = await fan_pages_handler(session, {
+                'names': [config['name']], 'count': 1, 'business_id': store.business_id,
+                'business_suite_page_create': True,
+                'defer_business_attach': True, 'reserved_page_ids': sorted(set(known) | excluded),
+                'foreign_page_ids': sorted(excluded),
+                'category': params.get('category') or 'Digital creator', 'confirm_main_business': False,
+                'require_policy_consent': True, 'policies_accepted': params.get('policies_accepted') is not False,
+            }, {}, provisioning_state=state, item_id=item, profile_id=creator, scope_key=scope)
+        except Exception as exc:
+            code = getattr(exc, 'code', '')
+            if not isinstance(code, str) or not code.strip():
+                code = 'BUNDLE_PAGE_CREATE_FAILED'
+            await state.fail(item, creator, scope, ProvisioningStep.FAN_PAGES, code, str(exc))
+            raise
         page = result['pages'][0]
         if str(page['id']) in excluded:
             raise ProvisioningError('BUNDLE_PAGE_ALREADY_RESERVED', 'Page CREATE resolved to another bundle; its ownership was preserved.')
