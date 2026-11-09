@@ -1780,7 +1780,97 @@ class JobStore:
                                 }):
                             task['retryable']=True
                             task['recovery_mode']='retry_private_launch_before_submit'
-                item['provisioning_steps']=steps_by_item.get(item['id'],[])
+                item_steps=steps_by_item.get(item['id'],[])
+                prepare_failed = any(
+                    str(task.get('action') or '').lower() == 'prepare'
+                    and str(task.get('status') or '').upper() == 'FAILED'
+                    for task in tasks
+                )
+                failure_codes = [str(item.get('error_code') or '').strip().upper()]
+                failure_codes.extend(
+                    str(task.get('error_code') or '').strip().upper()
+                    for task in tasks
+                    if str(task.get('status') or '').upper() == 'FAILED'
+                )
+                if prepare_failed and any(code in {
+                        'FAN_PAGE_CREATE_RESULT_UNKNOWN',
+                        'PAGE_CREATE_RESULT_UNKNOWN',
+                        'PREPARE_PAGE_UNCONFIRMED',
+                    } for code in failure_codes):
+                    child_prefix = str(item.get('id') or '') + ':prepare:'
+                    nested_page = con.execute(
+                        """SELECT error_code,error_message,attempt,result_json
+                           FROM provisioning_steps
+                           WHERE profile_id=? AND step='FAN_PAGES' AND status='FAILED'
+                             AND substr(item_id,1,?)=?
+                           ORDER BY updated_at DESC LIMIT 1""",
+                        (str(item.get('profile_id') or ''), len(child_prefix), child_prefix),
+                    ).fetchone()
+                    if nested_page is not None:
+                        try:
+                            nested_result = json.loads(nested_page['result_json'] or '{}')
+                        except (ValueError, TypeError):
+                            nested_result = {}
+                        nested_result = nested_result if isinstance(nested_result, dict) else {}
+                        evidence = nested_result.get('create_response')
+                        evidence = evidence if isinstance(evidence, dict) else {}
+                        safe_response = {}
+
+                        def safe_meta_text(value):
+                            if not isinstance(value, str):
+                                return ''
+                            text = re.sub(r'https?://\\S+|[\\w.+-]+@[\\w.-]+\\.[A-Za-z]{2,}', '[redacted]', value)
+                            text = re.sub(r'(?i)\\b(?:cookie|access[_ -]?token|authorization|password|secret|fb_dtsg|jazoest|lsd|xs|c_user)\\b\\s*[:=]\\s*\\S+', '[redacted]', text)
+                            text = re.sub(r'[A-Za-z0-9_./+=-]{48,}', '[redacted]', text)
+                            return ' '.join(text.split())[:180]
+
+                        for key in ('meta_error_code', 'top_error_code'):
+                            value = str(evidence.get(key) or '').strip()
+                            if value.isdigit() and len(value) <= 30:
+                                safe_response[key] = value
+                        category = str(evidence.get('meta_error_category') or '').strip()
+                        if category in {'user', 'system', 'integrity'}:
+                            safe_response['meta_error_category'] = category
+                        for key in ('error_message', 'top_error_message', 'name_error'):
+                            message = safe_meta_text(evidence.get(key))
+                            if message:
+                                safe_response[key] = message
+                        outcome = str(evidence.get('outcome') or '').strip()
+                        if outcome in {'REJECTED', 'RESULT_UNVERIFIED', 'RESULT_UNKNOWN'}:
+                            safe_response['outcome'] = outcome
+                        safe_errors = []
+                        raw_errors = evidence.get('graphql_errors')
+                        for error in raw_errors[:2] if isinstance(raw_errors, list) else []:
+                            if not isinstance(error, dict):
+                                continue
+                            clean_error = {}
+                            code = str(error.get('code') or '').strip()
+                            if re.fullmatch(r'[A-Za-z0-9_]{1,40}', code):
+                                clean_error['code'] = code
+                            message = safe_meta_text(error.get('message'))
+                            if message:
+                                clean_error['message'] = message
+                            if clean_error:
+                                safe_errors.append(clean_error)
+                        if safe_errors:
+                            safe_response['graphql_errors'] = safe_errors
+
+                        safe_result = {}
+                        business_id = str(nested_result.get('business_id') or '').strip()
+                        if re.fullmatch(r'\\d{5,30}', business_id):
+                            safe_result['business_id'] = business_id
+                        if safe_response:
+                            safe_result['create_response'] = safe_response
+                        item_steps.insert(0, {
+                            'step': 'FAN_PAGES',
+                            'status': 'FAILED',
+                            'attempt': int(nested_page['attempt'] or 0),
+                            'error_code': str(nested_page['error_code'] or ''),
+                            'error_message': str(nested_page['error_message'] or '')[:1000],
+                            'result': safe_result,
+                            'nested_prepare_step': True,
+                        })
+                item['provisioning_steps']=item_steps
                 items.append(item)
             data=dict(job)
             data['items']=items
