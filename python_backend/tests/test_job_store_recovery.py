@@ -1143,6 +1143,33 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
             'One Job, item, task and provisioning SELECT should serve any job size')
         self.assertEqual(sum('join job_items' in q for q in selects),2)
 
+    async def test_job_view_returns_prepare_child_steps_for_its_own_profile(self):
+        job_id, item_id = self._seed(task_status='FAILED')
+        with self.store._connect() as con:
+            con.execute("UPDATE job_tasks SET action='prepare' WHERE item_id=?", (item_id,))
+        child = item_id + ':prepare:bundle:1:access:1234567890123456'
+        diagnostic = {'stage': 'rk_full_control', 'code': 'META_AUTH_TOKEN_UNAVAILABLE',
+            'verification': [{'operation': 'READ_RK', 'auth_cookie_deletions': ['c_user', 'xs']}]}
+        await self.provisioning_state.set_running(child, '4', 'prepare:4', ProvisioningStep.PAGE_ACCESS)
+        await self.provisioning_state.checkpoint(child, '4', 'prepare:4', ProvisioningStep.PAGE_ACCESS, {
+            'business_id': '1234567890123456', 'diagnostic': diagnostic, 'internal_fixture': True,
+        })
+        await self.provisioning_state.fail(child, '4', 'prepare:4', ProvisioningStep.PAGE_ACCESS,
+            'META_AUTH_TOKEN_UNAVAILABLE', 'Authentication cookie deletion')
+        await self.provisioning_state.set_running(item_id + ':prepare:bundle:2:access:9876543210987654',
+            '5', 'prepare:5', ProvisioningStep.PAGE_ACCESS)
+        await self.provisioning_state.set_running(item_id + ':unrelated:page_access',
+            '4', 'other:4', ProvisioningStep.PAGE_ACCESS)
+
+        item = (await self.store.job_view(job_id))['items'][0]
+        self.assertEqual(item['provisioning_steps'], [])
+        self.assertEqual(len(item['prepare_steps']), 1)
+        step = item['prepare_steps'][0]
+        self.assertEqual((step['item_id'], step['step'], step['status']),
+            (child, 'PAGE_ACCESS', 'FAILED'))
+        self.assertEqual(step['result']['diagnostic'], diagnostic)
+        self.assertNotIn('internal_fixture', step['result'])
+
     async def test_finalize_does_not_promote_running_task_to_success(self):
         job_id, item_id = self._seed(task_status="RUNNING")
 

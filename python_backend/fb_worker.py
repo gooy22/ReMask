@@ -2945,6 +2945,10 @@ class FacebookWebSession:
                 # BM/RK identities in the response. Skip the Ads Manager
                 # document preflight that can stall on a cross-host redirect.
         except AuthenticationError as exc:
+            payload = getattr(exc, "meta_payload", None)
+            if isinstance(payload, dict) and payload.get("auth_cookie_deletions"):
+                # Meta explicitly cleared the selected session. End this attempt.
+                raise
             if ((scoped_probe in {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS",
                     "READ_FP", "FP_CATEGORY", "FP_PRECHECK"}
                     and before_submit is None and multipart_files is None)

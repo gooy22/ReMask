@@ -1326,6 +1326,36 @@ class PreviousSessionReadRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(session._retry_scoped_read_with_previous_session.await_args.kwargs["read_timeout_seconds"])
         session._ensure_session.assert_not_awaited()
 
+    async def test_scoped_read_does_not_try_previous_session_after_auth_cookie_deletion(self):
+        session = FacebookWebSession(WebProfile(
+            name="32", cookies={"c_user": "123456789", "xs": "fixture-current"},
+            proxy="http://fixture-proxy:80", user_agent="Fixture",
+        ))
+        failure = AuthenticationError("Meta removed profile authentication cookies")
+        failure.meta_payload = {"auth_cookie_deletions": ["c_user", "xs"]}
+        failure.transport_stage = "bootstrap"
+        failure.request_may_have_been_sent = False
+        session._validate_business_loginpage_probe = Mock(return_value="READ_RK")
+        session.bootstrap = AsyncMock(side_effect=failure)
+        session._retry_scoped_read_with_previous_session = AsyncMock(
+            return_value={"data": {"adaccounts": []}},
+        )
+        session._ensure_session = AsyncMock()
+
+        with self.assertRaises(AuthenticationError) as raised:
+            await session.graphql(
+                "fixture-doc-id",
+                {"businessID": "987654321"},
+                friendly_name="BusinessAdAccounts",
+                endpoint_url="https://business.facebook.com/api/graphql/",
+                business_context_id="987654321",
+                business_loginpage_probe="READ_RK",
+            )
+
+        self.assertIs(raised.exception, failure)
+        session._retry_scoped_read_with_previous_session.assert_not_awaited()
+        session._ensure_session.assert_not_awaited()
+
     async def test_scoped_read_recovers_graphql_auth_rejection_without_explicit_timeout(self):
         actor = "123456789"
         session = FacebookWebSession(WebProfile(

@@ -1733,16 +1733,32 @@ class JobStore:
                 t.pop('result_json',None)
                 tasks_by_item.setdefault(t['item_id'],[]).append(t)
             steps_by_item={}
+            prepare_steps_by_item={}
+            # Prepare writes under <item_id>:prepare:*. Use indexable bounds
+            # so polling still reads the parent and all its steps in one query.
             for pr in con.execute(
-                'SELECT p.* FROM provisioning_steps AS p '
-                'JOIN job_items AS i ON i.id=p.item_id '
-                'WHERE i.job_id=? ORDER BY i.created_at,p.created_at,p.step',(job_id,)
+                'SELECT p.*, i.id AS parent_item_id FROM provisioning_steps AS p '
+                'JOIN job_items AS i ON p.item_id>=i.id '
+                "AND p.item_id<(i.id||':prepare;') "
+                "AND (p.item_id=i.id OR (p.profile_id=i.profile_id AND p.item_id>=(i.id||':prepare:'))) "
+                'WHERE i.job_id=? ORDER BY i.created_at,p.created_at,p.step,p.item_id',(job_id,)
             ).fetchall():
                 p=dict(pr)
-                if p.get('result_json'):
-                    p['result']=json.loads(p['result_json'])
-                p.pop('result_json',None)
-                steps_by_item.setdefault(p['item_id'],[]).append(p)
+                parent_item_id=p.pop('parent_item_id')
+                result_json=p.pop('result_json',None)
+                if result_json:
+                    p['result']=json.loads(result_json)
+                if p['item_id'] == parent_item_id:
+                    steps_by_item.setdefault(parent_item_id,[]).append(p)
+                else:
+                    result=p.get('result')
+                    if isinstance(result, dict):
+                        p['result']={
+                            key: result[key] for key in
+                            ('business_id', 'ad_account_id', 'page_id', 'phase', 'diagnostic')
+                            if key in result
+                        }
+                    prepare_steps_by_item.setdefault(parent_item_id,[]).append(p)
             items=[]
             for ir in item_rows:
                 item=dict(ir)
@@ -1889,6 +1905,8 @@ class JobStore:
                             'nested_prepare_step': True,
                         })
                 item['provisioning_steps']=item_steps
+                if any(task.get('action') == 'prepare' for task in tasks):
+                    item['prepare_steps']=prepare_steps_by_item.get(item['id'],[])
                 items.append(item)
             data=dict(job)
             data['items']=items
