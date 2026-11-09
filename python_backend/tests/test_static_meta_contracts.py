@@ -225,6 +225,25 @@ class StaticReadBootstrapRetryTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('before_submit', web.graphql.call_args.kwargs)
         self.assertEqual(web.graphql.call_args.kwargs['read_timeout_seconds'], 30)
 
+    async def test_query_retries_one_pre_send_bootstrap_timeout(self):
+        error = self.timeout(stage='bootstrap')
+        web = SimpleNamespace(graphql=AsyncMock(side_effect=[
+            error, {'data': {'ok': True}},
+        ]))
+        result = await execute(
+            web, 'READ_RK', business=BM, bootstrap_account_id='555666777',
+        )
+        self.assertEqual(result, {'data': {'ok': True}})
+        self.assertEqual(web.graphql.await_count, 2)
+        self.assertEqual(
+            web.graphql.await_args_list[0],
+            web.graphql.await_args_list[1],
+        )
+        self.assertEqual(
+            web.graphql.call_args.kwargs['business_loginpage_account_id'],
+            '555666777',
+        )
+
     async def test_query_retries_timeout_wrapped_by_business_auth_precheck(self):
         from tests.test_fb_worker_request_envelope import BusinessAuthenticationPrecheckTests
         web, http = BusinessAuthenticationPrecheckTests().session(

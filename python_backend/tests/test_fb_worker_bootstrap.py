@@ -747,6 +747,13 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bootstrap.fb_dtsg, "scoped-token")
         self.assertEqual(bootstrap._business_loginpage_return_url, scoped_url)
 
+        exact_business_scope_url = scoped_url + "&business_id=987654321"
+        reused = await session.bootstrap(
+            business_loginpage_return_url=exact_business_scope_url,
+        )
+        self.assertIs(reused, bootstrap)
+        self.assertEqual(client.calls, [scoped_url])
+
         home_session, home_client = self.session(body, FacebookWebSession.BUSINESS_HOME_URL)
         await home_session.bootstrap(
             business_loginpage_return_url=scoped_url, business_home_only=True,
@@ -774,6 +781,25 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
             FacebookWebSession.BUSINESS_HOME_URL,
         ])
         session._fetch_dtsg_refresh_token.assert_awaited_once()
+
+    async def test_business_ajax_dtsg_context_skips_duplicate_read_rk_document(self):
+        actor, business = "123456789", "987654321"
+        session, _client = self.session("", "https://business.facebook.com/")
+        session.fetch_text = AsyncMock(
+            side_effect=AssertionError("exact READ_RK must use its pinned query")
+        )
+        bootstrap = FacebookBootstrap(
+            actor_id=actor,
+            fb_dtsg="read-token",
+            source_url="https://business.facebook.com/ajax/dtsg/?__a=true",
+        )
+
+        result = await session._business_bootstrap(
+            bootstrap, business_id=business, business_loginpage_probe="READ_RK",
+        )
+
+        self.assertIs(result, bootstrap)
+        session.fetch_text.assert_not_awaited()
 
     async def test_bootstrap_accepts_exact_account_only_saved_context_return(self):
         actor, account = "123456789", "555666777"

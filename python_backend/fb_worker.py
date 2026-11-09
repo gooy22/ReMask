@@ -1077,6 +1077,25 @@ class FacebookWebSession:
         error.transport_stage = "business_auth_precheck"
         raise error
 
+    @staticmethod
+    def _business_bootstrap_cache_key(return_url: str) -> str:
+        """Bind a cached bootstrap to the selected ad account, not a BM URL variant."""
+        parts = urlsplit(str(return_url or "").strip())
+        account_ids = parse_qs(parts.query, keep_blank_values=True).get("act", [])
+        if (
+            parts.scheme == "https"
+            and parts.netloc == "adsmanager.facebook.com"
+            and parts.path == "/adsmanager/manage/campaigns"
+            and not parts.fragment
+            and len(account_ids) == 1
+            and re.fullmatch(r"\d{5,30}", account_ids[0])
+        ):
+            return (
+                "https://adsmanager.facebook.com/adsmanager/manage/campaigns"
+                f"?act={account_ids[0]}"
+            )
+        return ""
+
     async def bootstrap(
         self,
         *,
@@ -1121,10 +1140,19 @@ class FacebookWebSession:
                 )
 
         scoped_bootstrap_context = (
-            business_loginpage_return_url
+            self._business_bootstrap_cache_key(business_loginpage_return_url)
             if business_loginpage_return_url and not business_home_only
             else ""
         )
+
+        def cached_scoped_context_matches() -> bool:
+            return bool(
+                scoped_bootstrap_context
+                and self._bootstrap is not None
+                and str(getattr(
+                    self._bootstrap, "_business_loginpage_return_url", ""
+                ) or "") == scoped_bootstrap_context
+            )
         if (
             scoped_bootstrap_context and self._bootstrap is not None
             and getattr(self._bootstrap, "_business_loginpage_return_url", "")
@@ -1140,7 +1168,8 @@ class FacebookWebSession:
             self._profile_session_identity_verified = False
         if (self._bootstrap is not None
                 and self._bootstrap.profile_actor_verified
-                and not allow_business_loginpage_probe):
+                and not allow_business_loginpage_probe
+                and not cached_scoped_context_matches()):
             self._bootstrap = None
         if self._bootstrap is not None and not force and not self._bootstrap.profile_actor_verified:
             from app.contract_maintenance.module_refresh import refresh_due
@@ -1155,7 +1184,8 @@ class FacebookWebSession:
                 self._bootstrap = None
                 self._profile_session_identity_verified = False
             if (self._bootstrap is not None and self._bootstrap.profile_actor_verified
-                    and not allow_business_loginpage_probe):
+                    and not allow_business_loginpage_probe
+                    and not cached_scoped_context_matches()):
                 self._bootstrap = None
             if self._bootstrap is not None and not force:
                 return self._bootstrap
@@ -2177,7 +2207,7 @@ class FacebookWebSession:
         source = str(getattr(bootstrap, "source_url", "") or "").strip()
         source_parts = urlsplit(source)
         source_is_ajax_dtsg = (
-            source_parts.hostname == "www.facebook.com"
+            source_parts.hostname in {"www.facebook.com", "business.facebook.com"}
             and source_parts.path.rstrip("/") == "/ajax/dtsg"
             and parse_qs(source_parts.query).get("__a") == ["true"]
         )
@@ -3098,7 +3128,9 @@ class FacebookWebSession:
                         business_page_create_prechecked=page_create_prechecked,
                     )
                     if scoped_ads_manager_return_url:
-                        bootstrap._business_loginpage_return_url = scoped_ads_manager_return_url
+                        bootstrap._business_loginpage_return_url = (
+                            self._business_bootstrap_cache_key(scoped_ads_manager_return_url)
+                        )
                 # Targeting suggestions are read-only and validate the exact
                 # BM/RK identities in the response. Skip the Ads Manager
                 # document preflight that can stall on a cross-host redirect.
