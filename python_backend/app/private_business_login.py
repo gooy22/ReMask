@@ -62,6 +62,14 @@ def native_business_login_continuation(body, return_url, *, diagnostic=None):
         '/adsmanager/manage/campaigns',
         '/adsmanager/manage/campaigns/',
     }
+    # BM inventory runs before an ad account is selected. Permit only the exact
+    # no-query Business Home return URL for that actor-wide read; Ads Manager
+    # handoffs remain bound to one explicit act.
+    unscoped_business_home = (
+        expected_host == 'business.facebook.com'
+        and expected.path == '/latest/home'
+        and not expected_query
+    )
     scope_checks = {
         'scope_scheme_https': expected.scheme.casefold() == 'https',
         'scope_host_allowed': expected_host in allowed_hosts,
@@ -69,12 +77,18 @@ def native_business_login_continuation(body, return_url, *, diagnostic=None):
             expected.username is None and expected.password is None
             and expected_port in (None, 443)
         ),
-        'scope_path_allowed': expected.path in allowed_paths,
+        'scope_path_allowed': expected.path in allowed_paths or unscoped_business_home,
         'scope_query_keys_allowed': set(expected_query) <= {'act', 'business_id'},
-        'scope_act_count_valid': len(expected_acts) == 1,
-        'scope_act_format_valid': (
+        'scope_act_count_valid': (
             len(expected_acts) == 1
-            and re.fullmatch(r'[0-9]{5,30}', expected_acts[0]) is not None
+            or (unscoped_business_home and not expected_acts)
+        ),
+        'scope_act_format_valid': (
+            (
+                len(expected_acts) == 1
+                and re.fullmatch(r'[0-9]{5,30}', expected_acts[0]) is not None
+            )
+            or (unscoped_business_home and not expected_acts)
         ),
         'scope_business_count_valid': len(expected_business_ids) <= 1,
         'scope_business_format_valid': (
@@ -215,9 +229,9 @@ def native_business_login_continuation(body, return_url, *, diagnostic=None):
     if not candidates and report.get('reason') == 'root_missing' and ROOT in body:
         # Some current Business gates render this reviewed native FB button
         # client-side and omit its serialized React props from the HTML. Match
-        # the same native handoff using only the exact account-scoped Ads Manager
-        # return URL validated above; never broaden to a Business home or another
-        # account. The caller has already rejected credentials and agreement text.
+        # the native handoff using only the exact Ads Manager target or the exact
+        # no-query Business Home target validated above; never accept an untrusted
+        # destination or widen the act/BM scope. Credentials and agreement text are rejected.
         target = urlsplit(return_url)
         target_query = dict(parse_qsl(target.query, keep_blank_values=True))
         target_query.update(
