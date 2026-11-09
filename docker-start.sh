@@ -203,8 +203,11 @@ PY
   # calls the local PHP context endpoint.
 
   # Keep monitoring the HTTP-only worker after startup too.
-  # Restart only after three consecutive failed health probes to avoid killing
-  # the worker on a single transient event-loop stall.
+  # Private Meta HTTP reads have a 15s request budget. Three failed probes can
+  # terminate a worker before that bounded request times out, requeueing its
+  # durable item and repeating the full Prepare pass. Allow one request deadline
+  # plus scheduling jitter before recovery.
+
   (
     FAIL_COUNT=0
     while true; do
@@ -226,7 +229,7 @@ PY
       fi
 
       FAIL_COUNT=$((FAIL_COUNT + 1))
-      if [ "$FAIL_COUNT" -lt 3 ]; then
+      if [ "$FAIL_COUNT" -lt 8 ]; then
         sleep 2
         continue
       fi
