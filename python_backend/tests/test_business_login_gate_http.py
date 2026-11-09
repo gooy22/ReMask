@@ -260,7 +260,7 @@ class GateContinuationParserTests(unittest.TestCase):
         )
 
         self.assertIsNotNone(continuation)
-        self.assertEqual(diagnostic["reason"], "native_fb_scoped_fallback")
+        self.assertEqual(diagnostic["reason"], "native_fb_continuation")
         self.assertTrue(diagnostic["scope_path_allowed"])
         self.assertTrue(diagnostic["scope_act_count_valid"])
         params = parse_qs(urlsplit(continuation).query)
