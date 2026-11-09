@@ -747,6 +747,13 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bootstrap.fb_dtsg, "scoped-token")
         self.assertEqual(bootstrap._business_loginpage_return_url, scoped_url)
 
+        exact_business_scope_url = scoped_url + "&business_id=987654321"
+        reused = await session.bootstrap(
+            business_loginpage_return_url=exact_business_scope_url,
+        )
+        self.assertIs(reused, bootstrap)
+        self.assertEqual(client.calls, [scoped_url])
+
         home_session, home_client = self.session(body, FacebookWebSession.BUSINESS_HOME_URL)
         await home_session.bootstrap(
             business_loginpage_return_url=scoped_url, business_home_only=True,
