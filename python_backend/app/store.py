@@ -1808,9 +1808,10 @@ class JobStore:
                     nested_result = {}
                     if expected_business:
                         candidate_rows = con.execute(
-                            """SELECT error_code,error_message,attempt,result_json
+                            """SELECT status,error_code,error_message,attempt,result_json
                                FROM provisioning_steps
-                               WHERE profile_id=? AND step='FAN_PAGES' AND status='FAILED'
+                               WHERE profile_id=? AND step='FAN_PAGES'
+                                 AND status IN ('FAILED','RUNNING')
                                ORDER BY updated_at DESC LIMIT 100""",
                             (str(item.get('profile_id') or ''),),
                         ).fetchall()
@@ -1880,6 +1881,7 @@ class JobStore:
                         item_steps.insert(0, {
                             'step': 'FAN_PAGES',
                             'status': 'FAILED',
+                            'checkpoint_status': str(nested_page['status'] or '').upper(),
                             'attempt': int(nested_page['attempt'] or 0),
                             'error_code': str(nested_page['error_code'] or ''),
                             'error_message': str(nested_page['error_message'] or '')[:1000],
