@@ -1570,12 +1570,15 @@ function pythonWorkerRenderJob(job) {
           }).join('\n');
           details.appendChild(summary);details.appendChild(pre);errorTd.appendChild(details);
         }
-        const accessStep = (item.provisioning_steps || []).find(function(s) { return s.step === 'PAGE_ACCESS'; });
-        if (itemStatus === 'FAILED') {
+        const rootSteps = Array.isArray(item.provisioning_steps) ? item.provisioning_steps : [];
+        const prepareSteps = Array.isArray(item.prepare_steps) ? item.prepare_steps : [];
+        const traceSteps = rootSteps.concat(prepareSteps);
+        const accessStep = rootSteps.find(function(s) { return s.step === 'PAGE_ACCESS'; });
+        if (itemStatus === 'FAILED' && traceSteps.length) {
           const trace=document.createElement('details');
           const title=document.createElement('summary'); title.textContent='Шаги комплекта';
           const pre=document.createElement('pre');
-          pre.textContent=(item.provisioning_steps || []).map(function(s) {
+          pre.textContent=traceSteps.map(function(s) {
             const r=s.result || {};
             return [s.step,s.status,r.business_id && 'BM '+r.business_id,r.ad_account_id && 'РК '+r.ad_account_id,r.phase,s.error_code].filter(Boolean).join(' · ');
           }).join('\n');
@@ -1586,12 +1589,16 @@ function pythonWorkerRenderJob(job) {
         } else if (accessStep && accessStep.status === 'SUCCESS' && accessStep.result.page_shared_to_business === true) {
           errorTd.textContent += ' · PrgssTeam: рекламный доступ в новом BM подготовлен';
         }
-        const fpStep = (item.provisioning_steps || []).find(function(s) { return s.step === 'FAN_PAGES'; });
-        const fpDiagnostic = (accessStep && accessStep.result && accessStep.result.diagnostic) || (fpStep && fpStep.result && fpStep.result.browser_diagnostic);
+        const fpStep = rootSteps.find(function(s) { return s.step === 'FAN_PAGES'; });
+        const failedPrepareAccess = prepareSteps.find(function(s) {
+          return s.step === 'PAGE_ACCESS' && s.status === 'FAILED' && s.result?.diagnostic;
+        });
+        const accessDiagnostic = (failedPrepareAccess || accessStep)?.result?.diagnostic;
+        const fpDiagnostic = accessDiagnostic || fpStep?.result?.browser_diagnostic;
         if (itemStatus === 'FAILED' && fpDiagnostic && typeof fpDiagnostic === 'object') {
           const details = document.createElement('details');
           const summary = document.createElement('summary');
-          summary.textContent = accessStep && accessStep.result.diagnostic ? 'Диагностика доступа FP' : 'Диагностика Confirm / FP';
+          summary.textContent = accessDiagnostic ? 'Диагностика доступа FP' : 'Диагностика Confirm / FP';
           const pre = document.createElement('pre');
           const diagnosticText={...fpDiagnostic}; delete diagnosticText.form_preview;
           pre.textContent = JSON.stringify(diagnosticText, null, 2);
