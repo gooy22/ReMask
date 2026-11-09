@@ -6,7 +6,9 @@ failure that the trace proves happened before any HTTP/2 request data was sent.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import re
 from contextlib import asynccontextmanager
 from http.cookiejar import Cookie
 import logging
@@ -78,6 +80,28 @@ class _Body:
             self._metric.delivered += len(data)
         return bytes(data)
 
+    async def read_some(self, size: int) -> bytes:
+        """Return the next available decoded chunk without waiting for EOF."""
+        size = max(0, int(size))
+        if size == 0:
+            return b""
+        if self._pending:
+            data = self._pending[:size]
+            self._pending = self._pending[len(data):]
+        else:
+            while True:
+                try:
+                    chunk = await anext(self._chunks)
+                except StopAsyncIteration:
+                    return b""
+                if chunk:
+                    break
+            data = chunk[:size]
+            self._pending = chunk[len(data):]
+        if self._metric is not None:
+            self._metric.delivered += len(data)
+        return bytes(data)
+
 
 class PrivateResponse:
     def __init__(self, response: httpx.Response, metric=None) -> None:
@@ -86,7 +110,31 @@ class PrivateResponse:
         self.url = response.url
         self.charset = response.charset_encoding
         self.http_version = response.http_version
+        self.extensions = response.extensions
         self.content = _Body(response, metric)
+
+    async def text_prefix(self, size: int, *, idle_timeout_seconds: float = 1.5) -> str:
+        """Read a bounded body prefix, stopping when the response goes idle."""
+        limit = max(0, min(int(size), 256 * 1024))
+        if limit == 0:
+            return ""
+        raw = bytearray()
+        try:
+            async with asyncio.timeout(max(0.05, float(idle_timeout_seconds))):
+                while len(raw) < limit:
+                    chunk = await self.content.read_some(limit - len(raw))
+                    if not chunk:
+                        break
+                    raw.extend(chunk)
+        except asyncio.TimeoutError:
+            # Some Meta handoff documents keep their response stream open after
+            # sending the useful form/control. The caller can safely inspect the
+            # prefix; the enclosing response context will close the remainder.
+            pass
+        try:
+            return bytes(raw).decode(self.charset or "utf-8", errors="replace")
+        except LookupError:
+            return bytes(raw).decode("utf-8", errors="replace")
 
     async def text(self) -> str:
         # Bootstrap/GraphQL bodies have a finite decompressed budget too.
@@ -106,9 +154,12 @@ class PrivateHttpClient:
         self.proxy = proxy
         self.profile_name = profile_name
         self._actor_id = str(cookies.get('c_user') or '')
-        # Keep the imported profile snapshot so a failed Business login-page
-        # redirect cannot poison the subsequent read-only identity probe.
+        self._user_agent = str(user_agent or '')
+        # Keep the imported snapshot for same-actor rotation checks.
+        # Explicit Meta redirect deletions are tracked separately and honored.
         self._profile_cookies = dict(cookies)
+        self._trusted_meta_xs_fingerprints: set[str] = set()
+        self._meta_redirect_auth_cookie_directive_pending = False
         self.direct_test_until = direct_test_deadline(profile_name, self._actor_id) if not proxy else 0
         self.timeout_seconds = timeout_seconds
         limits = httpx.Limits(max_connections=pool_size,
@@ -138,20 +189,105 @@ class PrivateHttpClient:
             timeout=httpx.Timeout(timeout_seconds), cookies=jar,
             headers={"User-Agent": user_agent,
                      "Accept-Language": "en-US,en;q=0.9", "Accept": "*/*"},
-            event_hooks={'request': [self._log_auth_cookie_evidence, request_hook], 'response': [response_hook]},
+            event_hooks={'request': [self._log_auth_cookie_evidence, request_hook],
+                         'response': [response_hook, self._track_meta_xs_cookie_updates]},
         )
 
-    async def _log_auth_cookie_evidence(self, request: httpx.Request) -> None:
-        """Log whether the prepared Facebook request carries this profile's auth cookies.
+    def accept_same_actor_cookie_refresh(self) -> bool:
+        """Adopt Meta-set cookies only while the selected actor and cookie set remain intact."""
+        original = dict(self._profile_cookies)
+        snapshot = self.facebook_cookie_snapshot()
+        # Meta may legitimately remove or rotate non-auth cookies during a
+        # redirect. Keep that same-actor jar as long as both session auth
+        # cookies remain valid; restoring every original cookie here would
+        # overwrite Meta's update and resend stale values on the next hop.
+        complete_same_actor = (
+            bool(original)
+            and bool(snapshot)
+            and snapshot.get("c_user") == self._actor_id
+            and bool(str(snapshot.get("xs") or "").strip())
+        )
+        if not complete_same_actor:
+            return False
+        self._profile_cookies = dict(snapshot)
+        return True
 
-        Never log cookie values or fingerprints. This distinguishes an absent or
-        shadowed Cookie header from a Meta-side identity rejection.
-        """
+    def _profile_cookie_snapshot_for_wire(self) -> dict[str, str]:
+        """Preserve complete same-actor Meta refreshes across subsequent requests."""
+        if not self.accept_same_actor_cookie_refresh():
+            if self._meta_redirect_auth_cookie_directive_pending:
+                return dict(self.facebook_cookie_snapshot())
+            self.restore_profile_cookies()
+        return dict(self._profile_cookies)
+
+    @staticmethod
+    def _serialize_profile_cookie_header(cookies: dict[str, str]) -> str | None:
+        pairs = []
+        for name, value in cookies.items():
+            name, value = str(name), str(value)
+            if not re.fullmatch(r"[A-Za-z0-9_.-]{1,256}", name):
+                return None
+            if any(ord(char) < 33 or ord(char) > 126 or char in '";,\\\\' for char in value):
+                return None
+            pairs.append(f"{name}={value}")
+        return "; ".join(pairs) if pairs else None
+
+    @staticmethod
+    def _cookie_header_carries_profile_snapshot(
+        header: str, cookies: dict[str, str], actor_id: str,
+    ) -> bool:
+        if not header or not cookies or len(header) > 131072:
+            return False
+        values_by_name: dict[str, list[str]] = {}
+        for part in header.split(";"):
+            name, separator, value = part.strip().partition("=")
+            if not separator:
+                continue
+            values_by_name.setdefault(name, []).append(value.strip().strip('"'))
+        for name, expected in cookies.items():
+            values = values_by_name.get(str(name), [])
+            if not values or str(expected) not in values:
+                return False
+        actor_values = values_by_name.get("c_user", [])
+        xs_values = values_by_name.get("xs", [])
+        if (not actor_values or any(value != actor_id for value in actor_values)
+                or not xs_values or not any(value.strip() for value in xs_values)):
+            return False
+        return True
+
+    async def _log_auth_cookie_evidence(self, request: httpx.Request) -> None:
+        """Canonicalize and record the final Facebook Cookie header without exposing values."""
         try:
             host = request.url.host.lower()
-            if host != "facebook.com" and not host.endswith(".facebook.com"):
+            if ((host != "facebook.com" and not host.endswith(".facebook.com"))
+                    or request.url.scheme.lower() != "https"):
                 return
-            evidence = cookie_evidence(request.headers.get("cookie", ""), self._actor_id)
+            profile_cookies = self._profile_cookie_snapshot_for_wire()
+            canonical_header = self._serialize_profile_cookie_header(profile_cookies)
+            original_header = request.headers.get("cookie", "")
+            jar_header_matches_profile = self._cookie_header_carries_profile_snapshot(
+                original_header, profile_cookies, self._actor_id,
+            )
+            rebuilt = canonical_header is not None and not jar_header_matches_profile
+            if self._meta_redirect_auth_cookie_directive_pending:
+                rebuilt = False
+                actor_values = []
+                for part in original_header.split(";"):
+                    name, separator, value = part.strip().partition("=")
+                    if separator and name.strip() == "c_user":
+                        actor_values.append(value.strip().strip('"'))
+                if any(value != self._actor_id for value in actor_values):
+                    # A server-issued actor change must never cross profiles.
+                    request.headers["cookie"] = ""
+                    rebuilt = False
+            elif canonical_header is not None and rebuilt:
+                # If HTTPX omitted a saved profile cookie or exposed another
+                # c_user, send the verified profile snapshot. Otherwise retain
+                # its host/path-aware header, including same-actor Meta-issued
+                # cookies from the current redirect chain.
+                request.headers["cookie"] = canonical_header
+            header = request.headers.get("cookie", "")
+            evidence = cookie_evidence(header, self._actor_id)
             names = set(evidence.get("header_auth_cookie_names", []))
             path = request.url.path
             if path not in {
@@ -161,8 +297,10 @@ class PrivateHttpClient:
                 "/login.php", "/checkpoint", "/checkpoint/",
             }:
                 path = "unreviewed"
+            wire_exact = canonical_header is not None and header == canonical_header
+            user_agent_matches = request.headers.get("user-agent", "") == self._user_agent
             log.info(
-                "[%s] private_http_auth_header method=%s host=%s path=%s actor_cookie_state=%s xs_present=%s cookie_count=%s",
+                "[%s] private_http_auth_header method=%s host=%s path=%s actor_cookie_state=%s xs_present=%s cookie_count=%s cookie_wire_exact=%s cookie_header_rebuilt=%s user_agent_matches=%s",
                 self.profile_name,
                 request.method,
                 host,
@@ -170,6 +308,9 @@ class PrivateHttpClient:
                 evidence.get("header_auth_state", "unavailable"),
                 "xs" in names,
                 evidence.get("header_cookie_count", 0),
+                wire_exact,
+                rebuilt,
+                user_agent_matches,
             )
         except Exception as exc:
             log.info(
@@ -183,7 +324,7 @@ class PrivateHttpClient:
         return self._client.is_closed
 
     def facebook_cookie_snapshot(self) -> dict[str, str]:
-        """Return shared-scope cookies only when scoped auth cookies agree."""
+        """Return shared-scope cookies when scoped actor cookies stay on the selected profile."""
         result: dict[str, str] = {}
         scoped_auth: list[tuple[str, str]] = []
         for cookie in self._client.cookies.jar:
@@ -204,9 +345,101 @@ class PrivateHttpClient:
                 scoped_auth.append((name, value))
         for name, value in scoped_auth:
             shared_value = result.get(name)
-            if shared_value is not None and shared_value != value:
-                return {}
+            if name == "c_user" and shared_value is not None and shared_value != value:
+                return {}  # A scoped actor switch must never replace the profile.
+            if (name == "xs" and shared_value is not None and shared_value != value
+                    and hashlib.sha256(value.encode("utf-8")).hexdigest()
+                    not in self._trusted_meta_xs_fingerprints):
+                return {}  # Ignore manually injected or unverified shadow cookies.
         return result
+
+    async def _track_meta_xs_cookie_updates(self, response: httpx.Response) -> None:
+        """Track Meta-issued xs cookies and auth-cookie directives on redirects."""
+        try:
+            host = str(response.url.host or "").casefold()
+            if host != "facebook.com" and not host.endswith(".facebook.com"):
+                return
+            is_redirect = (
+                response.status_code in {301, 302, 303, 307, 308}
+                and bool(response.headers.get("location"))
+            )
+            auth_directives: set[str] = set()
+            auth_deletions: set[str] = set()
+            auth_deletion_scopes: dict[str, dict[str, str]] = {}
+            auth_scope_evidence: set[str] = set()
+            for raw in response.headers.get_list("set-cookie"):
+                pair = str(raw or "").split(";", 1)[0].strip()
+                name, separator, value = pair.partition("=")
+                cookie_name = name.strip().casefold()
+                if not separator:
+                    continue
+                value = value.strip().strip('"')
+                is_cookie_deletion = (
+                    not value
+                    or value.casefold() == "deleted"
+                    or re.search(r";\s*max-age\s*=\s*0(?:\s*;|\s*$)", str(raw), re.I)
+                )
+                if is_redirect and cookie_name in {"c_user", "xs"}:
+                    destination = auth_deletions if is_cookie_deletion else auth_directives
+                    destination.add(cookie_name)
+                    attributes: dict[str, str] = {}
+                    for attribute in str(raw).split(";")[1:]:
+                        key, _, attribute_value = attribute.strip().partition("=")
+                        key = key.strip().casefold()
+                        if key in {"domain", "path"}:
+                            attributes[key] = attribute_value.strip()
+                    domain = attributes.get("domain", "").lstrip(".").casefold().rstrip(".")
+                    domain_scope = (
+                        "shared" if domain == "facebook.com"
+                        else "facebook_subdomain" if domain.endswith(".facebook.com")
+                        else "host" if not domain
+                        else "other"
+                    )
+                    path = attributes.get("path", "")
+                    path_scope = (
+                        "root" if path == "/"
+                        else "narrow" if path.startswith("/")
+                        else "default"
+                    )
+                    action = "delete" if is_cookie_deletion else "set"
+                    auth_scope_evidence.add(
+                        f"{cookie_name}:{action}:{domain_scope}:{path_scope}"
+                    )
+                    if is_cookie_deletion:
+                        auth_deletion_scopes[cookie_name] = {
+                            "domain": domain_scope,
+                            "path": path_scope,
+                        }
+                if cookie_name != "xs" or is_cookie_deletion:
+                    continue
+                self._trusted_meta_xs_fingerprints.add(
+                    hashlib.sha256(value.encode("utf-8")).hexdigest()
+                )
+                if len(self._trusted_meta_xs_fingerprints) > 64:
+                    self._trusted_meta_xs_fingerprints.pop()
+            if is_redirect and (auth_directives or auth_deletions):
+                # Keep the directive metadata on this response so a narrowly
+                # scoped document-navigation guard can distinguish this hop
+                # from a stale session-wide marker. Cookie values are excluded.
+                response.extensions["remask_meta_auth_cookie_directive"] = {
+                    "sets": sorted(auth_directives),
+                    "deletions": sorted(auth_deletions),
+                    "deletion_scopes": auth_deletion_scopes,
+                }
+                # Honor Meta's redirect response by default. Narrow exceptions
+                # are explicitly authorized by callers for reviewed same-profile
+                # Business handoff continuations.
+                self._meta_redirect_auth_cookie_directive_pending = True
+                log.info(
+                    "[%s] private_http_meta_redirect_auth_cookie_directive status=%d host=%s names=%s deleted=%s scope=%s",
+                    self.profile_name, response.status_code, host,
+                    ",".join(sorted(auth_directives | auth_deletions)),
+                    ",".join(sorted(auth_deletions)),
+                    ",".join(sorted(auth_scope_evidence)),
+                )
+        except Exception:
+            # Cookie tracking is only an acceptance aid; never disrupt HTTP.
+            return
 
     def restore_profile_cookies(self) -> None:
         """Reset Facebook cookies to the imported profile for an identity probe."""
@@ -218,6 +451,8 @@ class PrivateHttpClient:
                     jar.clear(cookie.domain, cookie.path, cookie.name)
                 except KeyError:
                     pass
+        self._trusted_meta_xs_fingerprints.clear()
+        self._meta_redirect_auth_cookie_directive_pending = False
         for name, value in self._profile_cookies.items():
             jar.set_cookie(Cookie(
                 version=0, name=name, value=value, port=None,
