@@ -18,7 +18,13 @@ import httpx
 from app.private_ads_document import _extract_sprinkle_config
 
 from app.private_http import PrivateHttpClient
-from app.business_login_gate_http import continue_business_login_gate, is_business_login_gate_url
+from app.business_login_gate_http import (
+    _last_referrer_policy,
+    _navigation_fetch_site,
+    _navigation_referrer,
+    continue_business_login_gate,
+    is_business_login_gate_url,
+)
 from app.meta_auth_document import auth_route_gate as _auth_route_gate, has_login_form as _has_login_form
 
 
@@ -133,7 +139,7 @@ class FacebookWebSession:
     Все приватные GraphQL-запросы проходят через этот объект.
     """
 
-    ADS_MANAGER_URL = "https://business.facebook.com/latest/home"
+    BUSINESS_HOME_URL = "https://business.facebook.com/latest/home"
 
     GRAPHQL_URL = "https://business.facebook.com/api/graphql/"
 
@@ -480,7 +486,37 @@ class FacebookWebSession:
         actor = str(snapshot.get("c_user") or snapshot.get("i_user") or "").strip()
         if (actor != str(expected_actor).strip()
                 or not str(snapshot.get("xs") or "").strip()):
+            if getattr(session, "_meta_redirect_auth_cookie_directive_pending", False):
+                return
             restore_fn()
+
+    def _apply_document_redirect_context(
+        self, request_headers: dict[str, str], response: Any,
+        destination: str, *, hop: int,
+    ) -> None:
+        """Rebuild browser navigation headers only after a manual redirect."""
+        source_url = str(getattr(response, "url", "") or "")
+        response_headers = getattr(response, "headers", {}) or {}
+        get_list = getattr(response_headers, "get_list", None)
+        if callable(get_list):
+            policies = get_list("referrer-policy")
+        else:
+            policy_value = response_headers.get("referrer-policy", "")
+            policies = [str(policy_value)] if policy_value else []
+        policy = _last_referrer_policy(policies)
+        referer = _navigation_referrer(source_url, destination, policy)
+        if referer:
+            request_headers["Referer"] = referer
+        else:
+            request_headers.pop("Referer", None)
+        fetch_site = _navigation_fetch_site(source_url, destination)
+        request_headers["Sec-Fetch-Site"] = fetch_site
+        source_host = str(urlsplit(source_url).hostname or "").casefold()
+        target_host = str(urlsplit(destination).hostname or "").casefold()
+        log.info(
+            "[%s] bootstrap redirect context hop=%d source_host=%s target_host=%s sec_fetch_site=%s referer_present=%s",
+            self.profile.name, hop, source_host, target_host, fetch_site, bool(referer),
+        )
 
     @classmethod
     def _first_match(
@@ -567,20 +603,14 @@ class FacebookWebSession:
     ) -> tuple[str, str]:
         endpoint_specs = (
             (
-                "https://www.facebook.com/ajax/dtsg/",
-                "https://www.facebook.com/",
+                "https://business.facebook.com/ajax/dtsg/",
+                "https://business.facebook.com/",
                 "__a",
                 ("true", "1"),
             ),
             (
-                "https://m.facebook.com/ajax/dtsg/",
-                "https://m.facebook.com/",
-                "__ajax__",
-                ("true",),
-            ),
-            (
-                "https://business.facebook.com/ajax/dtsg/",
-                "https://business.facebook.com/",
+                "https://www.facebook.com/ajax/dtsg/",
+                "https://www.facebook.com/",
                 "__a",
                 ("true", "1"),
             ),
@@ -588,10 +618,30 @@ class FacebookWebSession:
 
         for endpoint, referer, query_key, query_values in endpoint_specs:
             for query_value in query_values:
-                restore_profile_cookies = getattr(session, "restore_profile_cookies", None)
-                if callable(restore_profile_cookies):
-                    restore_profile_cookies()
+                attempt_name = f"{endpoint}?{query_key}={query_value}"
+                if getattr(
+                    session,
+                    "_meta_redirect_auth_cookie_directive_pending",
+                    False,
+                ):
+                    attempts.append(
+                        f"{attempt_name}: skipped after prior Meta auth-cookie directive"
+                    )
+                    return "", ""
                 try:
+                    # Each DTSG refresh probe stays bound to the selected actor.
+                    # Keep Meta-issued cookie changes and never try another host
+                    # after Meta explicitly deletes an auth cookie.
+                    self._restore_profile_cookie_snapshot_if_lost(
+                        session, stage="dtsg_refresh_target_start",
+                    )
+                    auth_cookie_directive_before = bool(
+                        getattr(
+                            session,
+                            "_meta_redirect_auth_cookie_directive_pending",
+                            False,
+                        )
+                    )
                     async with session.get(
                         endpoint,
                         params={
@@ -610,18 +660,36 @@ class FacebookWebSession:
                             "Sec-Fetch-Site": "same-origin",
                         },
                         allow_redirects=False,
+                        cookie_jar_guard=lambda: self._restore_profile_cookie_snapshot_if_lost(
+                            session,
+                            stage=f"dtsg_refresh_headers_{query_key}_{query_value}",
+                        ),
                     ) as response:
                         raw = await response.text()
-                        location = str(response.headers.get("Location") or "")
-                        attempt_name = (
-                            f"{endpoint}?{query_key}={query_value}"
+                        self._restore_profile_cookie_snapshot_if_lost(
+                            session,
+                            stage=f"dtsg_refresh_body_{query_key}_{query_value}",
                         )
+                        location = str(response.headers.get("Location") or "")
 
                         if response.status in {301, 302, 303, 307, 308}:
                             attempts.append(
                                 f"{attempt_name}: redirect HTTP "
                                 f"{response.status} to {location or '<empty>'}"
                             )
+                            if (
+                                not auth_cookie_directive_before
+                                and getattr(
+                                    session,
+                                    "_meta_redirect_auth_cookie_directive_pending",
+                                    False,
+                                )
+                            ):
+                                attempts.append(
+                                    f"{attempt_name}: stopping host fallback after "
+                                    "Meta auth-cookie directive"
+                                )
+                                return "", ""
                             continue
 
                         if response.status >= 400:
@@ -652,10 +720,6 @@ class FacebookWebSession:
                     attempts.append(
                         f"{endpoint}?{query_key}={query_value}: network "
                         f"{exc.__class__.__name__}"
-                    )
-                finally:
-                    self._restore_profile_cookie_snapshot_if_lost(
-                        session, stage=f"dtsg_refresh_{query_key}_{query_value}"
                     )
 
         return "", ""
@@ -766,12 +830,12 @@ class FacebookWebSession:
             "https://mbasic.facebook.com/profile.php",
         )
         for target in targets:
-            # Business login-page redirects can delete root-scope auth cookies
-            # before the profile identity check. Each probe starts from the
-            # exact imported profile snapshot.
-            restore_cookies = getattr(session, "restore_profile_cookies", None)
-            if callable(restore_cookies):
-                restore_cookies()
+            # Keep complete same-actor cookie rotations across identity probes.
+            # Restore the imported set only if the actor or required cookies
+            # disappear during the preceding Meta redirect.
+            self._restore_profile_cookie_snapshot_if_lost(
+                session, stage="verified_profile_target_start",
+            )
             try:
                 from app.private_http import buffered_response
                 probe_timeout_seconds = 15.0 if target.startswith("https://adsmanager.facebook.com/") else 8.0
@@ -802,8 +866,10 @@ class FacebookWebSession:
                     # Each hop is a separate bounded GET from the exact saved
                     # profile snapshot; never let an automatic redirect consume
                     # the next request with a changed cookie jar.
-                    if callable(restore_cookies):
-                        restore_cookies()
+                    self._restore_profile_cookie_snapshot_if_lost(
+                        session,
+                        stage=f"verified_profile_redirect_hop_{redirect_count + 1}",
+                    )
                     response, body = await asyncio.wait_for(
                         buffered_response(
                             "GET",
@@ -863,6 +929,10 @@ class FacebookWebSession:
                         # Keep auth redirects as evidence, but do not follow them.
                         final_url_override = next_url
                         break
+                    self._apply_document_redirect_context(
+                        request_headers, response, next_url,
+                        hop=redirect_count + 1,
+                    )
                     current_url = next_url
                 if response is None:
                     raise asyncio.TimeoutError("profile probe returned no response")
@@ -1012,6 +1082,7 @@ class FacebookWebSession:
         allow_business_loginpage_probe: bool = False,
         require_actor_match: bool = True,
         prefer_business_home: bool = False,
+        business_home_only: bool = False,
         business_loginpage_return_url: str = "",
     ) -> FacebookBootstrap:
 
@@ -1102,18 +1173,25 @@ class FacebookWebSession:
             # retain their independent profile-page identity bootstrap.
             token_patterns = list(self.FB_DTSG_PATTERNS)
 
+            # Business Home remains the first document for Business GraphQL. If it has
+            # no usable DTSG, retain the pre-existing fallback surfaces; actor
+            # matching and exact Business reads still gate any provisioning write.
             bootstrap_urls = (
-                self.ADS_MANAGER_URL,
-                "https://business.facebook.com/latest/settings",
-                "https://business.facebook.com/latest/overview",
-                "https://www.facebook.com/adsmanager/manage/campaigns",
-                "https://www.facebook.com/marketplace/",
-                "https://www.facebook.com/",
-                "https://www.facebook.com/me",
-                "https://www.facebook.com/settings",
-                "https://m.facebook.com/",
-                "https://mbasic.facebook.com/",
-                "https://mbasic.facebook.com/profile.php",
+                (self.BUSINESS_HOME_URL,)
+                if business_home_only
+                else (
+                    self.BUSINESS_HOME_URL,
+                    "https://business.facebook.com/latest/settings",
+                    "https://business.facebook.com/latest/overview",
+                    "https://www.facebook.com/adsmanager/manage/campaigns",
+                    "https://www.facebook.com/marketplace/",
+                    "https://www.facebook.com/",
+                    "https://www.facebook.com/me",
+                    "https://www.facebook.com/settings",
+                    "https://m.facebook.com/",
+                    "https://mbasic.facebook.com/",
+                    "https://mbasic.facebook.com/profile.php",
+                )
             )
 
             body = ""
@@ -1128,6 +1206,21 @@ class FacebookWebSession:
             for bootstrap_url in bootstrap_urls:
                 try:
                     from app.private_http import buffered_response
+                    async def read_bootstrap_body(response):
+                        response_url = str(getattr(response, "url", "") or "")
+                        if is_business_login_gate_url(response_url):
+                            # Meta's loginpage handoff may keep its stream open
+                            # after sending the useful continuation control. Read
+                            # only a short prefix so the reviewed parser can act.
+                            log.info(
+                                "[%s] read bounded Business loginpage prefix during bootstrap",
+                                self.profile.name,
+                            )
+                            read_prefix = getattr(response, "text_prefix", None)
+                            if callable(read_prefix):
+                                return await read_prefix(256 * 1024, idle_timeout_seconds=4.0)
+                        return await response.text()
+
                     request_headers = {
                         "Accept": (
                             "text/html,application/xhtml+xml,"
@@ -1149,20 +1242,117 @@ class FacebookWebSession:
                             attempts.append(f"{bootstrap_url}: redirect loop")
                             break
                         visited_urls.add(current_url)
-                        restore_profile_cookies = getattr(
-                            session, "restore_profile_cookies", None
+                        self._restore_profile_cookie_snapshot_if_lost(
+                            session, stage="bootstrap_target_and_redirect_hop",
                         )
-                        if callable(restore_profile_cookies):
-                            restore_profile_cookies()
                         redirect_statuses = {301, 302, 303, 307, 308}
-                        response_status = {"value": None}
+                        response_status = {
+                            "value": None,
+                            "business_bootstrap_restore": False,
+                        }
 
                         def restore_cookies_after_redirect_headers(response):
                             response_status["value"] = int(response.status)
+                            allow_business_bootstrap_restore = False
+                            if redirect_count == 0 and response_status["value"] == 302:
+                                try:
+                                    request_parts = urlsplit(current_url)
+                                    bootstrap_parts = urlsplit(bootstrap_url)
+                                    source_parts = urlsplit(str(response.url))
+                                    target_url = urljoin(
+                                        str(response.url),
+                                        str(response.headers.get("Location") or ""),
+                                    )
+                                    target_parts = urlsplit(target_url)
+                                    extensions = getattr(response, "extensions", {}) or {}
+                                    directive = (
+                                        extensions.get("remask_meta_auth_cookie_directive", {})
+                                        if isinstance(extensions, dict)
+                                        else {}
+                                    )
+                                    if not isinstance(directive, dict):
+                                        directive = {}
+                                    deletions = {
+                                        str(name).casefold()
+                                        for name in directive.get("deletions", [])
+                                    }
+                                    sets = {
+                                        str(name).casefold()
+                                        for name in directive.get("sets", [])
+                                    }
+                                    scopes = directive.get("deletion_scopes", {})
+                                    saved_cookies = getattr(session, "_profile_cookies", {})
+                                    current_cookies = session.facebook_cookie_snapshot()
+                                    expected_actor = str(
+                                        saved_cookies.get("c_user") or ""
+                                    ).strip() if isinstance(saved_cookies, dict) else ""
+                                    expected_xs = str(
+                                        saved_cookies.get("xs") or ""
+                                    ).strip() if isinstance(saved_cookies, dict) else ""
+                                    current_actor = str(
+                                        current_cookies.get("c_user") or ""
+                                    ).strip()
+                                    current_xs = str(
+                                        current_cookies.get("xs") or ""
+                                    ).strip()
+                                    exact_deletion = (
+                                        deletions == {"c_user", "xs"}
+                                        and not sets
+                                        and isinstance(scopes, dict)
+                                        and all(
+                                            scopes.get(name) == {
+                                                "domain": "shared", "path": "root",
+                                            }
+                                            for name in ("c_user", "xs")
+                                        )
+                                    )
+                                    reviewed_bootstrap_source = (
+                                        bootstrap_url in bootstrap_urls
+                                        and current_url == bootstrap_url
+                                        and request_parts.scheme == "https"
+                                        and str(request_parts.hostname or "").casefold()
+                                            == str(bootstrap_parts.hostname or "").casefold()
+                                        and request_parts.port in (None, 443)
+                                        and not request_parts.username
+                                        and not request_parts.password
+                                        and request_parts.path == bootstrap_parts.path
+                                        and request_parts.query == bootstrap_parts.query
+                                        and source_parts.scheme == request_parts.scheme
+                                        and str(source_parts.hostname or "").casefold()
+                                            == str(request_parts.hostname or "").casefold()
+                                        and source_parts.port in (None, 443)
+                                        and not source_parts.username
+                                        and not source_parts.password
+                                        and source_parts.path == request_parts.path
+                                        and source_parts.query == request_parts.query
+                                    )
+                                    allow_business_bootstrap_restore = (
+                                        reviewed_bootstrap_source
+                                        and target_parts.scheme == "https"
+                                        and str(target_parts.hostname or "").casefold()
+                                            == "business.facebook.com"
+                                        and target_parts.port in (None, 443)
+                                        and not target_parts.username
+                                        and not target_parts.password
+                                        and target_parts.path == "/business/loginpage/"
+                                        and exact_deletion
+                                        and expected_actor == actor_id
+                                        and bool(expected_xs)
+                                        and current_actor in {"", expected_actor}
+                                        and current_xs in {"", expected_xs}
+                                    )
+                                except (TypeError, ValueError):
+                                    allow_business_bootstrap_restore = False
+                            response_status["business_bootstrap_restore"] = (
+                                allow_business_bootstrap_restore
+                            )
                             if response_status["value"] in redirect_statuses:
                                 self._restore_profile_cookie_snapshot_if_lost(
                                     session,
                                     stage=f"bootstrap_response_headers_{redirect_count + 1}",
+                                    allow_business_home_loginpage_auth_restore=(
+                                        allow_business_bootstrap_restore
+                                    ),
                                 )
 
                         try:
@@ -1178,19 +1368,72 @@ class FacebookWebSession:
                                 16 * 1024 * 1024 + 1,
                                 retry_read=True,
                                 validate=restore_cookies_after_redirect_headers,
-                                reader=lambda response: response.text(),
+                                reader=read_bootstrap_body,
                             )
                         finally:
                             if response_status["value"] in redirect_statuses:
                                 self._restore_profile_cookie_snapshot_if_lost(
                                     session,
                                     stage=f"bootstrap_response_body_{redirect_count + 1}",
+                                    allow_business_home_loginpage_auth_restore=(
+                                        response_status["business_bootstrap_restore"]
+                                    ),
                                 )
                         candidate_url = str(response.url)
                         candidate_status = int(response.status)
                         self._restore_invalid_profile_cookie_snapshot(
                             session, actor_id
                         )
+                        response_extensions = getattr(response, "extensions", {}) or {}
+                        meta_auth_directive = response_extensions.get(
+                            "remask_meta_auth_cookie_directive", {}
+                        ) or {}
+                        if not isinstance(meta_auth_directive, dict):
+                            meta_auth_directive = {}
+                        deleted_auth_cookies = (
+                            set(meta_auth_directive.get("deletions", []) or [])
+                            & {"c_user", "xs"}
+                        )
+                        if deleted_auth_cookies:
+                            current_cookies = session.facebook_cookie_snapshot()
+                            current_actor = str(current_cookies.get("c_user") or "").strip()
+                            current_xs = str(current_cookies.get("xs") or "").strip()
+                            if current_actor != actor_id or not current_xs:
+                                exact_auth_deletion = (
+                                    {str(name).casefold() for name in
+                                     (meta_auth_directive.get("deletions") or [])}
+                                    == {"c_user", "xs"}
+                                    and not {
+                                        str(name).casefold() for name in
+                                        (meta_auth_directive.get("sets") or [])
+                                    }
+                                    and isinstance(
+                                        meta_auth_directive.get("deletion_scopes"), dict
+                                    )
+                                    and all(
+                                        meta_auth_directive["deletion_scopes"].get(name)
+                                        == {"domain": "shared", "path": "root"}
+                                        for name in ("c_user", "xs")
+                                    )
+                                )
+                                exact_business_handoff = bool(
+                                    response_status["business_bootstrap_restore"]
+                                    and exact_auth_deletion
+                                )
+                                if not exact_business_handoff:
+                                    error = AuthenticationError(
+                                        "Meta removed a required selected-profile authentication cookie during bootstrap; no authenticated follow-up or provisioning request was sent."
+                                    )
+                                    error.meta_payload = {
+                                        "auth_cookie_deletions": sorted(deleted_auth_cookies)
+                                    }
+                                    error.request_may_have_been_sent = False
+                                    error.transport_stage = "bootstrap"
+                                    raise error
+                                log.info(
+                                    "[%s] bootstrap continuing after exact same-profile read-only loginpage handoff actor_cookie_present=%s xs_present=%s",
+                                    self.profile.name, bool(current_actor), bool(current_xs),
+                                )
                         response_headers = getattr(response, "headers", {}) or {}
                         location = str(
                             response_headers.get("location")
@@ -1222,10 +1465,11 @@ class FacebookWebSession:
                         if redirect_count == 5:
                             attempts.append(f"{bootstrap_url}: redirect limit")
                             break
-                        # Restore the imported profile snapshot before each
-                        # first-party hop. Meta can shadow root auth cookies with
-                        # Set-Cookie on a redirect response.
-                        if (bootstrap_url == self.ADS_MANAGER_URL
+                        # Preserve complete same-actor Meta cookie updates across this
+                        # first-party redirect chain. The guard above restores
+                        # the imported snapshot only if the actor or cookie set
+                        # becomes invalid.
+                        if (bootstrap_url == self.BUSINESS_HOME_URL
                                 and redirect_count == 0
                                 and candidate_status == 302):
                             source_host = str(urlsplit(candidate_url).hostname or "").casefold()
@@ -1235,6 +1479,10 @@ class FacebookWebSession:
                                 self.profile.name, source_host, target_host,
                             )
                             await asyncio.sleep(3.0)
+                        self._apply_document_redirect_context(
+                            request_headers, response, next_url,
+                            hop=redirect_count + 1,
+                        )
                         current_url = next_url
                     else:
                         attempts.append(f"{bootstrap_url}: redirect limit")
@@ -1242,9 +1490,16 @@ class FacebookWebSession:
                     candidate_url = str(response.url)
                     candidate_status = int(response.status)
                     if is_business_login_gate_url(candidate_url):
+                        get_referrer_policies = getattr(response_headers, "get_list", None)
+                        gate_referrer_policy = ", ".join(
+                            get_referrer_policies("referrer-policy")
+                            if callable(get_referrer_policies)
+                            else [str(response_headers.get("referrer-policy") or "")]
+                        )
                         recovered = await self._maybe_continue_business_login_gate(
                             gate_url=candidate_url, body=candidate_body,
                             return_url=business_loginpage_return_url or bootstrap_url,
+                            referrer_policy=gate_referrer_policy,
                         )
                         if recovered:
                             candidate_status = int(recovered["status"])
@@ -1364,9 +1619,9 @@ class FacebookWebSession:
             if not fb_dtsg:
                 detail = " | ".join(attempts[-8:]) or "no bootstrap response"
                 error = AuthenticationError(
-                    "Facebook browser session has no usable fb_dtsg. "
-                    "The saved cookies may be expired/incomplete, or Facebook "
-                    "did not expose a DTSG token on page bootstrap or /ajax/dtsg/. "
+                    "Meta did not expose a usable fb_dtsg token on the available "
+                    "bootstrap pages or read-only /ajax/dtsg/ request. "
+                    "The cause is not established; no GraphQL POST was sent. "
                     f"Attempts: {detail}"
                 )
                 error.meta_payload = {"business_precheck": auth_attempts,
@@ -1441,6 +1696,7 @@ class FacebookWebSession:
 
     async def _maybe_continue_business_login_gate(
         self, *, gate_url: str, body: str, return_url: str,
+        referrer_policy: str = "",
     ) -> dict | None:
         if self._business_login_gate_attempted:
             return None
@@ -1448,6 +1704,7 @@ class FacebookWebSession:
         self.invalidate_bootstrap()
         result = await continue_business_login_gate(
             self, gate_url=gate_url, body=body, return_url=return_url,
+            referrer_policy=referrer_policy,
         )
         log.info("[%s] business_login_handoff outcome=%s",
             self.profile.name,
@@ -1477,30 +1734,92 @@ class FacebookWebSession:
             # the reviewed snapshot and do not expose source/session values.
             log.warning('module_refresh unavailable type=%s', type(exc).__name__)
 
-    def _restore_profile_cookie_snapshot_if_lost(self, session, *, stage: str) -> bool:
-        """Restore the resolver-loaded profile snapshot before another request."""
+    def _restore_profile_cookie_snapshot_if_lost(
+        self, session, *, stage: str,
+        allow_business_home_loginpage_auth_restore: bool = False,
+    ) -> bool:
+        """Keep same-actor refreshes; restore only a verified lost profile snapshot."""
         saved = getattr(session, "_profile_cookies", None)
         read_snapshot = getattr(session, "facebook_cookie_snapshot", None)
         restore = getattr(session, "restore_profile_cookies", None)
         if not isinstance(saved, dict) or not saved or not callable(read_snapshot):
             return False
-        actor = str(saved.get("c_user") or "")
-        xs = str(saved.get("xs") or "")
-        # The persisted snapshot must contain both session identity cookies before
-        # it can serve as a safe rollback point.
+        actor = str(saved.get("c_user") or "").strip()
+        xs = str(saved.get("xs") or "").strip()
         if not actor or not xs:
             return False
         current = read_snapshot()
         if not isinstance(current, dict):
             current = {}
-        lost = (
-            len(current) < len(saved)
-            or any(name not in current for name in saved)
-            or str(current.get("c_user") or "") != actor
-            or str(current.get("xs") or "") != xs
+        current_actor = str(current.get("c_user") or "").strip()
+        current_xs = str(current.get("xs") or "").strip()
+        directive_pending = bool(
+            getattr(session, "_meta_redirect_auth_cookie_directive_pending", False)
         )
-        if not lost:
+
+        allow_authorized_body_restore = (
+            allow_business_home_loginpage_auth_restore
+            and stage.startswith("bootstrap_response_body_")
+        )
+        if allow_business_home_loginpage_auth_restore:
+            profile_cookies = getattr(self.profile, "cookies", {})
+            selected_actor = str(
+                profile_cookies.get("c_user") or ""
+            ).strip() if isinstance(profile_cookies, dict) else ""
+            selected_xs = str(
+                profile_cookies.get("xs") or ""
+            ).strip() if isinstance(profile_cookies, dict) else ""
+            if (
+                (not directive_pending and not allow_authorized_body_restore)
+                or selected_actor != actor
+                or selected_xs != xs
+                or current_actor not in {"", actor}
+                or current_xs not in {"", xs}
+            ):
+                log.info(
+                    "[%s] profile_cookie_snapshot_restore_skipped stage=%s reason=business_handoff_snapshot_mismatch",
+                    self.profile.name, stage,
+                )
+                return False
+            if allow_authorized_body_restore and all(
+                name in current and str(current.get(name)) == str(value)
+                for name, value in saved.items()
+            ):
+                log.info(
+                    "[%s] profile_cookie_snapshot_restore_skipped stage=%s reason=snapshot_already_intact",
+                    self.profile.name, stage,
+                )
+                return False
+
+        accept_refresh = getattr(session, "accept_same_actor_cookie_refresh", None)
+        if not (
+            allow_business_home_loginpage_auth_restore
+            and (directive_pending or allow_authorized_body_restore)
+        ):
+            if callable(accept_refresh) and accept_refresh():
+                refreshed = getattr(session, "_profile_cookies", {})
+                if isinstance(refreshed, dict) and any(
+                    str(refreshed.get(name)) != str(value) for name, value in saved.items()
+                ):
+                    log.info(
+                        "[%s] profile_cookie_snapshot_refreshed stage=%s expected_count=%d refreshed_count=%d actor_match=true xs_present=true",
+                        self.profile.name, stage, len(saved), len(refreshed),
+                    )
+                return False
+
+        if directive_pending and not allow_business_home_loginpage_auth_restore:
+            log.info(
+                "[%s] profile_cookie_snapshot_restore_skipped stage=%s reason=meta_redirect_auth_cookie_directive",
+                self.profile.name, stage,
+            )
             return False
+
+        if directive_pending and allow_business_home_loginpage_auth_restore:
+            log.info(
+                "[%s] profile_cookie_snapshot_restore_allowed stage=%s reason=exact_same_profile_readonly_bootstrap_loginpage_handoff actor_match=true",
+                self.profile.name, stage,
+            )
+
         try:
             if not callable(restore):
                 raise RuntimeError("profile snapshot restore is unavailable")
@@ -1516,12 +1835,16 @@ class FacebookWebSession:
                 request_may_have_been_sent=True,
                 transport_stage="fetch_cookie_restore",
             ) from None
+        if not isinstance(restored, dict):
+            restored = {}
         valid = (
-            isinstance(restored, dict)
-            and len(restored) >= len(saved)
-            and all(name in restored for name in saved)
-            and str(restored.get("c_user") or "") == actor
-            and str(restored.get("xs") or "") == xs
+            all(name in restored and str(restored.get(name)) == str(value)
+                for name, value in saved.items())
+            and str(restored.get("c_user") or "").strip() == actor
+            and str(restored.get("xs") or "").strip() == xs
+            and str(getattr(self.profile, "cookies", {}).get("c_user") or "").strip()
+                == actor
+            and str(getattr(self.profile, "cookies", {}).get("xs") or "").strip() == xs
         )
         if not valid:
             raise RemoteRequestError(
@@ -1530,7 +1853,7 @@ class FacebookWebSession:
                 transport_stage="fetch_cookie_restore",
             )
         log.warning(
-            "[%s] profile_cookie_snapshot_restored stage=%s expected_count=%d restored_count=%d",
+            "[%s] profile_cookie_snapshot_restored stage=%s expected_count=%d restored_count=%d exact=true",
             self.profile.name, stage, len(saved), len(restored),
         )
         return True
@@ -1687,7 +2010,7 @@ class FacebookWebSession:
                     and str(previous_parts.hostname or "").casefold() == next_host
                     and (previous_parts.port or 443) == (next_port or 443)
                 )
-                if (ads_manager_document and redirect_count == 0
+                if (document_request and redirect_count == 0
                         and response.status == 302):
                     await asyncio.sleep(3)
                 request_headers["Referer"] = previous_url
@@ -1820,9 +2143,38 @@ class FacebookWebSession:
                 and bootstrap.profile_actor_verified):
             return bootstrap
         source = str(getattr(bootstrap, "source_url", "") or "").strip()
+        source_parts = urlsplit(source)
+        source_is_ajax_dtsg = (
+            source_parts.hostname == "www.facebook.com"
+            and source_parts.path.rstrip("/") == "/ajax/dtsg"
+            and parse_qs(source_parts.query).get("__a") == ["true"]
+        )
+        current_actor = str(self.profile.cookies.get("c_user") or "").strip()
+        exact_inventory_read = (
+            (business_loginpage_probe == "READ_BM" and not str(business_id or "").strip())
+            or (
+                business_loginpage_probe == "READ_RK"
+                and str(business_id or "").strip().isdigit()
+            )
+        )
+        if (
+            exact_inventory_read
+            and source_is_ajax_dtsg
+            and current_actor.isdigit()
+            and bootstrap.actor_id == current_actor
+            and bool(str(bootstrap.fb_dtsg or "").strip())
+        ):
+            # READ_BM and READ_RK are pinned, read-only queries. Let the exact
+            # GraphQL response confirm Business access instead of reopening a
+            # separate Business document that can redirect independently.
+            log.info(
+                "[%s] exact %s will confirm Business access; skipping duplicate Business document precheck",
+                self.profile.name, business_loginpage_probe,
+            )
+            return bootstrap
         target = (
             "https://business.facebook.com/latest/settings/ad_accounts/?business_id=" + business_id
-            if business_id else self.ADS_MANAGER_URL
+            if business_id else self.BUSINESS_HOME_URL
         )
         if not business_id and (not source or urlsplit(source).hostname == "business.facebook.com"):
             return bootstrap
@@ -2829,7 +3181,7 @@ class FacebookWebSession:
             bootstrap_source_url
             if same_business_origin
             else (
-                self.ADS_MANAGER_URL
+                self.BUSINESS_HOME_URL
                 if "business.facebook.com" in endpoint_parts.netloc
                 else origin + "/"
             )
@@ -3156,7 +3508,7 @@ class FacebookWebSession:
                     self.timeout_seconds * 1000,
                 )
                 await page.goto(
-                    self.ADS_MANAGER_URL,
+                    self.BUSINESS_HOME_URL,
                     wait_until="commit",
                     timeout=navigation_timeout_ms,
                 )
