@@ -894,6 +894,27 @@ class FacebookWebSession:
                         ),
                         timeout=probe_timeout_seconds,
                     )
+                    response_extensions = getattr(response, "extensions", {}) or {}
+                    meta_auth_directive = response_extensions.get(
+                        "remask_meta_auth_cookie_directive", {}
+                    ) or {}
+                    if not isinstance(meta_auth_directive, dict):
+                        meta_auth_directive = {}
+                    deleted_auth_cookies = {
+                        str(name).casefold()
+                        for name in (meta_auth_directive.get("deletions") or [])
+                    } & {"c_user", "xs"}
+                    if deleted_auth_cookies:
+                        self.invalidate_bootstrap()
+                        error = AuthenticationError(
+                            "Meta explicitly removed a selected-profile authentication cookie during identity bootstrap; no follow-up or provisioning request was sent."
+                        )
+                        error.meta_payload = {
+                            "auth_cookie_deletions": sorted(deleted_auth_cookies)
+                        }
+                        error.request_may_have_been_sent = False
+                        error.transport_stage = "business_auth_precheck"
+                        raise error
                     self._restore_invalid_profile_cookie_snapshot(session, expected_actor)
                     status = int(response.status)
                     response_headers = getattr(response, "headers", {}) or {}
@@ -1354,19 +1375,15 @@ class FacebookWebSession:
                             & {"c_user", "xs"}
                         )
                         if deleted_auth_cookies:
-                            current_cookies = session.facebook_cookie_snapshot()
-                            current_actor = str(current_cookies.get("c_user") or "").strip()
-                            current_xs = str(current_cookies.get("xs") or "").strip()
-                            if current_actor != actor_id or not current_xs:
-                                error = AuthenticationError(
-                                    "Meta removed a required selected-profile authentication cookie during bootstrap; no authenticated follow-up or provisioning request was sent."
-                                )
-                                error.meta_payload = {
-                                    "auth_cookie_deletions": sorted(deleted_auth_cookies)
-                                }
-                                error.request_may_have_been_sent = False
-                                error.transport_stage = "bootstrap"
-                                raise error
+                            error = AuthenticationError(
+                                "Meta explicitly removed a selected-profile authentication cookie during bootstrap; no follow-up or provisioning request was sent."
+                            )
+                            error.meta_payload = {
+                                "auth_cookie_deletions": sorted(deleted_auth_cookies)
+                            }
+                            error.request_may_have_been_sent = False
+                            error.transport_stage = "bootstrap"
+                            raise error
                         self._restore_invalid_profile_cookie_snapshot(
                             session, actor_id
                         )

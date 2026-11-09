@@ -389,6 +389,75 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls[0][1]['actor_id'], '123')
         self.assertEqual(calls[0][2]['X-Remask-Internal-Key'], 'fixture-internal-key')
 
+    async def test_verified_profile_bootstrap_stops_after_meta_auth_cookie_deletion(self):
+        actor = '123456789'
+        original = {'c_user': actor, 'xs': 'imported-xs'}
+        profile = WebProfile('fixture', dict(original),
+            'http://127.0.0.1:1', 'fixture-UA')
+        web = FacebookWebSession(profile)
+        self.addAsyncCleanup(web.close)
+        client = await web._ensure_session()
+        requests = []
+
+        def handler(request):
+            requests.append((request.url.host, request.url.path))
+            return httpx.Response(302, headers=[
+                ('Location', 'https://www.facebook.com/'),
+                ('Set-Cookie', 'c_user=; Domain=.facebook.com; Path=/; Max-Age=0; Secure'),
+                ('Set-Cookie', 'xs=; Domain=.facebook.com; Path=/; Max-Age=0; Secure'),
+            ])
+
+        await self.mock(client, handler)
+        client._client.event_hooks["response"].append(client._track_meta_xs_cookie_updates)
+        with self.assertRaisesRegex(
+            AuthenticationError, 'Meta explicitly removed a selected-profile'
+        ):
+            await web._verified_profile_bootstrap(
+                client, actor, [], require_actor_match=True,
+            )
+
+        self.assertEqual(requests, [('www.facebook.com', '/me')])
+        self.assertEqual(client.facebook_cookie_snapshot(), {})
+        self.assertFalse(web._profile_session_identity_verified)
+        await web.close()
+        self.assertEqual(profile.cookies, original)
+
+    async def test_scoped_ads_manager_bootstrap_stops_on_meta_auth_cookie_deletion(self):
+        actor = '123456789'
+        original = {'c_user': actor, 'xs': 'imported-xs'}
+        profile = WebProfile('fixture', dict(original),
+            'http://127.0.0.1:1', 'fixture-UA')
+        web = FacebookWebSession(profile)
+        self.addAsyncCleanup(web.close)
+        client = await web._ensure_session()
+        requests = []
+
+        def handler(request):
+            requests.append((request.url.host, request.url.path))
+            return httpx.Response(302, headers=[
+                ('Location', 'https://business.facebook.com/business/loginpage/'),
+                ('Set-Cookie', 'c_user=; Domain=.facebook.com; Path=/; Max-Age=0; Secure'),
+                ('Set-Cookie', 'xs=; Domain=.facebook.com; Path=/; Max-Age=0; Secure'),
+            ])
+
+        await self.mock(client, handler)
+        client._client.event_hooks["response"].append(client._track_meta_xs_cookie_updates)
+        with self.assertRaisesRegex(
+            AuthenticationError, 'Meta explicitly removed a selected-profile'
+        ):
+            await web.bootstrap(
+                business_loginpage_return_url=(
+                    'https://adsmanager.facebook.com/adsmanager/manage/campaigns'
+                    '?act=123456789&business_id=987654321'
+                ),
+            )
+
+        self.assertEqual(requests, [
+            ('adsmanager.facebook.com', '/adsmanager/manage/campaigns'),
+        ])
+        self.assertEqual(profile.cookies, original)
+        await web.close()
+
     async def test_bootstrap_explicit_auth_cookie_deletion_stops_before_inventory_reads(self):
         actor = '123456789'
         original = {'c_user': actor, 'xs': 'imported-xs'}
@@ -408,7 +477,7 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
         client._client.event_hooks["response"].append(client._track_meta_xs_cookie_updates)
         web.refresh_reviewed_modules = AsyncMock()
         with self.assertRaisesRegex(
-            AuthenticationError, 'Meta removed a required selected-profile'
+            AuthenticationError, 'Meta explicitly removed a selected-profile'
         ):
             await web.bootstrap()
         self.assertEqual(len(requests), 1)
@@ -454,7 +523,7 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
                     new=AsyncMock(wraps=web._verified_profile_bootstrap),
                 ) as verify_profile:
                     with self.assertRaisesRegex(
-                        AuthenticationError, 'Meta removed a required selected-profile'
+                        AuthenticationError, 'Meta explicitly removed a selected-profile'
                     ):
                         await web.bootstrap(
                             allow_business_loginpage_probe=True, prefer_business_home=True,
@@ -496,7 +565,7 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
         await self.mock(client, handler)
         client._client.event_hooks["response"].append(client._track_meta_xs_cookie_updates)
         with self.assertRaisesRegex(
-            AuthenticationError, 'Meta removed a required selected-profile'
+            AuthenticationError, 'Meta explicitly removed a selected-profile'
         ):
             await web.bootstrap(
                 allow_business_loginpage_probe=True, prefer_business_home=True,
