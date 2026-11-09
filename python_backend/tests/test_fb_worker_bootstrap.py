@@ -725,6 +725,29 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(result, bootstrap)
         session.fetch_text.assert_not_awaited()
 
+    async def test_scoped_ads_manager_url_is_first_business_bootstrap_document(self):
+        actor, account = "123456789", "555666777"
+        scoped_url = (
+            "https://adsmanager.facebook.com/adsmanager/manage/campaigns"
+            f"?act={account}"
+        )
+        body = (
+            '<script>CurrentUserInitialData = {"USER_ID":"123456789"};</script>'
+            '["DTSGInitialData",[],{"token":"scoped-token"}]'
+        )
+        session, client = self.session(body, scoped_url)
+        bootstrap = await session.bootstrap(
+            business_loginpage_return_url=scoped_url,
+        )
+        self.assertEqual(client.calls[0], scoped_url)
+        self.assertEqual(bootstrap.fb_dtsg, "scoped-token")
+
+        home_session, home_client = self.session(body, FacebookWebSession.BUSINESS_HOME_URL)
+        await home_session.bootstrap(
+            business_loginpage_return_url=scoped_url, business_home_only=True,
+        )
+        self.assertEqual(home_client.calls[0], FacebookWebSession.BUSINESS_HOME_URL)
+
     async def test_bootstrap_accepts_exact_account_only_saved_context_return(self):
         actor, account = "123456789", "555666777"
         session = FacebookWebSession(WebProfile(name="27",
@@ -737,6 +760,39 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
                 f"?act={account}"
             ))
 
+        session._ensure_session.assert_awaited_once()
+
+    async def test_read_bm_account_hint_builds_account_only_ads_manager_scope(self):
+        from app.static_meta_contracts import command
+        actor, account = "123456789", "555666777"
+        row = command("READ_BM")
+        session = FacebookWebSession(WebProfile(name="29",
+            cookies={"c_user": actor}, proxy=None, user_agent="fixture"))
+        session._validate_business_loginpage_probe = Mock(return_value="READ_BM")
+        bootstrap = FacebookBootstrap(actor_id=actor, fb_dtsg="fixture-token")
+        session.bootstrap = AsyncMock(return_value=bootstrap)
+        session._business_bootstrap = AsyncMock(return_value=bootstrap)
+        session._ensure_session = AsyncMock(side_effect=RuntimeError("stop before GraphQL POST"))
+
+        with self.assertRaisesRegex(RuntimeError, "stop before GraphQL POST"):
+            await session.graphql(
+                row["doc_id"], row["variables"],
+                friendly_name=row["friendly_name"], endpoint_url=row["endpoint_url"],
+                business_loginpage_probe="READ_BM",
+                business_loginpage_account_id=account, read_timeout_seconds=30,
+            )
+
+        session.bootstrap.assert_awaited_once_with(
+            business_loginpage_return_url=(
+                "https://adsmanager.facebook.com/adsmanager/manage/campaigns"
+                f"?act={account}"
+            ),
+        )
+        session._business_bootstrap.assert_awaited_once()
+        self.assertEqual(
+            session._business_bootstrap.await_args.kwargs["business_loginpage_probe"],
+            "READ_BM",
+        )
         session._ensure_session.assert_awaited_once()
 
     async def test_read_fp_handoff_uses_exact_selected_account_and_business(self):
