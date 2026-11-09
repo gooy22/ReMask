@@ -2370,7 +2370,7 @@ async def profile_live_inventory(
             try:
                 facebook_web=await meta_transport.facebook_web()
                 facebook_web.defer_module_refresh=fast_sync
-                private_timeout=budget(32.0)
+                private_timeout=budget(45.0)
                 with measure_phase('inventory_read'):
                     private_snapshot=await hard_deadline(
                         private_inventory_snapshot(
