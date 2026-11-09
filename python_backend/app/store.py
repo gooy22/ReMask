@@ -1819,8 +1819,8 @@ class JobStore:
                         def safe_meta_text(value):
                             if not isinstance(value, str):
                                 return ''
-                            text = re.sub(r'https?://\\S+|[\\w.+-]+@[\\w.-]+\\.[A-Za-z]{2,}', '[redacted]', value)
-                            text = re.sub(r'(?i)\\b(?:cookie|access[_ -]?token|authorization|password|secret|fb_dtsg|jazoest|lsd|xs|c_user)\\b\\s*[:=]\\s*\\S+', '[redacted]', text)
+                            text = re.sub(r'https?://\S+|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}', '[redacted]', value)
+                            text = re.sub(r'(?i)\b(?:cookie|access[_ -]?token|authorization|password|secret|fb_dtsg|jazoest|lsd|xs|c_user)\b\s*[:=]\s*\S+', '[redacted]', text)
                             text = re.sub(r'[A-Za-z0-9_./+=-]{48,}', '[redacted]', text)
                             return ' '.join(text.split())[:180]
 
