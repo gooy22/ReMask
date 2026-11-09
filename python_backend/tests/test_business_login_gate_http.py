@@ -250,6 +250,44 @@ class GateContinuationParserTests(unittest.TestCase):
         self.assertEqual(selected_query["act"], ["999999"])
         self.assertEqual(selected_query["business_id"], ["222222"])
 
+    def test_native_continuation_supports_unscoped_business_home_for_bm_read(self):
+        from app.private_business_login import native_business_login_continuation
+
+        body = _native_gate_body(referrerURI=RETURN_URL)
+        diagnostic = {}
+        continuation = native_business_login_continuation(
+            body, RETURN_URL, diagnostic=diagnostic,
+        )
+
+        self.assertIsNotNone(continuation)
+        self.assertEqual(diagnostic["reason"], "native_fb_continuation")
+        self.assertTrue(diagnostic["scope_path_allowed"])
+        self.assertTrue(diagnostic["scope_act_count_valid"])
+        params = parse_qs(urlsplit(continuation).query)
+        next_url = params["next"][0]
+        self.assertEqual(urlsplit(next_url).netloc, "business.facebook.com")
+        self.assertEqual(urlsplit(next_url).path, "/latest/home")
+        next_query = parse_qs(urlsplit(next_url).query)
+        self.assertEqual(
+            set(next_query),
+            {"biz_login_source", "join_id"},
+        )
+
+        # Accountless Business Home is exact and query-free; it must not accept
+        # a different Business route or an unverified ad-account scope.
+        for invalid_url in (
+            "https://business.facebook.com/latest/settings",
+            RETURN_URL + "?act=111111",
+        ):
+            with self.subTest(invalid_url=invalid_url):
+                rejected = {}
+                self.assertIsNone(
+                    native_business_login_continuation(
+                        body, invalid_url, diagnostic=rejected,
+                    )
+                )
+                self.assertEqual(rejected["reason"], "request_scope")
+
     def test_accepts_same_scope_latest_home_with_native_request_id(self):
         from app.private_business_login import native_business_login_continuation
 
@@ -583,7 +621,7 @@ class GateContinuationTransportTests(unittest.IsolatedAsyncioTestCase):
             web,
             gate_url=GATE_URL,
             body="<p>Review your business</p>",
-            return_url=RETURN_URL,
+            return_url="https://business.facebook.com/latest/settings",
         )
         self.assertIsNone(result)
         self.assertEqual(
