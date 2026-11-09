@@ -213,6 +213,10 @@ class BusinessPageTests(unittest.IsolatedAsyncioTestCase):
         with patch('app.provisioning.fan_pages_handler.fan_pages_handler', side_effect=create):
             with self.assertRaises(ProvisioningError):
                 await ensure_business_page(self.session, {'business_id': BM2}, self.state)
+            failed_step = await self.state.step(seen[0][0], ProvisioningStep.FAN_PAGES)
+            self.assertEqual(failed_step['status'], 'FAILED')
+            self.assertEqual(failed_step['result']['phase'], 'PAGE_CREATE_CLICK_INTENT')
+            self.assertEqual(failed_step['result']['business_id'], BM2)
             self.context.profile_id = '18'
             result = await ensure_business_page(self.session, {'business_id': BM2}, self.state)
         self.assertEqual(seen[0], seen[1])
