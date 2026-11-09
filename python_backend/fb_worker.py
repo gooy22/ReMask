@@ -1238,14 +1238,10 @@ class FacebookWebSession:
             if business_home_only:
                 bootstrap_urls = (self.BUSINESS_HOME_URL,)
             elif account_only_bootstrap:
-                # READ_BM's account-only handoff follows the known-good kit path:
-                # selected Ads Manager account, then Business Home. Generic
-                # profile fallbacks consumed the live-inventory deadline before
-                # the pinned READ_BM query could receive a response.
-                bootstrap_urls = (
-                    business_loginpage_return_url,
-                    self.BUSINESS_HOME_URL,
-                )
+                # READ_BM's account-only handoff follows the established kit
+                # route through Business Home. The Ads Manager return URL is
+                # reserved for explicitly scoped reads, not initial kit setup.
+                bootstrap_urls = (self.BUSINESS_HOME_URL,)
             else:
                 bootstrap_urls = scoped_bootstrap_urls + (
                     self.BUSINESS_HOME_URL,
