@@ -78,7 +78,7 @@ def _bm_scopes(payload):
     return rows, complete, next_page is True
 
 
-async def read_business_inventory(web, expected=''):
+async def read_business_inventory(web, expected='', *, bootstrap_account_id=''):
     rows, complete, diagnostics = {}, False, []
     if expected:
         payload = await execute(web, 'CONFIG', business=expected)
@@ -96,7 +96,10 @@ async def read_business_inventory(web, expected=''):
     variables = command('READ_BM')['variables']
     for count in (200, 400, 800):
         variables['fetchNumberForBusinessScopes'] = count
-        payload = await execute(web, 'READ_BM', variables=variables)
+        payload = await execute(
+            web, 'READ_BM', variables=variables,
+            bootstrap_account_id=bootstrap_account_id,
+        )
         found, complete, more = _bm_scopes(payload)
         # Each request is a fresh full prefix, not a cursor page. Do not merge
         # identities that disappeared between responses into a complete result.
