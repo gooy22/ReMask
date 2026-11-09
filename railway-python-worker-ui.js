@@ -362,12 +362,18 @@ async function pythonWorkerMapLimit(items, limit, worker) {
 function pythonWorkerItemCanRetry(item) {
   if (!item || String(item.status || '').toUpperCase() !== 'FAILED') return false;
   const tasks = Array.isArray(item.tasks) ? item.tasks : [];
+  const steps = Array.isArray(item.provisioning_steps) ? item.provisioning_steps : [];
   if (pythonWorkerItemBlockedByKnownProfileStatus(item)) return false;
-  // A stale aggregate flag must not turn a security checkpoint into a retry.
-  if (pythonWorkerIsProfileAuthBlockedCode(item.error_code) || tasks.some(function(task) {
-    return task && String(task.status || '').toUpperCase() === 'FAILED' &&
-      pythonWorkerIsProfileAuthBlockedCode(task.error_code);
-  })) return false;
+  // A stale aggregate flag must not turn an auth failure into an automatic replay.
+  if (pythonWorkerIsProfileAuthBlockedCode(item.error_code) ||
+    tasks.some(function(task) {
+      return task && String(task.status || '').toUpperCase() === 'FAILED' &&
+        pythonWorkerIsProfileAuthBlockedCode(task.error_code);
+    }) ||
+    steps.some(function(step) {
+      return step && String(step.status || '').toUpperCase() === 'FAILED' &&
+        pythonWorkerIsProfileAuthBlockedCode(step.error_code);
+    })) return false;
   return item.retryable === true || tasks.some(function(task) {
     return task && String(task.status || '').toUpperCase() === 'FAILED' && task.retryable === true;
   });
@@ -719,7 +725,8 @@ function pythonWorkerIsProfileAuthBlockedCode(code) {
     'SESSION_EXPIRED',
     'BUSINESS_LOGIN_GATE',
     'TWO_FACTOR_REQUIRED',
-    'FACEBOOK_TEMPORARILY_BLOCKED'
+    'FACEBOOK_TEMPORARILY_BLOCKED',
+    'META_AUTH_TOKEN_UNAVAILABLE'
   ].indexOf(value) !== -1 || /(?:CHECKPOINT_REQUIRED|BUSINESS_LOGIN_GATE)$/.test(value);
 }
 
@@ -965,17 +972,16 @@ let pythonWorkerProfileStatusRequest = null;
 let pythonWorkerProfileStatusJobId = '';
 
 function pythonWorkerItemErrorCode(item) {
-  const failedTask = (Array.isArray(item && item.tasks) ? item.tasks : []).find(function(task) {
+  const failedTasks = (Array.isArray(item && item.tasks) ? item.tasks : []).filter(function(task) {
     return task && String(task.status || '').toUpperCase() === 'FAILED';
   });
-  const failedStep = (Array.isArray(item && item.provisioning_steps) ? item.provisioning_steps : []).find(function(step) {
+  const failedSteps = (Array.isArray(item && item.provisioning_steps) ? item.provisioning_steps : []).filter(function(step) {
     return step && String(step.status || '').toUpperCase() === 'FAILED';
   });
-  const candidates = [
-    item && item.error_code,
-    failedTask && failedTask.error_code,
-    failedStep && failedStep.error_code
-  ].map(function(value) { return String(value || '').trim().toUpperCase(); }).filter(Boolean);
+  const candidates = [item && item.error_code]
+    .concat(failedTasks.map(function(task) { return task.error_code; }))
+    .concat(failedSteps.map(function(step) { return step.error_code; }))
+    .map(function(value) { return String(value || '').trim().toUpperCase(); }).filter(Boolean);
   const authPriority = [
     'CHECKPOINT_REQUIRED',
     'TWO_FACTOR_REQUIRED',
@@ -1013,6 +1019,9 @@ function pythonWorkerJobStatusView(item) {
   }
   if (/BUSINESS_LOGIN_GATE$/.test(code)) {
     return {label:'ДОСТУП META ОСТАНОВЛЕН', key:'BUSINESS_LOGIN_GATE', message:'Meta остановила доступ. Новые задачи запрещены.'};
+  }
+  if (code === 'META_AUTH_TOKEN_UNAVAILABLE') {
+    return {label:'ВХОД НЕ ПОДТВЕРЖДЁН', key:'LOGIN_REQUIRED', message:'Meta не подтвердила контекст авторизации; GraphQL/CREATE не отправлялся. Повтор задания заблокирован.'};
   }
   if (code === 'PRIVATE_LAUNCH_PLAN_CHANGED') {
     return {label:'НАСТРОЙКИ ИЗМЕНИЛИСЬ', key:'FAILED', message:'У этой задачи уже сохранены другие настройки. Новый запрос не отправлен.'};
@@ -1054,6 +1063,9 @@ function pythonWorkerUserFailureText(item) {
   }
   if (/BUSINESS_LOGIN_GATE$/.test(code) || code === 'PROFILE_META_BLOCKED') {
     return 'Meta остановила доступ. Новые действия по профилю запрещены.';
+  }
+  if (code === 'META_AUTH_TOKEN_UNAVAILABLE') {
+    return 'Meta не подтвердила вход; GraphQL/CREATE не отправлялся. Автоматический повтор этого задания заблокирован. Сначала восстановите вход штатным способом в Facebook.';
   }
   if (code === 'PRIVATE_LAUNCH_PLAN_CHANGED') {
     return 'У этой задачи уже сохранены другие настройки. Новый запрос не отправлен.';
@@ -1362,7 +1374,7 @@ function pythonWorkerRenderJob(job) {
           summary.textContent = 'Технические подробности';
           const pre = document.createElement('pre');
           pre.textContent = [
-            item && item.error_code ? 'Код: ' + item.error_code : '',
+            pythonWorkerItemErrorCode(item) ? 'Код: ' + pythonWorkerItemErrorCode(item) : '',
             item && item.error_message ? 'Описание: ' + item.error_message : '',
             ...pythonWorkerFailureDetails(item),
             ...businessTelemetry
