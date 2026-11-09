@@ -693,37 +693,45 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(cookie_session.restored)
         session.fetch_text.assert_awaited_once()
 
-    async def test_read_bm_uses_pinned_query_instead_of_reopening_business_home(self):
+    async def test_read_bm_reopens_business_home_after_non_business_dtsg(self):
         actor = "123456789"
         session = FacebookWebSession(WebProfile(name="29",
             cookies={"c_user": actor, "xs": "fixture-xs"}, proxy=None, user_agent="fixture"))
         bootstrap = FacebookBootstrap(actor_id=actor, fb_dtsg="fixture-token",
             source_url="https://www.facebook.com/ajax/dtsg/?__a=true",
             profile_actor_verified=False)
-        session.fetch_text = AsyncMock()
+        session.fetch_text = AsyncMock(return_value=(
+            200, "<html>Business Home</html>", FacebookWebSession.BUSINESS_HOME_URL,
+        ))
 
         result = await session._business_bootstrap(
             bootstrap, business_loginpage_probe="READ_BM",
         )
 
         self.assertIs(result, bootstrap)
-        session.fetch_text.assert_not_awaited()
+        session.fetch_text.assert_awaited_once_with(FacebookWebSession.BUSINESS_HOME_URL)
 
-    async def test_read_rk_uses_pinned_query_instead_of_reopening_business_document(self):
+    async def test_read_rk_reopens_exact_business_document_after_non_business_dtsg(self):
         actor, business = "123456789", "987654321"
         session = FacebookWebSession(WebProfile(name="29",
             cookies={"c_user": actor, "xs": "fixture-xs"}, proxy=None, user_agent="fixture"))
         bootstrap = FacebookBootstrap(actor_id=actor, fb_dtsg="fixture-token",
             source_url="https://www.facebook.com/ajax/dtsg/?__a=true",
             profile_actor_verified=False)
-        session.fetch_text = AsyncMock()
+        target = (
+            "https://business.facebook.com/latest/settings/ad_accounts/"
+            f"?business_id={business}"
+        )
+        session.fetch_text = AsyncMock(return_value=(
+            200, "<html>Business Accounts</html>", target,
+        ))
 
         result = await session._business_bootstrap(
             bootstrap, business_id=business, business_loginpage_probe="READ_RK",
         )
 
         self.assertIs(result, bootstrap)
-        session.fetch_text.assert_not_awaited()
+        session.fetch_text.assert_awaited_once_with(target)
 
     async def test_scoped_ads_manager_url_is_first_business_bootstrap_document(self):
         actor, account = "123456789", "555666777"
@@ -782,12 +790,16 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         ])
         session._fetch_dtsg_refresh_token.assert_awaited_once()
 
-    async def test_business_ajax_dtsg_context_skips_duplicate_read_rk_document(self):
+    async def test_business_ajax_dtsg_still_requires_exact_read_rk_document(self):
         actor, business = "123456789", "987654321"
         session, _client = self.session("", "https://business.facebook.com/")
-        session.fetch_text = AsyncMock(
-            side_effect=AssertionError("exact READ_RK must use its pinned query")
+        target = (
+            "https://business.facebook.com/latest/settings/ad_accounts/"
+            f"?business_id={business}"
         )
+        session.fetch_text = AsyncMock(return_value=(
+            200, "<html>Business Accounts</html>", target,
+        ))
         bootstrap = FacebookBootstrap(
             actor_id=actor,
             fb_dtsg="read-token",
@@ -799,7 +811,7 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertIs(result, bootstrap)
-        session.fetch_text.assert_not_awaited()
+        session.fetch_text.assert_awaited_once_with(target)
 
     async def test_bootstrap_accepts_exact_account_only_saved_context_return(self):
         actor, account = "123456789", "555666777"
