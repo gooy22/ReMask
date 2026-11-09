@@ -1287,22 +1287,60 @@ async def _require_fp_auth_ready(profile_ids: list[str]) -> None:
         )
 
 
+_NON_RETRYABLE_PROFILE_AUTH_CODES = frozenset({
+    # Meta did not provide an authenticated context, so no CREATE request was sent.
+    # Keep this failed job closed to automatic replay; resolve auth in Facebook first.
+    "META_AUTH_TOKEN_UNAVAILABLE",
+})
+
+
+def _failed_item_error_codes(item: dict[str, Any]) -> set[str]:
+    """Collect errors from the failed item, its tasks, and its recorded steps."""
+    codes: set[str] = set()
+    item_code = str(item.get('error_code') or '').strip().upper()
+    if item_code:
+        codes.add(item_code)
+    for collection_key in ('tasks', 'provisioning_steps'):
+        for row in item.get(collection_key) or []:
+            if not isinstance(row, dict) or str(row.get('status') or '').upper() != 'FAILED':
+                continue
+            candidates = [row.get('error_code')]
+            result = row.get('result')
+            if isinstance(result, dict):
+                candidates.extend((result.get('error_code'), result.get('code')))
+            for value in candidates:
+                code = str(value or '').strip().upper()
+                if code:
+                    codes.add(code)
+    return codes
+
+
 def _view_terminal_auth_retry_profile_ids(view: dict[str, Any]) -> list[str]:
-    """Profiles whose failed item is blocked by a terminal Facebook auth state."""
+    """Profiles whose failed item carries a terminal Facebook auth code."""
     out: list[str] = []
     for item in view.get('items') or []:
         if not isinstance(item,dict) or str(item.get('status') or '').upper()!='FAILED':
             continue
-        codes={str(item.get('error_code') or '').strip().upper()}
-        for task in item.get('tasks') or []:
-            if isinstance(task,dict) and str(task.get('status') or '').upper()=='FAILED':
-                codes.add(str(task.get('error_code') or '').strip().upper())
-        if not any(code in BROWSER_TERMINAL_ACCESS_CODES for code in codes):
+        if not _failed_item_error_codes(item).intersection(BROWSER_TERMINAL_ACCESS_CODES):
             continue
         profile=str(item.get('profile_id') or '').strip()
         if profile and profile not in out:
             out.append(profile)
     return out
+
+
+def _view_non_retryable_auth_profile_ids(view: dict[str, Any]) -> set[str]:
+    """Profiles whose failed job must not be replayed without a new auth flow."""
+    blocked: set[str] = set()
+    for item in view.get('items') or []:
+        if not isinstance(item, dict) or str(item.get('status') or '').upper() != 'FAILED':
+            continue
+        if not _failed_item_error_codes(item).intersection(_NON_RETRYABLE_PROFILE_AUTH_CODES):
+            continue
+        profile = str(item.get('profile_id') or '').strip()
+        if profile:
+            blocked.add(profile)
+    return blocked
 
 
 def _view_failed_profiles_with_known_session_blocks(
@@ -1321,10 +1359,7 @@ def _view_failed_profiles_with_known_session_blocks(
     for item in view.get('items') or []:
         if not isinstance(item, dict) or str(item.get('status') or '').upper() != 'FAILED':
             continue
-        codes = {str(item.get('error_code') or '').strip().upper()}
-        for task in item.get('tasks') or []:
-            if isinstance(task, dict) and str(task.get('status') or '').upper() == 'FAILED':
-                codes.add(str(task.get('error_code') or '').strip().upper())
+        codes = _failed_item_error_codes(item)
         if any(code in BROWSER_TERMINAL_ACCESS_CODES for code in codes):
             # These already pass through the explicit, bounded auth preflight.
             continue
@@ -4655,11 +4690,13 @@ async def retry_failed(job_id: str, consent: dict | None = Body(default=None)) -
     status_blocked_profiles=_view_failed_profiles_with_known_session_blocks(
         current_view, profile_statuses
     )
+    non_retryable_auth_profiles = _view_non_retryable_auth_profile_ids(current_view)
     if auth_retry_profiles:
         _auth_ready,auth_blocked=await _partition_auth_retry_profiles(auth_retry_profiles)
     else:
         auth_blocked={}
-    excluded_profiles=set(auth_blocked) | status_blocked_profiles | terminal_profiles
+    excluded_profiles=(set(auth_blocked) | status_blocked_profiles | terminal_profiles
+                       | non_retryable_auth_profiles)
 
     fp_profiles=_view_fan_page_retry_profile_ids(current_view)
     fp_profiles_for_gate=[
@@ -4709,6 +4746,7 @@ async def retry_failed(job_id: str, consent: dict | None = Body(default=None)) -
                 and profile not in recovered_gate_profiles
                 for profile, value in terminal_statuses.items()
             ) else
+            'META_AUTH_TOKEN_UNAVAILABLE' if non_retryable_auth_profiles else
             'FACEBOOK_AUTH_REQUIRED' if auth_blocked else
             'PROFILE_SESSION_BLOCKED' if status_blocked_profiles else ''
         ),
