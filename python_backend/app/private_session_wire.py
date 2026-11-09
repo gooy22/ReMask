@@ -17,8 +17,8 @@ def route(url):
 
 
 def cookie_evidence(header, actor):
-    auth = {'c_user':'', 'xs':''}
-    names, conflicts = set(), False
+    auth_values = {'c_user': [], 'xs': []}
+    names = set()
     if len(header) > 131072:
         return {'header_auth_state':'unavailable'}
     for part in header.split(';'):
@@ -26,16 +26,15 @@ def cookie_evidence(header, actor):
         if not separator:
             continue
         names.add(name)
-        if name in auth:
-            value = value.strip('"')
-            if auth[name] and auth[name] != value:
-                conflicts = True
-            auth[name] = value
-    state = ('conflicting' if conflicts else 'absent' if not auth['c_user'] else
-             'matches' if auth['c_user'] == actor else 'mismatch')
+        if name in auth_values:
+            auth_values[name].append(value.strip().strip('"'))
+    actor_values = auth_values['c_user']
+    actor_conflict = len(set(actor_values)) > 1
+    state = ('conflicting' if actor_conflict else 'absent' if not actor_values else
+             'matches' if all(value == actor for value in actor_values) else 'mismatch')
     return {'header_auth_state':state, 'header_cookie_count':len(names),
-        'header_auth_cookie_names':sorted(names & set(auth)),
-        'header_auth_cookie_fingerprint':hashlib.sha256(json.dumps(auth,
+        'header_auth_cookie_names':sorted(names & set(auth_values)),
+        'header_auth_cookie_fingerprint':hashlib.sha256(json.dumps(auth_values,
             sort_keys=True,separators=(',', ':')).encode()).hexdigest()}
 
 
