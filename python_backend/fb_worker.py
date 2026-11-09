@@ -139,7 +139,8 @@ class FacebookWebSession:
     Все приватные GraphQL-запросы проходят через этот объект.
     """
 
-    BUSINESS_HOME_URL = "https://business.facebook.com/latest/home"
+    ADS_MANAGER_URL = "https://business.facebook.com/latest/home"
+    BUSINESS_HOME_URL = ADS_MANAGER_URL
 
     GRAPHQL_URL = "https://business.facebook.com/api/graphql/"
 
