@@ -2213,7 +2213,7 @@ class FacebookWebSession:
         source = str(getattr(bootstrap, "source_url", "") or "").strip()
         target = (
             "https://business.facebook.com/latest/settings/ad_accounts/?business_id=" + business_id
-            if business_id else self.BUSINESS_HOME_URL
+            if business_id else self.ADS_MANAGER_URL
         )
         if not business_id and (not source or urlsplit(source).hostname == "business.facebook.com"):
             return bootstrap
