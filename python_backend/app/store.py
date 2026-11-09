@@ -1781,18 +1781,13 @@ class JobStore:
                             task['retryable']=True
                             task['recovery_mode']='retry_private_launch_before_submit'
                 item_steps=steps_by_item.get(item['id'],[])
-                prepare_failed = any(
-                    str(task.get('action') or '').lower() == 'prepare'
-                    and str(task.get('status') or '').upper() == 'FAILED'
-                    for task in tasks
-                )
                 failure_codes = [str(item.get('error_code') or '').strip().upper()]
                 failure_codes.extend(
                     str(task.get('error_code') or '').strip().upper()
                     for task in tasks
                     if str(task.get('status') or '').upper() == 'FAILED'
                 )
-                if prepare_failed and any(code in {
+                if any(code in {
                         'FAN_PAGE_CREATE_RESULT_UNKNOWN',
                         'PAGE_CREATE_RESULT_UNKNOWN',
                         'PREPARE_PAGE_UNCONFIRMED',
