@@ -108,6 +108,7 @@ class FacebookBootstrap:
     source_url: str = ""
     profile_actor_verified: bool = False
     sprinkle_config: dict[str, object] = field(default_factory=dict, repr=False)
+    _business_loginpage_return_url: str = field(default="", repr=False)
 
 
 
@@ -1117,6 +1118,20 @@ class FacebookWebSession:
                     transport_stage="business_auth_precheck",
                 )
 
+        scoped_bootstrap_context = (
+            business_loginpage_return_url
+            if business_loginpage_return_url and not business_home_only
+            else ""
+        )
+        if (
+            scoped_bootstrap_context and self._bootstrap is not None
+            and getattr(self._bootstrap, "_business_loginpage_return_url", "")
+                != scoped_bootstrap_context
+        ):
+            # A cached generic profile/Business token must not bypass the
+            # selected account's first-party Ads Manager navigation context.
+            force = True
+
         if (allow_business_loginpage_probe and self._bootstrap is not None
                 and not self._bootstrap.profile_actor_verified):
             self._bootstrap = None
@@ -1681,6 +1696,7 @@ class FacebookWebSession:
                 request_context=request_context,
                 source_url=final_url,
                 sprinkle_config=_extract_sprinkle_config(body),
+                _business_loginpage_return_url=scoped_bootstrap_context,
             )
 
             self._bootstrap = bootstrap
@@ -3071,6 +3087,8 @@ class FacebookWebSession:
                         business_loginpage_probe=scoped_probe,
                         business_page_create_prechecked=page_create_prechecked,
                     )
+                    if scoped_ads_manager_return_url:
+                        bootstrap._business_loginpage_return_url = scoped_ads_manager_return_url
                 # Targeting suggestions are read-only and validate the exact
                 # BM/RK identities in the response. Skip the Ads Manager
                 # document preflight that can stall on a cross-host redirect.
