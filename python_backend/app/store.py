@@ -1797,21 +1797,42 @@ class JobStore:
                         'PAGE_CREATE_RESULT_UNKNOWN',
                         'PREPARE_PAGE_UNCONFIRMED',
                     } for code in failure_codes):
-                    child_prefix = str(item.get('id') or '') + ':prepare:'
-                    nested_page = con.execute(
-                        """SELECT error_code,error_message,attempt,result_json
-                           FROM provisioning_steps
-                           WHERE profile_id=? AND step='FAN_PAGES' AND status='FAILED'
-                             AND substr(item_id,1,?)=?
-                           ORDER BY updated_at DESC LIMIT 1""",
-                        (str(item.get('profile_id') or ''), len(child_prefix), child_prefix),
-                    ).fetchone()
+                    failure_messages = [str(item.get('error_message') or '')]
+                    failure_messages.extend(
+                        str(task.get('error_message') or '')
+                        for task in tasks
+                        if str(task.get('status') or '').upper() == 'FAILED'
+                    )
+                    expected_business = ''
+                    for failure_message in failure_messages:
+                        business_match = re.search("r'\\bBM\\s+(\\d{5,30})\\b'", failure_message)
+                        if business_match:
+                            expected_business = business_match.group(1)
+                            break
+                    nested_page = None
+                    nested_result = {}
+                    if expected_business:
+                        candidate_rows = con.execute(
+                            """SELECT error_code,error_message,attempt,result_json
+                               FROM provisioning_steps
+                               WHERE profile_id=? AND step='FAN_PAGES' AND status='FAILED'
+                               ORDER BY updated_at DESC LIMIT 100""",
+                            (str(item.get('profile_id') or ''),),
+                        ).fetchall()
+                        for candidate in candidate_rows:
+                            try:
+                                candidate_result = json.loads(candidate['result_json'] or '{}')
+                            except (ValueError, TypeError):
+                                continue
+                            if not isinstance(candidate_result, dict):
+                                continue
+                            if (str(candidate_result.get('business_id') or '') == expected_business
+                                    and str(candidate_result.get('phase') or '').upper()
+                                    in {'PAGE_CREATE_RESULT_UNKNOWN', 'PAGE_CREATE_CLICK_INTENT'}):
+                                nested_page = candidate
+                                nested_result = candidate_result
+                                break
                     if nested_page is not None:
-                        try:
-                            nested_result = json.loads(nested_page['result_json'] or '{}')
-                        except (ValueError, TypeError):
-                            nested_result = {}
-                        nested_result = nested_result if isinstance(nested_result, dict) else {}
                         evidence = nested_result.get('create_response')
                         evidence = evidence if isinstance(evidence, dict) else {}
                         safe_response = {}
@@ -1857,7 +1878,7 @@ class JobStore:
 
                         safe_result = {}
                         business_id = str(nested_result.get('business_id') or '').strip()
-                        if re.fullmatch(r'\\d{5,30}', business_id):
+                        if re.fullmatch(r'\d{5,30}', business_id):
                             safe_result['business_id'] = business_id
                         if safe_response:
                             safe_result['create_response'] = safe_response
