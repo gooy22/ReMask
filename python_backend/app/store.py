@@ -1805,7 +1805,7 @@ class JobStore:
                     )
                     expected_business = ''
                     for failure_message in failure_messages:
-                        business_match = re.search("r'\\bBM\\s+(\\d{5,30})\\b'", failure_message)
+                        business_match = re.search(r'\bBM\s+(\d{5,30})\b', failure_message)
                         if business_match:
                             expected_business = business_match.group(1)
                             break
