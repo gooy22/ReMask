@@ -39,6 +39,12 @@ def private_auth_error(exc):
     else:
         code = "META_AUTH_TOKEN_UNAVAILABLE"
     unsent = getattr(exc, "request_may_have_been_sent", None) is False
+    raw_cookie_deletions = payload.get("auth_cookie_deletions", []) if isinstance(payload, dict) else []
+    cookie_deletions = sorted({
+        value.strip().casefold()
+        for value in raw_cookie_deletions
+        if isinstance(value, str) and value.strip().casefold() in {"c_user", "xs"}
+    }) if isinstance(raw_cookie_deletions, (list, tuple, set)) else []
     message = ("Meta redirected the selected profile to its Ads Manager login flow; cookie age was not checked."
         if code == "META_LOGIN_REQUIRED" else
         "Meta's read-only page did not confirm the selected profile identity."
@@ -48,10 +54,13 @@ def private_auth_error(exc):
         "Meta did not provide a verified authentication context; cookie age was not checked.")
     message += (" No GraphQL POST was sent." if unsent else " Any retained submit must be verified before retry.")
     error = ProvisioningError(code, message, retryable=True)
-    error.inventory_diagnostics = [{"auth_gate": code,
+    diagnostic = {"auth_gate": code,
         "transport_stage": str(getattr(exc, "transport_stage", "")),
         "observed_reasons": sorted(str(r) for r in reasons if r in
             ('checkpoint_redirect', 'meta_login_redirect', 'login_redirect', 'login_form', 'redirected_host', 'http_auth',
              'actor_mismatch', 'actor_unobserved')),
-        "post_not_sent": unsent}]
+        "post_not_sent": unsent}
+    if cookie_deletions:
+        diagnostic["auth_cookie_deletions"] = cookie_deletions
+    error.inventory_diagnostics = [diagnostic]
     return error
