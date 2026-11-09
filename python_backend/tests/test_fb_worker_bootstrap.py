@@ -693,7 +693,7 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(cookie_session.restored)
         session.fetch_text.assert_awaited_once()
 
-    async def test_read_bm_reopens_business_home_after_non_business_dtsg(self):
+    async def test_read_bm_reopens_ads_manager_after_non_business_dtsg(self):
         actor = "123456789"
         session = FacebookWebSession(WebProfile(name="29",
             cookies={"c_user": actor, "xs": "fixture-xs"}, proxy=None, user_agent="fixture"))
@@ -715,7 +715,7 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.fb_dtsg, "business-token")
         self.assertEqual(result.source_url, FacebookWebSession.BUSINESS_HOME_URL)
-        session.fetch_text.assert_awaited_once_with(FacebookWebSession.BUSINESS_HOME_URL)
+        session.fetch_text.assert_awaited_once_with(FacebookWebSession.ADS_MANAGER_URL)
 
     async def test_read_rk_reopens_exact_business_document_after_non_business_dtsg(self):
         actor, business = "123456789", "987654321"
