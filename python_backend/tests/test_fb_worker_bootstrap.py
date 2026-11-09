@@ -753,6 +753,28 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(home_client.calls[0], FacebookWebSession.BUSINESS_HOME_URL)
 
+    async def test_account_only_read_uses_only_ads_manager_then_business_home(self):
+        actor, account = "123456789", "555666777"
+        scoped_url = (
+            "https://adsmanager.facebook.com/adsmanager/manage/campaigns"
+            f"?act={account}"
+        )
+        session, client = self.session("authenticated shell without DTSG", scoped_url)
+        session._fetch_dtsg_refresh_token = AsyncMock(return_value=(
+            "ajax-token", "https://business.facebook.com/ajax/dtsg/?__a=true",
+        ))
+
+        bootstrap = await session.bootstrap(
+            business_loginpage_return_url=scoped_url,
+        )
+
+        self.assertEqual(bootstrap.fb_dtsg, "ajax-token")
+        self.assertEqual(client.calls, [
+            scoped_url,
+            FacebookWebSession.BUSINESS_HOME_URL,
+        ])
+        session._fetch_dtsg_refresh_token.assert_awaited_once()
+
     async def test_bootstrap_accepts_exact_account_only_saved_context_return(self):
         actor, account = "123456789", "555666777"
         session = FacebookWebSession(WebProfile(name="27",
