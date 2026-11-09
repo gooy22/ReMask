@@ -379,7 +379,7 @@ class PrivateHttpClient:
                     or value.casefold() == "deleted"
                     or re.search(r";\s*max-age\s*=\s*0(?:\s*;|\s*$)", str(raw), re.I)
                 )
-                if is_redirect and cookie_name in {"c_user", "xs"}:
+                if cookie_name in {"c_user", "xs"} and (is_redirect or is_cookie_deletion):
                     destination = auth_deletions if is_cookie_deletion else auth_directives
                     destination.add(cookie_name)
                     attributes: dict[str, str] = {}
@@ -417,21 +417,17 @@ class PrivateHttpClient:
                 )
                 if len(self._trusted_meta_xs_fingerprints) > 64:
                     self._trusted_meta_xs_fingerprints.pop()
-            if is_redirect and (auth_directives or auth_deletions):
-                # Keep the directive metadata on this response so a narrowly
-                # scoped document-navigation guard can distinguish this hop
-                # from a stale session-wide marker. Cookie values are excluded.
+            if auth_deletions or (is_redirect and auth_directives):
+                # Preserve Meta's explicit auth-cookie decisions for the
+                # bootstrap guard. Cookie values are excluded from the evidence.
                 response.extensions["remask_meta_auth_cookie_directive"] = {
                     "sets": sorted(auth_directives),
                     "deletions": sorted(auth_deletions),
                     "deletion_scopes": auth_deletion_scopes,
                 }
-                # Honor Meta's redirect response by default. Narrow exceptions
-                # are explicitly authorized by callers for reviewed same-profile
-                # Business handoff continuations.
                 self._meta_redirect_auth_cookie_directive_pending = True
                 log.info(
-                    "[%s] private_http_meta_redirect_auth_cookie_directive status=%d host=%s names=%s deleted=%s scope=%s",
+                    "[%s] private_http_meta_auth_cookie_directive status=%d host=%s names=%s deleted=%s scope=%s",
                     self.profile_name, response.status_code, host,
                     ",".join(sorted(auth_directives | auth_deletions)),
                     ",".join(sorted(auth_deletions)),
