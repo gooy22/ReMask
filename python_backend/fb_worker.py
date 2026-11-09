@@ -2207,7 +2207,7 @@ class FacebookWebSession:
         source = str(getattr(bootstrap, "source_url", "") or "").strip()
         source_parts = urlsplit(source)
         source_is_ajax_dtsg = (
-            source_parts.hostname == "www.facebook.com"
+            source_parts.hostname in {"www.facebook.com", "business.facebook.com"}
             and source_parts.path.rstrip("/") == "/ajax/dtsg"
             and parse_qs(source_parts.query).get("__a") == ["true"]
         )
