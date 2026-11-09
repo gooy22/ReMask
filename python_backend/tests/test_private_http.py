@@ -410,7 +410,7 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
         await self.mock(client, handler)
         client._client.event_hooks["response"].append(client._track_meta_xs_cookie_updates)
         with self.assertRaisesRegex(
-            AuthenticationError, 'Meta removed a required selected-profile'
+            AuthenticationError, 'Meta explicitly removed a selected-profile'
         ):
             await web._verified_profile_bootstrap(
                 client, actor, [], require_actor_match=True,
@@ -477,7 +477,7 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
         client._client.event_hooks["response"].append(client._track_meta_xs_cookie_updates)
         web.refresh_reviewed_modules = AsyncMock()
         with self.assertRaisesRegex(
-            AuthenticationError, 'Meta removed a required selected-profile'
+            AuthenticationError, 'Meta explicitly removed a selected-profile'
         ):
             await web.bootstrap()
         self.assertEqual(len(requests), 1)
@@ -523,7 +523,7 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
                     new=AsyncMock(wraps=web._verified_profile_bootstrap),
                 ) as verify_profile:
                     with self.assertRaisesRegex(
-                        AuthenticationError, 'Meta removed a required selected-profile'
+                        AuthenticationError, 'Meta explicitly removed a selected-profile'
                     ):
                         await web.bootstrap(
                             allow_business_loginpage_probe=True, prefer_business_home=True,
@@ -565,7 +565,7 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
         await self.mock(client, handler)
         client._client.event_hooks["response"].append(client._track_meta_xs_cookie_updates)
         with self.assertRaisesRegex(
-            AuthenticationError, 'Meta removed a required selected-profile'
+            AuthenticationError, 'Meta explicitly removed a selected-profile'
         ):
             await web.bootstrap(
                 allow_business_loginpage_probe=True, prefer_business_home=True,
