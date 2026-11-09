@@ -743,7 +743,7 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.source_url, target)
         session.fetch_text.assert_awaited_once_with(target)
 
-    async def test_scoped_ads_manager_url_is_first_business_bootstrap_document(self):
+    async def test_account_only_bootstrap_uses_business_home_and_keeps_return_hint(self):
         actor, account = "123456789", "555666777"
         scoped_url = (
             "https://adsmanager.facebook.com/adsmanager/manage/campaigns"
@@ -761,7 +761,7 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         bootstrap = await session.bootstrap(
             business_loginpage_return_url=scoped_url,
         )
-        self.assertEqual(client.calls[0], scoped_url)
+        self.assertEqual(client.calls[0], FacebookWebSession.BUSINESS_HOME_URL)
         self.assertEqual(bootstrap.fb_dtsg, "scoped-token")
         self.assertEqual(bootstrap._business_loginpage_return_url, scoped_url)
 
@@ -770,7 +770,7 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
             business_loginpage_return_url=exact_business_scope_url,
         )
         self.assertIs(reused, bootstrap)
-        self.assertEqual(client.calls, [scoped_url])
+        self.assertEqual(client.calls, [FacebookWebSession.BUSINESS_HOME_URL])
 
         home_session, home_client = self.session(body, FacebookWebSession.BUSINESS_HOME_URL)
         await home_session.bootstrap(
@@ -778,7 +778,7 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(home_client.calls[0], FacebookWebSession.BUSINESS_HOME_URL)
 
-    async def test_account_only_read_uses_only_ads_manager_then_business_home(self):
+    async def test_account_only_read_starts_at_business_home(self):
         actor, account = "123456789", "555666777"
         scoped_url = (
             "https://adsmanager.facebook.com/adsmanager/manage/campaigns"
@@ -794,10 +794,7 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(bootstrap.fb_dtsg, "ajax-token")
-        self.assertEqual(client.calls, [
-            scoped_url,
-            FacebookWebSession.BUSINESS_HOME_URL,
-        ])
+        self.assertEqual(client.calls, [FacebookWebSession.BUSINESS_HOME_URL])
         session._fetch_dtsg_refresh_token.assert_awaited_once()
 
     async def test_business_ajax_dtsg_still_requires_exact_read_rk_document(self):
