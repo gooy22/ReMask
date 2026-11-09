@@ -1370,7 +1370,7 @@ class FacebookWebSession:
                         self._restore_invalid_profile_cookie_snapshot(
                             session, actor_id
                         )
-                        response_headers = getattr(response, "headers", {}) or {};
+                        response_headers = getattr(response, "headers", {}) or {}
                         location = str(
                             response_headers.get("location")
                             or response_headers.get("Location")
