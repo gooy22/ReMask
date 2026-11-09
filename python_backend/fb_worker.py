@@ -108,6 +108,7 @@ class FacebookBootstrap:
     source_url: str = ""
     profile_actor_verified: bool = False
     sprinkle_config: dict[str, object] = field(default_factory=dict, repr=False)
+    _business_loginpage_return_url: str = field(default="", repr=False)
 
 
 
@@ -1117,6 +1118,20 @@ class FacebookWebSession:
                     transport_stage="business_auth_precheck",
                 )
 
+        scoped_bootstrap_context = (
+            business_loginpage_return_url
+            if business_loginpage_return_url and not business_home_only
+            else ""
+        )
+        if (
+            scoped_bootstrap_context and self._bootstrap is not None
+            and getattr(self._bootstrap, "_business_loginpage_return_url", "")
+                != scoped_bootstrap_context
+        ):
+            # A cached generic profile/Business token must not bypass the
+            # selected account's first-party Ads Manager navigation context.
+            force = True
+
         if (allow_business_loginpage_probe and self._bootstrap is not None
                 and not self._bootstrap.profile_actor_verified):
             self._bootstrap = None
@@ -1174,13 +1189,18 @@ class FacebookWebSession:
             # retain their independent profile-page identity bootstrap.
             token_patterns = list(self.FB_DTSG_PATTERNS)
 
-            # Business Home remains the first document for Business GraphQL. If it has
-            # no usable DTSG, retain the pre-existing fallback surfaces; actor
-            # matching and exact Business reads still gate any provisioning write.
+            # A validated selected-account Ads Manager URL is the first document
+            # for a scoped read. The exact READ_BM/READ_RK/READ_FP response still
+            # decides access; the saved account ID is only navigation context.
+            scoped_bootstrap_urls = (
+                (business_loginpage_return_url,)
+                if business_loginpage_return_url and not business_home_only
+                else ()
+            )
             bootstrap_urls = (
                 (self.BUSINESS_HOME_URL,)
                 if business_home_only
-                else (
+                else scoped_bootstrap_urls + (
                     self.BUSINESS_HOME_URL,
                     "https://business.facebook.com/latest/settings",
                     "https://business.facebook.com/latest/overview",
@@ -1676,6 +1696,7 @@ class FacebookWebSession:
                 request_context=request_context,
                 source_url=final_url,
                 sprinkle_config=_extract_sprinkle_config(body),
+                _business_loginpage_return_url=scoped_bootstrap_context,
             )
 
             self._bootstrap = bootstrap
@@ -2947,10 +2968,16 @@ class FacebookWebSession:
         scoped_ads_manager_return_url = ""
         if business_loginpage_account_id:
             scoped_business_id = str(business_context_id or "").strip()
+            read_bm_account_only = scoped_probe == "READ_BM"
+            valid_business_context = (
+                not scoped_business_id
+                if read_bm_account_only
+                else bool(re.fullmatch(r"\d{5,30}", scoped_business_id))
+            )
             if (
-                scoped_probe not in {"READ_RK", "READ_FP"}
+                scoped_probe not in {"READ_BM", "READ_RK", "READ_FP"}
                 or endpoint != self.GRAPHQL_URL
-                or not re.fullmatch(r"\d{5,30}", scoped_business_id)
+                or not valid_business_context
                 or not re.fullmatch(r"\d{5,30}", business_loginpage_account_id)
                 or request_envelope is not None
                 or before_submit is not None
@@ -2958,13 +2985,18 @@ class FacebookWebSession:
                 or not str(friendly_name or "").strip().endswith("Query")
             ):
                 raise RemoteRequestError(
-                    "Exact account handoff scope is limited to read-only READ_RK/READ_FP queries.",
+                    "Exact account handoff scope is limited to read-only READ_BM/READ_RK/READ_FP queries.",
                     request_may_have_been_sent=False,
                     transport_stage="business_auth_precheck",
                 )
             scoped_ads_manager_return_url = (
                 "https://adsmanager.facebook.com/adsmanager/manage/campaigns"
-                f"?act={business_loginpage_account_id}&business_id={scoped_business_id}"
+                f"?act={business_loginpage_account_id}"
+                + (
+                    ""
+                    if read_bm_account_only
+                    else f"&business_id={scoped_business_id}"
+                )
             )
         page_create_prechecked = False
         try:
@@ -3055,6 +3087,8 @@ class FacebookWebSession:
                         business_loginpage_probe=scoped_probe,
                         business_page_create_prechecked=page_create_prechecked,
                     )
+                    if scoped_ads_manager_return_url:
+                        bootstrap._business_loginpage_return_url = scoped_ads_manager_return_url
                 # Targeting suggestions are read-only and validate the exact
                 # BM/RK identities in the response. Skip the Ads Manager
                 # document preflight that can stall on a cross-host redirect.

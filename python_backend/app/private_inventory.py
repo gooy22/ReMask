@@ -342,10 +342,23 @@ async def private_inventory_snapshot(
     if discover_businesses and execute_read_queries and callable(getattr(web, 'graphql', None)):
         try:
             from .static_meta_inventory import read_business_inventory
+            # A single previously confirmed account is navigation context only.
+            # READ_BM must still return fresh Meta evidence before any write.
+            known_account_ids = {
+                _clean_id(value)
+                for account_ids in known_accounts_by_business.values()
+                for value in account_ids
+                if _clean_id(value)
+            }
+            bootstrap_account_hint = (
+                next(iter(known_account_ids)) if len(known_account_ids) == 1 else ""
+            )
             # Let the private HTTP request's own timeout/retry policy run.
             # This snapshot already has one outer wall-clock deadline; a nested
             # 18s wait_for cancels an in-flight request before its transport can finish.
-            proof = await read_business_inventory(web)
+            proof = await read_business_inventory(
+                web, bootstrap_account_id=bootstrap_account_hint,
+            )
             businesses.update({str(key): str(name) for key, name in proof.get('rows', {}).items()
                 if _clean_id(key) and str(key) != personal_scope_id})
             discovery_complete = proof.get('complete') is True

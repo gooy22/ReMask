@@ -70,11 +70,11 @@ def command(operation, **bindings):
 async def execute(web, operation, *, before_submit=None, business='', variables=None, **bindings):
     bootstrap_account_id = str(bindings.pop("bootstrap_account_id", "") or "").strip()
     if bootstrap_account_id and (
-            operation != "READ_RK"
+            operation not in {"READ_BM", "READ_RK"}
             or not re.fullmatch(r"\d{5,30}", bootstrap_account_id)):
         raise ProvisioningError(
             'PRIVATE_STATIC_CONTRACT_ARGUMENT_INVALID',
-            'A bootstrap account hint is limited to an exact READ_RK identity.',
+            'A bootstrap account hint is limited to exact read-only READ_BM/READ_RK identities.',
         )
     if business:
         bindings["business"] = business

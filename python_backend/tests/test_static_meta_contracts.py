@@ -117,6 +117,18 @@ class StaticReadTests(unittest.IsolatedAsyncioTestCase):
             [30, 30, 30],
         )
 
+    async def test_read_bm_account_hint_is_navigation_context_for_read_only_queries(self):
+        web = self.web(scopes([(BM, 'BM')]))
+        await execute(web, 'READ_BM', bootstrap_account_id=RK)
+        self.assertEqual(
+            web.graphql.call_args.kwargs['business_loginpage_account_id'], RK,
+        )
+        self.assertEqual(web.graphql.call_args.kwargs['business_context_id'], '')
+        for operation in ('CREATE_BM', 'CREATE_RK'):
+            with self.assertRaises(ProvisioningError):
+                await execute(web, operation, bootstrap_account_id=RK)
+        self.assertEqual(web.graphql.await_count, 1)
+
     async def test_bm_inventory_posts_one_fixed_read_and_no_asset_navigation(self):
         web=self.web(scopes([(BM,'BM')]))
         proof=await read_business_inventory(web)
@@ -124,6 +136,16 @@ class StaticReadTests(unittest.IsolatedAsyncioTestCase):
         web.fetch_text.assert_not_awaited()
         self.assertEqual(web.graphql.call_args.args[0],command('READ_BM')['doc_id'])
         self.assertNotIn('asset_id',repr(web.graphql.call_args))
+        self.assertEqual(web.business_read_verification_events[-1],
+            ('mark', 'READ_BM', (), True))
+
+    async def test_bm_read_account_hint_does_not_become_inventory_evidence(self):
+        web = self.web(scopes([(BM, 'BM')]))
+        proof = await read_business_inventory(web, bootstrap_account_id=RK)
+        self.assertEqual(proof['rows'], {BM: 'BM'})
+        self.assertEqual(
+            web.graphql.call_args.kwargs['business_loginpage_account_id'], RK,
+        )
         self.assertEqual(web.business_read_verification_events[-1],
             ('mark', 'READ_BM', (), True))
 
