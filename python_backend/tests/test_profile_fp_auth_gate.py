@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import main as api
 from fb_worker import AuthenticationError
+from app.session import ProfileContextError
 from app.facebook_business_browser import BrowserBusinessError, BrowserPreflightResult, BROWSER_TERMINAL_ACCESS_CODES
 
 
@@ -139,6 +140,81 @@ class ProfileFpAuthGateTests(unittest.IsolatedAsyncioTestCase):
         worker.enqueue_job.assert_not_awaited()
         worker.resolver.resolve.assert_not_awaited()
         preflight.assert_not_awaited()
+
+    async def test_create_job_blocks_unchanged_revoked_cookie_snapshot_before_enqueue(self):
+        request=api.CreateJobRequest(profiles=[{'profile_id':'32','tasks':[{
+            'action':'private_launch','payload':{'desired':{'business':True}}}]}])
+        fake=SimpleNamespace(
+            terminal_profile_statuses=AsyncMock(return_value={}),
+            has_profile_auth_cookie_revocation=AsyncMock(return_value=True),
+            create_job=AsyncMock(),
+        )
+        worker=SimpleNamespace(
+            resolver=SimpleNamespace(resolve=AsyncMock(side_effect=ProfileContextError(
+                'Meta явно удалила auth-cookies c_user, xs. Запрос к Meta не отправлен.',
+                category='meta_auth_cookie_revoked',
+            ))),
+            private_launch=SimpleNamespace(ads_manager=None),
+            enqueue_job=AsyncMock(),
+        )
+        with patch.object(api,'store',fake),patch.object(api,'pool',worker), \
+             patch.object(api,'mirror',SimpleNamespace(enabled=False)):
+            with self.assertRaises(api.HTTPException) as failure:
+                await api.create_job(request)
+        self.assertEqual(failure.exception.status_code,409)
+        self.assertIn('Meta явно удалила auth-cookie',str(failure.exception.detail))
+        fake.create_job.assert_not_awaited()
+        worker.enqueue_job.assert_not_awaited()
+        worker.resolver.resolve.assert_awaited_once_with('32')
+
+    async def test_create_job_allows_same_profile_after_resolver_confirms_new_session(self):
+        request=api.CreateJobRequest(profiles=[{'profile_id':'32','tasks':[{
+            'action':'private_launch','payload':{'desired':{'business':True}}}]}])
+        fake=SimpleNamespace(
+            terminal_profile_statuses=AsyncMock(return_value={}),
+            has_profile_auth_cookie_revocation=AsyncMock(return_value=True),
+            create_job=AsyncMock(return_value=('fresh-session-job',True)),
+            job_view=AsyncMock(return_value={'status':'QUEUED','items_total':1}),
+        )
+        worker=SimpleNamespace(
+            resolver=SimpleNamespace(resolve=AsyncMock(return_value=SimpleNamespace(cookies={
+                'c_user':'123456789','xs':'new-session'
+            }))),
+            private_launch=SimpleNamespace(ads_manager=None),
+            enqueue_job=AsyncMock(),
+        )
+        with patch.object(api,'store',fake),patch.object(api,'pool',worker), \
+             patch.object(api,'mirror',SimpleNamespace(enabled=False)):
+            accepted=await api.create_job(request)
+        self.assertEqual(accepted.job_id,'fresh-session-job')
+        fake.create_job.assert_awaited_once()
+        worker.enqueue_job.assert_awaited_once_with('fresh-session-job')
+
+    async def test_create_job_distinguishes_auth_guard_failure_from_meta_cookie_deletion(self):
+        request=api.CreateJobRequest(profiles=[{'profile_id':'32','tasks':[{
+            'action':'private_launch','payload':{'desired':{'business':True}}}]}])
+        fake=SimpleNamespace(
+            terminal_profile_statuses=AsyncMock(return_value={}),
+            has_profile_auth_cookie_revocation=AsyncMock(return_value=True),
+            create_job=AsyncMock(),
+        )
+        worker=SimpleNamespace(
+            resolver=SimpleNamespace(resolve=AsyncMock(side_effect=ProfileContextError(
+                'Local profile status could not be read.',
+                category='auth_cookie_revocation_store',
+            ))),
+            private_launch=SimpleNamespace(ads_manager=None),
+            enqueue_job=AsyncMock(),
+        )
+        with patch.object(api,'store',fake),patch.object(api,'pool',worker), \
+             patch.object(api,'mirror',SimpleNamespace(enabled=False)):
+            with self.assertRaises(api.HTTPException) as failure:
+                await api.create_job(request)
+        self.assertEqual(failure.exception.status_code,409)
+        self.assertIn('Не удалось проверить сохранённый вход',str(failure.exception.detail))
+        self.assertNotIn('Meta явно удалила',str(failure.exception.detail))
+        fake.create_job.assert_not_awaited()
+        worker.enqueue_job.assert_not_awaited()
 
     async def test_profile_preflight_stops_checkpoint_before_resolving_profile(self):
         fake=SimpleNamespace(terminal_checkpoint_profiles=AsyncMock(return_value=['22']))

@@ -1176,6 +1176,58 @@ async def _terminal_profile_statuses(profile_ids: list[str]) -> dict[str, dict[s
     return result
 
 
+async def _auth_cookie_revocation_profile_statuses(
+    profile_ids: list[str],
+) -> dict[str, dict[str, Any]]:
+    """Compare marked profiles locally before accepting another Meta job."""
+    clean = list(dict.fromkeys(
+        str(value or '').strip() for value in profile_ids if str(value or '').strip()
+    ))
+    has_marker = getattr(store, 'has_profile_auth_cookie_revocation', None)
+    if not clean or not callable(has_marker):
+        return {}
+    blocked: dict[str, dict[str, Any]] = {}
+    for profile_id in clean:
+        try:
+            if not await has_marker(profile_id):
+                continue
+            # ProfileResolver compares the current c_user/xs fingerprint before
+            # returning a context. A same-actor refresh clears the marker here;
+            # unchanged or changed-actor snapshots fail without a Meta request.
+            await pool.resolver.resolve(profile_id)
+        except ProfileContextError as exc:
+            code = getattr(exc, 'code', 'PROFILE_CONTEXT_ERROR')
+            if code == 'META_AUTH_COOKIE_REVOKED':
+                status = 'AUTH_COOKIE_REVOKED'
+                message = str(exc)
+            elif code == 'PROFILE_IDENTITY_CHANGED':
+                status = 'PROFILE_IDENTITY_CHANGED'
+                message = str(exc)
+            else:
+                status = 'PROFILE_AUTH_GUARD_UNAVAILABLE'
+                message = (
+                    'Не удалось проверить сохранённый вход выбранного профиля. '
+                    'Запрос к Meta не отправлен.'
+                )
+            blocked[profile_id] = {
+                'status': status,
+                'checked_at': int(time.time()),
+                'message': message,
+                'auth_cookie_deletions': list(getattr(exc, 'auth_cookie_deletions', []) or []),
+            }
+        except Exception as exc:
+            log.warning(
+                'auth_cookie_revocation_preflight_unavailable profile=%s kind=%s',
+                profile_id, type(exc).__name__,
+            )
+            blocked[profile_id] = {
+                'status': 'PROFILE_AUTH_GUARD_UNAVAILABLE',
+                'checked_at': int(time.time()),
+                'message': 'Не удалось безопасно проверить сохранённый вход выбранного профиля. Запрос к Meta не отправлен.',
+            }
+    return blocked
+
+
 async def _checkpointed_profile_ids(profile_ids: list[str]) -> set[str]:
     clean = list(dict.fromkeys(
         str(value or '').strip() for value in profile_ids if str(value or '').strip()
@@ -1354,7 +1406,7 @@ def _view_failed_profiles_with_known_session_blocks(
         for row in profile_statuses
         if isinstance(row, dict) and str(row.get('profile_id') or '').strip()
     }
-    blocked_states = {'CHECKPOINT', 'BUSINESS_LOGIN_GATE', 'LOGIN_REQUIRED', 'TWO_FACTOR', 'LIMITED', 'IN_PROGRESS'}
+    blocked_states = {'CHECKPOINT', 'BUSINESS_LOGIN_GATE', 'AUTH_COOKIE_REVOKED', 'PROFILE_IDENTITY_CHANGED', 'PROFILE_AUTH_GUARD_UNAVAILABLE', 'LOGIN_REQUIRED', 'TWO_FACTOR', 'LIMITED', 'IN_PROGRESS'}
     blocked: set[str] = set()
     for item in view.get('items') or []:
         if not isinstance(item, dict) or str(item.get('status') or '').upper() != 'FAILED':
@@ -4372,6 +4424,10 @@ def _single_paused_private_launch_draft_request(request: CreateJobRequest) -> bo
 async def create_job(request: CreateJobRequest) -> JobAccepted:
     requested_profile_ids = [str(profile.profile_id) for profile in request.profiles]
     terminal_statuses = await _terminal_profile_statuses(requested_profile_ids)
+    auth_revocation_statuses = await _auth_cookie_revocation_profile_statuses(requested_profile_ids)
+    for profile_id, status in auth_revocation_statuses.items():
+        if str((terminal_statuses.get(profile_id) or {}).get('status') or '').upper() != 'CHECKPOINT':
+            terminal_statuses[profile_id] = status
     blocked_profiles = sorted(terminal_statuses)
     paused_draft_revalidation = (
         bool(blocked_profiles)
@@ -4392,6 +4448,14 @@ async def create_job(request: CreateJobRequest) -> JobAccepted:
             states = {str(value.get('status') or '').upper() for value in terminal_statuses.values()}
             if states == {'CHECKPOINT'}:
                 message = "Чекпоинт Meta: выбранные профили остановлены. Prepare не запущен."
+            elif states == {'AUTH_COOKIE_REVOKED'}:
+                message = "Meta явно удалила auth-cookie сохранённого входа. Тот же набор не отправлен повторно; Prepare не создан."
+            elif states == {'PROFILE_IDENTITY_CHANGED'}:
+                message = "ID Facebook-профиля изменился после зафиксированного удаления auth-cookie. Запрос к Meta не отправлен; проверьте привязанный аккаунт."
+            elif states == {'PROFILE_AUTH_GUARD_UNAVAILABLE'}:
+                message = "Не удалось проверить сохранённый вход выбранного профиля. Запрос к Meta не отправлен; Prepare не создан."
+            elif states & {'AUTH_COOKIE_REVOKED', 'PROFILE_IDENTITY_CHANGED', 'PROFILE_AUTH_GUARD_UNAVAILABLE'}:
+                message = "Не удалось безопасно подтвердить вход выбранных профилей. Запрос к Meta не отправлен; Prepare не создан."
             elif states == {'BUSINESS_LOGIN_GATE'}:
                 message = "Meta остановила доступ выбранных профилей. Prepare не запущен."
             else:
@@ -4483,6 +4547,10 @@ async def retry_failed(job_id: str, consent: dict | None = Body(default=None)) -
         if isinstance(item,dict) and str(item.get('profile_id') or '').strip()
     ]
     terminal_statuses = await _terminal_profile_statuses(view_profile_ids)
+    auth_revocation_statuses = await _auth_cookie_revocation_profile_statuses(view_profile_ids)
+    for profile_id, status in auth_revocation_statuses.items():
+        if str((terminal_statuses.get(profile_id) or {}).get('status') or '').upper() != 'CHECKPOINT':
+            terminal_statuses[profile_id] = status
     terminal_profiles = set(terminal_statuses)
     checkpoint_profiles = {
         profile for profile, value in terminal_statuses.items()

@@ -88,6 +88,27 @@ class BusinessPageHTTPTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.meta.posts, [])
         self.assertEqual(self.meta.calls, [])
 
+    async def test_bootstrap_auth_cookie_deletion_is_saved_to_page_checkpoint(self):
+        from fb_worker import AuthenticationError
+
+        error = AuthenticationError('Meta removed authentication cookies')
+        error.meta_payload = {'auth_cookie_deletions': ['c_user', 'xs']}
+        error.request_may_have_been_sent = False
+        self.meta.bootstrap.side_effect = error
+
+        with self.assertRaises(ProvisioningError) as caught:
+            await self.run_page()
+
+        self.assertEqual(caught.exception.code, 'META_AUTH_TOKEN_UNAVAILABLE')
+        self.assertEqual(self.meta.posts, [])
+        self.assertEqual(self.meta.calls, [])
+        saved = (await self.state.step('create', ProvisioningStep.FAN_PAGES))['result']
+        self.assertEqual(saved['recovery_auth_phase'], 'BUSINESS_BOOTSTRAP')
+        self.assertEqual(
+            saved['recovery_auth_diagnostic'][0]['auth_cookie_deletions'],
+            ['c_user', 'xs'],
+        )
+
     async def test_uncached_create_binds_exact_business_and_commits_canonical_delegate(self):
         result = await self.run_page()
         self.assertEqual(result['page_ids'], [FP2])

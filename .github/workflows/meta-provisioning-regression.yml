@@ -87,7 +87,9 @@ jobs:
       - name: Selected Business sync scope
         run: node tests/workspace-sync-scope.test.cjs
       - name: Automatic batch interface
-        run: node tests/worker-auto-ui.test.cjs
+        run: |
+          node tests/worker-auto-ui.test.cjs
+          node tests/worker-auth-cookie-revocation-ui.test.cjs
       - name: Private Launch catalog and funding interface
         run: |
           node tests/launch-private-catalog.test.cjs

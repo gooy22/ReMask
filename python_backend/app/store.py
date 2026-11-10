@@ -113,6 +113,15 @@ class JobStore:
                 checked_at INTEGER NOT NULL,
                 message TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS profile_auth_cookie_revocations (
+                profile_id TEXT PRIMARY KEY,
+                actor_fingerprint TEXT NOT NULL,
+                auth_fingerprint TEXT NOT NULL,
+                deleted_names_json TEXT NOT NULL,
+                checked_at INTEGER NOT NULL,
+                source_job_id TEXT NOT NULL DEFAULT '',
+                message TEXT NOT NULL
+            );
             CREATE INDEX IF NOT EXISTS idx_items_status ON job_items(status);
             CREATE INDEX IF NOT EXISTS idx_items_job_created ON job_items(job_id, created_at);
             CREATE INDEX IF NOT EXISTS idx_tasks_item ON job_tasks(item_id, position);
@@ -2143,6 +2152,148 @@ class JobStore:
             for row in rows
         }
 
+    @staticmethod
+    def _auth_cookie_fingerprint(cookies: dict[str, Any]) -> tuple[str, str]:
+        """Return one-way fingerprints of the selected actor and c_user/xs."""
+        if not isinstance(cookies, dict):
+            return "", ""
+        actor = str(cookies.get("c_user") or "").strip()
+        xs = str(cookies.get("xs") or "").strip()
+        if not re.fullmatch(r"\d{1,30}", actor) or not xs or len(xs) > 8192:
+            return "", ""
+        actor_fingerprint = hashlib.sha256(actor.encode("utf-8")).hexdigest()
+        payload = json.dumps([actor, xs], ensure_ascii=True, separators=(",", ":"))
+        return actor_fingerprint, hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    async def has_profile_auth_cookie_revocation(self, profile_id: str) -> bool:
+        clean = str(profile_id or "").strip()
+        if not clean:
+            return False
+        return await asyncio.to_thread(self._has_profile_auth_cookie_revocation_sync, clean)
+
+    def _has_profile_auth_cookie_revocation_sync(self, profile_id: str) -> bool:
+        with self._connect() as con:
+            return con.execute(
+                "SELECT 1 FROM profile_auth_cookie_revocations WHERE profile_id=?",
+                (profile_id,),
+            ).fetchone() is not None
+
+    async def record_profile_auth_cookie_revocation(
+        self,
+        profile_id: str,
+        cookies: dict[str, Any],
+        deleted_names: list[str] | tuple[str, ...] | set[str],
+        *,
+        source_job_id: str = "",
+    ) -> bool:
+        clean = str(profile_id or "").strip()
+        names = sorted({
+            str(value).strip().casefold()
+            for value in (deleted_names or [])
+            if isinstance(value, str) and str(value).strip().casefold() in {"c_user", "xs"}
+        })
+        actor_fingerprint, auth_fingerprint = self._auth_cookie_fingerprint(cookies)
+        if not clean or not actor_fingerprint or not auth_fingerprint or not names:
+            return False
+        now = _now()
+        message = (
+            f"Meta явно удалила auth-cookie: {', '.join(names)}. Сохранённый набор заблокирован "
+            "до обновления входа того же Facebook-профиля."
+        )
+        return await asyncio.to_thread(
+            self._record_profile_auth_cookie_revocation_sync,
+            clean, actor_fingerprint, auth_fingerprint, names, now,
+            str(source_job_id or "").strip()[:160], message,
+        )
+
+    def _record_profile_auth_cookie_revocation_sync(
+        self,
+        profile_id: str,
+        actor_fingerprint: str,
+        auth_fingerprint: str,
+        deleted_names: list[str],
+        checked_at: int,
+        source_job_id: str,
+        message: str,
+    ) -> bool:
+        with self._connect() as con:
+            con.execute(
+                """INSERT INTO profile_auth_cookie_revocations(
+                       profile_id,actor_fingerprint,auth_fingerprint,deleted_names_json,
+                       checked_at,source_job_id,message
+                   ) VALUES(?,?,?,?,?,?,?)
+                   ON CONFLICT(profile_id) DO UPDATE SET
+                     actor_fingerprint=excluded.actor_fingerprint,
+                     auth_fingerprint=excluded.auth_fingerprint,
+                     deleted_names_json=excluded.deleted_names_json,
+                     checked_at=MAX(profile_auth_cookie_revocations.checked_at,excluded.checked_at),
+                     source_job_id=excluded.source_job_id,
+                     message=excluded.message""",
+                (profile_id, actor_fingerprint, auth_fingerprint,
+                 json.dumps(deleted_names, separators=(",", ":")), checked_at,
+                 source_job_id, message),
+            )
+        return True
+
+    async def profile_auth_cookie_revocation_for_context(
+        self, profile_id: str, cookies: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        clean = str(profile_id or "").strip()
+        if not clean:
+            return None
+        actor_fingerprint, auth_fingerprint = self._auth_cookie_fingerprint(cookies)
+        return await asyncio.to_thread(
+            self._profile_auth_cookie_revocation_for_context_sync,
+            clean, actor_fingerprint, auth_fingerprint,
+        )
+
+    def _profile_auth_cookie_revocation_for_context_sync(
+        self, profile_id: str, actor_fingerprint: str, auth_fingerprint: str
+    ) -> dict[str, Any] | None:
+        with self._connect() as con:
+            row = con.execute(
+                """SELECT actor_fingerprint,auth_fingerprint,deleted_names_json,checked_at,
+                          source_job_id,message
+                   FROM profile_auth_cookie_revocations WHERE profile_id=?""",
+                (profile_id,),
+            ).fetchone()
+            if not row:
+                return None
+            original_actor = str(row["actor_fingerprint"] or "")
+            original_fingerprint = str(row["auth_fingerprint"] or "")
+            if actor_fingerprint == original_actor and (auth_fingerprint == original_fingerprint or not auth_fingerprint):
+                try:
+                    names = json.loads(row["deleted_names_json"] or "[]")
+                except (TypeError, ValueError):
+                    names = []
+                return {
+                    "status": "META_AUTH_COOKIE_REVOKED",
+                    "checked_at": int(row["checked_at"] or 0),
+                    "deleted_names": [name for name in names if name in {"c_user", "xs"}]
+                        if isinstance(names, list) else [],
+                    "source_job_id": str(row["source_job_id"] or ""),
+                    "message": str(row["message"] or ""),
+                }
+            if actor_fingerprint != original_actor:
+                return {
+                    "status": "PROFILE_IDENTITY_CHANGED",
+                    "checked_at": int(row["checked_at"] or 0),
+                    "deleted_names": [],
+                    "source_job_id": str(row["source_job_id"] or ""),
+                    "message": (
+                        "ID Facebook-профиля изменился после удаления auth-cookie. "
+                        "Запрос к Meta не отправлялся; проверьте привязанный аккаунт."
+                    ),
+                }
+            # Only a same-actor replacement of the auth session can clear the
+            # revocation. Updating unrelated cookies leaves the marker intact.
+            con.execute(
+                "DELETE FROM profile_auth_cookie_revocations "
+                "WHERE profile_id=? AND actor_fingerprint=? AND auth_fingerprint=?",
+                (profile_id, original_actor, original_fingerprint),
+            )
+            return None
+
     async def terminal_checkpoint_profiles(self, profile_ids: list[str]) -> list[str]:
         """Return profiles whose Meta checkpoint has been recorded as terminal."""
         clean = list(dict.fromkeys(
@@ -2187,6 +2338,29 @@ class JobStore:
                 }
                 for row in terminal_rows
             }
+            revocation_rows = con.execute(
+                """SELECT profile_id,deleted_names_json,checked_at,source_job_id,message
+                   FROM profile_auth_cookie_revocations ORDER BY checked_at DESC,profile_id"""
+            ).fetchall()
+            for row in revocation_rows:
+                profile_id = str(row["profile_id"] or "").strip()
+                if not profile_id or terminal_by_profile.get(profile_id, {}).get("status") == "CHECKPOINT":
+                    continue
+                try:
+                    raw_names = json.loads(row["deleted_names_json"] or "[]")
+                except (TypeError, ValueError):
+                    raw_names = []
+                deleted_names = sorted({
+                    name for name in raw_names
+                    if isinstance(name, str) and name in {"c_user", "xs"}
+                }) if isinstance(raw_names, list) else []
+                terminal_by_profile[profile_id] = {
+                    "status": "AUTH_COOKIE_REVOKED",
+                    "checked_at": int(row["checked_at"] or 0),
+                    "message": str(row["message"] or "Meta явно удалила auth-cookie выбранного профиля."),
+                    "auth_cookie_deletions": deleted_names,
+                    "source_job_id": str(row["source_job_id"] or ""),
+                }
             rows = con.execute(
                 """
                 SELECT i.id AS item_id,i.profile_id,i.status,i.error_code,i.error_message,i.updated_at,
