@@ -124,7 +124,11 @@ assert.ok(source.includes('const message=remaskPrivateLaunchUserMessage(error)')
   assert.equal(verifiedReadButton.disabled,false,'a completed read is available again without creating a new job');
   assert.equal(JSON.stringify(job),original,'a successful diagnostic read must preserve the immutable source journal');
   assert.deepEqual(calls.map(row=>row.action),['status','private_draft_read','private_draft_read']);
-  assert.equal(calls[1].profile_id,profile);assert.equal(calls[1].job_id,id);assert.equal(calls[1].task_id,taskId);
+  readResult.fragment_reads[0].observed.status={present:true,type:'str',length:7};
+  await verifiedReadButton.events.click();
+  assert.match(verifiedIdsCell.textContent,/статус строка \\(значение скрыто; длина 7 символов\\)/);
+  assert.doesNotMatch(verifiedIdsCell.textContent,/статус str:7/);
+  assert.equal(calls[2].profile_id,profile);assert.equal(calls[2].job_id,id);assert.equal(calls[2].task_id,taskId);
   ctx.renderJob({id:'legacy',items:[]});
   assert.equal(legacyRenders,0,'late legacy init must not erase the restored private result');
   assert.match(controls.jobItems.textContent,new RegExp(campaign));

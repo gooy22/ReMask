@@ -953,6 +953,7 @@ function remaskPrivateRenderJob(job) {
                             if(!value||typeof value!=='object')return 'unknown';
                             if(value.present===false)return 'не наблюдалось';
                             if(Object.prototype.hasOwnProperty.call(value,'value'))return String(value.value??'null');
+                            if(Number.isSafeInteger(value.length)&&value.type==='str')return 'строка (значение скрыто; длина '+value.length+' символов)';
                             if(Number.isSafeInteger(value.length))return String(value.type||'value')+':'+value.length;
                             return String(value.type||'unknown');
                         };
