@@ -1865,6 +1865,170 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(failed["status"], "FAILED")
         self.assertEqual(failed["error_code"], "META_AUTH_TOKEN_UNAVAILABLE")
 
+    async def test_legacy_explicit_cookie_deletion_blocks_new_snapshot_until_same_actor_refresh(self):
+        now = int(time.time())
+        message = (
+            "Meta explicitly removed a selected-profile authentication cookie. "
+            "No GraphQL POST was sent."
+        )
+        with self.store._connect() as con:
+            con.execute(
+                "INSERT INTO jobs(id,status,idempotency_key,created_at,updated_at) VALUES(?,?,?,?,?)",
+                ("job-legacy-auth-cookie-deletion", "FAILED", "idem-legacy-auth-cookie", now, now),
+            )
+            con.execute(
+                "INSERT INTO job_items(id,job_id,profile_id,status,error_code,error_message,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                ("item-legacy-auth-cookie-deletion", "job-legacy-auth-cookie-deletion", "32", "FAILED",
+                 "META_AUTH_TOKEN_UNAVAILABLE", message, now, now),
+            )
+
+        self.assertTrue(await self.store.has_profile_auth_cookie_revocation("32"))
+        current = {"c_user": "61596084833362", "xs": "current-snapshot"}
+        marker = await self.store.profile_auth_cookie_revocation_for_context("32", current)
+        self.assertEqual(marker["status"], "META_AUTH_COOKIE_REVOKED")
+        self.assertEqual(marker["evidence_kind"], "legacy_history_pending")
+        self.assertEqual(marker["deleted_names"], [])
+        self.assertIn("отпечаток использованной тогда сессии не сохранялся", marker["message"])
+        self.assertIn("Текущий снимок профиля заблокирован", marker["message"])
+
+        state = next(row for row in await self.store.latest_profile_session_statuses()
+                     if row["profile_id"] == "32")
+        self.assertEqual(state["status"], "AUTH_COOKIE_REVOKED")
+        self.assertIn("отпечаток использованной тогда сессии не сохранялся", state["message"])
+        with self.store._connect() as con:
+            saved = dict(con.execute(
+                "SELECT * FROM profile_auth_cookie_revocations WHERE profile_id='32'"
+            ).fetchone())
+        self.assertNotIn(current["c_user"], str(saved))
+        self.assertNotIn(current["xs"], str(saved))
+        self.assertEqual(saved["evidence_kind"], "legacy_history_pending")
+
+        # Only a same-actor auth snapshot change clears the local guard.
+        self.assertIsNone(await self.store.profile_auth_cookie_revocation_for_context(
+            "32", {**current, "xs": "refreshed-same-actor-session"},
+        ))
+        self.assertFalse(await self.store.has_profile_auth_cookie_revocation("32"))
+
+        # The retained old error does not recreate the guard after that refresh.
+        self.assertIsNone(await self.store.profile_auth_cookie_revocation_for_context(
+            "32", {**current, "xs": "refreshed-same-actor-session"},
+        ))
+
+    async def test_generic_auth_failure_without_cookie_deletion_evidence_does_not_create_guard(self):
+        now = int(time.time())
+        with self.store._connect() as con:
+            con.execute(
+                "INSERT INTO jobs(id,status,idempotency_key,created_at,updated_at) VALUES(?,?,?,?,?)",
+                ("job-generic-auth-failure", "FAILED", "idem-generic-auth-failure", now, now),
+            )
+            con.execute(
+                "INSERT INTO job_items(id,job_id,profile_id,status,error_code,error_message,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                ("item-generic-auth-failure", "job-generic-auth-failure", "32", "FAILED",
+                 "META_AUTH_TOKEN_UNAVAILABLE", "Meta did not provide a verified authentication context.", now, now),
+            )
+
+        self.assertFalse(await self.store.has_profile_auth_cookie_revocation("32"))
+        self.assertIsNone(await self.store.profile_auth_cookie_revocation_for_context(
+            "32", {"c_user": "61596084833362", "xs": "still-current-session"},
+        ))
+
+    async def test_new_legacy_deletion_event_reblocks_after_earlier_refresh(self):
+        now = int(time.time())
+        current = {"c_user": "61596084833362", "xs": "refreshed-session"}
+        await self.store.record_profile_auth_cookie_revocation(
+            "32", {"c_user": current["c_user"], "xs": "old-revoked-session"},
+            ["xs"], source_job_id="job-older-auth-cookie-event",
+        )
+        self.assertIsNone(await self.store.profile_auth_cookie_revocation_for_context("32", current))
+
+        message = (
+            "Meta explicitly removed a selected-profile authentication cookie. "
+            "No GraphQL POST was sent."
+        )
+        with self.store._connect() as con:
+            con.execute(
+                "INSERT INTO jobs(id,status,idempotency_key,created_at,updated_at) VALUES(?,?,?,?,?)",
+                ("job-new-legacy-auth-cookie-deletion", "FAILED", "idem-new-legacy-auth-cookie", now + 1, now + 1),
+            )
+            con.execute(
+                "INSERT INTO job_items(id,job_id,profile_id,status,error_code,error_message,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                ("item-new-legacy-auth-cookie-deletion", "job-new-legacy-auth-cookie-deletion", "32", "FAILED",
+                 "META_AUTH_TOKEN_UNAVAILABLE", message, now + 1, now + 1),
+            )
+
+        self.assertTrue(await self.store.has_profile_auth_cookie_revocation("32"))
+        marker = await self.store.profile_auth_cookie_revocation_for_context("32", current)
+        self.assertEqual(marker["status"], "META_AUTH_COOKIE_REVOKED")
+        self.assertEqual(marker["source_job_id"], "job-new-legacy-auth-cookie-deletion")
+
+    async def test_resolver_blocks_legacy_deletion_history_before_returning_meta_context(self):
+        now = int(time.time())
+        message = (
+            "Meta explicitly removed a selected-profile authentication cookie. "
+            "No GraphQL POST was sent."
+        )
+        with self.store._connect() as con:
+            con.execute(
+                "INSERT INTO jobs(id,status,idempotency_key,created_at,updated_at) VALUES(?,?,?,?,?)",
+                ("job-resolver-legacy-auth-cookie", "FAILED", "idem-resolver-legacy-auth-cookie", now, now),
+            )
+            con.execute(
+                "INSERT INTO job_items(id,job_id,profile_id,status,error_code,error_message,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                ("item-resolver-legacy-auth-cookie", "job-resolver-legacy-auth-cookie", "32", "FAILED",
+                 "META_AUTH_TOKEN_UNAVAILABLE", message, now, now),
+            )
+        cookies = {"c_user": "61596084833362", "xs": "rejected-session"}
+        resolver = ProfileResolver("https://resolver.invalid/profile", "fixture-key")
+        resolver._fetch = AsyncMock(return_value={
+            "cookies": cookies,
+            "user_agent": "fixture-UA",
+            "proxy": "http://127.0.0.1:1",
+        })
+        resolver.auth_cookie_revocation_store = self.store
+
+        with self.assertRaises(ProfileContextError) as caught:
+            await resolver.resolve("32")
+
+        self.assertEqual(caught.exception.code, "META_AUTH_COOKIE_REVOKED")
+        self.assertIn("отпечаток использованной тогда сессии не сохранялся", str(caught.exception))
+        resolver._fetch.assert_awaited_once_with(params={"profile_id": "32"}, label="profile resolver")
+        self.assertTrue(await self.store.has_profile_auth_cookie_revocation("32"))
+        marker = await self.store.profile_auth_cookie_revocation_for_context("32", cookies)
+        self.assertEqual(marker["evidence_kind"], "legacy_history_pending")
+
+    async def test_auth_revocation_evidence_kind_migrates_existing_database(self):
+        with self.store._connect() as con:
+            con.execute("DROP TABLE profile_auth_cookie_revocations")
+            con.execute("""CREATE TABLE profile_auth_cookie_revocations (
+                profile_id TEXT PRIMARY KEY,
+                actor_fingerprint TEXT NOT NULL,
+                auth_fingerprint TEXT NOT NULL,
+                deleted_names_json TEXT NOT NULL,
+                checked_at INTEGER NOT NULL,
+                source_job_id TEXT NOT NULL DEFAULT '',
+                message TEXT NOT NULL
+            )""")
+            con.execute(
+                "INSERT INTO profile_auth_cookie_revocations VALUES(?,?,?,?,?,?,?)",
+                ("32", "a" * 64, "b" * 64, "[]", int(time.time()), "old-job", "legacy marker"),
+            )
+
+        await self.store.init()
+
+        with self.store._connect() as con:
+            columns = {row["name"] for row in con.execute(
+                "PRAGMA table_info(profile_auth_cookie_revocations)"
+            ).fetchall()}
+            marker = dict(con.execute(
+                "SELECT evidence_kind FROM profile_auth_cookie_revocations WHERE profile_id='32'"
+            ).fetchone())
+        self.assertIn("evidence_kind", columns)
+        self.assertEqual(marker["evidence_kind"], "snapshot_pending")
+
 
 
 

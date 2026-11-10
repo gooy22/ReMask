@@ -120,7 +120,8 @@ class JobStore:
                 deleted_names_json TEXT NOT NULL,
                 checked_at INTEGER NOT NULL,
                 source_job_id TEXT NOT NULL DEFAULT '',
-                message TEXT NOT NULL
+                message TEXT NOT NULL,
+                evidence_kind TEXT NOT NULL DEFAULT 'snapshot_pending'
             );
             CREATE INDEX IF NOT EXISTS idx_items_status ON job_items(status);
             CREATE INDEX IF NOT EXISTS idx_items_job_created ON job_items(job_id, created_at);
@@ -140,6 +141,16 @@ class JobStore:
                         f"ALTER TABLE {table} "
                         "ADD COLUMN retryable INTEGER NOT NULL DEFAULT 0"
                     )
+
+            revocation_columns = {
+                str(row["name"])
+                for row in con.execute("PRAGMA table_info(profile_auth_cookie_revocations)").fetchall()
+            }
+            if "evidence_kind" not in revocation_columns:
+                con.execute(
+                    "ALTER TABLE profile_auth_cookie_revocations "
+                    "ADD COLUMN evidence_kind TEXT NOT NULL DEFAULT 'snapshot_pending'"
+                )
 
             # Older jobs allowed only one item per profile. Bulk units have
             # independent checkpoints but keep the real profile identity.
@@ -2173,10 +2184,45 @@ class JobStore:
 
     def _has_profile_auth_cookie_revocation_sync(self, profile_id: str) -> bool:
         with self._connect() as con:
-            return con.execute(
-                "SELECT 1 FROM profile_auth_cookie_revocations WHERE profile_id=?",
+            row = con.execute(
+                "SELECT evidence_kind,source_job_id FROM profile_auth_cookie_revocations WHERE profile_id=?",
                 (profile_id,),
-            ).fetchone() is not None
+            ).fetchone()
+            history = self._latest_explicit_auth_cookie_deletion_sync(con, profile_id)
+            if row is None:
+                return history is not None
+            if str(row["evidence_kind"] or "snapshot_pending") != "resolved":
+                return True
+            return bool(history and str(history["source_job_id"] or "") != str(row["source_job_id"] or ""))
+
+    @staticmethod
+    def _latest_explicit_auth_cookie_deletion_sync(
+        con: sqlite3.Connection, profile_id: str
+    ) -> dict[str, Any] | None:
+        """Find only persisted failures that explicitly report cookie deletion and no CREATE POST."""
+        explicit = "%meta explicitly removed a selected-profile authentication cookie%"
+        unsent = "%no graphql post was sent%"
+        row = con.execute(
+            """SELECT source_job_id,checked_at,error_message FROM (
+                   SELECT i.job_id AS source_job_id,i.updated_at AS checked_at,
+                          i.error_message AS error_message
+                   FROM job_items i
+                   WHERE i.profile_id=? AND upper(i.status)='FAILED'
+                     AND upper(COALESCE(i.error_code,''))='META_AUTH_TOKEN_UNAVAILABLE'
+                     AND lower(COALESCE(i.error_message,'')) LIKE ?
+                     AND lower(COALESCE(i.error_message,'')) LIKE ?
+                   UNION ALL
+                   SELECT i.job_id AS source_job_id,t.updated_at AS checked_at,
+                          t.error_message AS error_message
+                   FROM job_items i JOIN job_tasks t ON t.item_id=i.id
+                   WHERE i.profile_id=? AND upper(i.status)='FAILED' AND upper(t.status)='FAILED'
+                     AND upper(COALESCE(t.error_code,''))='META_AUTH_TOKEN_UNAVAILABLE'
+                     AND lower(COALESCE(t.error_message,'')) LIKE ?
+                     AND lower(COALESCE(t.error_message,'')) LIKE ?
+               ) ORDER BY checked_at DESC,source_job_id DESC LIMIT 1""",
+            (profile_id, explicit, unsent, profile_id, explicit, unsent),
+        ).fetchone()
+        return dict(row) if row else None
 
     async def record_profile_auth_cookie_revocation(
         self,
@@ -2203,7 +2249,7 @@ class JobStore:
         return await asyncio.to_thread(
             self._record_profile_auth_cookie_revocation_sync,
             clean, actor_fingerprint, auth_fingerprint, names, now,
-            str(source_job_id or "").strip()[:160], message,
+            str(source_job_id or "").strip()[:160], message, "snapshot_pending",
         )
 
     def _record_profile_auth_cookie_revocation_sync(
@@ -2215,23 +2261,25 @@ class JobStore:
         checked_at: int,
         source_job_id: str,
         message: str,
+        evidence_kind: str = "snapshot_pending",
     ) -> bool:
         with self._connect() as con:
             con.execute(
                 """INSERT INTO profile_auth_cookie_revocations(
                        profile_id,actor_fingerprint,auth_fingerprint,deleted_names_json,
-                       checked_at,source_job_id,message
-                   ) VALUES(?,?,?,?,?,?,?)
+                       checked_at,source_job_id,message,evidence_kind
+                   ) VALUES(?,?,?,?,?,?,?,?)
                    ON CONFLICT(profile_id) DO UPDATE SET
                      actor_fingerprint=excluded.actor_fingerprint,
                      auth_fingerprint=excluded.auth_fingerprint,
                      deleted_names_json=excluded.deleted_names_json,
                      checked_at=MAX(profile_auth_cookie_revocations.checked_at,excluded.checked_at),
                      source_job_id=excluded.source_job_id,
-                     message=excluded.message""",
+                     message=excluded.message,
+                     evidence_kind=excluded.evidence_kind""",
                 (profile_id, actor_fingerprint, auth_fingerprint,
                  json.dumps(deleted_names, separators=(",", ":")), checked_at,
-                 source_job_id, message),
+                 source_job_id, message, evidence_kind),
             )
         return True
 
@@ -2251,13 +2299,65 @@ class JobStore:
         self, profile_id: str, actor_fingerprint: str, auth_fingerprint: str
     ) -> dict[str, Any] | None:
         with self._connect() as con:
+            con.execute("BEGIN IMMEDIATE")
+            history = self._latest_explicit_auth_cookie_deletion_sync(con, profile_id)
             row = con.execute(
                 """SELECT actor_fingerprint,auth_fingerprint,deleted_names_json,checked_at,
-                          source_job_id,message
+                          source_job_id,message,evidence_kind
                    FROM profile_auth_cookie_revocations WHERE profile_id=?""",
                 (profile_id,),
             ).fetchone()
-            if not row:
+            now = _now()
+            if row is None or (
+                str(row["evidence_kind"] or "snapshot_pending") == "resolved"
+                and history is not None
+                and str(history.get("source_job_id") or "") != str(row["source_job_id"] or "")
+            ):
+                if history is None:
+                    return None
+                if not actor_fingerprint or not auth_fingerprint:
+                    return {
+                        "status": "META_AUTH_COOKIE_REVOKED",
+                        "checked_at": int(history.get("checked_at") or now),
+                        "deleted_names": [],
+                        "source_job_id": str(history.get("source_job_id") or ""),
+                        "evidence_kind": "legacy_history_pending",
+                        "message": (
+                            "В старом задании Meta явно удалила auth-cookie, но отпечаток той сессии не сохранялся. "
+                            "Текущий вход не подтверждён; запрос к Meta не отправлен."
+                        ),
+                    }
+                source_job_id = str(history.get("source_job_id") or "")[:160]
+                message = (
+                    "В старом задании Meta явно удалила auth-cookie; отпечаток использованной тогда сессии "
+                    "не сохранялся. Текущий снимок профиля заблокирован до обновления входа того же Facebook ID. "
+                    "Запрос к Meta не отправлен."
+                )
+                con.execute(
+                    """INSERT INTO profile_auth_cookie_revocations(
+                           profile_id,actor_fingerprint,auth_fingerprint,deleted_names_json,
+                           checked_at,source_job_id,message,evidence_kind
+                       ) VALUES(?,?,?,?,?,?,?, 'legacy_history_pending')
+                       ON CONFLICT(profile_id) DO UPDATE SET
+                         actor_fingerprint=excluded.actor_fingerprint,
+                         auth_fingerprint=excluded.auth_fingerprint,
+                         deleted_names_json=excluded.deleted_names_json,
+                         checked_at=excluded.checked_at,
+                         source_job_id=excluded.source_job_id,
+                         message=excluded.message,
+                         evidence_kind=excluded.evidence_kind""",
+                    (profile_id, actor_fingerprint, auth_fingerprint, "[]", now,
+                     source_job_id, message),
+                )
+                return {
+                    "status": "META_AUTH_COOKIE_REVOKED",
+                    "checked_at": now,
+                    "deleted_names": [],
+                    "source_job_id": source_job_id,
+                    "evidence_kind": "legacy_history_pending",
+                    "message": message,
+                }
+            if str(row["evidence_kind"] or "snapshot_pending") == "resolved":
                 return None
             original_actor = str(row["actor_fingerprint"] or "")
             original_fingerprint = str(row["auth_fingerprint"] or "")
@@ -2272,25 +2372,35 @@ class JobStore:
                     "deleted_names": [name for name in names if name in {"c_user", "xs"}]
                         if isinstance(names, list) else [],
                     "source_job_id": str(row["source_job_id"] or ""),
+                    "evidence_kind": str(row["evidence_kind"] or "snapshot_pending"),
                     "message": str(row["message"] or ""),
                 }
             if actor_fingerprint != original_actor:
+                evidence_kind = str(row["evidence_kind"] or "snapshot_pending")
+                identity_message = (
+                    "ID Facebook-профиля изменился после фиксации старой auth-cookie-блокировки; "
+                    "сравнить его с актором прежнего задания нельзя. Запрос к Meta не отправлялся."
+                    if evidence_kind == "legacy_history_pending" else
+                    "ID Facebook-профиля изменился после удаления auth-cookie. "
+                    "Запрос к Meta не отправлялся; проверьте привязанный аккаунт."
+                )
                 return {
                     "status": "PROFILE_IDENTITY_CHANGED",
                     "checked_at": int(row["checked_at"] or 0),
                     "deleted_names": [],
                     "source_job_id": str(row["source_job_id"] or ""),
-                    "message": (
-                        "ID Facebook-профиля изменился после удаления auth-cookie. "
-                        "Запрос к Meta не отправлялся; проверьте привязанный аккаунт."
-                    ),
+                    "evidence_kind": evidence_kind,
+                    "message": identity_message,
                 }
             # Only a same-actor replacement of the auth session can clear the
-            # revocation. Updating unrelated cookies leaves the marker intact.
+            # revocation. Keep a resolved receipt so legacy job history cannot
+            # recreate the guard on every later job.
             con.execute(
-                "DELETE FROM profile_auth_cookie_revocations "
-                "WHERE profile_id=? AND actor_fingerprint=? AND auth_fingerprint=?",
-                (profile_id, original_actor, original_fingerprint),
+                """UPDATE profile_auth_cookie_revocations
+                   SET evidence_kind='resolved',checked_at=?,message=?
+                   WHERE profile_id=? AND actor_fingerprint=? AND auth_fingerprint=?""",
+                (now, "Вход того же Facebook ID обновлён после auth-cookie-блокировки.",
+                 profile_id, original_actor, original_fingerprint),
             )
             return None
 
@@ -2339,12 +2449,14 @@ class JobStore:
                 for row in terminal_rows
             }
             revocation_rows = con.execute(
-                """SELECT profile_id,deleted_names_json,checked_at,source_job_id,message
+                """SELECT profile_id,deleted_names_json,checked_at,source_job_id,message,evidence_kind
                    FROM profile_auth_cookie_revocations ORDER BY checked_at DESC,profile_id"""
             ).fetchall()
             for row in revocation_rows:
                 profile_id = str(row["profile_id"] or "").strip()
-                if not profile_id or terminal_by_profile.get(profile_id, {}).get("status") == "CHECKPOINT":
+                if (not profile_id
+                        or str(row["evidence_kind"] or "snapshot_pending") == "resolved"
+                        or terminal_by_profile.get(profile_id, {}).get("status") == "CHECKPOINT"):
                     continue
                 try:
                     raw_names = json.loads(row["deleted_names_json"] or "[]")
