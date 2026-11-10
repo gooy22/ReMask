@@ -93,7 +93,9 @@ if (typeof creativeTargetSearchConfig !== 'function') {
                 });
                 box.appendChild(button);
             }
-            if(!all.length)box.textContent='Ничего не найдено. Попробуйте другое название.';
+            if(!all.length)box.textContent=data?.availability==='NOT_LOADED'
+                ? 'Список вариантов не загружен. Выберите один профиль и один РК в шаге 1, затем повторите поиск.'
+                : 'Ничего не найдено. Попробуйте другое название.';
             if(data?.source==='private_meta_template_reference' && data.reference_checked_at){
                 const hint=document.createElement('div');hint.className='muted';
                 hint.textContent='Сохранённые данные Meta · '+new Date(data.reference_checked_at*1000).toLocaleString('ru-RU')+
