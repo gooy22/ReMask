@@ -160,6 +160,7 @@ class PrivateHttpClient:
         self._profile_cookies = dict(cookies)
         self._trusted_meta_xs_fingerprints: set[str] = set()
         self._meta_redirect_auth_cookie_directive_pending = False
+        self.meta_auth_cookie_deletions: set[str] = set()
         self.direct_test_until = direct_test_deadline(profile_name, self._actor_id) if not proxy else 0
         self.timeout_seconds = timeout_seconds
         limits = httpx.Limits(max_connections=pool_size,
@@ -195,6 +196,8 @@ class PrivateHttpClient:
 
     def accept_same_actor_cookie_refresh(self) -> bool:
         """Adopt Meta-set cookies only while the selected actor and cookie set remain intact."""
+        if self.meta_auth_cookie_deletions:
+            return False
         original = dict(self._profile_cookies)
         snapshot = self.facebook_cookie_snapshot()
         # Meta may legitimately remove or rotate non-auth cookies during a
@@ -426,6 +429,7 @@ class PrivateHttpClient:
                     "deletion_scopes": auth_deletion_scopes,
                 }
                 self._meta_redirect_auth_cookie_directive_pending = True
+                self.meta_auth_cookie_deletions.update(auth_deletions)
                 log.info(
                     "[%s] private_http_meta_auth_cookie_directive status=%d host=%s names=%s deleted=%s scope=%s",
                     self.profile_name, response.status_code, host,
@@ -439,6 +443,8 @@ class PrivateHttpClient:
 
     def restore_profile_cookies(self) -> None:
         """Reset Facebook cookies to the imported profile for an identity probe."""
+        if self.meta_auth_cookie_deletions:
+            return
         jar = self._client.cookies.jar
         for cookie in list(jar):
             domain = str(cookie.domain or "").lstrip(".").casefold()

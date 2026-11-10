@@ -304,6 +304,7 @@ class BusinessAuthenticationPrecheckTests(unittest.IsolatedAsyncioTestCase):
         import asyncio
         session, http = self.session()
         class Response:
+            status = 200
             async def __aenter__(self): return self
             async def __aexit__(self, *args): return False
             async def text(self): raise asyncio.TimeoutError('fixture')

@@ -26,6 +26,12 @@ from app.business_login_gate_http import (
     is_business_login_gate_url,
 )
 from app.meta_auth_document import auth_route_gate as _auth_route_gate, has_login_form as _has_login_form
+from app.private_auth import (
+    auth_cookie_deletion_error,
+    auth_cookie_deletion_names,
+    observed_auth_cookie_deletions,
+    response_auth_cookie_deletions,
+)
 
 
 log = logging.getLogger("remask_worker")
@@ -142,6 +148,7 @@ class FacebookWebSession:
 
     ADS_MANAGER_URL = "https://business.facebook.com/latest/home"
     BUSINESS_HOME_URL = ADS_MANAGER_URL
+    BUSINESS_ACCOUNTS_URL = "https://business.facebook.com/latest/settings/ad_accounts/?business_id="
 
     GRAPHQL_URL = "https://business.facebook.com/api/graphql/"
 
@@ -188,7 +195,9 @@ class FacebookWebSession:
         self._bootstrap: FacebookBootstrap | None = None
         self._profile_session_identity_verified = False
         self._business_read_proofs: dict[tuple[str, str, str, str, str], float] = {}
-        self._business_page_create_prechecks: dict[tuple[str, str, str, str, str], float] = {}
+        self._business_page_create_prechecks: dict[
+            tuple[str, str, str, str, str], tuple[FacebookBootstrap, float]
+        ] = {}
         self._graphql_request_counter = 0
         self._business_login_gate_attempted = False
         self._previous_recovery_attempted = False
@@ -346,10 +355,10 @@ class FacebookWebSession:
             business_id, actor_id, page_name, bio, category_ids,
         )
         selected_actor = str(self.profile.cookies.get("c_user") or "").strip()
-        bootstrap_actor = str(getattr(self._bootstrap, "actor_id", "") or "").strip()
-        if key is None or key[1] != selected_actor or bootstrap_actor != key[1]:
+        bootstrap = self._bootstrap
+        if key is None or key[1] != selected_actor or bootstrap is None or bootstrap.actor_id != key[1]:
             return False
-        self._business_page_create_prechecks[key] = time.monotonic()
+        self._business_page_create_prechecks[key] = (bootstrap, time.monotonic())
         return True
 
     def has_fresh_business_page_create_precheck(
@@ -358,11 +367,13 @@ class FacebookWebSession:
         key = self._business_page_create_precheck_key(
             business_id, actor_id, page_name, bio, category_ids,
         )
+        proof = self._business_page_create_prechecks.get(key) if key is not None else None
+        if proof is None:
+            return False
+        bootstrap, verified_at = proof
         selected_actor = str(self.profile.cookies.get("c_user") or "").strip()
-        bootstrap_actor = str(getattr(self._bootstrap, "actor_id", "") or "").strip()
-        verified_at = self._business_page_create_prechecks.get(key) if key is not None else None
-        return (key is not None and key[1] == selected_actor and bootstrap_actor == key[1]
-                and verified_at is not None and 0 <= time.monotonic() - verified_at <= 90)
+        return (key[1] == selected_actor and bootstrap is self._bootstrap
+                and 0 <= time.monotonic() - verified_at <= 90)
 
     # ------------------------------------------------------------------
     # Proxy
@@ -491,6 +502,18 @@ class FacebookWebSession:
             if getattr(session, "_meta_redirect_auth_cookie_directive_pending", False):
                 return
             restore_fn()
+
+    def _require_auth_cookies(self, session, stage, response=None, *,
+                              request_may_have_been_sent=False, request_rejected=False):
+        names = response_auth_cookie_deletions(response) or auth_cookie_deletion_names(
+            getattr(session, "meta_auth_cookie_deletions", None),
+        )
+        if names:
+            self.invalidate_bootstrap()
+            raise auth_cookie_deletion_error(
+                names, stage, request_may_have_been_sent=request_may_have_been_sent,
+                request_rejected=request_rejected,
+            )
 
     def _apply_document_redirect_context(
         self, request_headers: dict[str, str], response: Any,
@@ -627,6 +650,7 @@ class FacebookWebSession:
         for endpoint, referer, query_key, query_values in endpoint_specs:
             for query_value in query_values:
                 attempt_name = f"{endpoint}?{query_key}={query_value}"
+                self._require_auth_cookies(session, "bootstrap")
                 if getattr(
                     session,
                     "_meta_redirect_auth_cookie_directive_pending",
@@ -673,6 +697,7 @@ class FacebookWebSession:
                             stage=f"dtsg_refresh_headers_{query_key}_{query_value}",
                         ),
                     ) as response:
+                        self._require_auth_cookies(session, "bootstrap", response)
                         raw = await response.text()
                         self._restore_profile_cookie_snapshot_if_lost(
                             session,
@@ -838,6 +863,7 @@ class FacebookWebSession:
             "https://mbasic.facebook.com/profile.php",
         )
         for target in targets:
+            self._require_auth_cookies(session, "business_auth_precheck")
             # Keep complete same-actor cookie rotations across identity probes.
             # Restore the imported set only if the actor or required cookies
             # disappear during the preceding Meta redirect.
@@ -890,31 +916,13 @@ class FacebookWebSession:
                             ),
                             16 * 1024 * 1024 + 1,
                             retry_read=True,
+                            validate=lambda response: self._require_auth_cookies(
+                                session, "business_auth_precheck", response,
+                            ),
                             reader=lambda response: response.text(),
                         ),
                         timeout=probe_timeout_seconds,
                     )
-                    response_extensions = getattr(response, "extensions", {}) or {}
-                    meta_auth_directive = response_extensions.get(
-                        "remask_meta_auth_cookie_directive", {}
-                    ) or {}
-                    if not isinstance(meta_auth_directive, dict):
-                        meta_auth_directive = {}
-                    deleted_auth_cookies = {
-                        str(name).casefold()
-                        for name in (meta_auth_directive.get("deletions") or [])
-                    } & {"c_user", "xs"}
-                    if deleted_auth_cookies:
-                        self.invalidate_bootstrap()
-                        error = AuthenticationError(
-                            "Meta explicitly removed a selected-profile authentication cookie during identity bootstrap; no follow-up or provisioning request was sent."
-                        )
-                        error.meta_payload = {
-                            "auth_cookie_deletions": sorted(deleted_auth_cookies)
-                        }
-                        error.request_may_have_been_sent = False
-                        error.transport_stage = "business_auth_precheck"
-                        raise error
                     self._restore_invalid_profile_cookie_snapshot(session, expected_actor)
                     status = int(response.status)
                     response_headers = getattr(response, "headers", {}) or {}
@@ -1134,8 +1142,10 @@ class FacebookWebSession:
         business_loginpage_return_url: str = "",
     ) -> FacebookBootstrap:
 
+        self._require_auth_cookies(self.session, "bootstrap")
         business_loginpage_return_url = str(business_loginpage_return_url or "").strip()
         account_only_bootstrap = False
+        scoped_business_document = ""
         if business_loginpage_return_url:
             parts = urlsplit(business_loginpage_return_url)
             params = parse_qs(parts.query, keep_blank_values=True)
@@ -1165,6 +1175,8 @@ class FacebookWebSession:
                     request_may_have_been_sent=False,
                     transport_stage="business_auth_precheck",
                 )
+            if exact_business_scope:
+                scoped_business_document = self.BUSINESS_ACCOUNTS_URL + business_ids[0]
 
         scoped_bootstrap_context = (
             self._business_bootstrap_cache_key(business_loginpage_return_url)
@@ -1173,20 +1185,20 @@ class FacebookWebSession:
         )
 
         def cached_scoped_context_matches() -> bool:
-            return bool(
-                scoped_bootstrap_context
-                and self._bootstrap is not None
-                and str(getattr(
-                    self._bootstrap, "_business_loginpage_return_url", ""
-                ) or "") == scoped_bootstrap_context
+            current = self._bootstrap
+            if (not scoped_bootstrap_context or current is None
+                    or current.actor_id != str(self.profile.cookies.get("c_user") or "").strip()):
+                return False
+            return (
+                current._business_loginpage_return_url == scoped_bootstrap_context
+                or bool(scoped_business_document and current.source_url == scoped_business_document)
             )
         if (
             scoped_bootstrap_context and self._bootstrap is not None
-            and getattr(self._bootstrap, "_business_loginpage_return_url", "")
-                != scoped_bootstrap_context
+            and not cached_scoped_context_matches()
         ):
             # A cached generic profile/Business token must not bypass the
-            # selected account's first-party Ads Manager navigation context.
+            # selected scope's fresh bootstrap.
             force = True
 
         if (allow_business_loginpage_probe and self._bootstrap is not None
@@ -1206,6 +1218,7 @@ class FacebookWebSession:
 
         async with self._bootstrap_lock:
 
+            self._require_auth_cookies(self.session, "bootstrap")
             if (allow_business_loginpage_probe and self._bootstrap is not None
                     and not self._bootstrap.profile_actor_verified):
                 self._bootstrap = None
@@ -1248,23 +1261,12 @@ class FacebookWebSession:
             # retain their independent profile-page identity bootstrap.
             token_patterns = list(self.FB_DTSG_PATTERNS)
 
-            # A validated selected-account Ads Manager URL is the first document
-            # for a scoped read. The exact READ_BM/READ_RK/READ_FP response still
-            # decides access; the saved account ID is only navigation context.
-            scoped_bootstrap_urls = (
-                (business_loginpage_return_url,)
-                if business_loginpage_return_url and not business_home_only
-                else ()
-            )
-            if business_home_only:
-                bootstrap_urls = (self.BUSINESS_HOME_URL,)
-            elif account_only_bootstrap:
-                # READ_BM's account-only handoff follows the established kit
-                # route through Business Home. The Ads Manager return URL is
-                # reserved for explicitly scoped reads, not initial kit setup.
+            # Prepare starts at Business Home. The validated Ads Manager URL
+            # belongs to the login handoff if Meta requests one.
+            if business_home_only or account_only_bootstrap:
                 bootstrap_urls = (self.BUSINESS_HOME_URL,)
             else:
-                bootstrap_urls = scoped_bootstrap_urls + (
+                bootstrap_urls = (
                     self.BUSINESS_HOME_URL,
                     "https://business.facebook.com/latest/settings",
                     "https://business.facebook.com/latest/overview",
@@ -1333,6 +1335,7 @@ class FacebookWebSession:
                         response_status = {"value": None}
 
                         def restore_cookies_after_redirect_headers(response):
+                            self._require_auth_cookies(session, "bootstrap", response)
                             response_status["value"] = int(response.status)
                             if response_status["value"] in redirect_statuses:
                                 self._restore_profile_cookie_snapshot_if_lost(
@@ -1363,27 +1366,6 @@ class FacebookWebSession:
                                 )
                         candidate_url = str(response.url)
                         candidate_status = int(response.status)
-                        response_extensions = getattr(response, "extensions", {}) or {}
-                        meta_auth_directive = response_extensions.get(
-                            "remask_meta_auth_cookie_directive", {}
-                        ) or {}
-                        if not isinstance(meta_auth_directive, dict):
-                            meta_auth_directive = {}
-                        deleted_auth_cookies = (
-                            {str(name).casefold() for name in
-                             (meta_auth_directive.get("deletions") or [])}
-                            & {"c_user", "xs"}
-                        )
-                        if deleted_auth_cookies:
-                            error = AuthenticationError(
-                                "Meta explicitly removed a selected-profile authentication cookie during bootstrap; no follow-up or provisioning request was sent."
-                            )
-                            error.meta_payload = {
-                                "auth_cookie_deletions": sorted(deleted_auth_cookies)
-                            }
-                            error.request_may_have_been_sent = False
-                            error.transport_stage = "bootstrap"
-                            raise error
                         self._restore_invalid_profile_cookie_snapshot(
                             session, actor_id
                         )
@@ -1555,6 +1537,7 @@ class FacebookWebSession:
                         transport_stage="bootstrap",
                     ) from exc
 
+            refresh_token = ""
             if not fb_dtsg:
                 refresh_token, refresh_source = await self._fetch_dtsg_refresh_token(
                     session,
@@ -1597,7 +1580,9 @@ class FacebookWebSession:
                 ],
             )
 
-            jazoest = self._first_match(
+            # A checksum embedded in the document is tied to its own DTSG.
+            # An AJAX refresh can use the verified SprinkleConfig instead.
+            jazoest = "" if refresh_token else self._first_match(
                 body,
                 [
                     (
@@ -1800,6 +1785,8 @@ class FacebookWebSession:
         # Recovery pages are document navigations too. Opt in at the caller
         # rather than changing generic bundle/API/CDN reads across the app.
         facebook_host = hostname == "facebook.com" or hostname.endswith(".facebook.com")
+        if facebook_host:
+            self._require_auth_cookies(session, "fetch")
         document_request = facebook_host and (hostname == "business.facebook.com" or document_navigation) and not (
             parts.path.lower().endswith((".js", ".css", ".json"))
             or "/api/" in parts.path.lower()
@@ -1858,6 +1845,9 @@ class FacebookWebSession:
                         max(1, int(max_bytes)) + 1,
                         retry_read=document_request,
                         retry_timeout=retry_timeout,
+                        validate=(
+                            lambda response: self._require_auth_cookies(session, "fetch", response)
+                        ) if facebook_host else None,
                     )
                 finally:
                     if document_request or ads_manager_document:
@@ -2045,7 +2035,7 @@ class FacebookWebSession:
             return bootstrap
         source = str(getattr(bootstrap, "source_url", "") or "").strip()
         target = (
-            "https://business.facebook.com/latest/settings/ad_accounts/?business_id=" + business_id
+            self.BUSINESS_ACCOUNTS_URL + business_id
             if business_id else self.ADS_MANAGER_URL
         )
         if not business_id and (not source or urlsplit(source).hostname == "business.facebook.com"):
@@ -2606,6 +2596,8 @@ class FacebookWebSession:
                 await previous.close()
                 raise
             except Exception as exc:
+                if observed_auth_cookie_deletions(exc):
+                    raise
                 log.info(
                     "[%s] previous same-actor bootstrap candidate unavailable candidate=%d kind=%s",
                     self.profile.name, candidate_index, type(exc).__name__,
@@ -2733,6 +2725,8 @@ class FacebookWebSession:
                 await previous.close()
                 raise
             except Exception as exc:
+                if observed_auth_cookie_deletions(exc):
+                    raise
                 log.info(
                     "[%s] previous same-actor session read candidate unavailable operation=%s candidate=%d kind=%s",
                     self.profile.name, business_loginpage_probe, candidate_index, type(exc).__name__,
@@ -2849,6 +2843,7 @@ class FacebookWebSession:
                 )
             )
         page_create_prechecked = False
+        page_precheck_bootstrap = None
         try:
             if scoped_probe:
                 # Exact asset queries stay pinned to their requested BM/RK/Page IDs.
@@ -2870,12 +2865,17 @@ class FacebookWebSession:
                         page_input.get("categories"),
                     )
                 )
+                if page_create_prechecked:
+                    page_precheck_bootstrap = self._bootstrap
                 if urlsplit(endpoint).hostname == "business.facebook.com":
                     # Preserve the bundle's Business-first token and cache.
                     # Replacing it with a generic /me token before each exact
                     # Business request breaks the session context used by the
                     # successful prechecks and by the following CREATE.
-                    if scoped_ads_manager_return_url:
+                    if page_precheck_bootstrap is not None:
+                        self._require_auth_cookies(self.session, "business_auth_precheck")
+                        bootstrap = page_precheck_bootstrap
+                    elif scoped_ads_manager_return_url:
                         bootstrap = await self.bootstrap(
                             business_loginpage_return_url=scoped_ads_manager_return_url,
                         )
@@ -2941,12 +2941,16 @@ class FacebookWebSession:
                         bootstrap._business_loginpage_return_url = (
                             self._business_bootstrap_cache_key(scoped_ads_manager_return_url)
                         )
+                    if scoped_probe == "CREATE_FP" and bootstrap is not page_precheck_bootstrap:
+                        raise RemoteRequestError(
+                            "Exact Business Page prechecks are required on the current HTTP bootstrap.",
+                            request_may_have_been_sent=False, transport_stage="business_auth_precheck",
+                        )
                 # Targeting suggestions are read-only and validate the exact
                 # BM/RK identities in the response. Skip the Ads Manager
                 # document preflight that can stall on a cross-host redirect.
         except AuthenticationError as exc:
-            payload = getattr(exc, "meta_payload", None)
-            if isinstance(payload, dict) and payload.get("auth_cookie_deletions"):
+            if observed_auth_cookie_deletions(exc):
                 # Meta explicitly cleared the selected session. End this attempt.
                 raise
             if ((scoped_probe in {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS",
@@ -3131,6 +3135,7 @@ class FacebookWebSession:
         transport_stage = "before_graphql_submit"
 
         try:
+            self._require_auth_cookies(session, transport_stage)
             if callable(before_submit):
                 try:
                     await before_submit()
@@ -3140,6 +3145,7 @@ class FacebookWebSession:
                         request_may_have_been_sent=False,
                         transport_stage="before_graphql_submit",
                     ) from exc
+                self._require_auth_cookies(session, transport_stage)
 
             transport_stage = "graphql_submit"
             # From this point an exception is conservatively treated as
@@ -3153,6 +3159,12 @@ class FacebookWebSession:
                 allow_redirects=False,
                 **post_options,
             ) as response:
+                if response.status in {301, 302, 303, 307, 308, 401, 403}:
+                    location = str(response.headers.get("Location") or "").lower()
+                    self._require_auth_cookies(session, "graphql_response", response,
+                        request_may_have_been_sent=True,
+                        request_rejected=response.status in {401, 403}
+                            or "login" in location or "checkpoint" in location)
 
                 raw_body = await response.text()
 
@@ -3213,6 +3225,8 @@ class FacebookWebSession:
                 # Meta can return HTTP 200 with a login rejection instead of
                 # redirecting. Never let that become a generic mutation error.
                 if str(payload.get("error") or "") == "1357001":
+                    self._require_auth_cookies(session, "graphql_response", response,
+                        request_may_have_been_sent=True, request_rejected=True)
                     self.invalidate_bootstrap()
                     error = AuthenticationError("Meta Business rejected the session: Log in to continue.")
                     error.meta_payload = payload
@@ -3227,6 +3241,8 @@ class FacebookWebSession:
                 exc.request_may_have_been_sent = request_may_have_been_sent
             if not hasattr(exc, "transport_stage"):
                 exc.transport_stage = transport_stage
+            if observed_auth_cookie_deletions(exc):
+                raise
             if ((scoped_probe in {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS",
                     "READ_FP", "FP_CATEGORY", "FP_PRECHECK"}
                     and before_submit is None and multipart_files is None)
