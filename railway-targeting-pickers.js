@@ -34,7 +34,7 @@ if (typeof creativeTargetSearchConfig !== 'function') {
         const query=input.value.trim();
         if(query.length<2){
             pickerControllers[type]?.abort();delete pickerControllers[type];delete pickerPages[type];
-            box.textContent='';return;
+            box.textContent=query.length?'Введите минимум 2 символа для поиска.':'';return;
         }
         if(offset && (pickerPages[type]?.query!==query || pickerPages[type]?.next_offset!==offset))return;
         pickerControllers[type]?.abort();
@@ -126,7 +126,7 @@ if (typeof creativeTargetSearchConfig !== 'function') {
     if(typeof ensureBehaviorTargetingUi==='function')ensureBehaviorTargetingUi();
     for(const [type,cfg] of Object.entries(pickerConfig)){
         const input=$(cfg.input);if(!input)continue;
-        input.placeholder='Выберите из списка или введите название';
+        input.placeholder='Введите минимум 2 символа; добавьте выбором варианта';
         let focusTimer=0;
         input.addEventListener('focus',()=>{
             clearTimeout(focusTimer);
