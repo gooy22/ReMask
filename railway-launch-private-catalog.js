@@ -886,6 +886,29 @@ function remaskPrivateShowReadResult(container,message,technical) {
     const visible=document.createElement('span');visible.textContent=message;container.appendChild(visible);
     remaskPrivateAppendDetails(container,'Технические подробности',technical);
 }
+const remaskPrivateDraftReadCachePrefix='remask_private_draft_read_v1:';
+function remaskPrivateDraftReadCacheKey(profileId,jobId,taskId) {
+    return remaskPrivateDraftReadCachePrefix+String(profileId||'')+':'+String(jobId||'')+':'+String(taskId||'');
+}
+function remaskPrivateSaveDraftRead(key,snapshot) {
+    try{localStorage.setItem(key,JSON.stringify(snapshot));}catch(_){}
+}
+function remaskPrivateLoadDraftRead(key) {
+    try{
+        const value=JSON.parse(localStorage.getItem(key)||'null');
+        if(!value||value.version!==1||typeof value.ok!=='boolean'||
+            typeof value.checked_at!=='string'||!/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$/.test(value.checked_at)||
+            !Number.isFinite(Date.parse(value.checked_at))||typeof value.message!=='string'||
+            value.message.length>1200||typeof value.technical!=='string'||value.technical.length>8000)return null;
+        return {version:1,ok:value.ok,checked_at:value.checked_at,message:value.message,technical:value.technical};
+    }catch(_){return null;}
+}
+function remaskPrivateShowSavedDraftRead(container,snapshot) {
+    const state=snapshot.ok
+        ?'Последняя сохранённая сверка от '+snapshot.checked_at+'. Новый запрос к Meta не выполнялся. '
+        :'Последняя сверка от '+snapshot.checked_at+' завершилась с ошибкой. Новый запрос к Meta не выполнялся. ';
+    remaskPrivateShowReadResult(container,state+snapshot.message,snapshot.technical);
+}
 function remaskPrivateRecentJob(job) {
     const select=$('recentJobSelect');
     if(!select||typeof document==='undefined'||!remaskPrivateIsJob(job))return;
@@ -930,14 +953,17 @@ function remaskPrivateRenderJob(job) {
                 const button=document.createElement('button');button.type='button';
                 button.className='btn btn-secondary';button.textContent='Проверить черновик в Meta';
                 const result=document.createElement('div');result.className='muted';
+                const readCacheKey=remaskPrivateDraftReadCacheKey(item.profile_id,job.id,task.id);
+                const savedRead=remaskPrivateLoadDraftRead(readCacheKey);
                 const terminalReadKey='remask_private_meta_terminal_v1:'+String(item.profile_id||'');
                 let terminalReadCode='';
                 try{terminalReadCode=String(localStorage.getItem(terminalReadKey)||'');}catch(_){}
                 let terminalStopped=Boolean(terminalReadCode);
                 if(terminalStopped){
                     button.disabled=true;button.textContent='Действия остановлены';
-                    result.textContent=remaskPrivateErrorLabel(terminalReadCode);
-                }
+                    if(savedRead&&!savedRead.ok)remaskPrivateShowSavedDraftRead(result,savedRead);
+                    else result.textContent=remaskPrivateErrorLabel(terminalReadCode);
+                }else if(savedRead)remaskPrivateShowSavedDraftRead(result,savedRead);
                 button.addEventListener('click',async()=>{
                     if(terminalStopped)return;
                     button.disabled=true;result.textContent='Читаю сохранённый черновик…';
@@ -990,10 +1016,12 @@ function remaskPrivateRenderJob(job) {
                             ?String(read.pending_stage.stage||'unknown')+' ('+String(read.pending_stage.reason||'unknown')+')':'';
                         const technical=checks.join('\n')+(pending?'\nОжидающий этап: '+pending:'')+
                             '\nПолнота черновика и редактор не проверялись.';
-                        remaskPrivateShowReadResult(result,
-                            'Черновик '+String(read.draft_id||'')+' прочитан. Совпали связи и настройки: '+
-                                matching+' из '+rows.length+'. Публикация не выполнялась.',
-                            technical);
+                        const message='Черновик '+String(read.draft_id||'')+' прочитан. Совпали связи и настройки: '+
+                            matching+' из '+rows.length+'. Публикация не выполнялась.';
+                        const safeTechnical=technical.slice(0,8000);
+                        remaskPrivateSaveDraftRead(readCacheKey,{version:1,ok:true,
+                            checked_at:new Date().toISOString(),message,technical:safeTechnical});
+                        remaskPrivateShowReadResult(result,message,safeTechnical);
                     }catch(error){
                         const code=String(error?.code||'');
                         const message=String(error?.message||error||'');
@@ -1006,8 +1034,10 @@ function remaskPrivateRenderJob(job) {
                             try{localStorage.setItem(terminalReadKey,code||'PROFILE_META_BLOCKED');}catch(_){}
                             button.disabled=true;button.textContent='Действия остановлены';
                         }
-                        remaskPrivateShowReadResult(result,label,
-                            [code,message].filter(Boolean).join('\n'));
+                        const safeTechnical=code;
+                        remaskPrivateSaveDraftRead(readCacheKey,{version:1,ok:false,
+                            checked_at:new Date().toISOString(),message:label,technical:safeTechnical});
+                        remaskPrivateShowReadResult(result,label,safeTechnical);
                     }finally{if(!terminalStopped)button.disabled=false;}
                 });
                 tr.children[5].appendChild(button);tr.children[5].appendChild(result);
