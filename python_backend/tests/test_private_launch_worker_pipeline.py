@@ -172,12 +172,19 @@ class NativeWorkerPipelineTests(unittest.IsolatedAsyncioTestCase):
         async def reject(path, params):
             row = await get(path,params)
             if row.get('ad_object_type')=='ad':
-                row.update(validation_status='HAS_ERRORS',active_errors=[{'error_code':1359188,'field':'billing'}])
+                row.update(validation_status='HAS_ERRORS',active_errors=[{'error_code':1359188,'field':'billing',
+                    'message':'raw-marker billing https://example.com/?token=raw-marker'}])
             return row
         self.meta.get = reject
         request = self.request(); job = await self.submit(request); view = await self.terminal(job)
         self.assertEqual(view['status'],'FAILED')
-        self.assertEqual(view['items'][0]['tasks'][0]['error_code'],'PRIVATE_ADS_DRAFT_VALIDATION_ERRORS')
+        task = view['items'][0]['tasks'][0]
+        self.assertEqual(task['error_code'],'PRIVATE_ADS_DRAFT_VALIDATION_ERRORS')
+        self.assertIn('"value":1359188',task['error_message'])
+        self.assertIn('"terms":["billing"]',task['error_message'])
+        self.assertNotIn('raw-marker',task['error_message'],
+            'diagnostics must retain only bounded codes, field names, and allowlisted terms')
+        self.assertLess(len(task['error_message']),1000,'the durable error message must preserve valid bounded JSON')
         self.assertEqual(len(self.meta.fragments),3); self.assertEqual(len(self.meta.posts),4)
         self.assertEqual(await self.submit(request),job)
         self.assertEqual(len(self.meta.fragments),3); self.assertEqual(len(self.meta.posts),4)
