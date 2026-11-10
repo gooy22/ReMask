@@ -1037,7 +1037,7 @@ function remaskPrivateRenderJob(job) {
                         const safeTechnical=code;
                         remaskPrivateSaveDraftRead(readCacheKey,{version:1,ok:false,
                             checked_at:new Date().toISOString(),message:label,technical:safeTechnical});
-                        remaskPrivateShowReadResult(result,label,safeTechnical);
+                        remaskPrivateShowReadResult(result,label,[code,message].filter(Boolean).join('\n'));
                     }finally{if(!terminalStopped)button.disabled=false;}
                 });
                 tr.children[5].appendChild(button);tr.children[5].appendChild(result);
