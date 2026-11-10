@@ -209,9 +209,6 @@ async def create_business_page(session, params, *, state, item_id, profile_id, s
     actor = _id((getattr(session.context, 'cookies', {}) or {}).get('c_user'))
     web = await session.facebook_web()
     web.private_only = True
-    bootstrap = await web.bootstrap()
-    if not actor or str(getattr(bootstrap, 'actor_id', '')) != actor:
-        raise ProvisioningError('SESSION_EXPIRED', 'Page HTTP actor differs from the selected profile.', retryable=True)
     if ((checkpoint.get('business_id') and checkpoint['business_id'] != business)
             or (checkpoint.get('create_actor_id') and checkpoint['create_actor_id'] != actor)):
         raise ProvisioningError('FAN_PAGES_CHECKPOINT_MISMATCH', 'Retained Page intent belongs to another target or actor.')
@@ -219,6 +216,24 @@ async def create_business_page(session, params, *, state, item_id, profile_id, s
     async def save(patch):
         return await state.checkpoint(item_id, profile_id, scope_key, ProvisioningStep.FAN_PAGES,
             {'business_id': business, 'target_names': [name], 'create_actor_id': actor, 'transport': TRANSPORT, **patch})
+
+    try:
+        bootstrap = await web.bootstrap()
+    except Exception as exc:
+        auth_error = private_auth_error(exc)
+        if auth_error is not None:
+            diagnostics = getattr(auth_error, 'inventory_diagnostics', None)
+            if isinstance(diagnostics, list):
+                try:
+                    await save({'recovery_auth_phase': 'BUSINESS_BOOTSTRAP',
+                        'recovery_auth_diagnostic': diagnostics})
+                except Exception as checkpoint_exc:
+                    log.warning('FP bootstrap auth diagnostic checkpoint failed business=%s error_type=%s',
+                        business, type(checkpoint_exc).__name__)
+            raise auth_error from exc
+        raise
+    if not actor or str(getattr(bootstrap, 'actor_id', '')) != actor:
+        raise ProvisioningError('SESSION_EXPIRED', 'Page HTTP actor differs from the selected profile.', retryable=True)
 
     if checkpoint.get('target_names') and checkpoint['target_names'] != [name]:
         if not can_retarget_page_name(checkpoint):

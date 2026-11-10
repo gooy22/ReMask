@@ -1624,6 +1624,52 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
                      if value["profile_id"] == "4")
         self.assertEqual(final["status"], "CHECKPOINT")
 
+    async def test_meta_auth_cookie_revocation_blocks_same_snapshot_and_clears_on_same_actor_refresh(self):
+        profile = "4"
+        original = {"c_user": "61596084833362", "xs": "revoked-session-value", "datr": "old"}
+        self.assertTrue(await self.store.record_profile_auth_cookie_revocation(
+            profile, original, ["c_user", "xs"], source_job_id="job-auth-revoked",
+        ))
+
+        status = next(row for row in await self.store.latest_profile_session_statuses()
+                      if row["profile_id"] == profile)
+        self.assertEqual(status["status"], "AUTH_COOKIE_REVOKED")
+        self.assertEqual(status["auth_cookie_deletions"], ["c_user", "xs"])
+        marker = await self.store.profile_auth_cookie_revocation_for_context(profile, original)
+        self.assertEqual(marker["status"], "META_AUTH_COOKIE_REVOKED")
+        self.assertEqual(marker["deleted_names"], ["c_user", "xs"])
+        self.assertNotIn("auth_fingerprint", marker)
+        with self.store._connect() as con:
+            persisted = dict(con.execute(
+                "SELECT * FROM profile_auth_cookie_revocations WHERE profile_id=?", (profile,),
+            ).fetchone())
+        self.assertNotIn(original["c_user"], str(persisted))
+        self.assertNotIn(original["xs"], str(persisted))
+        self.assertNotIn("actor_id", persisted)
+        self.assertRegex(persisted["actor_fingerprint"], r"^[a-f0-9]{64}$")
+
+        # Rotating an unrelated cookie does not clear Meta's auth-cookie decision.
+        self.assertIsNotNone(await self.store.profile_auth_cookie_revocation_for_context(
+            profile, {**original, "datr": "new"},
+        ))
+        # A changed session for the same selected actor clears the marker.
+        self.assertIsNone(await self.store.profile_auth_cookie_revocation_for_context(
+            profile, {**original, "xs": "new-session-value"},
+        ))
+        self.assertFalse(await self.store.has_profile_auth_cookie_revocation(profile))
+
+    async def test_meta_auth_cookie_revocation_does_not_adopt_a_different_actor(self):
+        profile = "4"
+        original = {"c_user": "61596084833362", "xs": "revoked-session-value"}
+        self.assertTrue(await self.store.record_profile_auth_cookie_revocation(
+            profile, original, ["xs"], source_job_id="job-auth-revoked",
+        ))
+        marker = await self.store.profile_auth_cookie_revocation_for_context(
+            profile, {"c_user": "61596084839999", "xs": "other-actor-session"},
+        )
+        self.assertEqual(marker["status"], "PROFILE_IDENTITY_CHANGED")
+        self.assertTrue(await self.store.has_profile_auth_cookie_revocation(profile))
+
     async def test_terminal_checkpoint_survives_newer_success_and_blocks_store_retry(self):
         now=int(time.time())
         job,item=self._seed(task_status='FAILED')
@@ -1734,6 +1780,90 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
         task = (await self.store.tasks("item-queued-after-meta-gate"))[0]
         self.assertEqual(task["status"], "FAILED")
         self.assertEqual(task["error_code"], "BUSINESS_LOGIN_GATE")
+
+    async def test_auth_cookie_revocation_stops_queued_prepare_before_meta_session(self):
+        now = int(time.time())
+        cookies = {"c_user": "61596084833362", "xs": "revoked-session-value"}
+        await self.store.record_profile_auth_cookie_revocation(
+            "4", cookies, ["c_user", "xs"], source_job_id="job-source-auth-revoked",
+        )
+        with self.store._connect() as con:
+            con.execute(
+                "INSERT INTO jobs(id,status,idempotency_key,created_at,updated_at) VALUES(?,?,?,?,?)",
+                ("job-queued-after-auth-cookie-revocation", "QUEUED", "idem-auth-revoked", now, now),
+            )
+            con.execute(
+                "INSERT INTO job_items(id,job_id,profile_id,status,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?)",
+                ("item-queued-after-auth-cookie-revocation", "job-queued-after-auth-cookie-revocation",
+                 "4", "QUEUED", now, now),
+            )
+            con.execute(
+                "INSERT INTO job_tasks(id,item_id,position,action,payload_json,status,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                ("task-queued-after-auth-cookie-revocation", "item-queued-after-auth-cookie-revocation",
+                 0, "prepare", "{}", "QUEUED", now, now),
+            )
+        with patch("app.runner.PrivateLaunchService", return_value=SimpleNamespace(ads_manager=None)):
+            worker = WorkerPool(self.store, concurrency=1)
+        context = SimpleNamespace(cookies=cookies)
+        worker.resolver = SimpleNamespace(resolve=AsyncMock(return_value=context))
+        worker.prepare.run = AsyncMock(side_effect=AssertionError("Prepare must not contact Meta"))
+
+        await worker._run_item("item-queued-after-auth-cookie-revocation")
+
+        worker.resolver.resolve.assert_awaited_once_with("4")
+        worker.prepare.run.assert_not_awaited()
+        item = await self.store.item("item-queued-after-auth-cookie-revocation")
+        self.assertEqual(item["status"], "FAILED")
+        self.assertEqual(item["error_code"], "META_AUTH_COOKIE_REVOKED")
+        task = (await self.store.tasks("item-queued-after-auth-cookie-revocation"))[0]
+        self.assertEqual(task["status"], "FAILED")
+        self.assertEqual(task["retryable"], 0)
+
+    async def test_worker_persists_meta_auth_cookie_deletion_from_prepare_failure(self):
+        now = int(time.time())
+        cookies = {"c_user": "61596084833362", "xs": "revoked-session-value"}
+        with self.store._connect() as con:
+            con.execute(
+                "INSERT INTO jobs(id,status,idempotency_key,created_at,updated_at) VALUES(?,?,?,?,?)",
+                ("job-auth-cookie-deletion", "QUEUED", "idem-auth-cookie-deletion", now, now),
+            )
+            con.execute(
+                "INSERT INTO job_items(id,job_id,profile_id,status,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?)",
+                ("item-auth-cookie-deletion", "job-auth-cookie-deletion", "4", "QUEUED", now, now),
+            )
+            con.execute(
+                "INSERT INTO job_tasks(id,item_id,position,action,payload_json,status,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                ("task-auth-cookie-deletion", "item-auth-cookie-deletion", 0, "prepare",
+                 json.dumps({"desired": {"ad_accounts": 1}}), "QUEUED", now, now),
+            )
+        with patch("app.runner.PrivateLaunchService", return_value=SimpleNamespace(ads_manager=None)):
+            worker = WorkerPool(self.store, concurrency=1)
+        context = SimpleNamespace(cookies=cookies)
+        worker.resolver = SimpleNamespace(resolve=AsyncMock(return_value=context))
+        error = ProvisioningError("META_AUTH_TOKEN_UNAVAILABLE", "Meta explicitly removed an authentication cookie.", retryable=True)
+        error.inventory_diagnostics = [{"auth_cookie_deletions": ["c_user", "xs"]}]
+        worker.prepare.run = AsyncMock(side_effect=error)
+
+        class FakeProfileSession:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return None
+
+        with patch("app.runner.ProfileSession", return_value=FakeProfileSession()):
+            await worker._run_item("item-auth-cookie-deletion")
+
+        marker = await self.store.profile_auth_cookie_revocation_for_context("4", cookies)
+        self.assertEqual(marker["status"], "META_AUTH_COOKIE_REVOKED")
+        self.assertEqual(marker["deleted_names"], ["c_user", "xs"])
+        failed = await self.store.item("item-auth-cookie-deletion")
+        self.assertEqual(failed["status"], "FAILED")
+        self.assertEqual(failed["error_code"], "META_AUTH_TOKEN_UNAVAILABLE")
 
 
 

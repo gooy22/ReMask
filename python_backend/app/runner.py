@@ -18,6 +18,7 @@ from .provisioning.timeouts import prepare_hard_timeout, provisioning_hard_timeo
 from .router import RoutePolicyError, TransparentPostRouter
 from .private_launch import PrivateLaunchService
 from .private_http_metrics import begin_operation, end_operation
+from .private_auth import observed_auth_cookie_deletions
 from .session import ProfileResolver, ProfileSession, ProfileContextError, ProxyCheckError
 from .store import JobStore
 from .work_queue import ProfileWorkQueue, WorkerInstanceLease
@@ -42,6 +43,56 @@ def _fan_page_error_summary(value: Any) -> str:
         "[redacted]", text,
     )
     return text[:700]
+
+
+def _auth_cookie_deletions_for_error(exc: BaseException) -> list[str]:
+    """Read only the safe c_user/xs deletion names from structured error evidence."""
+    names: set[str] = set()
+    pending: list[Any] = [exc]
+    seen: set[int] = set()
+    while pending and len(seen) < 32:
+        current = pending.pop()
+        if current is None or id(current) in seen:
+            continue
+        seen.add(id(current))
+        names.update(observed_auth_cookie_deletions(current))
+        for attr in ("inventory_diagnostics", "meta_payload", "diagnostic"):
+            value = getattr(current, attr, None)
+            if isinstance(value, (dict, list, tuple)):
+                pending.append(value)
+        if isinstance(current, dict):
+            for key, value in current.items():
+                if key == "auth_cookie_deletions" and isinstance(value, (list, tuple, set)):
+                    names.update(
+                        str(name).strip().casefold()
+                        for name in value
+                        if isinstance(name, str) and str(name).strip().casefold() in {"c_user", "xs"}
+                    )
+                elif key in {"verification", "inventory_diagnostics", "meta_payload", "diagnostic"}:
+                    if isinstance(value, (dict, list, tuple)):
+                        pending.append(value)
+        elif isinstance(current, (list, tuple)):
+            pending.extend(current)
+        for attr in ("__cause__", "__context__"):
+            pending.append(getattr(current, attr, None))
+    return sorted(names)
+
+
+async def _record_auth_cookie_revocation(store: Any, profile_id: str, context: Any,
+                                         exc: BaseException, job_id: str) -> None:
+    names = _auth_cookie_deletions_for_error(exc)
+    writer = getattr(store, "record_profile_auth_cookie_revocation", None)
+    cookies = getattr(context, "cookies", None)
+    if not names or not callable(writer) or not isinstance(cookies, dict):
+        return
+    try:
+        recorded = await writer(profile_id, cookies, names, source_job_id=job_id)
+        if recorded:
+            log.info("worker_item_auth_cookie_revocation_recorded profile=%s names=%s",
+                profile_id, ",".join(names))
+    except Exception as store_exc:
+        log.warning("worker_item_auth_cookie_revocation_checkpoint_failed profile=%s error_type=%s",
+            profile_id, type(store_exc).__name__)
 
 class TaskRegistry:
     def __init__(self) -> None:
@@ -122,6 +173,7 @@ class WorkerPool:
         self.registry.register('proxy_check',_proxy_check)
         self.registry.register('transparent_post',self.router.execute)
         self.resolver=ProfileResolver(os.getenv('REMASK_PROFILE_RESOLVER_URL'),os.getenv('REMASK_INTERNAL_KEY'))
+        self.resolver.auth_cookie_revocation_store = store
         self.provisioning=ProvisioningService(self.provisioning_state,profile_resolver=self.resolver)
         self.prepare=PrepareService(self.provisioning_state,self.provisioning)
         self.private_launch=PrivateLaunchService(self.provisioning_state)
@@ -468,13 +520,19 @@ class WorkerPool:
             terminal_reader = getattr(self.store, 'terminal_profile_statuses', None)
             terminal = (await terminal_reader([profile_id])).get(profile_id, {}) if callable(terminal_reader) else {}
             terminal_status = str(terminal.get('status') or '').upper()
+            auth_revocation_reader = getattr(self.store, 'has_profile_auth_cookie_revocation', None)
+            auth_revocation_present = (
+                await auth_revocation_reader(profile_id)
+                if callable(auth_revocation_reader) else False
+            )
             if terminal_status == 'CHECKPOINT':
                 fail_checkpoint = getattr(self.store, 'fail_item_for_checkpoint', None)
                 if callable(fail_checkpoint):
                     await fail_checkpoint(item_id)
                     log.info('worker_item_blocked_terminal_checkpoint item=%s profile=%s',item_id,profile_id)
                     return
-            if terminal_status == 'BUSINESS_LOGIN_GATE' and not paused_draft_revalidation:
+            if (terminal_status == 'BUSINESS_LOGIN_GATE' and not paused_draft_revalidation
+                    and not auth_revocation_present):
                 fail_terminal = getattr(self.store, 'fail_item_for_terminal_access', None)
                 if callable(fail_terminal):
                     await fail_terminal(item_id, terminal_status)
@@ -501,6 +559,40 @@ class WorkerPool:
                 finally:
                     log.info('worker_dispatch_latency item=%s queue_age_ms=%.0f profile_lock_ms=%.2f resolver_ms=%.2f',
                         item_id,queue_age_ms,lock_wait_ms,(time.monotonic()-resolver_started)*1000)
+                if auth_revocation_present:
+                    revocation_reader = getattr(self.store, 'profile_auth_cookie_revocation_for_context', None)
+                    revocation = (
+                        await revocation_reader(profile_id, getattr(context, 'cookies', {}))
+                        if callable(revocation_reader) else None
+                    )
+                    if revocation:
+                        code = str(revocation.get('status') or 'META_AUTH_COOKIE_REVOKED').upper()
+                        if code == 'META_AUTH_COOKIE_REVOKED':
+                            names = revocation.get('deleted_names') or ['c_user', 'xs']
+                            names = [name for name in names if name in {'c_user', 'xs'}]
+                            names_text = ', '.join(names) or 'c_user/xs'
+                            message = (
+                                f'Meta явно удалила cookies {names_text}. Этот сохранённый снимок не отправлялся повторно. '
+                                'Обновите вход выбранного профиля Facebook перед повтором Prepare.'
+                            )
+                        else:
+                            message = (
+                                'ID Facebook-профиля изменился после удаления auth-cookie. Запрос к Meta не отправлялся; '
+                                'сначала проверьте, что к профилю привязан правильный аккаунт.'
+                            )
+                        first_task = next((task for task in tasks if task['status'] != 'SUCCESS'), None)
+                        if first_task:
+                            await self.store.set_task_failed(
+                                first_task['id'], code, message, retryable=False,
+                            )
+                        log.info('worker_item_blocked_auth_cookie_revocation item=%s profile=%s code=%s',
+                            item_id, profile_id, code)
+                        return
+                    if terminal_status == 'BUSINESS_LOGIN_GATE':
+                        clear_gate = getattr(self.store, 'clear_terminal_business_login_gate', None)
+                        if callable(clear_gate):
+                            await clear_gate(profile_id)
+                        terminal_status = ''
                 async with ProfileSession(context) as session:
                     for task in tasks:
                         if task['status']=='SUCCESS':
@@ -709,6 +801,9 @@ class WorkerPool:
                             await self.store.set_task_success(task['id'],result)
                             traffic_outcome = 'success'
                         except ProvisioningError as exc:
+                            await _record_auth_cookie_revocation(
+                                self.store, profile_id, context, exc, str(item.get('job_id') or ''),
+                            )
                             await self.store.set_task_failed(
                                 task['id'],
                                 exc.code,
@@ -733,6 +828,9 @@ class WorkerPool:
                             )
                             break
                         except Exception as exc:
+                            await _record_auth_cookie_revocation(
+                                self.store, profile_id, context, exc, str(item.get('job_id') or ''),
+                            )
                             await self.store.set_task_failed(
                                 task['id'],
                                 'TASK_FAILED',
@@ -758,9 +856,16 @@ class WorkerPool:
                 )
                 if tasks:
                     first=next((t for t in tasks if t['status']!='SUCCESS'),tasks[0])
+                    code = getattr(exc, 'code', 'PROFILE_CONTEXT_ERROR')
+                    if code not in {
+                        'META_AUTH_COOKIE_REVOKED',
+                        'PROFILE_IDENTITY_CHANGED',
+                        'PROFILE_AUTH_GUARD_UNAVAILABLE',
+                    }:
+                        code = 'PROFILE_CONTEXT_ERROR'
                     await self.store.set_task_failed(
                         first['id'],
-                        'PROFILE_CONTEXT_ERROR',
+                        code,
                         str(exc),
                         retryable=retryable,
                     )

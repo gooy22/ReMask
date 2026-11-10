@@ -29,10 +29,15 @@ class ProfileContextError(RuntimeError):
         *,
         retryable: bool = False,
         category: str = "profile_context",
+        auth_cookie_deletions: list[str] | tuple[str, ...] | set[str] | None = None,
     ) -> None:
         super().__init__(message)
         self.retryable = bool(retryable)
         self.category = str(category or "profile_context").strip()
+        self.auth_cookie_deletions = sorted({
+            value for value in (auth_cookie_deletions or [])
+            if isinstance(value, str) and value in {"c_user", "xs"}
+        })
 
     @property
     def code(self) -> str:
@@ -42,6 +47,9 @@ class ProfileContextError(RuntimeError):
             "session_expired": "SESSION_EXPIRED",
             "checkpoint_required": "CHECKPOINT_REQUIRED",
             "two_factor_required": "TWO_FACTOR_REQUIRED",
+            "meta_auth_cookie_revoked": "META_AUTH_COOKIE_REVOKED",
+            "profile_identity_changed": "PROFILE_IDENTITY_CHANGED",
+            "auth_cookie_revocation_store": "PROFILE_AUTH_GUARD_UNAVAILABLE",
             "auth_gate_unclassified": "META_AUTH_GATE_UNCLASSIFIED",
         }.get(self.category, "PROFILE_CONTEXT_ERROR")
 
@@ -83,6 +91,7 @@ class ProfileResolver:
     ) -> None:
         self.url = str(resolver_url or "").strip() or None
         self.key = internal_key
+        self.auth_cookie_revocation_store: Any | None = None
 
         clean_url = (self.url or "").lower()
         self.is_loopback = (
@@ -539,7 +548,63 @@ class ProfileResolver:
         )
         context._loaded_cookies = dict(cookie_map)
         context._cookie_persistor = self.persist_cookie_refresh
+        await self._guard_auth_cookie_revocation(context)
         return context
+
+    async def _guard_auth_cookie_revocation(self, context: ProfileContext) -> None:
+        """Block Meta use of a snapshot Meta explicitly revoked on an earlier request."""
+        store = self.auth_cookie_revocation_store
+        has_marker = getattr(store, "has_profile_auth_cookie_revocation", None)
+        compare_snapshot = getattr(store, "profile_auth_cookie_revocation_for_context", None)
+        if not callable(has_marker):
+            return
+        try:
+            present = await has_marker(context.profile_id)
+            if not present:
+                return
+            if not callable(compare_snapshot):
+                raise RuntimeError("auth-cookie revocation comparison is unavailable")
+            revocation = await compare_snapshot(context.profile_id, context.cookies)
+        except Exception as exc:
+            logging.getLogger("remask.profile_resolver").warning(
+                "profile_auth_cookie_guard_unavailable profile=%s kind=%s",
+                context.profile_id, type(exc).__name__,
+            )
+            raise ProfileContextError(
+                "Не удалось проверить блокировку auth-cookie. Запрос к Meta не отправлен.",
+                retryable=True,
+                category="auth_cookie_revocation_store",
+            ) from exc
+        if not revocation:
+            return
+        code = str(revocation.get("status") or "META_AUTH_COOKIE_REVOKED").upper()
+        if code == "PROFILE_IDENTITY_CHANGED":
+            message = (
+                "ID Facebook-профиля изменился после удаления auth-cookie. "
+                "Запрос к Meta не отправлялся; проверьте привязанный аккаунт."
+            )
+            category = "profile_identity_changed"
+        else:
+            names = [
+                name for name in (revocation.get("deleted_names") or [])
+                if name in {"c_user", "xs"}
+            ]
+            deleted = ", ".join(names) or "auth-cookie профиля"
+            message = (
+                f"Meta явно удалила auth-cookie: {deleted}. Сохранённый набор не отправлен повторно; "
+                "обновите вход выбранного Facebook-профиля."
+            )
+            category = "meta_auth_cookie_revoked"
+        logging.getLogger("remask.profile_resolver").info(
+            "profile_auth_cookie_snapshot_blocked profile=%s code=%s",
+            context.profile_id, code,
+        )
+        raise ProfileContextError(
+            message,
+            retryable=False,
+            category=category,
+            auth_cookie_deletions=names if code == "META_AUTH_COOKIE_REVOKED" else None,
+        )
 
 
 class MetaSession:

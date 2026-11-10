@@ -386,7 +386,7 @@ function pythonWorkerItemBlockedByKnownProfileStatus(item) {
   const profileId = String(item && item.profile_id || '').trim();
   const session = profileId ? sessions.get(profileId) : null;
   const status = String(session && session.status || '').toUpperCase();
-  return ['CHECKPOINT','BUSINESS_LOGIN_GATE','LOGIN_REQUIRED','TWO_FACTOR','LIMITED','IN_PROGRESS'].includes(status);
+  return ['CHECKPOINT','BUSINESS_LOGIN_GATE','AUTH_COOKIE_REVOKED','PROFILE_IDENTITY_CHANGED','PROFILE_AUTH_GUARD_UNAVAILABLE','LOGIN_REQUIRED','TWO_FACTOR','LIMITED','IN_PROGRESS'].includes(status);
 }
 
 function pythonWorkerFailureDetails(item) {
@@ -724,6 +724,9 @@ function pythonWorkerIsProfileAuthBlockedCode(code) {
     'CHECKPOINT_REQUIRED',
     'SESSION_EXPIRED',
     'BUSINESS_LOGIN_GATE',
+    'META_AUTH_COOKIE_REVOKED',
+    'PROFILE_IDENTITY_CHANGED',
+    'PROFILE_AUTH_GUARD_UNAVAILABLE',
     'TWO_FACTOR_REQUIRED',
     'FACEBOOK_TEMPORARILY_BLOCKED',
     'META_AUTH_TOKEN_UNAVAILABLE'
@@ -799,6 +802,10 @@ async function pythonWorkerProfilePreflight(profileId) {
     browser.ready === true &&
     browser.create_surface_ready === true &&
     preflight.facebook_session_ready === true;
+
+  if (savedState === 'AUTH_COOKIE_REVOKED' && typeof pythonWorkerLoadProfileStatuses === 'function') {
+    await pythonWorkerLoadProfileStatuses();
+  }
 
   return preflight;
 }
@@ -1020,6 +1027,15 @@ function pythonWorkerJobStatusView(item) {
   if (/BUSINESS_LOGIN_GATE$/.test(code)) {
     return {label:'ДОСТУП META ОСТАНОВЛЕН', key:'BUSINESS_LOGIN_GATE', message:'Meta остановила доступ. Новые задачи запрещены.'};
   }
+  if (code === 'META_AUTH_COOKIE_REVOKED') {
+    return {label:'META УДАЛИЛА COOKIE', key:'LOGIN_REQUIRED', message:'Meta явно удалила auth-cookie. Сохранённый вход не отправлен повторно.'};
+  }
+  if (code === 'PROFILE_IDENTITY_CHANGED') {
+    return {label:'ПРОФИЛЬ ИЗМЕНИЛСЯ', key:'LOGIN_REQUIRED', message:'ID Facebook-профиля изменился; запрос к Meta не отправлялся.'};
+  }
+  if (code === 'PROFILE_AUTH_GUARD_UNAVAILABLE') {
+    return {label:'ПРОВЕРКА НЕ ВЫПОЛНЕНА', key:'LOGIN_REQUIRED', message:'Не удалось проверить блокировку auth-cookie. Запрос к Meta не отправлялся.'};
+  }
   if (code === 'META_AUTH_TOKEN_UNAVAILABLE') {
     return {label:'ВХОД НЕ ПОДТВЕРЖДЁН', key:'LOGIN_REQUIRED', message:'Meta не подтвердила контекст авторизации; GraphQL/CREATE не отправлялся. Повтор задания заблокирован.'};
   }
@@ -1063,6 +1079,15 @@ function pythonWorkerUserFailureText(item) {
   }
   if (/BUSINESS_LOGIN_GATE$/.test(code) || code === 'PROFILE_META_BLOCKED') {
     return 'Meta остановила доступ. Новые действия по профилю запрещены.';
+  }
+  if (code === 'META_AUTH_COOKIE_REVOKED') {
+    return 'Meta явно удалила auth-cookie. Этот снимок не отправлялся повторно; перед Prepare нужно обновить вход выбранного Facebook-профиля.';
+  }
+  if (code === 'PROFILE_IDENTITY_CHANGED') {
+    return 'ID Facebook-профиля изменился после удаления auth-cookie. Запрос к Meta не отправлялся; проверьте привязанный аккаунт.';
+  }
+  if (code === 'PROFILE_AUTH_GUARD_UNAVAILABLE') {
+    return 'Не удалось проверить блокировку auth-cookie. Запрос к Meta не отправлялся.';
   }
   if (code === 'META_AUTH_TOKEN_UNAVAILABLE') {
     return 'Meta не подтвердила вход; GraphQL/CREATE не отправлялся. Автоматический повтор этого задания заблокирован. Сначала восстановите вход штатным способом в Facebook.';
@@ -1156,6 +1181,9 @@ function pythonWorkerProfileSessionView(value) {
     ACTIVE:{label:'АКТИВНО',className:'ok'},
     CHECKPOINT:{label:'ЧЕКПОИНТ',className:'warn'},
     BUSINESS_LOGIN_GATE:{label:'ДОСТУП META ОСТАНОВЛЕН',className:'warn'},
+    AUTH_COOKIE_REVOKED:{label:'META УДАЛИЛА COOKIE',className:'warn'},
+    PROFILE_IDENTITY_CHANGED:{label:'ID ПРОФИЛЯ ИЗМЕНИЛСЯ',className:'warn'},
+    PROFILE_AUTH_GUARD_UNAVAILABLE:{label:'ПРОВЕРКА ВХОДА НЕ УДАЛАСЬ',className:'warn'},
     LOGIN_REQUIRED:{label:'НУЖЕН ВХОД',className:'warn'},
     TWO_FACTOR:{label:'2FA',className:'warn'},
     LIMITED:{label:'ОГРАНИЧЕНИЕ META',className:'warn'},
@@ -5001,18 +5029,27 @@ async function pythonWorkerOpenAutoModal() {
       }
       profiles.forEach(function(profileId) {
         const saved = pythonWorkerProfileSessionStatuses.get(String(profileId));
-        if (['CHECKPOINT','BUSINESS_LOGIN_GATE'].includes(String(saved && saved.status || '').toUpperCase())) {
+        if (['CHECKPOINT','BUSINESS_LOGIN_GATE','AUTH_COOKIE_REVOKED','PROFILE_IDENTITY_CHANGED','PROFILE_AUTH_GUARD_UNAVAILABLE'].includes(String(saved && saved.status || '').toUpperCase())) {
           blockedProfiles.add(String(profileId));
         }
       });
-      const checkpointProfiles=[],metaBlockedProfiles=[];
+      const checkpointProfiles=[],metaBlockedProfiles=[],cookieRevokedProfiles=[],identityChangedProfiles=[],guardUnavailableProfiles=[];
       blockedProfiles.forEach(function(profileId){
         const saved=pythonWorkerProfileSessionStatuses.get(String(profileId));
         const status=String(saved && saved.status || '').toUpperCase();
         if(status==='CHECKPOINT')checkpointProfiles.push(String(profileId));
         else if(status==='BUSINESS_LOGIN_GATE')metaBlockedProfiles.push(String(profileId));
+        else if(status==='AUTH_COOKIE_REVOKED')cookieRevokedProfiles.push(String(profileId));
+        else if(status==='PROFILE_IDENTITY_CHANGED')identityChangedProfiles.push(String(profileId));
+        else if(status==='PROFILE_AUTH_GUARD_UNAVAILABLE')guardUnavailableProfiles.push(String(profileId));
       });
-      if(checkpointProfiles.length&&metaBlockedProfiles.length){
+      if(guardUnavailableProfiles.length){
+        pythonWorkerUiState.jobNotice='Не удалось проверить сохранённый вход у профилей '+guardUnavailableProfiles.join(', ')+'. Запросы к Meta не отправлены.';
+      }else if(identityChangedProfiles.length){
+        pythonWorkerUiState.jobNotice='ID Facebook-профиля изменился у профилей '+identityChangedProfiles.join(', ')+'. Запросы к Meta не отправлены; проверьте привязку.';
+      }else if(cookieRevokedProfiles.length){
+        pythonWorkerUiState.jobNotice='Meta явно удалила auth-cookie у профилей '+cookieRevokedProfiles.join(', ')+'. Повторные запросы остановлены до обновления входа.';
+      }else if(checkpointProfiles.length&&metaBlockedProfiles.length){
         pythonWorkerUiState.jobNotice='Meta остановила профили: чекпоинт — '+
           checkpointProfiles.join(', ')+'; доступ закрыт — '+metaBlockedProfiles.join(', ')+'.';
       }else if(checkpointProfiles.length){
