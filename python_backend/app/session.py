@@ -579,7 +579,8 @@ class ProfileResolver:
             return
         code = str(revocation.get("status") or "META_AUTH_COOKIE_REVOKED").upper()
         if code == "PROFILE_IDENTITY_CHANGED":
-            message = (
+            stored_message = str(revocation.get("message") or "").strip()
+            message = stored_message or (
                 "ID Facebook-профиля изменился после удаления auth-cookie. "
                 "Запрос к Meta не отправлялся; проверьте привязанный аккаунт."
             )
@@ -589,11 +590,18 @@ class ProfileResolver:
                 name for name in (revocation.get("deleted_names") or [])
                 if name in {"c_user", "xs"}
             ]
-            deleted = ", ".join(names) or "auth-cookie профиля"
-            message = (
-                f"Meta явно удалила auth-cookie: {deleted}. Сохранённый набор не отправлен повторно; "
-                "обновите вход выбранного Facebook-профиля."
-            )
+            stored_message = str(revocation.get("message") or "").strip()
+            if str(revocation.get("evidence_kind") or "") == "legacy_history_pending" and stored_message:
+                # The old job proves a cookie deletion, but did not retain the
+                # old fingerprint. Do not claim the current snapshot was the
+                # one Meta rejected.
+                message = stored_message
+            else:
+                deleted = ", ".join(names) or "auth-cookie профиля"
+                message = (
+                    f"Meta явно удалила auth-cookie: {deleted}. Сохранённый набор не отправлен повторно; "
+                    "обновите вход выбранного Facebook-профиля."
+                )
             category = "meta_auth_cookie_revoked"
         logging.getLogger("remask.profile_resolver").info(
             "profile_auth_cookie_snapshot_blocked profile=%s code=%s",
