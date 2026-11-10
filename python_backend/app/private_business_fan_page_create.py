@@ -153,6 +153,9 @@ async def reconcile(web, *, business, name, before, response_page='', actor='', 
             reasons.append('managed_profile_page_not_unique' if len(proofs) > 1 else 'managed_profile_page_unconfirmed')
         except Exception as exc:
             reasons.append(getattr(exc, 'code', type(exc).__name__))
+            auth_error = private_auth_error(exc)
+            if auth_error is not None:
+                raise auth_error from exc
             if getattr(exc, 'code', '') in _RECOVERY_AUTH_CODES:
                 raise
         failed_reads = [row for row in recovery_diagnostics if row.get('result') == 'http_rejected']

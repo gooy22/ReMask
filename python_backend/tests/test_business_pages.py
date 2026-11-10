@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, patch
 from app.private_page_ownership import CONFIG, PAGE, RIGHTS, CLAIM, ASSIGN
 from app.business_fan_page_contracts import command as page_command
 from app.provisioning.advertising_page import AdvertisingPageStore
-from app.provisioning.business_pages import BusinessPageStore, ensure_business_page
+from app.provisioning.business_pages import BusinessPageStore, ensure_business_page, reconcile_pending_business_page
 from app.provisioning.fan_pages_handler import fan_pages_handler
 from app.provisioning.models import ProvisioningError, ProvisioningStep
 from app.provisioning.prepare import PrepareService
@@ -262,6 +262,14 @@ class BusinessPageTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('page_id', await store.get())
         self.assertEqual(self.meta.calls, [])
 
+    async def test_reconcile_only_refuses_to_create_without_a_retained_submit(self):
+        create = AsyncMock(side_effect=AssertionError('Reconcile-only must never start a new CREATE'))
+        with patch('app.provisioning.fan_pages_handler.fan_pages_handler', create):
+            self.assertIsNone(await reconcile_pending_business_page(
+                self.session, {'business_id': BM2}, self.state))
+        create.assert_not_awaited()
+        self.assertEqual(self.meta.posts, [])
+
     async def test_uncertain_same_name_creates_are_scoped_and_do_not_tombstone_other_business(self):
         for item, bm, phase in [('pending', BM1, 'PAGE_CREATE_CLICK_INTENT'), ('done', BM2, 'PAGE_CREATED')]:
             await self.state.set_running(item, '15', item, ProvisioningStep.FAN_PAGES)
@@ -462,6 +470,41 @@ class BusinessPageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([name for name, _ in self.meta.posts], [ASSIGN, 'FP_CREATE', ASSIGN])
         self.assertEqual(self.meta.posts[-1][1]['assetID'], FP2)
         self.assertEqual(self.meta.owners[FP1], BM1)
+        self.session.facebook_business_browser.assert_not_awaited()
+
+    async def test_pending_page_result_is_reconciled_before_rk_full_control(self):
+        from app.private_asset_contracts import PAGE as PAGE_QUERY
+        await self._seed_existing_bundles()
+        item = 'workspace-business-page-facebook:' + UID + '-' + BM2
+        scope = 'workspace-business-page:' + BM2
+        store = BusinessPageStore(self.state, self.context, BM2)
+        await store.patch(name='PrgssTeam', creation_item_id=item, creation_profile_id='15')
+        await self.state.set_running(item, '15', scope, ProvisioningStep.FAN_PAGES)
+        await self.state.checkpoint(item, '15', scope, ProvisioningStep.FAN_PAGES,
+            {'phase': 'PAGE_CREATE_RESULT_UNKNOWN', 'resume_from': 'RECONCILE_CREATE',
+                'business_id': BM2, 'target_names': ['PrgssTeam'], 'create_actor_id': UID,
+                'active_page_name': 'PrgssTeam', 'active_before_ids': [FP1], 'response_page_id': ''})
+        self.meta.owners[FP2], self.meta.names[FP2] = BM2, 'PrgssTeam'
+        rk_full_control = AsyncMock(side_effect=ProvisioningError('RK_AUTH_TEST', 'stop after Page reconciliation'))
+        payload = {'desired': {'ad_accounts': 2},
+            'parameters': {'AD_ACCOUNT': {'currency': 'USD', 'timezone_id': 1}}}
+        with patch('app.provisioning.private_create_handlers._rk_inventory',
+                side_effect=lambda web, business, name, account: {'id': account, 'asset_ui_id': account}), \
+                patch('app.provisioning.service._await_profile_mutation_cooldown', AsyncMock()), \
+                patch('app.provisioning.rk_access.ensure_existing_rk_full_control', rk_full_control):
+            with self.assertRaises(ProvisioningError) as caught:
+                await PrepareService(self.state, ProvisioningService(self.state)).run(
+                    item_id='reconcile-before-rk', profile_id='15', context=self.context,
+                    session=self.session, payload=payload)
+        self.assertEqual(caught.exception.code, 'RK_AUTH_TEST')
+        read_fp_index = next(index for index, (name, _) in enumerate(self.meta.calls)
+            if name == page_command('READ_FP', business=BM2, cursor=None)['friendly_name'])
+        prove_page_index = next(index for index, (name, _) in enumerate(self.meta.calls)
+            if name == PAGE_QUERY)
+        self.assertLess(read_fp_index, prove_page_index)
+        rk_full_control.assert_awaited_once()
+        self.assertEqual((await store.get())['page_id'], FP2)
+        self.assertEqual(self.meta.posts, [])
         self.session.facebook_business_browser.assert_not_awaited()
 
     async def test_create_without_business_owner_continues_add_existing_page_and_full_rights(self):

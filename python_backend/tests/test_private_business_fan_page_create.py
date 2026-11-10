@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, Mock, patch
 from app.business_fan_page_contracts import MANIFEST, command, execute
 from app.business_page_response import inspect_create_response
 from app.contract_maintenance.update_business_pages import compile_candidate
-from app.private_business_fan_page_create import create_business_page, read_pages
+from app.private_business_fan_page_create import create_business_page, read_pages, reconcile
 from app.provisioning.business_pages import BusinessPageStore, ensure_business_page
 from app.provisioning.models import ProvisioningError, ProvisioningStep
 from app.provisioning.prepare import PrepareService
@@ -437,6 +437,26 @@ class BusinessPageHTTPTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(row['document_kind'] == 'request_headers_rejected' for row in checkpoint['recovery_diagnostics']))
         self.assertNotIn('secret-cookie-value', json.dumps(checkpoint))
         self.assertEqual(self.meta.posts, [])
+
+    async def test_auth_rejection_during_managed_page_proof_keeps_cookie_deletion_evidence(self):
+        from fb_worker import AuthenticationError
+        error = AuthenticationError('Meta removed profile authentication cookies')
+        error.meta_payload = {'auth_cookie_deletions': ['c_user', 'xs']}
+        checkpoint = AsyncMock()
+        with patch('app.private_business_fan_page_create.read_pages',
+                AsyncMock(return_value=([], True))), \
+                patch('app.private_page_recovery.managed_page_candidates',
+                    AsyncMock(return_value=[FP2])), \
+                patch('app.private_business_fan_page_create.prove_page',
+                    AsyncMock(side_effect=error)), \
+                patch('app.private_business_fan_page_create.asyncio.sleep', AsyncMock()):
+            with self.assertRaises(ProvisioningError) as caught:
+                await reconcile(SimpleNamespace(), business=BM2, name='PrgssTeam',
+                    before={FP1}, actor=UID, checkpoint=checkpoint)
+        self.assertEqual(caught.exception.code, 'META_AUTH_TOKEN_UNAVAILABLE')
+        self.assertEqual(caught.exception.inventory_diagnostics[0]['auth_cookie_deletions'], ['c_user', 'xs'])
+        self.assertNotEqual(caught.exception.code, 'FAN_PAGE_CREATE_RESULT_UNKNOWN')
+        checkpoint.assert_awaited_once()
 
     async def test_business_recovery_wrong_actor_or_foreign_owned_page_cannot_be_adopted(self):
         for actor, owner in (('61511111111111', None), (UID, BM1)):

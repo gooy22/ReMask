@@ -1349,6 +1349,9 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
         if str(result.get('business_id') or '')!=business or _normalize_ad_account_id(result.get('ad_account_id')).removeprefix('act_')!=account:
             raise ProvisioningError('CREATED_BUSINESS_RK_REQUIRED','RK creation result does not match this portfolio')
     business_page = params.get('page_topology') == 'ONE_PAGE_PER_BUSINESS'
+    if getattr(session, 'private_only', False) is True and business_page:
+        from .business_pages import reconcile_pending_business_page
+        await reconcile_pending_business_page(session, params, state, resolver)
     if getattr(session, 'private_only', False) is True and not browser_full_control_fallback:
         from .rk_access import ensure_existing_rk_full_control
         try:

@@ -112,6 +112,31 @@ class BusinessPageStore:
         return await asyncio.to_thread(self._bindings)
 
 
+def _retained_page_create_pending(result):
+    """Recognize only a durable Page submit that still requires verification."""
+    if not isinstance(result, dict):
+        return False
+    phase = str(result.get('phase') or '').upper()
+    return phase in {'PAGE_CREATE_CLICK_INTENT', 'PAGE_CREATE_RESULT_UNKNOWN'} or (
+        result.get('resume_from') == 'RECONCILE_CREATE'
+    )
+
+
+async def reconcile_pending_business_page(session, params, state, resolver=None):
+    """Resolve a retained bundle Page submit before unrelated RK authorization work."""
+    store = BusinessPageStore(state, session.context, params.get('business_id'))
+    config = await store.get()
+    if config.get('page_id'):
+        return config
+    item = config.get('creation_item_id') or (
+        'workspace-business-page-' + store.actor_key + '-' + store.business_id
+    )
+    retained = ((await state.step(item, ProvisioningStep.FAN_PAGES)) or {}).get('result') or {}
+    if not _retained_page_create_pending(retained):
+        return None
+    return await ensure_business_page(session, {**params, 'reconcile_only': True}, state, resolver)
+
+
 async def ensure_business_page(session, params, state, resolver=None):
     """Reuse an eligible exact Page or create one; CLAIM belongs to PAGE_ACCESS."""
     from ..static_meta_contracts import execute
@@ -152,21 +177,30 @@ async def ensure_business_page(session, params, state, resolver=None):
             if isinstance(row, dict) and str(row.get('id') or '').isdigit()}
         if legacy.get('page_id'):
             known[str(legacy['page_id'])] = {**legacy, 'id': str(legacy['page_id'])}
-        creation_pending = bool(config.get('creation_item_id'))
-        if creation_pending:
-            retained = ((await state.step(config['creation_item_id'], ProvisioningStep.FAN_PAGES)) or {}).get('result') or {}
-            evidence = retained.get('create_response') or {}
-            # An authoritative rejection is settled non-creation. An eligible
-            # existing Page can satisfy the bundle without retrying CREATE.
-            # Unknown/sent intents still reconcile their exact result first.
-            creation_pending = not (
-                retained.get('phase') == 'PAGE_CREATE_REJECTED'
-                and evidence.get('version') == 1 and evidence.get('outcome') == 'REJECTED'
-                and not any(retained.get(key) for key in ('page_id', 'page_ids', 'pages', 'created_pages',
-                    'response_page_id', 'additional_profile_id'))
-                and not any(evidence.get(key) for key in ('page_id', 'additional_profile_id'))
-                and not (retained.get('browser_diagnostic') or {}).get('response_page_id')
-            )
+        item = config.get('creation_item_id') or (
+            'workspace-business-page-' + store.actor_key + '-' + store.business_id
+        )
+        retained = ((await state.step(item, ProvisioningStep.FAN_PAGES)) or {}).get('result') or {}
+        if params.get('reconcile_only') is True:
+            creation_pending = _retained_page_create_pending(retained)
+            if not creation_pending:
+                raise ProvisioningError('BUNDLE_PAGE_RECONCILE_NOT_PENDING',
+                    'No retained Page CREATE requires reconciliation; no new CREATE was sent.')
+        else:
+            creation_pending = bool(config.get('creation_item_id'))
+            if creation_pending:
+                evidence = retained.get('create_response') or {}
+                # An authoritative rejection is settled non-creation. An eligible
+                # existing Page can satisfy the bundle without retrying CREATE.
+                # Unknown/sent intents still reconcile their exact result first.
+                creation_pending = not (
+                    retained.get('phase') == 'PAGE_CREATE_REJECTED'
+                    and evidence.get('version') == 1 and evidence.get('outcome') == 'REJECTED'
+                    and not any(retained.get(key) for key in ('page_id', 'page_ids', 'pages', 'created_pages',
+                        'response_page_id', 'additional_profile_id'))
+                    and not any(evidence.get(key) for key in ('page_id', 'additional_profile_id'))
+                    and not (retained.get('browser_diagnostic') or {}).get('response_page_id')
+                )
         candidates = [row for page, row in known.items() if not creation_pending and page not in excluded
             and (page == selected if selected else str(row.get('name') or '').casefold() == config['name'].casefold())]
         if selected and (selected in excluded or selected not in known):
@@ -207,7 +241,6 @@ async def ensure_business_page(session, params, state, resolver=None):
             raise ProvisioningError('PROFILE_PAGE_REQUIRED', 'This Business needs its own eligible existing Page.', retryable=True)
         # Stable across jobs, local aliases and reordered slots. The fan-page
         # state machine reconciles a retained submit before another CREATE.
-        item = config.get('creation_item_id') or ('workspace-business-page-' + store.actor_key + '-' + store.business_id)
         creator = str(config.get('creation_profile_id') or session.context.profile_id)
         config = await store.patch(creation_item_id=item, creation_profile_id=creator)
         scope = 'workspace-business-page:' + store.business_id
