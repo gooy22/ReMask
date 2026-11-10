@@ -224,6 +224,20 @@ function fixture(){
     'an unresolved request leaves the loading state and shows a short timeout message');
   assert.equal(timed.timers.size,0,'both targeting timers are cleared after timeout');
   console.log('Launch targeting: hard timeout aborts unresolved audience lookups.');
+
+  const notLoaded=fixture();
+  for(const id of ['interestQuery','interestResults','selectedInterests'])
+    notLoaded.nodes.set(id,id.endsWith('Query')?new Input():new Element());
+  Object.assign(notLoaded.ctx,{$:id=>notLoaded.nodes.get(id),state:{interests:[]},formPost:body=>body,
+    apiJson:async()=>({data:[],availability:'NOT_LOADED'}),
+    renderPills(){},invalidateLaunchReview(){},validateReady(){}});
+  vm.runInContext(read('railway-targeting-pickers.js'),notLoaded.ctx);
+  notLoaded.nodes.get('interestQuery').value='Travel';
+  await notLoaded.ctx.searchTargeting('interests');
+  assert.equal(notLoaded.nodes.get('interestResults').textContent,
+    'Список вариантов не загружен. Выберите один профиль и один РК в шаге 1, затем повторите поиск.',
+    'an unloaded targeting catalog is not mislabeled as an empty search result');
+  console.log('Launch targeting: NOT_LOADED is distinguished from a true no-match.');
   const cleanUiSource=read('railway-targeting-autocomplete-overlay.php');
   assert.match(cleanUiSource,/remask-targeting-search-cleanup/,'legacy search controls stay hidden before first paint');
   assert.match(cleanUiSource,/#geoSearch,#interestSearch\{display:none!important;visibility:hidden!important\}/);
