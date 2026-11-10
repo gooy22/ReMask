@@ -175,6 +175,20 @@ assert.ok(source.includes('const message=remaskPrivateLaunchUserMessage(error)')
   assert.match(verifiedIdsCell.textContent,/"locales": \[\s*44\s*\]/);
   assert.doesNotMatch(verifiedIdsCell.textContent,/"name": "Travel"|"countries": \[\s*"UA"|"name": "Chrome"/,
     'the readback summary uses the exact per-account targeting override, including interests, behaviors and language');
+  const manyTask=JSON.parse(JSON.stringify(job.items[0].tasks[0]));
+  const manyInterests=Array.from({length:300},(_,index)=>({id:String(10000+index),name:'Audience option '+index+' '.repeat(20)}));
+  manyTask.payload.launch.override.adset.targeting={flexible_spec:[{interests:manyInterests}]};
+  const fullSavedConfig=ctx.remaskPrivateSavedLaunchSummary(manyTask);
+  const fullTargetingReadback=ctx.remaskPrivateDraftAdsetSettingsSummary(manyTask,[]);
+  assert.ok(fullSavedConfig.length>8000&&fullSavedConfig.includes('"id": "10299"'),
+    'saved configuration retains selections beyond the former 80-item and 7800-character limits');
+  assert.ok(fullTargetingReadback.length>8000&&fullTargetingReadback.includes('"id": "10299"'),
+    'Ad Set readback retains all targeting selections beyond the former 80-item and 7900-character limits');
+  const largeSnapshotKey='large-saved-draft-read';
+  storage.set(largeSnapshotKey,JSON.stringify({version:1,ok:true,checked_at:'2026-11-10T17:30:00.000Z',
+    message:'Large offline readback fixture',technical:fullTargetingReadback}));
+  assert.equal(ctx.remaskPrivateLoadDraftRead(largeSnapshotKey)?.technical,fullTargetingReadback,
+    'cached draft readback accepts the expanded complete settings summary');
   readResult.fragment_reads[1].settings_diagnostic.fields.find(field=>field.field==='targeting').matches=false;
   assert.match(ctx.remaskPrivateDraftAdsetSettingsSummary(job.items[0].tasks[0],readResult.fragment_reads),
     /targeting — НЕ СОВПАЛО/,'the targeting summary makes a failed Meta comparison visible');
