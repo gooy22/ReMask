@@ -28,7 +28,7 @@ assert.ok(completionSource.includes('status.textContent=remaskPrivatePageReadFai
   const id='a'.repeat(32),profile='4',draft='1000001',campaign='1000002';
   const taskId='b'.repeat(32),otherTaskId='c'.repeat(32);
   const job={id,status:'FAILED',items_total:1,items:[{profile_id:profile,status:'FAILED',tasks:[
-    {id:taskId,action:'private_launch',status:'FAILED',attempt:5,error_code:'READ_RELATION_MISMATCH',
+    {id:taskId,action:'private_launch',status:'FAILED',attempt:5,error_code:'PRIVATE_ADS_DRAFT_VALIDATION_ERRORS',
       error_message:'<img src=x onerror=alert(1)>',payload:{ad_account_id:'120248891583720408',
         launch:{base:{execution_mode:'DRAFT'}}}},
     {id:otherTaskId,action:'private_launch',status:'FAILED',payload:{ad_account_id:'120249297411010775',
@@ -36,6 +36,23 @@ assert.ok(completionSource.includes('status.textContent=remaskPrivatePageReadFai
     {task_id:taskId,step:'ADS_MANAGER:DRAFT',entity_id:draft,status:'SUCCESS',verified:true},
     {task_id:taskId,step:'ADS_MANAGER:FRAGMENT_CAMPAIGN',entity_id:campaign,status:'RECONCILE_REQUIRED',verified:false}]}]};
   const original=JSON.stringify(job),storage=new Map(),calls=[];
+  let readFailure=true;
+  const readResult={draft_id:draft,draft_verified:false,advertising_mutation_posts:0,persisted:false,
+    fragment_reads:[
+      {level:'campaign',relationships_match:true,settings_match:true,
+        observed:{status:{present:true,type:'str',value:'PAUSED'},
+          validation_status:{present:true,type:'str',value:'VALIDATED'},parent_ad_object_id:{present:true,type:'int',value:1612970413293705}},
+        active_error_diagnostic:{observed:false,has_errors:false,is_list:false,codes:[],field_names:[],terms:[]}},
+      {level:'ad_set',relationships_match:true,settings_match:true,
+        observed:{status:{present:true,type:'str',value:'PAUSED'},
+          validation_status:{present:true,type:'str',value:'VALIDATED'},parent_ad_object_id:{present:true,type:'int',value:120256450355860322}},
+        active_error_diagnostic:{observed:false,has_errors:false,is_list:false,codes:[],field_names:[],terms:[]}},
+      {level:'ad',relationships_match:true,settings_match:true,
+        observed:{status:{present:true,type:'str',value:'PAUSED'},
+          validation_status:{present:true,type:'str',value:'HAS_ERRORS'},parent_ad_object_id:{present:true,type:'int',value:120256450356070322}},
+        active_error_diagnostic:{observed:true,has_errors:true,is_list:true,
+          codes:[{field:'error_code',value:1359188}],field_names:[],terms:['billing','method','payment']}}
+    ]};
   let legacyRenders=0;
   const ctx={console,URL,queueMicrotask,setTimeout:handler=>queueMicrotask(handler),
     $:name=>controls[name],state:{},fundingState(){},fundingReviewLabel(){},loadFunding:async()=>{},validateReady(){},
@@ -47,8 +64,9 @@ assert.ok(completionSource.includes('status.textContent=remaskPrivatePageReadFai
     fetch:async(_url,options)=>{
       const request=JSON.parse(options.body);calls.push(request);
       if(request.action==='status')return {ok:true,json:async()=>({ok:true,job})};
-      if(request.action==='private_draft_read')return {ok:false,status:502,
-        json:async()=>({ok:false,code:'PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE',message:'Meta requires sign-in'})};
+      if(request.action==='private_draft_read')return readFailure?{ok:false,status:502,
+        json:async()=>({ok:false,code:'PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE',message:'Meta requires sign-in'})}:
+        {ok:true,json:async()=>({ok:true,read:readResult})};
       throw new Error('Unexpected write: '+request.action);
     }};
   vm.createContext(ctx);vm.runInContext(source,ctx);
@@ -66,7 +84,7 @@ assert.ok(source.includes('const message=remaskPrivateLaunchUserMessage(error)')
   assert.doesNotMatch(controls.jobSummary.textContent,/FAILED/);
   assert.equal(controls.jobItems.children.length,2,'a job may contain two Launch tasks for the same profile');
   const errorCell=controls.jobItems.children[0].children[10];
-  assert.match(errorCell.textContent,/Не удалось завершить шаг/);
+  assert.match(errorCell.textContent,/Meta вернула ошибки валидации/);
   assert.doesNotMatch(errorCell.textContent,/^READ_RELATION_MISMATCH/);
   const errorDetails=errorCell.children.find(child=>child.className==='remask-private-technical');
   assert.ok(errorDetails,'machine details are available on demand');
@@ -91,15 +109,31 @@ assert.ok(source.includes('const message=remaskPrivateLaunchUserMessage(error)')
   assert.equal(storage.get('remask_private_meta_terminal_v1:'+profile),'PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE');
   assert.equal(JSON.stringify(job),original,'the read failure must preserve the immutable source journal');
   assert.deepEqual(calls.map(row=>row.action),['status','private_draft_read']);
+  readFailure=false;storage.delete('remask_private_meta_terminal_v1:'+profile);
+  ctx.remaskPrivateRenderJob(job);
+  const verifiedIdsCell=controls.jobItems.children[0].children[5];
+  const verifiedReadButton=verifiedIdsCell.children.find(child=>child.textContent==='Проверить черновик в Meta');
+  await verifiedReadButton.events.click();
+  assert.match(verifiedIdsCell.textContent,/Совпали связи и настройки: 3 из 3/);
+  assert.match(verifiedIdsCell.textContent,/статус PAUSED/);
+  assert.match(verifiedIdsCell.textContent,/VALIDATED/);
+  assert.match(verifiedIdsCell.textContent,/HAS_ERRORS/);
+  assert.match(verifiedIdsCell.textContent,/1359188/);
+  assert.match(verifiedIdsCell.textContent,/billing \/ method \/ payment/);
+  assert.match(verifiedIdsCell.textContent,/Полнота черновика и редактор не проверялись/);
+  assert.equal(verifiedReadButton.disabled,false,'a completed read is available again without creating a new job');
+  assert.equal(JSON.stringify(job),original,'a successful diagnostic read must preserve the immutable source journal');
+  assert.deepEqual(calls.map(row=>row.action),['status','private_draft_read','private_draft_read']);
   assert.equal(calls[1].profile_id,profile);assert.equal(calls[1].job_id,id);assert.equal(calls[1].task_id,taskId);
   ctx.renderJob({id:'legacy',items:[]});
   assert.equal(legacyRenders,0,'late legacy init must not erase the restored private result');
   assert.match(controls.jobItems.textContent,new RegExp(campaign));
-  assert.match(controls.jobItems.textContent,/BUSINESS_LOGIN_GATE/,'late legacy reads must retain the fresh read failure too');
+  assert.match(controls.jobItems.textContent,/PRIVATE_ADS_DRAFT_VALIDATION_ERRORS/,
+    'a fresh private journal read must restore its exact task error without claiming the old Meta read is fresh');
   let intercepted=false;
   await controls.recentJobSelect.events.change({preventDefault(){},stopImmediatePropagation(){intercepted=true;}});
   assert.equal(intercepted,true,'the private recent entry must not reach the legacy job endpoint');
-  assert.deepEqual(calls.map(row=>row.action),['status','private_draft_read','status']);
+  assert.deepEqual(calls.map(row=>row.action),['status','private_draft_read','private_draft_read','status']);
   controls.recentJobSelect.value='legacy';
   controls.recentJobSelect.events.change({});ctx.renderJob({id:'legacy',items:[]});
   assert.equal(legacyRenders,1,'explicitly selecting a legacy recent job still works');
