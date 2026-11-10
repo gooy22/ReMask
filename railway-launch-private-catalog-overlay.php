@@ -740,12 +740,18 @@ $launchAssetPrefix='scripts/launch.js?v=20261023-private-launch-meta-marker-v1-d
 $launchAssetVersion=substr(hash('sha256',$js),0,16);
 $php=preg_replace('#scripts/launch\\.js(?:\\?[^"\\\']*)?#',$launchAssetPrefix.'-'.$launchAssetVersion,$php,1);
 $php=str_replace('official API, read only','состояние оплаты, read only',$php);
+$launchBannerCount=0;
 $php=str_replace('Одна настройка → много FB-профилей и RK. Каждая цель использует свой token, proxy и account-specific assets.',
-    'Сохранённые РК и FP доступны без новой синхронизации. Доступ FP для рекламы и привязку карты ещё нужно проверить.',$php);
+    '<span id="remaskLaunchModeBanner">Сохранённые РК и FP доступны без новой синхронизации. Черновик создаётся на паузе, без публикации.</span>',
+    $php,$launchBannerCount);
+if($launchBannerCount!==1) throw new RuntimeException('Launch mode banner target did not match exactly once');
 $php=str_replace('PAUSED-BY-DEFAULT','ЗАПУСК НЕ ПРОВЕРЕН',$php);
 $php=str_replace('OFFICIAL META API','КАТАЛОГ РК И FP',$php);
+$launchModeNoticeCount=0;
 $php=str_replace('Checks token access, RK status, Page/Instagram, Pixel, Custom Audiences and funding context before Campaign creation.',
-    'Запуск рекламы недоступен: проверка доступа страницы и оплаты в текущем режиме ещё не выполнена.',$php);
+    '<span id="remaskLaunchModeReadinessNotice">Черновик сохраняется как PAUSED; публикация не выполняется.</span>',
+    $php,$launchModeNoticeCount);
+if($launchModeNoticeCount!==1) throw new RuntimeException('Launch mode readiness target did not match exactly once');
 $php=str_replace('Shows the current funding source/status Meta exposes for each selected RK. ReMask does not change payment methods here.',
     'Платёжная привязка требует отдельной проверки Meta. Сохранённые ID не подтверждают готовность карты.',$php);
 file_put_contents($phpPath,$php);
