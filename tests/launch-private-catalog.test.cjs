@@ -4,8 +4,19 @@ const vm = require('node:vm');
 const path = require('node:path');
 const source = fs.readFileSync(path.join(__dirname, '..', 'railway-launch-private-catalog.js'), 'utf8');
 const completionSource = fs.readFileSync(path.join(__dirname, '..', 'railway-private-launch-completion.js'), 'utf8');
+const privateCatalogOverlay = fs.readFileSync(path.join(__dirname, '..', 'railway-launch-private-catalog-overlay.php'), 'utf8');
 assert.ok(completionSource.includes('status.textContent=remaskPrivatePageReadFailure(error,profile,account);'),
   'single-RK Launch must render the safe page read failure, including an explicit Meta login gate');
+assert.ok(source.includes("const fundingCard=$('loadFunding')?.closest?.('.launch-card');") &&
+  source.includes('if(fundingCard)fundingCard.hidden=draft;'),
+  'the payment inspection card stays out of the Draft-only workflow');
+assert.ok(source.includes("const readiness=$('remaskLaunchModeReadinessNotice');") &&
+  source.includes("'Черновик сохраняется как PAUSED; публикация не выполняется.'"),
+  'the Launch readiness copy follows the selected execution mode');
+assert.ok(privateCatalogOverlay.includes('id="remaskLaunchModeBanner"') &&
+  privateCatalogOverlay.includes('id="remaskLaunchModeReadinessNotice"') &&
+  privateCatalogOverlay.includes('$launchModeNoticeCount!==1'),
+  'the build overlay installs unique mode-aware copy targets');
 
 // Reopen the original retained Draft in a browser with empty localStorage.
 // A fresh Meta read may fail; it must not create/retry a job, drop receipts,
