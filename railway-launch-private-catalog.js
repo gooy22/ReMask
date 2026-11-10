@@ -897,7 +897,7 @@ function remaskPrivateLoadDraftRead(key) {
     try{
         const value=JSON.parse(localStorage.getItem(key)||'null');
         if(!value||value.version!==1||typeof value.ok!=='boolean'||
-            typeof value.checked_at!=='string'||!/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$/.test(value.checked_at)||
+            typeof value.checked_at!=='string'||!/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$/.test(value.checked_at)||
             !Number.isFinite(Date.parse(value.checked_at))||typeof value.message!=='string'||
             value.message.length>1200||typeof value.technical!=='string'||value.technical.length>8000)return null;
         return {version:1,ok:value.ok,checked_at:value.checked_at,message:value.message,technical:value.technical};
