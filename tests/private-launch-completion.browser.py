@@ -678,6 +678,11 @@ class InstalledLaunchTests(unittest.TestCase):
         payload = self.page.evaluate('fixtureLaunch.payload()')
         self.assertEqual(payload['adset']['targeting']['geo_locations']['countries'], ['US'])
         self.assertEqual(payload['adset']['targeting']['locales'], [1000])
+        flexible = payload['adset']['targeting'].get('flexible_spec', [])
+        self.assertIn('123456', [item['id'] for group in flexible for item in group.get('interests', [])],
+                      'selected interests survive bundle restore and enter the Ad Set payload')
+        self.assertIn('654321', [item['id'] for group in flexible for item in group.get('behaviors', [])],
+                      'selected behaviors survive bundle restore and enter the Ad Set payload')
         self.assertNotIn('account_id', payload['adset']['targeting'])
         self.assertEqual(self.page.locator('#profile option:checked').count(), 0)
 
