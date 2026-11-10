@@ -30,7 +30,11 @@ assert.ok(completionSource.includes('status.textContent=remaskPrivatePageReadFai
   const job={id,status:'FAILED',items_total:1,items:[{profile_id:profile,status:'FAILED',tasks:[
     {id:taskId,action:'private_launch',status:'FAILED',attempt:5,error_code:'PRIVATE_ADS_DRAFT_VALIDATION_ERRORS',
       error_message:'<img src=x onerror=alert(1)>',payload:{ad_account_id:'120248891583720408',
-        launch:{base:{execution_mode:'DRAFT'}}}},
+        launch:{base:{execution_mode:'DRAFT',campaign:{name:'Saved campaign',objective:'OUTCOME_TRAFFIC',
+          access_token:'must-not-render'},adset:{name:'Saved set',daily_budget:500,
+          targeting:{age_min:23,age_max:33,geo_locations:{countries:['UA']},interests:[{id:'101',name:'Travel'}]}}},
+          override:{adset:{targeting:{age_min:25,age_max:32,geo_locations:{countries:['PL']},
+            interests:[{id:'202',name:'Air travel'}]}}}}}},
     {id:otherTaskId,action:'private_launch',status:'FAILED',payload:{ad_account_id:'120249297411010775',
       launch:{base:{execution_mode:'DRAFT'}}}}],advertising_steps:[
     {task_id:taskId,step:'ADS_MANAGER:DRAFT',entity_id:draft,status:'SUCCESS',verified:true},
@@ -99,6 +103,17 @@ assert.ok(source.includes('const message=remaskPrivateLaunchUserMessage(error)')
   assert.equal(JSON.parse(storage.get('remask_private_source_job_v1')).job_id,id);
   assert.equal(controls.recentJobSelect.value,'private:'+id);
   const idsCell=controls.jobItems.children[0].children[5];
+  const savedConfig=idsCell.children.find(child=>String(child.className||'').includes('remask-private-saved-config'));
+  assert.ok(savedConfig,'reopened Launch jobs expose their saved Campaign and Ad Set configuration');
+  assert.match(savedConfig.textContent,/Конфигурация из сохранённой задачи/);
+  assert.match(savedConfig.textContent,/Saved campaign/);
+  assert.match(savedConfig.textContent,/Saved set/);
+  assert.match(savedConfig.textContent,/"age_min": 25/);
+  assert.match(savedConfig.textContent,/"countries": \[\s*"PL"\s*\]/);
+  assert.doesNotMatch(savedConfig.textContent,/"age_min": 23|"countries": \[\s*"UA"/,
+    'a per-account targeting override replaces the saved base targeting as a unit');
+  assert.doesNotMatch(savedConfig.textContent,/must-not-render/,
+    'saved summaries remove credential-like fields');
   const readCacheKey='remask_private_draft_read_v1:'+profile+':'+id+':'+taskId;
   const button=idsCell.children.find(child=>child.textContent==='Проверить черновик в Meta');
   assert.ok(button,'a settled saved Draft offers an explicit read');
