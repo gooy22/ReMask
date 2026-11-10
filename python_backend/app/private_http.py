@@ -16,6 +16,7 @@ from typing import Any
 
 import httpx
 from .direct_test import direct_test_deadline
+from .private_cookie_directives import auth_cookie_directive
 from .private_http_metrics import begin_request, end_request, request_hook, response_hook, error_kind
 from .private_http_stages import PrivateRequestStages
 from .private_session_wire import cookie_evidence
@@ -371,17 +372,15 @@ class PrivateHttpClient:
             auth_deletion_scopes: dict[str, dict[str, str]] = {}
             auth_scope_evidence: set[str] = set()
             for raw in response.headers.get_list("set-cookie"):
+                directive = auth_cookie_directive(raw)
+                if directive is None:
+                    continue
+                cookie_name, is_cookie_deletion = directive
                 pair = str(raw or "").split(";", 1)[0].strip()
-                name, separator, value = pair.partition("=")
-                cookie_name = name.strip().casefold()
+                _, separator, value = pair.partition("=")
                 if not separator:
                     continue
                 value = value.strip().strip('"')
-                is_cookie_deletion = (
-                    not value
-                    or value.casefold() == "deleted"
-                    or re.search(r";\s*max-age\s*=\s*0(?:\s*;|\s*$)", str(raw), re.I)
-                )
                 if cookie_name in {"c_user", "xs"} and (is_redirect or is_cookie_deletion):
                     destination = auth_deletions if is_cookie_deletion else auth_directives
                     destination.add(cookie_name)

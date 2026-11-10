@@ -3,6 +3,8 @@ import hashlib
 import json
 import re
 
+from .private_cookie_directives import auth_cookie_directive
+
 
 def route(url):
     host = str(getattr(url, 'host', '') or '')
@@ -69,12 +71,12 @@ class SessionWireEvidence:
                 return
             changed, deleted = set(), set()
             for raw in response.headers.get_list('set-cookie'):
-                match = re.match(r'\s*(c_user|xs)\s*=\s*([^;]*)', raw, re.I)
-                if not match:
+                directive = auth_cookie_directive(raw)
+                if directive is None:
                     continue
-                name, value = match.group(1).lower(), match.group(2).strip('"').strip()
+                name, is_deletion = directive
                 changed.add(name)
-                if not value or value.lower() == 'deleted' or re.search(r';\s*max-age\s*=\s*0(?:\s*;|\s*$)', raw, re.I):
+                if is_deletion:
                     deleted.add(name)
             self.responses.append({**route(response.url), 'status':response.status_code,
                 'protocol':response.http_version if response.http_version in {'HTTP/2','HTTP/1.1'} else 'other',

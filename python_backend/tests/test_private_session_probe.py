@@ -179,8 +179,8 @@ class SessionProbeTests(unittest.IsolatedAsyncioTestCase):
             calls.append(request)
             if len(calls) == 1:
                 return httpx.Response(302, headers=[('Location','https://business.facebook.com/business/loginpage/?next=uri-secret'),
-                    ('Set-Cookie','c_user=deleted; Domain=.facebook.com; Path=/; Max-Age=0'),
-                    ('Set-Cookie','xs=deleted; Domain=.facebook.com; Path=/; Max-Age=0')], extensions={'http_version':b'HTTP/2'})
+                    ('Set-Cookie','c_user=synthetic-actor; Domain=.facebook.com; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT'),
+                    ('Set-Cookie','xs=synthetic-expired-xs; Domain=.facebook.com; Path=/; Max-Age=-1')], extensions={'http_version':b'HTTP/2'})
             return httpx.Response(200, text=document('0'), extensions={'http_version':b'HTTP/2'})
         created = []
         class WireWeb:
@@ -211,7 +211,8 @@ class SessionProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(created[0].client.is_closed)
         self.assertEqual(created[0].client.event_hooks['request'], [])
         self.assertEqual(created[0].profile.cookies, payload['cookies'])
-        for secret in ('import-fixture-secret','uri-secret','proxy-fixture-secret','synthetic-session-value'):
+        for secret in ('import-fixture-secret','uri-secret','proxy-fixture-secret','synthetic-session-value',
+                'synthetic-actor','synthetic-expired-xs'):
             self.assertNotIn(secret, str(result))
 
     async def test_wire_observer_failure_does_not_prevent_the_original_read(self):
