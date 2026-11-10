@@ -235,7 +235,7 @@ function fixture(){
   notLoaded.nodes.get('interestQuery').value='Travel';
   await notLoaded.ctx.searchTargeting('interests');
   assert.equal(notLoaded.nodes.get('interestResults').textContent,
-    'Список вариантов не загружен. Выберите один профиль и один РК в шаге 1, затем повторите поиск.',
+    'Справочник ещё не загружен. Выберите один профиль и один РК в шаге 1 как источник поиска; этот выбор нужен только для каталога и не закрепляется в сохранённом шаблоне.',
     'an unloaded targeting catalog is not mislabeled as an empty search result');
   console.log('Launch targeting: NOT_LOADED is distinguished from a true no-match.');
   const cleanUiSource=read('railway-targeting-autocomplete-overlay.php');
