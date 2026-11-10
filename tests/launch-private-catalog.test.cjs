@@ -99,6 +99,7 @@ assert.ok(source.includes('const message=remaskPrivateLaunchUserMessage(error)')
   assert.equal(JSON.parse(storage.get('remask_private_source_job_v1')).job_id,id);
   assert.equal(controls.recentJobSelect.value,'private:'+id);
   const idsCell=controls.jobItems.children[0].children[5];
+  const readCacheKey='remask_private_draft_read_v1:'+profile+':'+id+':'+taskId;
   const button=idsCell.children.find(child=>child.textContent==='Проверить черновик в Meta');
   assert.ok(button,'a settled saved Draft offers an explicit read');
   await button.events.click();
@@ -107,6 +108,10 @@ assert.ok(source.includes('const message=remaskPrivateLaunchUserMessage(error)')
   assert.equal(button.disabled,true,'Meta access gates are terminal and must not be checked again');
   assert.equal(button.textContent,'Действия остановлены');
   assert.equal(storage.get('remask_private_meta_terminal_v1:'+profile),'PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE');
+  const failedRead=JSON.parse(storage.get(readCacheKey));
+  assert.equal(failedRead.ok,false);
+  assert.equal(failedRead.technical,'PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE');
+  assert.ok(!JSON.stringify(failedRead).includes('Meta requires sign-in'),'cached diagnostics must not retain raw server text');
   assert.equal(JSON.stringify(job),original,'the read failure must preserve the immutable source journal');
   assert.deepEqual(calls.map(row=>row.action),['status','private_draft_read']);
   readFailure=false;storage.delete('remask_private_meta_terminal_v1:'+profile);
@@ -128,6 +133,19 @@ assert.ok(source.includes('const message=remaskPrivateLaunchUserMessage(error)')
   assert.equal(JSON.stringify(job),original,'a successful diagnostic read must preserve the immutable source journal');
   assert.deepEqual(calls.map(row=>row.action),['status','private_draft_read','private_draft_read']);
   assert.equal(calls[1].profile_id,profile);assert.equal(calls[1].job_id,id);assert.equal(calls[1].task_id,taskId);
+  const storedRead=JSON.parse(storage.get(readCacheKey));
+  assert.equal(storedRead.ok,true);
+  assert.match(storedRead.message,/Совпали связи и настройки: 3 из 3/);
+  assert.ok(!JSON.stringify(storedRead).includes('fragment_reads'),'only rendered safe text is persisted');
+  assert.ok(!JSON.stringify(storedRead).includes('c_user'));
+  assert.ok(!JSON.stringify(storedRead).includes('xs'));
+  const callsBeforeRestore=calls.length;
+  ctx.remaskPrivateRenderJob(job);
+  const restoredIdsCell=controls.jobItems.children[0].children[5];
+  assert.match(restoredIdsCell.textContent,/Последняя сохранённая сверка от/);
+  assert.match(restoredIdsCell.textContent,/Новый запрос к Meta не выполнялся/);
+  assert.match(restoredIdsCell.textContent,/Совпали связи и настройки: 3 из 3/);
+  assert.equal(calls.length,callsBeforeRestore,'reopening a job restores the saved read without another Meta request');
   ctx.renderJob({id:'legacy',items:[]});
   assert.equal(legacyRenders,0,'late legacy init must not erase the restored private result');
   assert.match(controls.jobItems.textContent,new RegExp(campaign));
