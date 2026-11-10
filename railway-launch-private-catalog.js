@@ -104,8 +104,21 @@ if(typeof document!=='undefined'&&document.createElement){
         const note=document.createElement('p');note.id='remaskPrivateExecutionNote';note.className='muted';
         const update=()=>{
             const draft=select.value==='DRAFT';
-            note.textContent=draft?'Сохранит кампанию, группу и объявление в черновике Meta. Без публикации и проверки карты.':
+            note.textContent=draft?'Сохранит кампанию, группу и объявление в статусе PAUSED. Без публикации.':
                 'Публикация требует проверки доступа страницы и оплаты. Начальный статус — PAUSED.';
+            const banner=$('remaskLaunchModeBanner');
+            if(banner)banner.textContent=draft
+                ?'Сохранённые РК и FP доступны без новой синхронизации. Черновик создаётся на паузе, без публикации.'
+                :'Сохранённые РК и FP доступны без новой синхронизации. Для публикации проверяются доступ страницы и оплата.';
+            const readiness=$('remaskLaunchModeReadinessNotice');
+            if(readiness)readiness.textContent=draft
+                ?'Черновик сохраняется как PAUSED; публикация не выполняется.'
+                :'Для публикации проверяются доступ к странице и оплата.';
+            // The funding card is a publish-only control. Hiding it in Draft
+            // mode prevents an unrelated payment check from looking like a
+            // prerequisite for saving a paused draft. No read is started here.
+            const fundingCard=$('loadFunding')?.closest?.('.launch-card');
+            if(fundingCard)fundingCard.hidden=draft;
             if($('launchButton')){
                 $('launchButton').textContent=draft?'Сохранить черновик в Meta':'Создать рекламу';
                 $('launchButton').setAttribute('aria-label',$('launchButton').textContent);
