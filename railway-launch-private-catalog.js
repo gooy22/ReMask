@@ -873,13 +873,56 @@ function remaskPrivateErrorLabel(code) {
     if(/LOGIN|SESSION_EXPIRED|AUTHENTICATION/.test(key))return 'Meta запросила вход. Действие остановлено.';
     return 'Не удалось завершить шаг. Подробности доступны ниже.';
 }
-function remaskPrivateAppendDetails(container,title,body) {
+function remaskPrivateAppendDetails(container,title,body,className='remask-private-technical') {
     if(!body)return;
     const details=document.createElement('details');
-    details.className='remask-private-technical';
+    details.className=className;
     const heading=document.createElement('summary');heading.textContent=title;
     const pre=document.createElement('pre');pre.textContent=body;
     details.appendChild(heading);details.appendChild(pre);container.appendChild(details);
+}
+function remaskPrivateSafeSavedValue(value,key='',depth=0) {
+    if(/cookie|token|password|authorization|secret|session|proxy|header/i.test(String(key)))return undefined;
+    if(depth>8)return '[depth limit]';
+    if(value===null||typeof value==='boolean'||typeof value==='number')return value;
+    if(typeof value==='string')return value.slice(0,600);
+    if(Array.isArray(value))return value.slice(0,80).map(item=>remaskPrivateSafeSavedValue(item,'',depth+1))
+        .filter(item=>item!==undefined);
+    if(!value||typeof value!=='object')return undefined;
+    const result={};
+    for(const [childKey,childValue] of Object.entries(value).slice(0,120)){
+        const safe=remaskPrivateSafeSavedValue(childValue,childKey,depth+1);
+        if(safe!==undefined)result[childKey]=safe;
+    }
+    return result;
+}
+function remaskPrivateSavedLaunchSummary(task) {
+    const launch=task?.payload?.launch;
+    if(!launch||typeof launch!=='object'||Array.isArray(launch))return '';
+    const base=launch.base&&typeof launch.base==='object'&&!Array.isArray(launch.base)?launch.base:launch;
+    const override=launch.override&&typeof launch.override==='object'&&!Array.isArray(launch.override)
+        ?launch.override:{};
+    const section=name=>{
+        const source=base[name],patch=override[name];
+        if((!source||typeof source!=='object'||Array.isArray(source))&&
+            (!patch||typeof patch!=='object'||Array.isArray(patch)))return undefined;
+        const result={...(source&&typeof source==='object'&&!Array.isArray(source)?source:{}),
+            ...(patch&&typeof patch==='object'&&!Array.isArray(patch)?patch:{})};
+        // Per-account audience targeting replaces the base targeting object as a whole.
+        if(name==='adset'&&patch&&Object.prototype.hasOwnProperty.call(patch,'targeting'))
+            result.targeting=patch.targeting;
+        return result;
+    };
+    const saved={};
+    for(const name of ['campaign','adset']){
+        const value=section(name);
+        const safe=remaskPrivateSafeSavedValue(value,name);
+        if(safe&&typeof safe==='object'&&Object.keys(safe).length)saved[name]=safe;
+    }
+    if(!Object.keys(saved).length)return '';
+    const serialized=JSON.stringify(saved,null,2);
+    return 'Конфигурация из сохранённой задачи; это не чтение текущего объекта Meta.\n'+
+        serialized.slice(0,7800)+(serialized.length>7800?'\n[показана ограниченная часть]':'');
 }
 function remaskPrivateShowReadResult(container,message,technical) {
     container.replaceChildren();
@@ -944,6 +987,10 @@ function remaskPrivateRenderJob(job) {
                 remaskPrivateAppendDetails(tr.children[10],'Технические подробности',
                     [errorCode,errorMessage].filter(Boolean).join('\n'));
             }
+            const savedConfig=remaskPrivateSavedLaunchSummary(task);
+            if(task.action==='private_launch'&&savedConfig)
+                remaskPrivateAppendDetails(tr.children[5],'Сохранённые параметры Campaign и Ad Set',savedConfig,
+                    'remask-private-technical remask-private-saved-config');
             const launch=payload.launch;
             const draftMode=(launch?.base?.execution_mode||launch?.execution_mode)==='DRAFT';
             if(task.action==='private_launch'&&draftMode&&/^[a-f0-9]{32}$/.test(String(task.id||''))&&
