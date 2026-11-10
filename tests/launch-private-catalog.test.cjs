@@ -117,8 +117,8 @@ assert.ok(source.includes('const message=remaskPrivateLaunchUserMessage(error)')
   await verifiedReadButton.events.click();
   assert.match(verifiedIdsCell.textContent,/Совпали связи и настройки: 3 из 3/);
   assert.match(verifiedIdsCell.textContent,/статус PAUSED/);
-  assert.match(verifiedIdsCell.textContent,/статус строка \\(значение скрыто; длина 7 символов\\)/);
-  assert.doesNotMatch(verifiedIdsCell.textContent,/статус str:7/);
+  assert.ok(verifiedIdsCell.textContent.includes('статус строка (значение скрыто; длина 7 символов)'));
+  assert.ok(!verifiedIdsCell.textContent.includes('статус str:7'));
   assert.match(verifiedIdsCell.textContent,/VALIDATED/);
   assert.match(verifiedIdsCell.textContent,/HAS_ERRORS/);
   assert.match(verifiedIdsCell.textContent,/1359188/);
