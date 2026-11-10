@@ -909,6 +909,25 @@ function remaskPrivateSafeSavedValue(value,key='',depth=0) {
     }
     return result;
 }
+function remaskPrivateMergeSavedLaunchObject(base,patch,path=[]) {
+    const isRecord=value=>Boolean(value)&&typeof value==='object'&&!Array.isArray(value);
+    if(!isRecord(base))return patch;
+    if(!isRecord(patch))return {...base};
+    const result={...base};
+    for(const [key,value] of Object.entries(patch)){
+        const childPath=[...path,key];
+        // Match the worker: a per-RK targeting selection replaces the full
+        // shared audience object, while other nested settings inherit fields.
+        if(childPath.length===2&&childPath[0]==='adset'&&childPath[1]==='targeting'){
+            result[key]=value;
+        }else if(isRecord(result[key])&&isRecord(value)){
+            result[key]=remaskPrivateMergeSavedLaunchObject(result[key],value,childPath);
+        }else{
+            result[key]=value;
+        }
+    }
+    return result;
+}
 function remaskPrivateEffectiveSavedLaunchSections(task) {
     const launch=task?.payload?.launch;
     if(!launch||typeof launch!=='object'||Array.isArray(launch))return {};
@@ -919,12 +938,9 @@ function remaskPrivateEffectiveSavedLaunchSections(task) {
         const source=base[name],patch=override[name];
         if((!source||typeof source!=='object'||Array.isArray(source))&&
             (!patch||typeof patch!=='object'||Array.isArray(patch)))return undefined;
-        const result={...(source&&typeof source==='object'&&!Array.isArray(source)?source:{}),
-            ...(patch&&typeof patch==='object'&&!Array.isArray(patch)?patch:{})};
-        // Per-account audience targeting replaces the base targeting object as a whole.
-        if(name==='adset'&&patch&&Object.prototype.hasOwnProperty.call(patch,'targeting'))
-            result.targeting=patch.targeting;
-        return result;
+        return remaskPrivateMergeSavedLaunchObject(
+            source&&typeof source==='object'&&!Array.isArray(source)?source:{},
+            patch&&typeof patch==='object'&&!Array.isArray(patch)?patch:{},[name]);
     };
     const saved={};
     for(const name of ['campaign','adset']){
