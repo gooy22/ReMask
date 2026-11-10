@@ -32,9 +32,10 @@ assert.ok(completionSource.includes('status.textContent=remaskPrivatePageReadFai
       error_message:'<img src=x onerror=alert(1)>',payload:{ad_account_id:'120248891583720408',
         launch:{base:{execution_mode:'DRAFT',campaign:{name:'Saved campaign',objective:'OUTCOME_TRAFFIC',
           access_token:'must-not-render'},adset:{name:'Saved set',daily_budget:500,
-          targeting:{age_min:23,age_max:33,geo_locations:{countries:['UA']},interests:[{id:'101',name:'Travel'}]}}},
+          targeting:{age_min:23,age_max:33,geo_locations:{countries:['UA']},interests:[{id:'101',name:'Travel'}],
+            behaviors:[{id:'303',name:'Chrome'}],locales:[24]}}},
           override:{adset:{targeting:{age_min:25,age_max:32,geo_locations:{countries:['PL']},
-            interests:[{id:'202',name:'Air travel'}]}}}}}},
+            interests:[{id:'202',name:'Air travel'}],behaviors:[{id:'404',name:'Engaged shoppers'}],locales:[44]}}}}}},
     {id:otherTaskId,action:'private_launch',status:'FAILED',payload:{ad_account_id:'120249297411010775',
       launch:{base:{execution_mode:'DRAFT'}}}}],advertising_steps:[
     {task_id:taskId,step:'ADS_MANAGER:DRAFT',entity_id:draft,status:'SUCCESS',verified:true},
@@ -50,6 +51,8 @@ assert.ok(completionSource.includes('status.textContent=remaskPrivatePageReadFai
       {level:'ad_set',relationships_match:true,settings_match:true,
         observed:{status:{present:true,type:'str',value:'PAUSED'},
           validation_status:{present:true,type:'str',value:'VALIDATED'},parent_ad_object_id:{present:true,type:'int',value:120256450355860322}},
+        settings_diagnostic:{fields:[{field:'name',matches:true},{field:'daily_budget',matches:true},
+          {field:'targeting',matches:true}]},
         active_error_diagnostic:{observed:false,has_errors:false,is_list:false,codes:[],field_names:[],terms:[]}},
       {level:'ad',relationships_match:true,settings_match:true,
         observed:{status:{present:true,type:'str',value:'PAUSED'},
@@ -143,6 +146,18 @@ assert.ok(source.includes('const message=remaskPrivateLaunchUserMessage(error)')
   assert.match(verifiedIdsCell.textContent,/HAS_ERRORS/);
   assert.match(verifiedIdsCell.textContent,/1359188/);
   assert.match(verifiedIdsCell.textContent,/billing \/ method \/ payment/);
+  assert.match(verifiedIdsCell.textContent,/Ad Set: значения из сохранённого задания и результат сравнения с прочитанным фрагментом Meta/);
+  assert.match(verifiedIdsCell.textContent,/targeting — СОВПАЛО/);
+  assert.match(verifiedIdsCell.textContent,/"countries": \[\s*"PL"\s*\]/);
+  assert.match(verifiedIdsCell.textContent,/"name": "Air travel"/);
+  assert.match(verifiedIdsCell.textContent,/"name": "Engaged shoppers"/);
+  assert.match(verifiedIdsCell.textContent,/"locales": \[\s*44\s*\]/);
+  assert.doesNotMatch(verifiedIdsCell.textContent,/"name": "Travel"|"countries": \[\s*"UA"|"name": "Chrome"/,
+    'the readback summary uses the exact per-account targeting override, including interests, behaviors and language');
+  readResult.fragment_reads[1].settings_diagnostic.fields.find(field=>field.field==='targeting').matches=false;
+  assert.match(ctx.remaskPrivateDraftAdsetSettingsSummary(job.items[0].tasks[0],readResult.fragment_reads),
+    /targeting — НЕ СОВПАЛО/,'the targeting summary makes a failed Meta comparison visible');
+  readResult.fragment_reads[1].settings_diagnostic.fields.find(field=>field.field==='targeting').matches=true;
   assert.match(verifiedIdsCell.textContent,/Полнота черновика и редактор не проверялись/);
   assert.equal(verifiedReadButton.disabled,false,'a completed read is available again without creating a new job');
   assert.equal(JSON.stringify(job),original,'a successful diagnostic read must preserve the immutable source journal');
