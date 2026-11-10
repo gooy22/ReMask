@@ -896,9 +896,9 @@ function remaskPrivateSafeSavedValue(value,key='',depth=0) {
     }
     return result;
 }
-function remaskPrivateSavedLaunchSummary(task) {
+function remaskPrivateEffectiveSavedLaunchSections(task) {
     const launch=task?.payload?.launch;
-    if(!launch||typeof launch!=='object'||Array.isArray(launch))return '';
+    if(!launch||typeof launch!=='object'||Array.isArray(launch))return {};
     const base=launch.base&&typeof launch.base==='object'&&!Array.isArray(launch.base)?launch.base:launch;
     const override=launch.override&&typeof launch.override==='object'&&!Array.isArray(launch.override)
         ?launch.override:{};
@@ -919,10 +919,33 @@ function remaskPrivateSavedLaunchSummary(task) {
         const safe=remaskPrivateSafeSavedValue(value,name);
         if(safe&&typeof safe==='object'&&Object.keys(safe).length)saved[name]=safe;
     }
+    return saved;
+}
+function remaskPrivateSavedLaunchSummary(task) {
+    const saved=remaskPrivateEffectiveSavedLaunchSections(task);
     if(!Object.keys(saved).length)return '';
     const serialized=JSON.stringify(saved,null,2);
     return 'Конфигурация из сохранённой задачи; это не чтение текущего объекта Meta.\n'+
         serialized.slice(0,7800)+(serialized.length>7800?'\n[показана ограниченная часть]':'');
+}
+function remaskPrivateDraftAdsetSettingsSummary(task,rows) {
+    const adset=remaskPrivateEffectiveSavedLaunchSections(task).adset;
+    if(!adset||typeof adset!=='object'||Array.isArray(adset))return '';
+    const read=Array.isArray(rows)?rows.find(row=>row?.level==='ad_set'):null;
+    const fields=Array.isArray(read?.settings_diagnostic?.fields)?read.settings_diagnostic.fields:[];
+    const matches=new Map(fields.filter(field=>field&&typeof field.field==='string')
+        .map(field=>[field.field,field.matches]));
+    const lines=[];
+    for(const [field,value] of Object.entries(adset)){
+        if(/cookie|token|password|authorization|secret|session|proxy|header/i.test(field))continue;
+        const checked=matches.has(field)?matches.get(field):read?.settings_match===true;
+        const status=checked===true?'СОВПАЛО':checked===false?'НЕ СОВПАЛО':'НЕТ СВЕРКИ';
+        const serialized=JSON.stringify(value,null,2);
+        lines.push(field+' — '+status+'\n'+(serialized===undefined?'null':serialized));
+    }
+    if(!lines.length)return '';
+    return 'Ad Set: значения из сохранённого задания и результат сравнения с прочитанным фрагментом Meta.\n'+
+        lines.join('\n\n');
 }
 function remaskPrivateShowReadResult(container,message,technical) {
     container.replaceChildren();
@@ -1061,11 +1084,13 @@ function remaskPrivateRenderJob(job) {
                         });
                         const pending=read.pending_stage&&typeof read.pending_stage==='object'
                             ?String(read.pending_stage.stage||'unknown')+' ('+String(read.pending_stage.reason||'unknown')+')':'';
-                        const technical=checks.join('\n')+(pending?'\nОжидающий этап: '+pending:'')+
-                            '\nПолнота черновика и редактор не проверялись.';
+                        const adsetSettings=remaskPrivateDraftAdsetSettingsSummary(task,rows);
+                        const technical=[checks.join('\n'),adsetSettings,
+                            pending?'Ожидающий этап: '+pending:'',
+                            'Полнота черновика и редактор не проверялись.'].filter(Boolean).join('\n\n');
                         const message='Черновик '+String(read.draft_id||'')+' прочитан. Совпали связи и настройки: '+
                             matching+' из '+rows.length+'. Публикация не выполнялась.';
-                        const safeTechnical=technical.slice(0,8000);
+                        const safeTechnical=technical.slice(0,7900)+(technical.length>7900?'\n[показана ограниченная часть]':'');
                         remaskPrivateSaveDraftRead(readCacheKey,{version:1,ok:true,
                             checked_at:new Date().toISOString(),message,technical:safeTechnical});
                         remaskPrivateShowReadResult(result,message,safeTechnical);
