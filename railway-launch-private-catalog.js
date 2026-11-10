@@ -864,6 +864,7 @@ function remaskPrivateErrorLabel(code) {
         CHECKPOINT_REQUIRED:'Чекпоинт Meta: аккаунт остановлен.',
         PRIVATE_ADS_DRAFT_RESULT_UNKNOWN:'Meta не подтвердила результат. Перед продолжением нужна сверка.',
         PRIVATE_ADS_DRAFT_INVALID_INPUT:'Проверьте настройки черновика.',
+        PRIVATE_ADS_DRAFT_VALIDATION_ERRORS:'Meta вернула ошибки валидации одного из фрагментов; полный черновик не подтверждён.',
         PRIVATE_LAUNCH_PLAN_CHANGED:'У этой задачи уже сохранены другие настройки. Новый запрос не отправлен.',
         PRIVATE_LAUNCH_EXISTING_INTENT:'Для этого РК уже есть незавершённый черновик. Продолжите сохранённую задачу.',
         PRIVATE_LAUNCH_MULTIPLE_PENDING_INTENTS:'Для этого РК найдены несколько черновиков. Новые объекты не создавались; нужна сверка.'
@@ -950,9 +951,23 @@ function remaskPrivateRenderJob(job) {
                         const matching=rows.filter(row=>row.relationships_match===true&&row.settings_match===true).length;
                         const safeShape=value=>{
                             if(!value||typeof value!=='object')return 'unknown';
-                            if(Object.prototype.hasOwnProperty.call(value,'value'))return String(value.value);
+                            if(value.present===false)return 'не наблюдалось';
+                            if(Object.prototype.hasOwnProperty.call(value,'value'))return String(value.value??'null');
                             if(Number.isSafeInteger(value.length))return String(value.type||'value')+':'+value.length;
                             return String(value.type||'unknown');
+                        };
+                        const safeValidation=diagnostic=>{
+                            if(!diagnostic||typeof diagnostic!=='object'||diagnostic.observed!==true)return 'не наблюдались';
+                            if(diagnostic.has_errors!==true)return diagnostic.is_list===true?'список пуст':'ошибок нет';
+                            const details=[];
+                            const codes=Array.isArray(diagnostic.codes)?diagnostic.codes.map(item=>
+                                item&&Object.prototype.hasOwnProperty.call(item,'value')?String(item.value):'').filter(Boolean):[];
+                            const fields=Array.isArray(diagnostic.field_names)?diagnostic.field_names.filter(item=>typeof item==='string'):[];
+                            const terms=Array.isArray(diagnostic.terms)?diagnostic.terms.filter(item=>typeof item==='string'):[];
+                            if(codes.length)details.push('коды '+codes.join(', '));
+                            if(fields.length)details.push('поля '+fields.join(', '));
+                            if(terms.length)details.push('термины '+terms.join(' / '));
+                            return 'есть'+(details.length?' ('+details.join('; ')+')':'');
                         };
                         const checks=rows.map(row=>{
                             const relationChecks=row.checks&&typeof row.checks==='object'?row.checks:{};
@@ -962,7 +977,10 @@ function remaskPrivateRenderJob(job) {
                                 field.field+'['+field.count+'] '+safeShape(field.expected)+' / '+safeShape(field.observed));
                             const parent=row.observed?.parent_ad_object_id;
                             const parentValue=parent?.present===true?safeShape(parent):'absent';
-                            return (row.level||'fragment')+': связи '+
+                            return (row.level||'fragment')+': статус '+safeShape(row.observed?.status)+
+                                '; validation '+safeShape(row.observed?.validation_status)+
+                                '; active_errors '+safeValidation(row.active_error_diagnostic)+
+                                '; связи '+
                                 (relationFailures.length?relationFailures.join(','):'совпали')+
                                 '; настройки '+(settingFailures.length?settingFailures.join(','):'совпали')+
                                 '; parent '+parentValue;
@@ -972,7 +990,7 @@ function remaskPrivateRenderJob(job) {
                         const technical=checks.join('\n')+(pending?'\nОжидающий этап: '+pending:'')+
                             '\nПолнота черновика и редактор не проверялись.';
                         remaskPrivateShowReadResult(result,
-                            'Черновик '+String(read.draft_id||'')+' прочитан. Совпало фрагментов: '+
+                            'Черновик '+String(read.draft_id||'')+' прочитан. Совпали связи и настройки: '+
                                 matching+' из '+rows.length+'. Публикация не выполнялась.',
                             technical);
                     }catch(error){
