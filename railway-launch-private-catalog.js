@@ -896,16 +896,35 @@ function remaskPrivateAppendDetails(container,title,body,className='remask-priva
 }
 function remaskPrivateSafeSavedValue(value,key='',depth=0) {
     if(/cookie|token|password|authorization|secret|session|proxy|header/i.test(String(key)))return undefined;
-    if(depth>8)return '[depth limit]';
+    if(depth>32)return '[depth limit]';
     if(value===null||typeof value==='boolean'||typeof value==='number')return value;
-    if(typeof value==='string')return value.slice(0,600);
-    if(Array.isArray(value))return value.slice(0,80).map(item=>remaskPrivateSafeSavedValue(item,'',depth+1))
+    if(typeof value==='string')return value;
+    if(Array.isArray(value))return value.map(item=>remaskPrivateSafeSavedValue(item,'',depth+1))
         .filter(item=>item!==undefined);
     if(!value||typeof value!=='object')return undefined;
     const result={};
-    for(const [childKey,childValue] of Object.entries(value).slice(0,120)){
+    for(const [childKey,childValue] of Object.entries(value)){
         const safe=remaskPrivateSafeSavedValue(childValue,childKey,depth+1);
         if(safe!==undefined)result[childKey]=safe;
+    }
+    return result;
+}
+function remaskPrivateMergeSavedLaunchObject(base,patch,path=[]) {
+    const isRecord=value=>Boolean(value)&&typeof value==='object'&&!Array.isArray(value);
+    if(!isRecord(base))return patch;
+    if(!isRecord(patch))return {...base};
+    const result={...base};
+    for(const [key,value] of Object.entries(patch)){
+        const childPath=[...path,key];
+        // Match the worker: a per-RK targeting selection replaces the full
+        // shared audience object, while other nested settings inherit fields.
+        if(childPath.length===2&&childPath[0]==='adset'&&childPath[1]==='targeting'){
+            result[key]=value;
+        }else if(isRecord(result[key])&&isRecord(value)){
+            result[key]=remaskPrivateMergeSavedLaunchObject(result[key],value,childPath);
+        }else{
+            result[key]=value;
+        }
     }
     return result;
 }
@@ -919,12 +938,9 @@ function remaskPrivateEffectiveSavedLaunchSections(task) {
         const source=base[name],patch=override[name];
         if((!source||typeof source!=='object'||Array.isArray(source))&&
             (!patch||typeof patch!=='object'||Array.isArray(patch)))return undefined;
-        const result={...(source&&typeof source==='object'&&!Array.isArray(source)?source:{}),
-            ...(patch&&typeof patch==='object'&&!Array.isArray(patch)?patch:{})};
-        // Per-account audience targeting replaces the base targeting object as a whole.
-        if(name==='adset'&&patch&&Object.prototype.hasOwnProperty.call(patch,'targeting'))
-            result.targeting=patch.targeting;
-        return result;
+        return remaskPrivateMergeSavedLaunchObject(
+            source&&typeof source==='object'&&!Array.isArray(source)?source:{},
+            patch&&typeof patch==='object'&&!Array.isArray(patch)?patch:{},[name]);
     };
     const saved={};
     for(const name of ['campaign','adset']){
@@ -938,8 +954,9 @@ function remaskPrivateSavedLaunchSummary(task) {
     const saved=remaskPrivateEffectiveSavedLaunchSections(task);
     if(!Object.keys(saved).length)return '';
     const serialized=JSON.stringify(saved,null,2);
+    const limit=100000;
     return 'Конфигурация из сохранённой задачи; это не чтение текущего объекта Meta.\n'+
-        serialized.slice(0,7800)+(serialized.length>7800?'\n[показана ограниченная часть]':'');
+        serialized.slice(0,limit)+(serialized.length>limit?'\n[показана ограниченная часть; превышен лимит 100000 символов]':'');
 }
 function remaskPrivateDraftAdsetSettingsSummary(task,rows) {
     const adset=remaskPrivateEffectiveSavedLaunchSections(task).adset;
@@ -978,7 +995,7 @@ function remaskPrivateLoadDraftRead(key) {
         if(!value||value.version!==1||typeof value.ok!=='boolean'||
             typeof value.checked_at!=='string'||!/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$/.test(value.checked_at)||
             !Number.isFinite(Date.parse(value.checked_at))||typeof value.message!=='string'||
-            value.message.length>1200||typeof value.technical!=='string'||value.technical.length>8000)return null;
+            value.message.length>1200||typeof value.technical!=='string'||value.technical.length>110000)return null;
         return {version:1,ok:value.ok,checked_at:value.checked_at,message:value.message,technical:value.technical};
     }catch(_){return null;}
 }
@@ -1103,7 +1120,9 @@ function remaskPrivateRenderJob(job) {
                             'Полнота черновика и редактор не проверялись.'].filter(Boolean).join('\n\n');
                         const message='Черновик '+String(read.draft_id||'')+' прочитан. Совпали связи и настройки: '+
                             matching+' из '+rows.length+'. Публикация не выполнялась.';
-                        const safeTechnical=technical.slice(0,7900)+(technical.length>7900?'\n[показана ограниченная часть]':'');
+                        const limit=100000;
+                        const safeTechnical=technical.slice(0,limit)+(technical.length>limit
+                            ?'\n[показана ограниченная часть; превышен лимит 100000 символов]':'');
                         remaskPrivateSaveDraftRead(readCacheKey,{version:1,ok:true,
                             checked_at:new Date().toISOString(),message,technical:safeTechnical});
                         remaskPrivateShowReadResult(result,message,safeTechnical);

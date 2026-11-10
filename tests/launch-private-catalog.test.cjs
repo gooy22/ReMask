@@ -43,9 +43,11 @@ assert.ok(privateCatalogOverlay.includes('id="remaskLaunchModeBanner"') &&
       error_message:'<img src=x onerror=alert(1)>',payload:{ad_account_id:'120248891583720408',
         launch:{base:{execution_mode:'DRAFT',campaign:{name:'Saved campaign',objective:'OUTCOME_TRAFFIC',
           access_token:'must-not-render'},adset:{name:'Saved set',daily_budget:500,
+          promoted_object:{pixel_id:'base-pixel',custom_event_type:'PURCHASE',custom_conversion_id:'base-conversion'},
           targeting:{age_min:23,age_max:33,geo_locations:{countries:['UA']},interests:[{id:'101',name:'Travel'}],
             behaviors:[{id:'303',name:'Chrome'}],locales:[24]}}},
-          override:{adset:{targeting:{age_min:25,age_max:32,geo_locations:{countries:['PL']},
+          override:{adset:{promoted_object:{pixel_id:'profile-pixel'},
+            targeting:{age_min:25,age_max:32,geo_locations:{countries:['PL']},
             interests:[{id:'202',name:'Air travel'}],behaviors:[{id:'404',name:'Engaged shoppers'}],locales:[44]}}}}}},
     {id:otherTaskId,action:'private_launch',status:'FAILED',payload:{ad_account_id:'120249297411010775',
       launch:{base:{execution_mode:'DRAFT'}}}}],advertising_steps:[
@@ -124,8 +126,16 @@ assert.ok(source.includes('const message=remaskPrivateLaunchUserMessage(error)')
   assert.match(savedConfig.textContent,/Saved set/);
   assert.match(savedConfig.textContent,/"age_min": 25/);
   assert.match(savedConfig.textContent,/"countries": \[\s*"PL"\s*\]/);
+  assert.match(savedConfig.textContent,/"pixel_id": "profile-pixel"/);
+  assert.match(savedConfig.textContent,/"custom_event_type": "PURCHASE"/);
+  assert.match(savedConfig.textContent,/"custom_conversion_id": "base-conversion"/,
+    'the saved configuration view inherits unoverridden nested Ad Set settings');
   assert.doesNotMatch(savedConfig.textContent,/"age_min": 23|"countries": \[\s*"UA"/,
     'a per-account targeting override replaces the saved base targeting as a unit');
+  assert.deepEqual(JSON.parse(JSON.stringify(ctx.remaskPrivateEffectiveSavedLaunchSections(
+    job.items[0].tasks[0]).adset.promoted_object)),
+    {pixel_id:'profile-pixel',custom_event_type:'PURCHASE',custom_conversion_id:'base-conversion'},
+    'the displayed effective Ad Set values match the worker nested-merge semantics');
   assert.doesNotMatch(savedConfig.textContent,/must-not-render/,
     'saved summaries remove credential-like fields');
   const readCacheKey='remask_private_draft_read_v1:'+profile+':'+id+':'+taskId;
@@ -165,6 +175,20 @@ assert.ok(source.includes('const message=remaskPrivateLaunchUserMessage(error)')
   assert.match(verifiedIdsCell.textContent,/"locales": \[\s*44\s*\]/);
   assert.doesNotMatch(verifiedIdsCell.textContent,/"name": "Travel"|"countries": \[\s*"UA"|"name": "Chrome"/,
     'the readback summary uses the exact per-account targeting override, including interests, behaviors and language');
+  const manyTask=JSON.parse(JSON.stringify(job.items[0].tasks[0]));
+  const manyInterests=Array.from({length:300},(_,index)=>({id:String(10000+index),name:'Audience option '+index+' '.repeat(20)}));
+  manyTask.payload.launch.override.adset.targeting={flexible_spec:[{interests:manyInterests}]};
+  const fullSavedConfig=ctx.remaskPrivateSavedLaunchSummary(manyTask);
+  const fullTargetingReadback=ctx.remaskPrivateDraftAdsetSettingsSummary(manyTask,[]);
+  assert.ok(fullSavedConfig.length>8000&&fullSavedConfig.includes('"id": "10299"'),
+    'saved configuration retains selections beyond the former 80-item and 7800-character limits');
+  assert.ok(fullTargetingReadback.length>8000&&fullTargetingReadback.includes('"id": "10299"'),
+    'Ad Set readback retains all targeting selections beyond the former 80-item and 7900-character limits');
+  const largeSnapshotKey='large-saved-draft-read';
+  storage.set(largeSnapshotKey,JSON.stringify({version:1,ok:true,checked_at:'2026-11-10T17:30:00.000Z',
+    message:'Large offline readback fixture',technical:fullTargetingReadback}));
+  assert.equal(ctx.remaskPrivateLoadDraftRead(largeSnapshotKey)?.technical,fullTargetingReadback,
+    'cached draft readback accepts the expanded complete settings summary');
   readResult.fragment_reads[1].settings_diagnostic.fields.find(field=>field.field==='targeting').matches=false;
   assert.match(ctx.remaskPrivateDraftAdsetSettingsSummary(job.items[0].tasks[0],readResult.fragment_reads),
     /targeting — НЕ СОВПАЛО/,'the targeting summary makes a failed Meta comparison visible');
