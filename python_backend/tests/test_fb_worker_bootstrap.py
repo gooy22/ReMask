@@ -162,6 +162,18 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         business_error.transport_stage = "business_auth_precheck"
         self.assertEqual(private_auth_error(business_error).code, "BUSINESS_LOGIN_GATE")
 
+    async def test_dtsg_refresh_does_not_reuse_the_document_checksum(self):
+        session, _ = self.session('<input name="jazoest" value="20999">',
+            'https://business.facebook.com/latest/home')
+        session._fetch_dtsg_refresh_token.return_value = (
+            'refreshed-token', 'https://www.facebook.com/ajax/dtsg/?__a=true',
+        )
+
+        bootstrap = await session.bootstrap()
+
+        self.assertEqual(bootstrap.fb_dtsg, 'refreshed-token')
+        self.assertEqual(bootstrap.jazoest, '')
+
     async def test_adsmanager_login_return_is_not_accepted_as_profile_bootstrap(self):
         url = ("https://www.facebook.com/index.php?next="
                "https%3A%2F%2Fwww.facebook.com%2Fadsmanager%2Fmanage%2Fcampaigns"
@@ -797,6 +809,23 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client.calls, [FacebookWebSession.BUSINESS_HOME_URL])
         session._fetch_dtsg_refresh_token.assert_awaited_once()
 
+    async def test_exact_account_handoff_reuses_its_business_settings_document(self):
+        business, account = "987654321", "555666777"
+        settings_url = FacebookWebSession.BUSINESS_ACCOUNTS_URL + business
+        session, client = self.session("", settings_url)
+        initial = FacebookBootstrap(actor_id="123456789", fb_dtsg="fixture-token",
+            source_url=settings_url)
+        session._bootstrap = initial
+        return_url = (
+            "https://adsmanager.facebook.com/adsmanager/manage/campaigns"
+            f"?act={account}&business_id={business}"
+        )
+
+        with patch("app.contract_maintenance.module_refresh.refresh_due", return_value=False):
+            self.assertIs(await session.bootstrap(business_loginpage_return_url=return_url), initial)
+
+        self.assertEqual(client.calls, [])
+
     async def test_business_ajax_dtsg_still_requires_exact_read_rk_document(self):
         actor, business = "123456789", "987654321"
         session, _client = self.session("", "https://business.facebook.com/")
@@ -1157,6 +1186,31 @@ class PreviousSessionReadRecoveryTests(unittest.IsolatedAsyncioTestCase):
 
         async def close(self):
             self.closed = True
+
+    async def test_read_recovery_stops_after_an_archived_snapshot_auth_deletion(self):
+        actor = "123456789"
+        session = FacebookWebSession(WebProfile(
+            "15", {"c_user": actor, "xs": "current-xs"}, None, "fixture-UA",
+            recovery_cookie_candidates=[
+                {"c_user": actor, "xs": "archive-one"},
+                {"c_user": actor, "xs": "archive-two"},
+            ],
+        ))
+        failure = AuthenticationError("fixture auth cookie deletion")
+        failure.meta_payload = {"auth_cookie_deletions": ["xs"]}
+        candidate = SimpleNamespace(bootstrap=AsyncMock(side_effect=failure),
+            session=self.Client({"c_user": actor, "xs": "archive-one"}), close=AsyncMock())
+        with patch("fb_worker.FacebookWebSession", return_value=candidate) as construct:
+            with self.assertRaises(AuthenticationError) as caught:
+                await session._retry_scoped_read_with_previous_session(
+                    "26033539376343649", {"businessID": "987654321"},
+                    friendly_name="BusinessAdAccounts", endpoint_url=None, request_envelope=None,
+                    business_context_id="987654321", business_loginpage_probe="READ_RK",
+                    read_timeout_seconds=30,
+                )
+        self.assertIs(caught.exception, failure)
+        construct.assert_called_once()
+        candidate.close.assert_awaited_once()
 
     async def test_read_recovery_tries_next_verified_same_actor_snapshot(self):
         actor = "123456789"

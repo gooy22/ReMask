@@ -382,6 +382,27 @@ class BusinessPageHTTPTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(checkpoint['active_before_ids'], [FP1])
         self.assertEqual(self.meta.posts, [])
 
+    async def test_retained_create_reconciliation_preserves_explicit_auth_deletion(self):
+        from fb_worker import AuthenticationError
+
+        failure = AuthenticationError('fixture auth cookie deletion')
+        failure.meta_payload = {'auth_cookie_deletions': ['xs']}
+        failure.request_may_have_been_sent = False
+        failure.transport_stage = 'fetch'
+        self.meta.fetch_text = AsyncMock(side_effect=failure)
+        await self.retain_legacy_submit()
+
+        with self.assertRaises(ProvisioningError) as caught:
+            await self.run_page()
+
+        self.assertEqual(caught.exception.code, 'META_AUTH_TOKEN_UNAVAILABLE')
+        self.assertEqual(caught.exception.inventory_diagnostics[0]['auth_cookie_deletions'], ['xs'])
+        self.meta.fetch_text.assert_awaited_once()
+        retained = (await self.state.step('create', ProvisioningStep.FAN_PAGES))['result']
+        self.assertEqual(retained['phase'], 'PAGE_CREATE_RESULT_UNKNOWN')
+        self.assertEqual(retained['active_before_ids'], [FP1])
+        self.assertEqual(self.meta.posts, [])
+
     async def test_business_document_recovers_free_page_when_both_www_surfaces_return_400(self):
         self.meta.owners[FP2] = None
         self.profile_document([FP1, FP2])

@@ -14,6 +14,7 @@ from html.parser import HTMLParser
 from urllib.parse import urlencode, urljoin, urlsplit, urlunsplit
 
 from .meta_auth_document import auth_gate as _auth_gate
+from .private_auth import auth_cookie_deletion_error, observed_auth_cookie_deletions, response_auth_cookie_deletions
 
 log = logging.getLogger("remask.business_login_gate")
 
@@ -939,6 +940,8 @@ async def _request_facebook(
             kwargs["params"] = current_fields
         response_referrer_policies = []
         async with session.request(current_method, current_url, **kwargs) as response:
+            if deletions := response_auth_cookie_deletions(response):
+                raise auth_cookie_deletion_error(deletions, "business_auth_precheck")
             last_status = int(response.status)
             last_url = str(response.url)
             location = str(response.headers.get("Location") or "")
@@ -1251,6 +1254,8 @@ async def continue_business_login_gate(
         set_outcome("return_url_not_verified")
         return None
     except Exception as exc:
+        if observed_auth_cookie_deletions(exc):
+            raise
         # Exception type is safe to report; exception text can contain request data.
         set_outcome("transport_error_" + type(exc).__name__)
         return None

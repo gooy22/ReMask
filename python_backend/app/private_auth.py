@@ -5,6 +5,35 @@ from .provisioning.models import ProvisioningError
 from .meta_auth_document import auth_route_gate
 
 
+def auth_cookie_deletion_names(values):
+    if not isinstance(values, (list, tuple, set, frozenset)):
+        return []
+    names = {value.strip().casefold() for value in values if isinstance(value, str)}
+    return sorted(names & {"c_user", "xs"})
+
+
+def response_auth_cookie_deletions(response):
+    extensions = getattr(response, "extensions", None)
+    directive = extensions.get("remask_meta_auth_cookie_directive") if isinstance(extensions, dict) else None
+    return auth_cookie_deletion_names(directive.get("deletions")) if isinstance(directive, dict) else []
+
+
+def auth_cookie_deletion_error(names, stage, *, request_may_have_been_sent=False,
+                               request_rejected=False):
+    from fb_worker import AuthenticationError
+    error = AuthenticationError("Meta explicitly removed a selected-profile authentication cookie.")
+    error.meta_payload = {"auth_cookie_deletions": names}
+    error.request_may_have_been_sent = request_may_have_been_sent
+    error.request_rejected = request_rejected
+    error.transport_stage = stage
+    return error
+
+
+def observed_auth_cookie_deletions(exc):
+    payload = getattr(exc, "meta_payload", None)
+    return auth_cookie_deletion_names(payload.get("auth_cookie_deletions")) if isinstance(payload, dict) else []
+
+
 def private_auth_error(exc):
     from fb_worker import AuthenticationError
     if not isinstance(exc, AuthenticationError):
@@ -39,13 +68,10 @@ def private_auth_error(exc):
     else:
         code = "META_AUTH_TOKEN_UNAVAILABLE"
     unsent = getattr(exc, "request_may_have_been_sent", None) is False
-    raw_cookie_deletions = payload.get("auth_cookie_deletions", []) if isinstance(payload, dict) else []
-    cookie_deletions = sorted({
-        value.strip().casefold()
-        for value in raw_cookie_deletions
-        if isinstance(value, str) and value.strip().casefold() in {"c_user", "xs"}
-    }) if isinstance(raw_cookie_deletions, (list, tuple, set)) else []
-    message = ("Meta redirected the selected profile to its Ads Manager login flow; cookie age was not checked."
+    cookie_deletions = observed_auth_cookie_deletions(exc)
+    message = ("Meta explicitly removed a selected-profile authentication cookie."
+        if cookie_deletions else
+        "Meta redirected the selected profile to its Ads Manager login flow; cookie age was not checked."
         if code == "META_LOGIN_REQUIRED" else
         "Meta's read-only page did not confirm the selected profile identity."
         if code == "PROFILE_IDENTITY_UNCONFIRMED" else

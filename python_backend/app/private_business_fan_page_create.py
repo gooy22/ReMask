@@ -12,12 +12,16 @@ import uuid
 
 from .business_fan_page_contracts import execute
 from .business_page_response import inspect_create_response, rejection_error
+from .private_auth import private_auth_error
 from .private_page_ownership import _data, _id
 from .static_meta_contracts import execute as settings_execute
 from .provisioning.models import ProvisioningError, ProvisioningStep
 
 log = logging.getLogger('remask_worker')
 TRANSPORT = 'business_suite_page_static_http2'
+_RECOVERY_AUTH_CODES = {'SESSION_EXPIRED', 'CHECKPOINT_REQUIRED', 'TWO_FACTOR_REQUIRED',
+    'BUSINESS_LOGIN_GATE', 'META_LOGIN_REQUIRED', 'META_AUTH_TOKEN_UNAVAILABLE',
+    'PROFILE_IDENTITY_UNCONFIRMED', 'META_RATE_LIMITED'}
 
 
 async def read_pages(web, business, *, bootstrap_account_id=""):
@@ -120,9 +124,11 @@ async def reconcile(web, *, business, name, before, response_page='', actor='', 
             reasons.append('exact_page_unconfirmed')
         except Exception as exc:
             reasons.append(getattr(exc, 'code', type(exc).__name__))
-            if type(exc).__name__ == 'AuthenticationError' or getattr(exc, 'code', '') in {'SESSION_EXPIRED', 'CHECKPOINT_REQUIRED', 'TWO_FACTOR_REQUIRED'}:
-                raise ProvisioningError('SESSION_EXPIRED',
-                    'Restore the profile session to verify the retained Page CREATE.', retryable=True) from exc
+            auth_error = private_auth_error(exc)
+            if auth_error is not None:
+                raise auth_error from exc
+            if getattr(exc, 'code', '') in _RECOVERY_AUTH_CODES:
+                raise
         if attempt < 2:
             await asyncio.sleep(0.5)
     if actor and not response_page and not ambiguous:
@@ -147,7 +153,7 @@ async def reconcile(web, *, business, name, before, response_page='', actor='', 
             reasons.append('managed_profile_page_not_unique' if len(proofs) > 1 else 'managed_profile_page_unconfirmed')
         except Exception as exc:
             reasons.append(getattr(exc, 'code', type(exc).__name__))
-            if getattr(exc, 'code', '') in {'SESSION_EXPIRED', 'CHECKPOINT_REQUIRED', 'BUSINESS_LOGIN_GATE', 'META_RATE_LIMITED'}:
+            if getattr(exc, 'code', '') in _RECOVERY_AUTH_CODES:
                 raise
         failed_reads = [row for row in recovery_diagnostics if row.get('result') == 'http_rejected']
         if failed_reads:
@@ -299,7 +305,6 @@ async def create_business_page(session, params, *, state, item_id, profile_id, s
                     payload = await execute(web, 'CREATE_FP', business=business, name=name, bio=str(params.get('bio') or '')[:255],
                         categories=sorted(matched), join=attempt_id, before_submit=intent)
                 except Exception as exc:
-                    from .private_auth import private_auth_error
                     auth_error = private_auth_error(exc)
                     if (not submitted or getattr(exc, 'request_may_have_been_sent', None) is False
                             or (auth_error is not None and getattr(exc, 'request_rejected', False) is True)):

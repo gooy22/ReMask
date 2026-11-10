@@ -1,7 +1,7 @@
 import unittest
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from app.business_fan_page_contracts import command, execute
 from fb_worker import AuthenticationError, FacebookBootstrap, FacebookWebSession, RemoteRequestError, WebProfile
@@ -174,6 +174,28 @@ class BusinessPageBootstrapProofTests(unittest.IsolatedAsyncioTestCase):
         web.invalidate_bootstrap()
         self.assertFalse(web.has_fresh_business_page_create_precheck(
             BUSINESS, ACTOR, "PrgssTeam", "", [CATEGORY_ID]))
+
+    async def test_page_create_refuses_prechecks_from_a_replaced_bootstrap(self):
+        web, bootstrap = self.make_web()
+        self.assertTrue(web.mark_business_page_create_precheck_verified(
+            BUSINESS, ACTOR, "PrgssTeam", "", [CATEGORY_ID]))
+        replacement = FacebookBootstrap(
+            fb_dtsg="another-token", actor_id=ACTOR,
+            source_url=bootstrap.source_url,
+        )
+        web.bootstrap = AsyncMock(return_value=replacement)
+        web._business_bootstrap = AsyncMock(return_value=replacement)
+        intent = AsyncMock()
+        post = Mock(side_effect=AssertionError("CREATE must not reach the transport"))
+        web._ensure_session.return_value.post = post
+
+        with self.assertRaises(RemoteRequestError) as caught:
+            await execute(web, "CREATE_FP", **bindings_for("CREATE_FP"),
+                          before_submit=intent)
+
+        self.assertFalse(caught.exception.request_may_have_been_sent)
+        intent.assert_not_awaited()
+        post.assert_not_called()
 
 
 class BusinessPageSessionRecoveryTests(unittest.IsolatedAsyncioTestCase):
