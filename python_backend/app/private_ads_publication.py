@@ -153,7 +153,29 @@ class AdsManagerDraftPublisher:
                 active_errors_present = "active_errors" in row
                 active_errors = row.get("active_errors")
                 if row.get("validation_status") == "HAS_ERRORS" or (isinstance(active_errors, list) and active_errors):
-                    raise fail("VALIDATION_ERRORS", "Meta returned active validation errors for the " + level + " draft")
+                    # Preserve only bounded, reviewed diagnostics. Raw Meta error
+                    # strings can echo request data, so they must never enter the
+                    # durable task journal.
+                    from .private_ads_inspect import validation_diagnostic
+                    diagnostic = validation_diagnostic(active_errors, observed=active_errors_present)
+                    for field, limit in (("codes", 5), ("field_names", 10), ("terms", 12)):
+                        if len(diagnostic[field]) > limit:
+                            diagnostic["truncated"] = True
+                            diagnostic[field] = diagnostic[field][:limit]
+                    validation_status = row.get("validation_status")
+                    if validation_status not in {"VALIDATED", "HAS_ERRORS", "PENDING"}:
+                        validation_status = "UNKNOWN"
+                    safe_record = {"validation_status": validation_status,
+                                   "active_error_diagnostic": diagnostic}
+                    safe_details = json.dumps(safe_record, ensure_ascii=False, separators=(",", ":"))
+                    for field in ("terms", "field_names", "codes"):
+                        while len(safe_details) > 850 and diagnostic[field]:
+                            diagnostic[field].pop()
+                            diagnostic["truncated"] = True
+                            safe_details = json.dumps(safe_record, ensure_ascii=False, separators=(",", ":"))
+                    message = ("Meta returned active validation errors for the " + level +
+                               " draft; safe_diagnostic=" + safe_details)
+                    raise fail("VALIDATION_ERRORS", message)
                 validation_pending = (
                     row.get("validation_status") == "PENDING"
                     and active_errors_present
