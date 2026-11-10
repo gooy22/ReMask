@@ -126,6 +126,13 @@ async def reconcile(web, *, business, name, before, response_page='', actor='', 
             reasons.append(getattr(exc, 'code', type(exc).__name__))
             auth_error = private_auth_error(exc)
             if auth_error is not None:
+                diagnostics = getattr(auth_error, 'inventory_diagnostics', None)
+                if checkpoint is not None and isinstance(diagnostics, list):
+                    try:
+                        await checkpoint({'recovery_auth_diagnostic': diagnostics})
+                    except Exception as checkpoint_exc:
+                        log.warning('FP auth diagnostic checkpoint failed business=%s error_type=%s',
+                            business, type(checkpoint_exc).__name__)
                 raise auth_error from exc
             if getattr(exc, 'code', '') in _RECOVERY_AUTH_CODES:
                 raise
@@ -155,6 +162,13 @@ async def reconcile(web, *, business, name, before, response_page='', actor='', 
             reasons.append(getattr(exc, 'code', type(exc).__name__))
             auth_error = private_auth_error(exc)
             if auth_error is not None:
+                diagnostics = getattr(auth_error, 'inventory_diagnostics', None)
+                if checkpoint is not None and isinstance(diagnostics, list):
+                    try:
+                        await checkpoint({'recovery_auth_diagnostic': diagnostics})
+                    except Exception as checkpoint_exc:
+                        log.warning('FP auth diagnostic checkpoint failed business=%s error_type=%s',
+                            business, type(checkpoint_exc).__name__)
                 raise auth_error from exc
             if getattr(exc, 'code', '') in _RECOVERY_AUTH_CODES:
                 raise

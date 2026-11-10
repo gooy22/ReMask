@@ -456,7 +456,9 @@ class BusinessPageHTTPTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(caught.exception.code, 'META_AUTH_TOKEN_UNAVAILABLE')
         self.assertEqual(caught.exception.inventory_diagnostics[0]['auth_cookie_deletions'], ['c_user', 'xs'])
         self.assertNotEqual(caught.exception.code, 'FAN_PAGE_CREATE_RESULT_UNKNOWN')
-        checkpoint.assert_awaited_once()
+        checkpoint.assert_awaited()
+        saved_auth_diagnostic = checkpoint.await_args_list[-1].args[0]['recovery_auth_diagnostic']
+        self.assertEqual(saved_auth_diagnostic[0]['auth_cookie_deletions'], ['c_user', 'xs'])
 
     async def test_business_recovery_wrong_actor_or_foreign_owned_page_cannot_be_adopted(self):
         for actor, owner in (('61511111111111', None), (UID, BM1)):
