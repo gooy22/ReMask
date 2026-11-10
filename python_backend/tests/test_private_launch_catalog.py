@@ -172,7 +172,10 @@ function renderTargetBindings() {
         (root/'scripts/workspace.js').write_text(
             'async function fetchAsset(resource){return null;}\nfunction fillSelect(){}\n'
             'async function checkAssetsSelection(){ }\nasync function showFunding(){}\n')
-        (root/'launch.php').write_text('<script src="scripts/launch.js?v=old"></script>')
+        (root/'launch.php').write_text('''<script src="scripts/launch.js?v=old"></script>
+<div>Одна настройка → много FB-профилей и RK. Каждая цель использует свой token, proxy и account-specific assets.</div>
+<div>Checks token access, RK status, Page/Instagram, Pixel, Custom Audiences and funding context before Campaign creation.</div>
+''')
         installer = Path(self.tmp.name)/'overlay.php'
         source = OVERLAY.read_text().replace("$root='/var/www/html';", '$root='+json.dumps(str(root))+';')
         source = source.replace('/tmp/railway-launch-private-catalog.js', str(ROOT/'railway-launch-private-catalog.js'))
@@ -187,6 +190,8 @@ function renderTargetBindings() {
         for file in [*root.glob('classes/*.php'),*root.glob('ajax/*.php')]:
             subprocess.run(['php','-l',str(file)],capture_output=True,check=True,timeout=10)
         self.assertIn('20261023-private-launch-meta-marker-v1', (root/'launch.php').read_text())
+        self.assertIn('id="remaskLaunchModeBanner"', (root/'launch.php').read_text())
+        self.assertIn('id="remaskLaunchModeReadinessNotice"', (root/'launch.php').read_text())
         self.assertEqual((root/'scripts/launch.js').read_text().count('/* REMASK_PRIVATE_LAUNCH_CATALOG_V1 */'), 1)
         installed_js=(root/'scripts/launch.js').read_text()
         self.assertIn('REMASK_PRIVATE_LAUNCH_META_MARKER_V1', installed_js)
