@@ -126,6 +126,11 @@ function fixture(){
   assert.equal(launch.nodes.get('interestSearch').isConnected,false,'the obsolete interest search button is removed');
   launch.nodes.get('geoQuery').fire('focus');
   assert.equal(launchRequests.length,0,'focusing an empty field does not request the full Meta catalog');
+  launch.nodes.get('geoQuery').value='U';
+  await launch.ctx.searchTargeting('locations');
+  assert.equal(launch.nodes.get('geoResults').textContent,'Введите минимум 2 символа для поиска.',
+    'a one-character query explains why no targeting suggestions appeared');
+  assert.equal(launchRequests.length,0,'a short targeting query does not send a lookup');
   launch.nodes.get('geoQuery').value='Ukraine';
   let request=launch.ctx.searchTargeting('locations');
   launch.nodes.get('geoQuery').fire('input');replies.shift()({data:[{key:'UA',type:'country',name:'Ukraine'}]});await request;
