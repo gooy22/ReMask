@@ -43,9 +43,11 @@ assert.ok(privateCatalogOverlay.includes('id="remaskLaunchModeBanner"') &&
       error_message:'<img src=x onerror=alert(1)>',payload:{ad_account_id:'120248891583720408',
         launch:{base:{execution_mode:'DRAFT',campaign:{name:'Saved campaign',objective:'OUTCOME_TRAFFIC',
           access_token:'must-not-render'},adset:{name:'Saved set',daily_budget:500,
+          promoted_object:{pixel_id:'base-pixel',custom_event_type:'PURCHASE',custom_conversion_id:'base-conversion'},
           targeting:{age_min:23,age_max:33,geo_locations:{countries:['UA']},interests:[{id:'101',name:'Travel'}],
             behaviors:[{id:'303',name:'Chrome'}],locales:[24]}}},
-          override:{adset:{targeting:{age_min:25,age_max:32,geo_locations:{countries:['PL']},
+          override:{adset:{promoted_object:{pixel_id:'profile-pixel'},
+            targeting:{age_min:25,age_max:32,geo_locations:{countries:['PL']},
             interests:[{id:'202',name:'Air travel'}],behaviors:[{id:'404',name:'Engaged shoppers'}],locales:[44]}}}}}},
     {id:otherTaskId,action:'private_launch',status:'FAILED',payload:{ad_account_id:'120249297411010775',
       launch:{base:{execution_mode:'DRAFT'}}}}],advertising_steps:[
@@ -124,8 +126,16 @@ assert.ok(source.includes('const message=remaskPrivateLaunchUserMessage(error)')
   assert.match(savedConfig.textContent,/Saved set/);
   assert.match(savedConfig.textContent,/"age_min": 25/);
   assert.match(savedConfig.textContent,/"countries": \[\s*"PL"\s*\]/);
+  assert.match(savedConfig.textContent,/"pixel_id": "profile-pixel"/);
+  assert.match(savedConfig.textContent,/"custom_event_type": "PURCHASE"/);
+  assert.match(savedConfig.textContent,/"custom_conversion_id": "base-conversion"/,
+    'the saved configuration view inherits unoverridden nested Ad Set settings');
   assert.doesNotMatch(savedConfig.textContent,/"age_min": 23|"countries": \[\s*"UA"/,
     'a per-account targeting override replaces the saved base targeting as a unit');
+  assert.deepEqual(JSON.parse(JSON.stringify(ctx.remaskPrivateEffectiveSavedLaunchSections(
+    job.items[0].tasks[0]).adset.promoted_object)),
+    {pixel_id:'profile-pixel',custom_event_type:'PURCHASE',custom_conversion_id:'base-conversion'},
+    'the displayed effective Ad Set values match the worker nested-merge semantics');
   assert.doesNotMatch(savedConfig.textContent,/must-not-render/,
     'saved summaries remove credential-like fields');
   const readCacheKey='remask_private_draft_read_v1:'+profile+':'+id+':'+taskId;
