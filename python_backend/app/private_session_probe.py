@@ -137,6 +137,81 @@ def _transport_reason(error):
     return 'unavailable'
 
 
+def profile_root_auth_cookie_deletion_names(proof):
+    """Return only root-scoped c_user/xs deletions from a measured identity read."""
+    if (not isinstance(proof, dict)
+            or proof.get("document_kind") != "saved_identity"
+            or proof.get("request_auth_matches") is not True
+            or proof.get("saved_auth_snapshot_sent") is not True
+            or proof.get("measurement_errors") != 0):
+        return []
+    wire = proof.get("wire")
+    if (not isinstance(wire, dict) or wire.get("measurement_errors") != 0
+            or not isinstance(wire.get("requests"), list) or not wire["requests"]
+            or not isinstance(wire.get("responses"), list) or not wire["responses"]):
+        return []
+    requests, responses = wire["requests"], wire["responses"]
+    for row in requests:
+        names = row.get("header_auth_cookie_names") if isinstance(row, dict) else None
+        if (not isinstance(row, dict)
+                or row.get("host") not in {"www.facebook.com", "facebook.com"}
+                or row.get("path") not in {"/me", "/profile.php"}
+                or row.get("method") != "GET"
+                or row.get("user_agent_matches") is not True
+                or row.get("header_auth_state") != "matches"
+                or not isinstance(names, list)
+                or not {"c_user", "xs"} <= set(value for value in names if isinstance(value, str))):
+            return []
+    for row in responses:
+        if (not isinstance(row, dict)
+                or row.get("host") not in {"www.facebook.com", "facebook.com"}
+                or row.get("path") not in {"/me", "/profile.php"}
+                or row.get("status") not in {200, 302, 303, 307, 308}
+                or row.get("protocol") not in {"HTTP/2", "HTTP/1.1"}):
+            return []
+    return sorted({
+        name for row in responses
+        for name in (row.get("profile_root_auth_cookie_deleted") or [])
+        if name in {"c_user", "xs"}
+    })
+
+
+def _saved_identity_wire_summary(wire_result, *, request_auth_fingerprint):
+    requests = wire_result.get("requests") or []
+    responses = wire_result.get("responses") or []
+    request_auth_matches = bool(requests) and requests[0].get("path") == "/me" and all(
+        row.get("host") in {"www.facebook.com", "facebook.com"}
+        and row.get("path") in {"/me", "/profile.php"}
+        and row.get("method") == "GET"
+        and row.get("user_agent_matches") is True
+        and row.get("header_auth_state") == "matches"
+        and {"c_user", "xs"} <= set(row.get("header_auth_cookie_names") or [])
+        for row in requests
+    )
+    saved_auth_snapshot_sent = bool(requests) and (
+        requests[0].get("header_auth_cookie_fingerprint") == request_auth_fingerprint
+    )
+    auth_cookie_directives_unchanged = bool(responses) and all(
+        not row.get("auth_cookie_deleted")
+        and not row.get("profile_root_auth_cookie_deleted")
+        and not row.get("auth_cookie_set")
+        and not row.get("profile_root_auth_cookie_set")
+        and row.get("status") in {200, 302, 303, 307, 308}
+        and row.get("protocol") in {"HTTP/2", "HTTP/1.1"}
+        for row in responses
+    )
+    summary = {
+        "request_auth_matches": request_auth_matches,
+        "saved_auth_snapshot_sent": saved_auth_snapshot_sent,
+        "auth_cookie_directives_unchanged": auth_cookie_directives_unchanged,
+        "measurement_errors": wire_result.get("measurement_errors", 1),
+        "profile_root_auth_cookie_deletion_names": [],
+    }
+    proof = {**summary, "document_kind": "saved_identity", "wire": wire_result}
+    summary["profile_root_auth_cookie_deletion_names"] = profile_root_auth_cookie_deletion_names(proof)
+    return summary
+
+
 async def probe_document(context, payload, *, web_factory=None):
     required = {"cookies", "business_id", "ad_account_id"}
     if (not isinstance(payload, dict) or not required <= set(payload)
@@ -304,29 +379,12 @@ async def probe_saved_identity(context, *, web_factory=None):
         final_host = final.hostname if final.hostname in {"www.facebook.com", "facebook.com"} else "unreviewed"
         final_path = final.path if final_host != "unreviewed" and final.path in {"/me", "/profile.php"} else "unreviewed"
         wire_result = wire.snapshot()
-        requests = wire_result["requests"]
-        responses = wire_result["responses"]
-        request_auth_matches = bool(requests) and requests[0].get("path") == "/me" and all(
-            row.get("host") in {"www.facebook.com", "facebook.com"}
-            and row.get("path") in {"/me", "/profile.php"}
-            and row.get("method") == "GET"
-            and row.get("user_agent_matches") is True
-            and row.get("header_auth_state") == "matches"
-            and {"c_user", "xs"} <= set(row.get("header_auth_cookie_names") or [])
-            for row in requests
+        wire_summary = _saved_identity_wire_summary(
+            wire_result, request_auth_fingerprint=request_auth_fingerprint,
         )
-        saved_auth_snapshot_sent = bool(requests) and (
-            requests[0].get("header_auth_cookie_fingerprint") == request_auth_fingerprint
-        )
-        auth_cookie_directives_unchanged = bool(responses) and all(
-            not row.get("auth_cookie_deleted")
-            and not row.get("profile_root_auth_cookie_deleted")
-            and not row.get("auth_cookie_set")
-            and not row.get("profile_root_auth_cookie_set")
-            and row.get("status") in {200, 302, 303, 307, 308}
-            and row.get("protocol") in {"HTTP/2", "HTTP/1.1"}
-            for row in responses
-        )
+        request_auth_matches = wire_summary["request_auth_matches"]
+        saved_auth_snapshot_sent = wire_summary["saved_auth_snapshot_sent"]
+        auth_cookie_directives_unchanged = wire_summary["auth_cookie_directives_unchanged"]
         final_identity_target_matches = (
             final_path == "/me"
             or (final_path == "/profile.php" and parse_qs(final.query).get("id") == [actor])
@@ -356,17 +414,19 @@ async def probe_saved_identity(context, *, web_factory=None):
             "login_form": login_form,
             "document_actor": evidence.get("document_actor", "unavailable"),
             "profile_actor_matches": evidence.get("profile_actor_matches") is True,
-            "request_auth_matches": request_auth_matches,
-            "saved_auth_snapshot_sent": saved_auth_snapshot_sent,
-            "auth_cookie_directives_unchanged": auth_cookie_directives_unchanged,
-            "measurement_errors": wire_result.get("measurement_errors", 1),
+            **wire_summary,
             "wire": wire_result,
             "identity_session_confirmed": confirmed,
         }
     except Exception as error:
+        wire_result = wire.snapshot()
+        wire_summary = _saved_identity_wire_summary(
+            wire_result, request_auth_fingerprint=request_auth_fingerprint,
+        )
         return {
             **result,
-            "wire": wire.snapshot(),
+            **wire_summary,
+            "wire": wire_result,
             "error_code": "PRIVATE_SESSION_PROBE_READ_UNAVAILABLE",
             "transport_failure_kind": _transport_kind(error),
             "transport_failure_reason": _transport_reason(error),

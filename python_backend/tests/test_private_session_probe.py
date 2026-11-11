@@ -24,7 +24,8 @@ class SessionProbeTests(unittest.IsolatedAsyncioTestCase):
                 final or "https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=111111&business_id=222222")))
         return Mock(return_value=self.web)
 
-    def identity_wire_factory(self, *, status=200, body=None, response_headers=None):
+    def identity_wire_factory(self, *, status=200, body=None, response_headers=None,
+                              error_after_response=None):
         import httpx
 
         self.wire_client = SimpleNamespace(event_hooks={"request": [], "response": []})
@@ -49,6 +50,8 @@ class SessionProbeTests(unittest.IsolatedAsyncioTestCase):
                     headers=response_headers or [])
                 for callback in inner.client.event_hooks["response"]:
                     await callback(response)
+                if error_after_response is not None:
+                    raise error_after_response
                 return status, document() if body is None else body, url
 
             async def close(inner):
@@ -86,6 +89,26 @@ class SessionProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result["identity_session_confirmed"])
         self.assertFalse(result["auth_cookie_directives_unchanged"])
         self.assertEqual(result["wire"]["responses"][0]["profile_root_auth_cookie_deleted"], ["xs"])
+        self.assertEqual(result["profile_root_auth_cookie_deletion_names"], ["xs"])
+
+    async def test_saved_identity_probe_preserves_deletion_evidence_when_transport_raises(self):
+        factory = self.identity_wire_factory(
+            status=302,
+            response_headers=[
+                ("Set-Cookie", "c_user=; Domain=.facebook.com; Path=/; Max-Age=0; Secure"),
+                ("Set-Cookie", "xs=; Domain=.facebook.com; Path=/; Max-Age=0; Secure"),
+            ],
+            error_after_response=RuntimeError("auth cookie deletion"),
+        )
+
+        result = await probe_saved_identity(self.context(), web_factory=factory)
+
+        self.assertFalse(result["response_received"])
+        self.assertFalse(result["identity_session_confirmed"])
+        self.assertTrue(result["request_auth_matches"])
+        self.assertTrue(result["saved_auth_snapshot_sent"])
+        self.assertEqual(result["profile_root_auth_cookie_deletion_names"], ["c_user", "xs"])
+        self.assertNotIn("saved-fixture", str(result))
 
     async def test_saved_identity_probe_does_not_confirm_meta_auth_cookie_update(self):
         factory = self.identity_wire_factory(response_headers=[
