@@ -2292,6 +2292,106 @@ class JobStore:
             )
         return True
 
+    async def resolve_legacy_auth_cookie_history(
+        self, profile_id: str, cookies: dict[str, Any], proof: dict[str, Any]
+    ) -> bool:
+        """Resolve only a legacy marker after a same-actor, no-deletion GET /me proof."""
+        clean = str(profile_id or "").strip()
+        actor_fingerprint, auth_fingerprint = self._auth_cookie_fingerprint(cookies)
+        if (not clean or not actor_fingerprint or not auth_fingerprint
+                or not self._valid_legacy_identity_probe_proof(proof, clean, auth_fingerprint)):
+            return False
+        return await asyncio.to_thread(
+            self._resolve_legacy_auth_cookie_history_sync,
+            clean, actor_fingerprint, auth_fingerprint,
+        )
+
+    @staticmethod
+    def _valid_legacy_identity_probe_proof(
+        proof: dict[str, Any], profile_id: str, auth_fingerprint: str
+    ) -> bool:
+        if (not isinstance(proof, dict)
+                or proof.get("profile_id") != profile_id
+                or proof.get("document_kind") != "saved_identity"
+                or proof.get("response_received") is not True
+                or proof.get("identity_session_confirmed") is not True
+                or proof.get("http_status") != 200
+                or proof.get("final_host") != "www.facebook.com"
+                or proof.get("final_path") not in {"/me", "/profile.php"}
+                or proof.get("final_identity_target_matches") is not True
+                or proof.get("legacy_gate") != "none"
+                or proof.get("login_form") is not False
+                or proof.get("document_actor") != "matches"
+                or proof.get("profile_actor_matches") is not True
+                or proof.get("request_auth_matches") is not True
+                or proof.get("saved_auth_snapshot_sent") is not True
+                or proof.get("auth_cookie_directives_unchanged") is not True
+                or proof.get("measurement_errors") != 0
+                or proof.get("auth_cookie_fingerprint") != auth_fingerprint):
+            return False
+        wire = proof.get("wire")
+        if not isinstance(wire, dict) or wire.get("measurement_errors") != 0:
+            return False
+        requests, responses = wire.get("requests"), wire.get("responses")
+        if not isinstance(requests, list) or not requests or not isinstance(responses, list) or not responses:
+            return False
+        if (not isinstance(requests[0], dict) or not isinstance(responses[-1], dict)
+                or requests[0].get("path") != "/me" or responses[-1].get("status") != 200):
+            return False
+        for request in requests:
+            names = request.get("header_auth_cookie_names") if isinstance(request, dict) else None
+            if (not isinstance(request, dict)
+                    or request.get("host") not in {"www.facebook.com", "facebook.com"}
+                    or request.get("path") not in {"/me", "/profile.php"}
+                    or request.get("method") != "GET"
+                    or request.get("user_agent_matches") is not True
+                    or request.get("header_auth_state") != "matches"
+                    or not isinstance(names, list)
+                    or not {"c_user", "xs"} <= set(value for value in names if isinstance(value, str))):
+                return False
+        for response in responses:
+            if (not isinstance(response, dict)
+                    or response.get("host") not in {"www.facebook.com", "facebook.com"}
+                    or response.get("path") not in {"/me", "/profile.php"}
+                    or response.get("status") not in {200, 302, 303, 307, 308}
+                    or response.get("protocol") not in {"HTTP/2", "HTTP/1.1"}
+                    or response.get("auth_cookie_deleted")
+                    or response.get("profile_root_auth_cookie_deleted")
+                    or response.get("auth_cookie_set")
+                    or response.get("profile_root_auth_cookie_set")):
+                return False
+        return True
+
+    def _resolve_legacy_auth_cookie_history_sync(
+        self, profile_id: str, actor_fingerprint: str, auth_fingerprint: str
+    ) -> bool:
+        with self._connect() as con:
+            con.execute("BEGIN IMMEDIATE")
+            row = con.execute(
+                "SELECT source_job_id,evidence_kind FROM profile_auth_cookie_revocations WHERE profile_id=?",
+                (profile_id,),
+            ).fetchone()
+            if row is None or str(row["evidence_kind"] or "") not in {
+                "legacy_parser_unverified", "legacy_history_unverified",
+            }:
+                return False
+            history = self._latest_explicit_auth_cookie_deletion_sync(con, profile_id)
+            source_job_id = str(row["source_job_id"] or "")
+            if history and str(history.get("source_job_id") or "") != source_job_id:
+                return False
+            message = (
+                "Сохранённый GET /me подтвердил тот же Facebook ID; старый маркер истории auth-cookie разрешён."
+            )
+            cursor = con.execute(
+                """UPDATE profile_auth_cookie_revocations
+                   SET actor_fingerprint=?,auth_fingerprint=?,deleted_names_json='[]',
+                       checked_at=?,message=?,evidence_kind='resolved'
+                   WHERE profile_id=? AND source_job_id=?
+                     AND evidence_kind IN ('legacy_parser_unverified','legacy_history_unverified')""",
+                (actor_fingerprint, auth_fingerprint, _now(), message, profile_id, source_job_id),
+            )
+            return cursor.rowcount == 1
+
     async def profile_auth_cookie_revocation_for_context(
         self, profile_id: str, cookies: dict[str, Any]
     ) -> dict[str, Any] | None:

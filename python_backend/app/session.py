@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
+import json
 import logging
 import os
 import re
@@ -93,6 +95,7 @@ class ProfileResolver:
         self.url = str(resolver_url or "").strip() or None
         self.key = internal_key
         self.auth_cookie_revocation_store: Any | None = None
+        self._legacy_auth_probe_attempts: dict[tuple[str, str, str], float] = {}
 
         clean_url = (self.url or "").lower()
         self.is_loopback = (
@@ -589,6 +592,44 @@ class ProfileResolver:
         elif code == "AUTH_COOKIE_HISTORY_UNVERIFIED" or str(
             revocation.get("evidence_kind") or ""
         ) == "legacy_history_pending":
+            evidence_kind = str(revocation.get("evidence_kind") or "")
+            resolve_legacy = getattr(store, "resolve_legacy_auth_cookie_history", None)
+            if (evidence_kind in {"legacy_parser_unverified", "legacy_history_unverified"}
+                    and callable(resolve_legacy)):
+                actor = str(context.cookies.get("c_user") or "")
+                xs = str(context.cookies.get("xs") or "")
+                snapshot = hashlib.sha256(json.dumps(
+                    [actor, xs, context.proxy, context.user_agent],
+                    ensure_ascii=True, separators=(",", ":")
+                ).encode("utf-8")).hexdigest()
+                probe_key = (
+                    context.profile_id,
+                    str(revocation.get("source_job_id") or ""),
+                    snapshot,
+                )
+                now = time.monotonic()
+                self._legacy_auth_probe_attempts = {
+                    key: checked for key, checked in self._legacy_auth_probe_attempts.items()
+                    if now - checked < 900
+                }
+                last_probe = self._legacy_auth_probe_attempts.get(probe_key)
+                if last_probe is None or now - last_probe >= 300:
+                    self._legacy_auth_probe_attempts[probe_key] = now
+                    try:
+                        from .private_session_probe import probe_saved_identity
+                        identity_proof = await probe_saved_identity(context)
+                        if await resolve_legacy(context.profile_id, context.cookies, identity_proof):
+                            self._legacy_auth_probe_attempts.pop(probe_key, None)
+                            logging.getLogger("remask.profile_resolver").info(
+                                "legacy_auth_cookie_history_resolved profile=%s proof=saved_identity_get",
+                                context.profile_id,
+                            )
+                            return
+                    except Exception as exc:
+                        logging.getLogger("remask.profile_resolver").warning(
+                            "legacy_auth_cookie_identity_probe_unavailable profile=%s kind=%s",
+                            context.profile_id, type(exc).__name__,
+                        )
             stored_message = str(revocation.get("message") or "").strip()
             message = stored_message or (
                 "Старая запись не доказывает отзыв текущего снимка, но её нельзя надёжно сопоставить "
