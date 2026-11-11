@@ -1,0 +1,1 @@
+Validate syntax-safe DTSG recovery build and runtime health.
