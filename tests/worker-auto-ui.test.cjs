@@ -29,13 +29,18 @@ const source = fs.readFileSync('railway-python-worker-ui.js', 'utf8');
       error_code:'PRIVATE_ADS_DRAFT_VALIDATION_ERRORS',error_message:'Ad validation failed',
       tasks:[{action:'private_launch',result:status==='SUCCESS'?{execution_mode:'DRAFT_INSPECT',
         fragment_reads:[{level:'ad',validation_status:'HAS_ERRORS',
-          active_error_diagnostic:{codes:[{value:1359188}]}}]}:null}]}]};
+          active_error_diagnostic:{codes:[{value:1359188}],records:[{codes:[{value:1359188},
+            {value:'SECRET'}],field_names:['pixel_id','<script>SECRET</script>'],
+            matched_terms_in_order:['payment','method','not','required','<script>SECRET</script>']} ]}}]}:null}]}]};
     scope.pythonWorkerUiState.jobId='retained-job';scope.pythonWorkerUiState.busy=true;
     await scope.pythonWorkerPoll();
     assert.doesNotMatch(texts.pythonPwStatus,/BM|Business Manager|Часть RK создана/);
     if(status==='SUCCESS'){
       assert.match(texts.pythonPwStatus,/Чтение сохранённого черновика завершено/);
       assert.match(texts.pythonPwStatus,/Объявление: Meta нашла ошибки проверки/);
+      assert.match(texts.pythonPwStatus,/1359188/);
+      assert.match(texts.pythonPwStatus,/payment \/ method \/ not \/ required/);
+      assert.doesNotMatch(texts.pythonPwStatus,/SECRET|<script>/);
       assert.match(texts.pythonPwStatus,/Публикация и редактор Meta не подтверждены/);
       assert.equal(scope.pythonWorkerUiState.jobId,'');
     }else{
@@ -70,6 +75,13 @@ const source = fs.readFileSync('railway-python-worker-ui.js', 'utf8');
   assert.match(messages[2],/Наличие и публикация не подтверждены/);
   assert.equal(/1815857|bid_amount|SECRET/.test(messages.join(' ')),false);
   assert.equal(messages[0].includes('1815857'),false);
+  const ordered=scope.pythonWorkerDraftValidationMessages({fragment_reads:[{level:'ad',
+    validation_status:'HAS_ERRORS',active_error_diagnostic:{records:[{codes:[{value:1359188},
+      {value:'SECRET'}],field_names:['optimization_goal','<script>SECRET</script>'],
+      matched_terms_in_order:['payment','method','not','required','<script>SECRET</script>']}]}}]});
+  assert.match(ordered[0],/1359188/);
+  assert.match(ordered[0],/payment \/ method \/ not \/ required/);
+  assert.doesNotMatch(ordered[0],/SECRET|<script>/);
   assert.equal(scope.pythonWorkerDraftValidationMessages({}).length,0);
   assert.equal(scope.pythonWorkerDraftValidationMessages({fragment_reads:[
     {level:'__proto__',validation_status:'HAS_ERRORS'}]}).length,0);

@@ -905,6 +905,44 @@ class ValidationDiagnosticTests(unittest.TestCase):
         for private in ('4111111111111111', 'private-person', 'example.invalid', 'DO_NOT_EXPOSE', '1234'):
             self.assertNotIn(private, repr(result))
 
+    def test_multiple_errors_keep_codes_and_ordered_safe_terms_separate(self):
+        from app.private_ads_inspect import validation_diagnostic
+        value = [
+            {'error_code':1359188,
+             'message':'Payment method is not required. access_token=DO_NOT_EXPOSE'},
+            {'error_subcode':17,
+             'message':'Unsupported objective for optimization_goal: discontinued.'},
+        ]
+        result = validation_diagnostic(value, observed=True)
+        self.assertEqual(result['records'], [
+            {'index':0,'codes':[{'field':'error_code','value':1359188}],
+             'field_names':[],'matched_terms_in_order':['payment','method','not','required'],
+             'truncated':False},
+            {'index':1,'codes':[{'field':'error_subcode','value':17}],
+             'field_names':['objective','optimization_goal'],
+             'matched_terms_in_order':['unsupported','objective','discontinued'],
+             'truncated':False},
+        ])
+        for private in ('access_token', 'DO_NOT_EXPOSE', 'Payment method is not required'):
+            self.assertNotIn(private, repr(result))
+        flat = validation_diagnostic(['Payment method isn\'t required', 'Unsupported objective'], observed=True)
+        self.assertEqual([row['matched_terms_in_order'] for row in flat['records']], [
+            ['payment','method',"isn't",'required'], ['unsupported','objective']])
+
+    def test_encoded_error_wrappers_are_split_into_error_records(self):
+        from app.private_ads_inspect import validation_diagnostic
+        import json
+        value = json.dumps({'data':[{'error':{'error_code':1359188,
+            'message':'Payment method not required'}},
+            {'error':{'error_code':1815706,'message':'Unsupported objective'}}]})
+        result = validation_diagnostic(value, observed=True)
+        self.assertEqual([row['codes'] for row in result['records']], [
+            [{'field':'error_code','value':1359188}],
+            [{'field':'error_code','value':1815706}],
+        ])
+        self.assertEqual([row['matched_terms_in_order'] for row in result['records']], [
+            ['payment','method','not','required'], ['unsupported','objective']])
+
     def test_credentials_and_boolean_or_unbounded_codes_are_never_exported(self):
         from app.private_ads_inspect import validation_diagnostic
         value = {'credentials': {'code': 77}, 'access_token': {'code': 88},
@@ -923,4 +961,6 @@ class ValidationDiagnosticTests(unittest.TestCase):
         from app.private_ads_inspect import validation_diagnostic
         result = validation_diagnostic([{'message':'objective ' * 3000}] * 1000, observed=True)
         self.assertTrue(result['truncated'])
-        self.assertLess(len(repr(result)), 1000)
+        self.assertEqual(len(result['records']), 8)
+        self.assertTrue(all(len(row['matched_terms_in_order']) <= 24 for row in result['records']))
+        self.assertLess(len(repr(result)), 5000)

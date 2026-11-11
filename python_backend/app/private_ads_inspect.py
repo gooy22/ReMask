@@ -25,9 +25,12 @@ READ_ONLY_DRAFT_PREDECESSORS = frozenset({
 })
 
 
-_ERROR_TERMS = frozenset("objective discontinued unsupported optimization billing payment method card funding confirmation destination promoted conversion attribution targeting placement budget schedule campaign adset creative permission ownership account restricted disabled invalid required missing incompatible duplicate parent image video page pixel currency name field validation status".split())
+_ERROR_TERMS = frozenset("objective discontinued unsupported optimization billing payment method card funding confirmation destination promoted conversion attribution targeting placement budget schedule campaign adset creative permission ownership account restricted disabled invalid required missing incompatible duplicate parent image video page pixel currency name field validation status not no without never cannot can't isn't aren't doesn't didn't wasn't weren't shouldn't wouldn't won't".split())
 _ERROR_CODES = frozenset({"code", "error_code", "error_subcode", "subcode", "exception_code"})
 _SECRET_KEYS = re.compile(r"cookie|token|secret|password|credential|authorization|dtsg|lsd|session", re.I)
+_ERROR_MESSAGE_KEYS = frozenset({"message", "error_message", "user_message", "error_user_msg"})
+_MAX_DIAGNOSTIC_RECORDS = 8
+_MAX_DIAGNOSTIC_TERMS_PER_RECORD = 24
 
 
 @lru_cache(maxsize=1)
@@ -42,57 +45,132 @@ def validation_diagnostic(value, *, observed):
 
     Error strings can echo requests. Keep numeric Meta codes, reviewed field
     names and an allowlisted vocabulary; do not persist arbitrary strings or URLs.
-    Parse an encoded error collection only within the same bounded budget.
+    Preserve safe term order and error-record association so separate Meta errors
+    and negations are not collapsed into one unordered global vocabulary.
     """
     fields = _validation_fields()
     terms, names, codes = set(), set(), set()
-    visited, truncated = 0, False
+    find_visited, walk_visited, truncated = 0, 0, False
 
-    def walk(node, key="", depth=0):
-        nonlocal visited, truncated
-        visited += 1
-        if visited > 256 or depth > 8:
+    def parse_encoded(node):
+        if not isinstance(node, str) or len(node) > 16000 or not node.lstrip().startswith(("{", "[")):
+            return None
+        try:
+            decoded = json.loads(node)
+        except (ValueError, RecursionError):
+            return None
+        return decoded if isinstance(decoded, (dict, list)) else None
+
+    record_nodes = []
+
+    def find_records(node, key="", depth=0):
+        nonlocal find_visited, truncated
+        find_visited += 1
+        if find_visited > 256 or depth > 8:
+            truncated = True
+            return
+        if _SECRET_KEYS.search(key):
+            return
+        if isinstance(node, dict):
+            if any(child_key in _ERROR_CODES or child_key in _ERROR_MESSAGE_KEYS
+                   for child_key in node if isinstance(child_key, str)):
+                if len(record_nodes) < _MAX_DIAGNOSTIC_RECORDS:
+                    record_nodes.append(node)
+                else:
+                    truncated = True
+                return
+            if len(node) > 64:
+                truncated = True
+            for child_key, child in list(node.items())[:64]:
+                if isinstance(child_key, str):
+                    find_records(child, child_key, depth + 1)
+        elif isinstance(node, list):
+            if len(node) > 64:
+                truncated = True
+            for child in node[:64]:
+                before = len(record_nodes)
+                find_records(child, key, depth + 1)
+                if len(record_nodes) == before and child is not None:
+                    if len(record_nodes) < _MAX_DIAGNOSTIC_RECORDS:
+                        record_nodes.append(child)
+                    else:
+                        truncated = True
+        elif isinstance(node, str):
+            if len(node) > 16000:
+                truncated = True
+            decoded = parse_encoded(node)
+            if decoded is not None:
+                find_records(decoded, key, depth + 1)
+
+    find_records(value)
+    if not record_nodes and value not in (None, [], {}):
+        # Some supported responses expose a compact message or field without
+        # an error wrapper. Keep its safe evidence as one bounded record.
+        record_nodes.append(value)
+
+    diagnostic_records = []
+
+    def walk_record(node, key, depth, record):
+        nonlocal walk_visited, truncated
+        walk_visited += 1
+        if walk_visited > 256 or depth > 8:
+            record["truncated"] = True
             truncated = True
             return
         if _SECRET_KEYS.search(key):
             return
         if key in fields:
-            names.add(key)
+            record["field_names"].add(key)
         if key in _ERROR_CODES:
             if type(node) is int and 0 <= node <= 2_147_483_647:
-                codes.add((key, node))
+                record["codes"].add((key, node))
             elif isinstance(node, str) and re.fullmatch(r"[0-9]{1,10}", node) and int(node) <= 2_147_483_647:
-                codes.add((key, int(node)))
+                record["codes"].add((key, int(node)))
         if isinstance(node, dict):
             if len(node) > 64:
+                record["truncated"] = True
                 truncated = True
             for child_key, child in list(node.items())[:64]:
                 if isinstance(child_key, str):
-                    walk(child, child_key, depth + 1)
+                    walk_record(child, child_key, depth + 1, record)
         elif isinstance(node, list):
             if len(node) > 64:
+                record["truncated"] = True
                 truncated = True
             for child in node[:64]:
-                walk(child, key, depth + 1)
+                walk_record(child, key, depth + 1, record)
         elif isinstance(node, str):
             if len(node) > 16000:
+                record["truncated"] = True
                 truncated = True
-            text = node[:16000]
-            words = set(re.findall(r"[a-z_]+", text.casefold()))
-            terms.update(words & _ERROR_TERMS)
-            names.update(words & fields)
-            if text.lstrip().startswith(("{", "[")) and len(node) <= 16000:
-                try:
-                    decoded = json.loads(text)
-                except (ValueError, RecursionError):
-                    return
-                if isinstance(decoded, (dict, list)):
-                    walk(decoded, key, depth + 1)
+            source = node[:16000]
+            decoded = parse_encoded(source)
+            if decoded is not None:
+                walk_record(decoded, key, depth + 1, record)
+                return
+            for word in re.findall(r"[a-z_]+n't|[a-z_]+", source.casefold()):
+                if word in _ERROR_TERMS and len(record["matched_terms_in_order"]) < _MAX_DIAGNOSTIC_TERMS_PER_RECORD:
+                    record["matched_terms_in_order"].append(word)
+                if word in fields:
+                    record["field_names"].add(word)
 
-    walk(value)
+    for index, record_node in enumerate(record_nodes):
+        record = {"codes": set(), "field_names": set(), "matched_terms_in_order": [], "truncated": False}
+        walk_record(record_node, "", 0, record)
+        record_codes = [{"field": field, "value": number} for field, number in sorted(record["codes"])]
+        record_fields = sorted(record["field_names"])
+        record_terms = record["matched_terms_in_order"]
+        codes.update((entry["field"], entry["value"]) for entry in record_codes)
+        names.update(record_fields)
+        terms.update(record_terms)
+        diagnostic_records.append({"index": index, "codes": record_codes,
+            "field_names": record_fields, "matched_terms_in_order": record_terms,
+            "truncated": record["truncated"]})
+
     return {"observed": observed, "is_list": isinstance(value, list), "has_errors": bool(value),
         "codes": [{"field": key, "value": number} for key, number in sorted(codes)],
-        "terms": sorted(terms), "field_names": sorted(names), "truncated": truncated}
+        "terms": sorted(terms), "field_names": sorted(names), "records": diagnostic_records,
+        "truncated": truncated}
 
 
 async def saved_draft_intent(adapter, *, profile_id, context, payload):

@@ -1087,13 +1087,34 @@ function remaskPrivateRenderJob(job) {
                             if(!diagnostic||typeof diagnostic!=='object'||diagnostic.observed!==true)return 'не наблюдались';
                             if(diagnostic.has_errors!==true)return diagnostic.is_list===true?'список пуст':'ошибок нет';
                             const details=[];
-                            const codes=Array.isArray(diagnostic.codes)?diagnostic.codes.map(item=>
-                                item&&Object.prototype.hasOwnProperty.call(item,'value')?String(item.value):'').filter(Boolean):[];
-                            const fields=Array.isArray(diagnostic.field_names)?diagnostic.field_names.filter(item=>typeof item==='string'):[];
-                            const terms=Array.isArray(diagnostic.terms)?diagnostic.terms.filter(item=>typeof item==='string'):[];
-                            if(codes.length)details.push('коды '+codes.join(', '));
-                            if(fields.length)details.push('поля '+fields.join(', '));
-                            if(terms.length)details.push('термины '+terms.join(' / '));
+                            const records=Array.isArray(diagnostic.records)?diagnostic.records.slice(0,8):[];
+                            if(records.length){
+                                const perError=records.map((record,index)=>{
+                                    if(!record||typeof record!=='object')return '';
+                                    const codes=Array.isArray(record.codes)?record.codes.map(item=>
+                                        item&&Number.isSafeInteger(item.value)&&item.value>=0?String(item.value):'').filter(Boolean):[];
+                                    const fields=Array.isArray(record.field_names)?record.field_names.filter(item=>
+                                        typeof item==='string'&&/^[a-z_]{1,64}$/.test(item)):[];
+                                    const terms=Array.isArray(record.matched_terms_in_order)?record.matched_terms_in_order.filter(item=>
+                                        typeof item==='string'&&/^[a-z_']{1,32}$/.test(item)):[];
+                                    const itemDetails=[];
+                                    if(codes.length)itemDetails.push('коды '+codes.join(', '));
+                                    if(fields.length)itemDetails.push('поля '+fields.join(', '));
+                                    if(terms.length)itemDetails.push('термины в исходном порядке '+terms.join(' / '));
+                                    return itemDetails.length?'ошибка '+(index+1)+' ['+itemDetails.join('; ')+']':'';
+                                }).filter(Boolean);
+                                if(perError.length)details.push('безопасные термины, исходный текст скрыт: '+perError.join(' | '));
+                            }else{
+                                const codes=Array.isArray(diagnostic.codes)?diagnostic.codes.map(item=>
+                                    item&&Number.isSafeInteger(item.value)&&item.value>=0?String(item.value):'').filter(Boolean):[];
+                                const fields=Array.isArray(diagnostic.field_names)?diagnostic.field_names.filter(item=>
+                                    typeof item==='string'&&/^[a-z_]{1,64}$/.test(item)):[];
+                                const terms=Array.isArray(diagnostic.terms)?diagnostic.terms.filter(item=>
+                                    typeof item==='string'&&/^[a-z_']{1,32}$/.test(item)):[];
+                                if(codes.length)details.push('коды '+codes.join(', '));
+                                if(fields.length)details.push('поля '+fields.join(', '));
+                                if(terms.length)details.push('термины '+terms.join(' / '));
+                            }
                             return 'есть'+(details.length?' ('+details.join('; ')+')':'');
                         };
                         const checks=rows.map(row=>{
