@@ -6,6 +6,7 @@ ad_object_id receipt.
 """
 from __future__ import annotations
 
+import copy
 import logging
 
 from .private_ads_draft import FRAGMENT_FIELDS, fail, identity
@@ -210,6 +211,7 @@ async def _read_account_level_object(
     object_id = identity(row.get("id"))
 
     creative_id = None
+    observed_creative_values = None
     checked_fields = fields
     if level == "campaign":
         source = "account_campaigns_read"
@@ -243,6 +245,9 @@ async def _read_account_level_object(
         _account(creative_row, account_id, creative_id)
         if not _matches(creative_row, creative_values):
             raise fail("READ_SPEC_MISMATCH", "Direct Creative read differs from the saved Launch")
+        observed_creative_values = {
+            key: copy.deepcopy(creative_row[key]) for key in creative_values if key in creative_row
+        }
         checked_fields = sorted(set(fields + ad_fields + creative_fields))
 
     return {
@@ -262,7 +267,10 @@ async def _read_account_level_object(
         "pagination_complete": True,
         "validation_unobserved": True,
         "fragment_read_error": fragment_read_error or {},
-        "object_values": {key: row[key] for key in values if key != "creative" and key in row},
+        "object_values": {
+            key: copy.deepcopy(row[key]) for key in values if key != "creative" and key in row
+        },
+        "creative_values": observed_creative_values,
         "checked_fields": checked_fields,
     }
 

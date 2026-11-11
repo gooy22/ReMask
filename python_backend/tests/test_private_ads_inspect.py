@@ -665,6 +665,7 @@ class SavedDraftInspectionTests(unittest.IsolatedAsyncioTestCase):
                             for row in result['object_reads']))
         self.assertEqual(result['object_reads'][2]['read_source'], 'account_ads_read')
         self.assertEqual(result['object_reads'][2]['direct_read_diagnostic']['error_subcode'], 33)
+        self.assertEqual(result['object_reads'][3]['values'], values_for('ad')['creative'])
         self.assertFalse(result['editor_verified'])
         self.assertIsNone(result['published'])
         self.assertEqual(len(self.client.posts), post_count)

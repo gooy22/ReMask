@@ -315,7 +315,6 @@ async def inspect_saved_draft(adapter, *, profile_id, context, session, payload)
                         parent_id=objects.get("ad_set" if level == "ad" else "campaign")
                             if level != "campaign" else None,
                         draft_id=draft_id, fragment_id=fragment["fragment_id"],
-                        fragment_read_error=exc.diagnostic,
                         expected_object_id=entity,
                         use_account_ad_row=level == "ad",
                     )
@@ -335,7 +334,8 @@ async def inspect_saved_draft(adapter, *, profile_id, context, session, payload)
                     "direct_read_diagnostic": exc.diagnostic})
                 if level == "ad":
                     object_reads.append({"level": "creative", "id": proof["creative_id"],
-                        "available": True, "settings_match": True, "missing_fields": [],
+                        "available": True, "values": copy.deepcopy(proof["creative_values"] or {}),
+                        "settings_match": True, "missing_fields": [],
                         "publication_verified": False, "read_source": "creative_exact_id_read",
                         "identity_fallback_verified": True})
                 continue
@@ -374,6 +374,7 @@ async def inspect_saved_draft(adapter, *, profile_id, context, session, payload)
                     continue
                 _scope(actual, target["ad_account_id"], creative_id)
                 object_reads.append({"level": "creative", "id": creative_id, "available": True,
+                    "values": {field: copy.deepcopy(actual[field]) for field in spec if field in actual},
                     "settings_match": all(field in actual and _same(actual[field], value, field)
                                           for field, value in spec.items()),
                     "missing_fields": sorted(set(spec) - set(actual)), "publication_verified": False})
