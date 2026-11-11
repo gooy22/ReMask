@@ -999,6 +999,7 @@ function pythonWorkerPrepareResult(item) {
 const pythonWorkerProfileSessionStatuses = new Map();
 let pythonWorkerProfileStatusRequest = null;
 let pythonWorkerProfileStatusJobId = '';
+let pythonWorkerProfileStatusJobState = '';
 
 function pythonWorkerItemErrorCode(item) {
   const failedTasks = (Array.isArray(item && item.tasks) ? item.tasks : []).filter(function(task) {
@@ -1330,8 +1331,10 @@ async function pythonWorkerLoadProfileStatuses() {
 function pythonWorkerRefreshProfileStatusesForJob(job) {
   const jobId = String(job && job.id || '');
   const status = String(job && job.status || '').toUpperCase();
-  if (!jobId || !['SUCCESS','FAILED','PARTIAL'].includes(status) || jobId === pythonWorkerProfileStatusJobId) return;
+  if (!jobId || !['SUCCESS','FAILED','PARTIAL'].includes(status)
+      || (jobId === pythonWorkerProfileStatusJobId && status === pythonWorkerProfileStatusJobState)) return;
   pythonWorkerProfileStatusJobId = jobId;
+  pythonWorkerProfileStatusJobState = status;
   pythonWorkerLoadProfileStatuses().catch(function(){});
 }
 
