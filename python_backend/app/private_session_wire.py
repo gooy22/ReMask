@@ -3,7 +3,7 @@ import hashlib
 import json
 import re
 
-from .private_cookie_directives import auth_cookie_directive
+from .private_cookie_directives import auth_cookie_deletes_profile_root, auth_cookie_directive
 
 
 def route(url):
@@ -69,7 +69,7 @@ class SessionWireEvidence:
             if len(self.responses) >= 16:
                 self.errors += 1
                 return
-            changed, deleted = set(), set()
+            changed, deleted, profile_deleted = set(), set(), set()
             for raw in response.headers.get_list('set-cookie'):
                 directive = auth_cookie_directive(raw)
                 if directive is None:
@@ -78,9 +78,13 @@ class SessionWireEvidence:
                 changed.add(name)
                 if is_deletion:
                     deleted.add(name)
+                    if auth_cookie_deletes_profile_root(raw,
+                            response_host=response.url.host, response_path=response.url.path):
+                        profile_deleted.add(name)
             self.responses.append({**route(response.url), 'status':response.status_code,
                 'protocol':response.http_version if response.http_version in {'HTTP/2','HTTP/1.1'} else 'other',
-                'auth_cookie_set':sorted(changed), 'auth_cookie_deleted':sorted(deleted)})
+                'auth_cookie_set':sorted(changed), 'auth_cookie_deleted':sorted(deleted),
+                'profile_root_auth_cookie_deleted':sorted(profile_deleted)})
         except Exception:
             self.errors += 1
 
