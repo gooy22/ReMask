@@ -723,12 +723,10 @@ vm.createContext(sandbox); vm.runInContext(source.slice(start,end), sandbox);
 
 // Re-running the same job can change its terminal state; refresh the profile status again.
 {
-  const scope = {
-    statusRefreshCalls: 0,
-    pythonWorkerLoadProfileStatuses() {
-      this.statusRefreshCalls += 1;
-      return Promise.resolve();
-    }
+  const scope = {statusRefreshCalls: 0};
+  scope.pythonWorkerLoadProfileStatuses = function() {
+    scope.statusRefreshCalls += 1;
+    return Promise.resolve();
   };
   vm.createContext(scope);
   const start = source.indexOf('function pythonWorkerRefreshProfileStatusesForJob(');
