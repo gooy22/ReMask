@@ -359,5 +359,17 @@ class LiveSyncContractTests(unittest.TestCase):
         self.assertIn("await self.close()", source)
 
 
+    def test_launch_resource_reads_use_readonly_inventory_resolver(self) -> None:
+        resolver_source = inspect.getsource(api._resolve_read_profile)
+        route_source = inspect.getsource(api.private_advertising_resources)
+
+        self.assertIn("allow_inventory_probe: bool = False", resolver_source)
+        self.assertIn("resolve_for_inventory_read", resolver_source)
+        self.assertIn(
+            "_resolve_read_profile(profile, allow_inventory_probe=True)",
+            route_source,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
