@@ -668,10 +668,12 @@ class ProfileResolver:
             await self._guard_auth_cookie_revocation(context)
             return context
 
-        actor = str(context.cookies.get("c_user") or "")
-        xs = str(context.cookies.get("xs") or "")
         snapshot = hashlib.sha256(json.dumps(
-            [str(context.profile_id), context.cookies, context.proxy, context.user_agent],
+            [
+                str(context.profile_id), context.cookies, context.proxy, context.user_agent,
+                str(revocation.get("source_job_id") or ""),
+                int(revocation.get("checked_at") or 0),
+            ],
             sort_keys=True, ensure_ascii=True, separators=(",", ":"),
         ).encode("utf-8")).hexdigest()
         probe_key = (str(context.profile_id), snapshot)
