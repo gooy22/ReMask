@@ -24,6 +24,7 @@ class PrivateAdvertisingErrorTests(unittest.IsolatedAsyncioTestCase):
         helper = AsyncMock(side_effect=error)
         reference = AsyncMock(side_effect=error)
         with patch.object(api.pool.resolver,'resolve',AsyncMock(return_value=context)), \
+             patch.object(api.pool.resolver,'resolve_for_inventory_read',AsyncMock(return_value=context)), \
              patch.object(api.pool,'private_launch',launch), \
              patch.object(api,'ProfileSession',factory), \
              patch('app.private_ads_helpers.read_form_helper',helper), \

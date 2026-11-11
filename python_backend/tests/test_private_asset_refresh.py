@@ -20,6 +20,7 @@ class PrivateAssetRefreshTests(unittest.IsolatedAsyncioTestCase):
             'checked_live':False,'account_scope_verified':False,'_cache':{'hit':True,'stale':False}}
         self.live={**self.cached,'checked_live':True,'account_scope_verified':True,'_cache':{'stale':False}}
         for patcher in (patch.object(api.pool.resolver,'resolve',AsyncMock(return_value=self.context)),
+                patch.object(api.pool.resolver,'resolve_for_inventory_read',AsyncMock(return_value=self.context)),
                 patch.object(api.pool,'private_launch',SimpleNamespace(_id=lambda value,name:value,resources=self.resources)),
                 patch.object(api,'ProfileSession',self.factory)):
             patcher.start();self.addCleanup(patcher.stop)
