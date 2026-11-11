@@ -23,11 +23,11 @@ class PrivateAdvertisingErrorTests(unittest.IsolatedAsyncioTestCase):
                                  ads_manager=SimpleNamespace(catalog=object()))
         helper = AsyncMock(side_effect=error)
         reference = AsyncMock(side_effect=error)
-        with patch.object(api.pool.resolver,'resolve',AsyncMock(return_value=context)), \\
-             patch.object(api.pool.resolver,'resolve_for_inventory_read',AsyncMock(return_value=context)), \\
-             patch.object(api.pool,'private_launch',launch), \\
-             patch.object(api,'ProfileSession',factory), \\
-             patch('app.private_ads_helpers.read_form_helper',helper), \\
+        with patch.object(api.pool.resolver,'resolve',AsyncMock(return_value=context)), \
+             patch.object(api.pool.resolver,'resolve_for_inventory_read',AsyncMock(return_value=context)), \
+             patch.object(api.pool,'private_launch',launch), \
+             patch.object(api,'ProfileSession',factory), \
+             patch('app.private_ads_helpers.read_form_helper',helper), \
              patch('app.private_template_reads.read_template_reference',reference):
             for route in ('resource','helper','reference'):
                 with self.subTest(route=route), self.assertRaises(HTTPException) as caught:
@@ -47,7 +47,7 @@ class PrivateAdvertisingErrorTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(web.private_only)
 
     async def test_excluded_template_source_and_writer_stop_before_resolver(self):
-        with patch.dict(os.environ,{'REMASK_TEMPLATE_LOOKUP_EXCLUDED_PROFILES':'16'}), \\
+        with patch.dict(os.environ,{'REMASK_TEMPLATE_LOOKUP_EXCLUDED_PROFILES':'16'}), \
              patch.object(api.pool.resolver,'resolve',AsyncMock()) as resolve:
             with self.assertRaises(HTTPException) as excluded:
                 await api.private_template_reference('16','interests',{})
