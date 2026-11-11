@@ -721,24 +721,38 @@ vm.createContext(sandbox); vm.runInContext(source.slice(start,end), sandbox);
 })().catch(error=>{console.error(error);process.exitCode=1;});
 
 
-// Re-running the same job can change its terminal state; refresh the profile status again.
-{
-  const scope = {statusRefreshCalls: 0};
-  scope.pythonWorkerLoadProfileStatuses = function() {
-    scope.statusRefreshCalls += 1;
-    return Promise.resolve();
-  };
+// A terminal transition under the same job ID must refresh after any older read settles.
+(async()=>{
+  const scope = {statusRefreshCalls:0};
   vm.createContext(scope);
   const start = source.indexOf('function pythonWorkerRefreshProfileStatusesForJob(');
   const end = source.indexOf('\nfunction pythonWorkerRenderJob', start);
   assert.ok(start >= 0 && end > start);
-  const setup = "let pythonWorkerProfileStatusJobId = ''; let pythonWorkerProfileStatusJobState = '';\n";
+  const setup = `
+    let pythonWorkerProfileStatusJobId = '';
+    let pythonWorkerProfileStatusJobState = '';
+    let pythonWorkerProfileStatusRequest = null;
+    let releasePending;
+    let statusRefreshCalls = 0;
+    function settlePending(){ releasePending(); }
+    pythonWorkerProfileStatusRequest = new Promise(resolve => { releasePending = resolve; });
+    function pythonWorkerLoadProfileStatuses(){
+      statusRefreshCalls += 1;
+      pythonWorkerProfileStatusRequest = null;
+      return Promise.resolve();
+    }
+  `;
   vm.runInContext(setup + source.slice(start, end), scope);
   scope.pythonWorkerRefreshProfileStatusesForJob({id:'retry-job',status:'FAILED'});
   scope.pythonWorkerRefreshProfileStatusesForJob({id:'retry-job',status:'FAILED'});
-  scope.pythonWorkerRefreshProfileStatusesForJob({id:'retry-job',status:'RUNNING'});
   scope.pythonWorkerRefreshProfileStatusesForJob({id:'retry-job',status:'SUCCESS'});
+  assert.equal(vm.runInContext('statusRefreshCalls', scope), 0);
+  scope.settlePending();
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(vm.runInContext('statusRefreshCalls', scope), 1);
   scope.pythonWorkerRefreshProfileStatusesForJob({id:'retry-job',status:'SUCCESS'});
+  assert.equal(vm.runInContext('statusRefreshCalls', scope), 1);
   scope.pythonWorkerRefreshProfileStatusesForJob({id:'next-job',status:'SUCCESS'});
-  assert.equal(scope.statusRefreshCalls, 3);
-}
+  assert.equal(vm.runInContext('statusRefreshCalls', scope), 2);
+})().catch(error=>{console.error(error);process.exitCode=1;});
