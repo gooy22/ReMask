@@ -1335,7 +1335,15 @@ function pythonWorkerRefreshProfileStatusesForJob(job) {
       || (jobId === pythonWorkerProfileStatusJobId && status === pythonWorkerProfileStatusJobState)) return;
   pythonWorkerProfileStatusJobId = jobId;
   pythonWorkerProfileStatusJobState = status;
-  pythonWorkerLoadProfileStatuses().catch(function(){});
+  const refresh = function() {
+    if (pythonWorkerProfileStatusJobId !== jobId || pythonWorkerProfileStatusJobState !== status) return;
+    pythonWorkerLoadProfileStatuses().catch(function(){});
+  };
+  if (pythonWorkerProfileStatusRequest) {
+    pythonWorkerProfileStatusRequest.then(refresh, refresh);
+    return;
+  }
+  refresh();
 }
 
 function pythonWorkerRenderJob(job) {
