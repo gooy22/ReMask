@@ -180,6 +180,21 @@ def values_diagnostic(rows, expected, business_id):
     return result
 
 
+def _draft_scope_diagnostic(draft, *, account_id, draft_id, actor_id):
+    """Return only match flags for the exact draft identity guard."""
+    row = draft if isinstance(draft, dict) else {}
+    observed_account = row.get("account_id")
+    return {
+        "response_type": type(draft).__name__,
+        "error_present": isinstance(draft, dict) and ("error" in draft or "errors" in draft),
+        "account_id_matches": (isinstance(observed_account, str)
+            and observed_account.removeprefix("act_") == account_id),
+        "draft_id_matches": row.get("id") == draft_id,
+        "author_id_matches": row.get("author_id") == actor_id,
+        "ownership_type_is_user": row.get("ownership_type") == "USER",
+    }
+
+
 async def read_diagnostic(adapter, *, profile_id, context, session, payload):
     target, _key, _fingerprint, actor, source_digest, draft_id, fragments, pending = await saved_draft_intent(
         adapter, profile_id=profile_id, context=context, payload=payload)
@@ -204,8 +219,18 @@ async def read_diagnostic(adapter, *, profile_id, context, session, payload):
     client.read_only = True
     draft = await client.get("/addraft_" + draft_id,
         {"fields": ["id", "account_id", "author_id", "ownership_type"]})
+    scope = _draft_scope_diagnostic(draft, account_id=target["ad_account_id"],
+        draft_id=draft_id, actor_id=actor)
+    logger = logging.getLogger(__name__)
+    if (scope["response_type"] != "dict" or scope["error_present"]
+            or not scope["account_id_matches"]):
+        logger.warning("saved_draft_read_scope_mismatch profile=%s stage=account checks=%s",
+            profile_id, json.dumps(scope, sort_keys=True, separators=(",", ":")))
     adapter_scope(draft, target["ad_account_id"])
-    if draft.get("id") != draft_id or draft.get("author_id") != actor or draft.get("ownership_type") != "USER":
+    if (not scope["draft_id_matches"] or not scope["author_id_matches"]
+            or not scope["ownership_type_is_user"]):
+        logger.warning("saved_draft_read_scope_mismatch profile=%s stage=ownership checks=%s",
+            profile_id, json.dumps(scope, sort_keys=True, separators=(",", ":")))
         raise fail("READ_SCOPE_MISMATCH", "Saved draft ownership was not confirmed")
     reads, parent = [], None
     campaign_object_read, account_object_fallbacks = None, []
