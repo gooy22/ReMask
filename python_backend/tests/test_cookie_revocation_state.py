@@ -1,6 +1,6 @@
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from app.session import MetaSession, ProfileContextError, ProfileResolver
 
@@ -129,6 +129,73 @@ class ProfileResolverRevocationGuardTests(unittest.IsolatedAsyncioTestCase):
         store.profile_auth_cookie_revocation_for_context.assert_awaited_once_with(
             "fixture-profile", cookies,
         )
+
+    async def test_legacy_marker_stays_blocked_when_identity_probe_is_unconfirmed(self):
+        cookies = {"c_user": "123456789", "xs": "current-session"}
+        resolver, store = self.resolver(cookies, {
+            "status": "AUTH_COOKIE_HISTORY_UNVERIFIED",
+            "deleted_names": [],
+            "evidence_kind": "legacy_history_unverified",
+            "blocking": True,
+            "message": "Старая запись не подтверждает текущую сессию.",
+        })
+        store.resolve_legacy_auth_cookie_history = AsyncMock(return_value=False)
+        proof = {"identity_session_confirmed": False, "persisted": False, "objects_created": False}
+
+        with patch("app.private_session_probe.probe_saved_identity", new=AsyncMock(return_value=proof)) as probe:
+            with self.assertRaises(ProfileContextError) as caught:
+                await resolver.resolve("fixture-profile")
+
+        self.assertEqual(caught.exception.code, "AUTH_COOKIE_HISTORY_UNVERIFIED")
+        probe.assert_awaited_once()
+        probe_context = probe.await_args.args[0]
+        self.assertEqual(probe_context.profile_id, "fixture-profile")
+        self.assertEqual(probe_context.cookies, cookies)
+        store.resolve_legacy_auth_cookie_history.assert_awaited_once_with(
+            "fixture-profile", cookies, proof,
+        )
+
+    async def test_legacy_marker_resolves_only_after_same_actor_identity_probe(self):
+        cookies = {"c_user": "123456789", "xs": "current-session"}
+        resolver, store = self.resolver(cookies, {
+            "status": "AUTH_COOKIE_HISTORY_UNVERIFIED",
+            "deleted_names": [],
+            "evidence_kind": "legacy_history_unverified",
+            "blocking": True,
+            "message": "Старая запись не подтверждает текущую сессию.",
+        })
+        store.resolve_legacy_auth_cookie_history = AsyncMock(return_value=True)
+        proof = {"identity_session_confirmed": True, "persisted": False, "objects_created": False}
+
+        with patch("app.private_session_probe.probe_saved_identity", new=AsyncMock(return_value=proof)) as probe:
+            context = await resolver.resolve("fixture-profile")
+
+        self.assertEqual(context.cookies, cookies)
+        probe.assert_awaited_once()
+        store.resolve_legacy_auth_cookie_history.assert_awaited_once_with(
+            "fixture-profile", cookies, proof,
+        )
+
+    async def test_unconfirmed_legacy_identity_probe_is_rate_limited_per_snapshot(self):
+        cookies = {"c_user": "123456789", "xs": "current-session"}
+        resolver, store = self.resolver(cookies, {
+            "status": "AUTH_COOKIE_HISTORY_UNVERIFIED",
+            "deleted_names": [],
+            "evidence_kind": "legacy_history_unverified",
+            "source_job_id": "legacy-job",
+            "blocking": True,
+            "message": "Старая запись не подтверждает текущую сессию.",
+        })
+        store.resolve_legacy_auth_cookie_history = AsyncMock(return_value=False)
+        proof = {"identity_session_confirmed": False, "persisted": False, "objects_created": False}
+
+        with patch("app.private_session_probe.probe_saved_identity", new=AsyncMock(return_value=proof)) as probe:
+            for _ in range(2):
+                with self.assertRaises(ProfileContextError) as caught:
+                    await resolver.resolve("fixture-profile")
+                self.assertEqual(caught.exception.code, "AUTH_COOKIE_HISTORY_UNVERIFIED")
+
+        probe.assert_awaited_once()
 
     async def test_guard_store_failure_fails_closed_before_meta_session(self):
         cookies = {"c_user": "123456789", "xs": "revoked-session"}

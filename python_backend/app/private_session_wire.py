@@ -14,7 +14,7 @@ def route(url):
     path = str(getattr(url, 'path', '') or '')
     if host != 'facebook.com' and not re.fullmatch(r'[a-z][a-z0-9-]{0,39}\.facebook\.com', host):
         host = 'unreviewed'
-    if host == 'unreviewed' or path not in {'/','/me','/login','/login/','/login.php',
+    if host == 'unreviewed' or path not in {'/','/me','/profile.php','/login','/login/','/login.php',
             '/login/device-based/regular/login/','/business/loginpage/','/latest/home',
             '/adsmanager/manage/campaigns','/checkpoint/'}:
         path = 'unreviewed'

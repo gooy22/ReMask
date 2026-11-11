@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock
 
-from app.private_session_probe import probe_document, _login_shape, _transport_kind, _transport_reason
+from app.private_session_probe import probe_document, probe_saved_identity, _login_shape, _transport_kind, _transport_reason
 from app.provisioning.models import ProvisioningError
 from tests.test_private_ads_draft import document
 
@@ -23,6 +23,81 @@ class SessionProbeTests(unittest.IsolatedAsyncioTestCase):
             side_effect=error, return_value=(200, document() if body is None else body,
                 final or "https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=111111&business_id=222222")))
         return Mock(return_value=self.web)
+
+    def identity_wire_factory(self, *, status=200, body=None, response_headers=None):
+        import httpx
+
+        self.wire_client = SimpleNamespace(event_hooks={"request": [], "response": []})
+
+        class WireWeb:
+            def __init__(inner, profile):
+                inner.profile = profile
+                inner.private_only = False
+                inner.client = self.wire_client
+
+            async def _ensure_session(inner):
+                return SimpleNamespace(_client=inner.client)
+
+            async def fetch_text(inner, url, **kwargs):
+                cookie = "; ".join(f"{name}={value}" for name, value in inner.profile.cookies.items())
+                request = httpx.Request("GET", url, headers={
+                    "Cookie": cookie, "User-Agent": inner.profile.user_agent,
+                })
+                for callback in inner.client.event_hooks["request"]:
+                    await callback(request)
+                response = httpx.Response(status, request=request, text=document() if body is None else body,
+                    headers=response_headers or [])
+                for callback in inner.client.event_hooks["response"]:
+                    await callback(response)
+                return status, document() if body is None else body, url
+
+            async def close(inner):
+                return None
+
+        return WireWeb
+
+    async def test_saved_identity_probe_confirms_only_exact_same_actor_get(self):
+        context = self.context()
+        factory = self.identity_wire_factory()
+
+        result = await probe_saved_identity(context, web_factory=factory)
+
+        self.assertTrue(result["identity_session_confirmed"])
+        self.assertEqual(result["document_kind"], "saved_identity")
+        self.assertEqual(result["final_host"], "www.facebook.com")
+        self.assertEqual(result["final_path"], "/me")
+        self.assertTrue(result["request_auth_matches"])
+        self.assertTrue(result["auth_cookie_directives_unchanged"])
+        self.assertFalse(result["persisted"])
+        self.assertFalse(result["objects_created"])
+        self.assertFalse(result["browser_started"])
+        self.assertEqual(result["wire"]["requests"][0]["method"], "GET")
+        self.assertEqual(result["wire"]["requests"][0]["header_auth_cookie_names"], ["c_user", "xs"])
+        self.assertNotIn("saved-fixture", str(result))
+
+    async def test_saved_identity_probe_does_not_confirm_meta_auth_cookie_deletion(self):
+        factory = self.identity_wire_factory(response_headers=[
+            ("Set-Cookie", "xs=; Domain=.facebook.com; Path=/; Max-Age=0; Secure"),
+        ])
+
+        result = await probe_saved_identity(self.context(), web_factory=factory)
+
+        self.assertTrue(result["response_received"])
+        self.assertFalse(result["identity_session_confirmed"])
+        self.assertFalse(result["auth_cookie_directives_unchanged"])
+        self.assertEqual(result["wire"]["responses"][0]["profile_root_auth_cookie_deleted"], ["xs"])
+
+    async def test_saved_identity_probe_does_not_confirm_meta_auth_cookie_update(self):
+        factory = self.identity_wire_factory(response_headers=[
+            ("Set-Cookie", "xs=rotated-session; Domain=.facebook.com; Path=/; Secure; HttpOnly"),
+        ])
+
+        result = await probe_saved_identity(self.context(), web_factory=factory)
+
+        self.assertTrue(result["response_received"])
+        self.assertFalse(result["identity_session_confirmed"])
+        self.assertFalse(result["auth_cookie_directives_unchanged"])
+        self.assertEqual(result["wire"]["responses"][0]["profile_root_auth_cookie_set"], ["xs"])
 
     async def test_one_get_uses_exact_saved_proxy_ua_and_does_not_change_input_or_profile(self):
         context, payload, factory = self.context(), self.payload(), self.factory()

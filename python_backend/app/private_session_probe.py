@@ -1,7 +1,9 @@
-"""One isolated Ads Manager document GET; imported cookies are never saved."""
+"""Read-only first-party session probes; imported cookies are never saved."""
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import re
 from html.parser import HTMLParser
 from urllib.parse import parse_qs, urljoin, urlsplit
@@ -235,6 +237,141 @@ async def probe_document(context, payload, *, web_factory=None):
             "transport_failure_kind":_transport_kind(error),
             "transport_failure_reason":_transport_reason(error),
             "error_type": type(error).__name__ if re.fullmatch(r"[A-Za-z_]{1,60}", type(error).__name__) else "Exception"}
+    finally:
+        wire.detach()
+        await web.close()
+
+
+async def probe_saved_identity(context, *, web_factory=None):
+    """Confirm only the saved actor with one GET /me; never renew or persist cookies."""
+    cookies = getattr(context, "cookies", None)
+    actor = str(cookies.get("c_user") or "") if isinstance(cookies, dict) else ""
+    xs = str(cookies.get("xs") or "") if isinstance(cookies, dict) else ""
+    user_agent = str(getattr(context, "user_agent", "") or "")
+    proxy = str(getattr(context, "proxy", "") or "")
+    if not re.fullmatch(r"\d{1,30}", actor) or not xs or not user_agent or not proxy:
+        return {
+            "profile_id": str(getattr(context, "profile_id", "")),
+            "document_kind": "saved_identity",
+            "response_received": False,
+            "identity_session_confirmed": False,
+            "persisted": False,
+            "objects_created": False,
+            "browser_started": False,
+            "error_code": "PRIVATE_SESSION_PROBE_CONTEXT_UNAVAILABLE",
+        }
+
+    from fb_worker import FacebookWebSession, WebProfile
+    profile = WebProfile(str(context.profile_id), dict(cookies), proxy, user_agent)
+    web = (web_factory or FacebookWebSession)(profile)
+    web.private_only = True
+    from .private_session_wire import SessionWireEvidence
+    wire = SessionWireEvidence(actor, user_agent)
+    auth_fingerprint = hashlib.sha256(json.dumps(
+        [actor, xs], ensure_ascii=True, separators=(",", ":")
+    ).encode("utf-8")).hexdigest()
+    request_auth_fingerprint = hashlib.sha256(json.dumps(
+        {"c_user": [actor], "xs": [xs]}, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")).hexdigest()
+    result = {
+        "profile_id": str(context.profile_id),
+        "document_kind": "saved_identity",
+        "response_received": False,
+        "identity_session_confirmed": False,
+        "persisted": False,
+        "objects_created": False,
+        "browser_started": False,
+        "auth_cookie_fingerprint": auth_fingerprint,
+    }
+    try:
+        async with asyncio.timeout(8):
+            if callable(getattr(web, "_ensure_session", None)):
+                try:
+                    await wire.attach(web)
+                except Exception:
+                    wire.errors += 1
+            else:
+                wire.errors += 1
+            status, body, final_url = await web.fetch_text(
+                "https://www.facebook.com/me",
+                max_bytes=1_000_001,
+                document_navigation=True,
+            )
+        from .private_ads_http import _bootstrap_evidence
+        evidence = _bootstrap_evidence(final_url, body, profile, actor)
+        login_form = evidence.get("login_form") is True
+        final = urlsplit(final_url)
+        final_host = final.hostname if final.hostname in {"www.facebook.com", "facebook.com"} else "unreviewed"
+        final_path = final.path if final_host != "unreviewed" and final.path in {"/me", "/profile.php"} else "unreviewed"
+        wire_result = wire.snapshot()
+        requests = wire_result["requests"]
+        responses = wire_result["responses"]
+        request_auth_matches = bool(requests) and requests[0].get("path") == "/me" and all(
+            row.get("host") in {"www.facebook.com", "facebook.com"}
+            and row.get("path") in {"/me", "/profile.php"}
+            and row.get("method") == "GET"
+            and row.get("user_agent_matches") is True
+            and row.get("header_auth_state") == "matches"
+            and {"c_user", "xs"} <= set(row.get("header_auth_cookie_names") or [])
+            for row in requests
+        )
+        saved_auth_snapshot_sent = bool(requests) and (
+            requests[0].get("header_auth_cookie_fingerprint") == request_auth_fingerprint
+        )
+        auth_cookie_directives_unchanged = bool(responses) and all(
+            not row.get("auth_cookie_deleted")
+            and not row.get("profile_root_auth_cookie_deleted")
+            and not row.get("auth_cookie_set")
+            and not row.get("profile_root_auth_cookie_set")
+            and row.get("status") in {200, 302, 303, 307, 308}
+            and row.get("protocol") in {"HTTP/2", "HTTP/1.1"}
+            for row in responses
+        )
+        final_identity_target_matches = (
+            final_path == "/me"
+            or (final_path == "/profile.php" and parse_qs(final.query).get("id") == [actor])
+        )
+        confirmed = (
+            status == 200
+            and final_host == "www.facebook.com"
+            and final_path in {"/me", "/profile.php"}
+            and final_identity_target_matches
+            and evidence.get("document_actor") == "matches"
+            and evidence.get("profile_actor_matches") is True
+            and evidence.get("path_gate") == "none"
+            and not login_form
+            and request_auth_matches
+            and saved_auth_snapshot_sent
+            and auth_cookie_directives_unchanged
+            and wire_result.get("measurement_errors") == 0
+        )
+        return {
+            **result,
+            "response_received": True,
+            "http_status": status,
+            "final_host": final_host,
+            "final_path": final_path,
+            "final_identity_target_matches": final_identity_target_matches,
+            "legacy_gate": evidence.get("path_gate", "unavailable"),
+            "login_form": login_form,
+            "document_actor": evidence.get("document_actor", "unavailable"),
+            "profile_actor_matches": evidence.get("profile_actor_matches") is True,
+            "request_auth_matches": request_auth_matches,
+            "saved_auth_snapshot_sent": saved_auth_snapshot_sent,
+            "auth_cookie_directives_unchanged": auth_cookie_directives_unchanged,
+            "measurement_errors": wire_result.get("measurement_errors", 1),
+            "wire": wire_result,
+            "identity_session_confirmed": confirmed,
+        }
+    except Exception as error:
+        return {
+            **result,
+            "wire": wire.snapshot(),
+            "error_code": "PRIVATE_SESSION_PROBE_READ_UNAVAILABLE",
+            "transport_failure_kind": _transport_kind(error),
+            "transport_failure_reason": _transport_reason(error),
+            "error_type": type(error).__name__ if re.fullmatch(r"[A-Za-z_]{1,60}", type(error).__name__) else "Exception",
+        }
     finally:
         wire.detach()
         await web.close()

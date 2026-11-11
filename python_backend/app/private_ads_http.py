@@ -140,8 +140,8 @@ def _bootstrap_evidence(url, body, profile, actor_id):
     hosts = {"adsmanager.facebook.com", "business.facebook.com", "www.facebook.com",
              "facebook.com", "m.facebook.com"}
     routes = {"/adsmanager/manage/campaigns", "/business/loginpage/", "/business/loginpage",
-              "/login/", "/login", "/login.php", "/checkpoint/", "/checkpoint",
-              "/latest/home", "/latest/home/", "/"}
+              "/login/", "/login", "/login.php", "/checkpoint/", "/checkpoint", "/me",
+              "/latest/home", "/latest/home/", "/", "/profile.php"}
     host = final.hostname if final.hostname in hosts else "unreviewed"
     path = final.path if host != "unreviewed" and final.path in routes else "unreviewed"
     # This field reports route evidence separately from actual HTML forms.
