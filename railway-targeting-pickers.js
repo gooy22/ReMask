@@ -94,7 +94,7 @@ if (typeof creativeTargetSearchConfig !== 'function') {
                 box.appendChild(button);
             }
             if(!all.length)box.textContent=data?.availability==='NOT_LOADED'
-                ? 'Список вариантов не загружен. Выберите один профиль и один РК в шаге 1, затем повторите поиск.'
+                ? 'Справочник ещё не загружен. Выберите один профиль и один РК в шаге 1 как источник поиска; этот выбор нужен только для каталога и не закрепляется в сохранённом шаблоне.'
                 : 'Ничего не найдено. Попробуйте другое название.';
             if(data?.source==='private_meta_template_reference' && data.reference_checked_at){
                 const hint=document.createElement('div');hint.className='muted';
