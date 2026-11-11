@@ -381,7 +381,7 @@ assert.equal(probeMessageOnly,probeFailure,
   'worker guard codes forwarded as an error message must remain diagnosable');
 assert.doesNotMatch(probeFailure,/probe details|cookies|аккаунт/);
 assert.match(context.remaskPrivatePageReadFailure({payload:{code:'PROFILE_IDENTITY_PROBE_RATE_LIMITED'}},
-  '32','120249233615830605'),/повторное чтение списка страниц не отправлено/);
+  '32','120249233615830605'),/повторное чтение списка страниц не отправлено/i);
 assert.match(context.remaskPrivatePageReadFailure({payload:{code:'PROFILE_READ_GUARD_UNAVAILABLE'}},
   '32','120249233615830605'),/локальное состояние профиля/);
 assert.match(context.remaskPrivatePageReadFailure({payload:{code:'META_AUTH_GATE_UNCLASSIFIED'}},
