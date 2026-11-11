@@ -2067,7 +2067,7 @@ async def profile_live_inventory(
     try:
         with measure_phase('resolver'):
             context=await asyncio.wait_for(
-                pool.resolver.resolve(clean_profile),
+                pool.resolver.resolve_for_inventory_read(clean_profile),
                 timeout=12.0,
             )
     except asyncio.TimeoutError as exc:
