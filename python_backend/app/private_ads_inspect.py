@@ -186,7 +186,7 @@ async def inspect_saved_draft(adapter, *, profile_id, context, session, payload)
             "draft_verified": False,
             "relationships_confirmed": False, "editor_verified": False, "published": None,
             "pending_stage": pending, "uninspected_levels": list(LEVELS),
-            "missing_direct_objects": [], "launch_fingerprint_verified": True,
+            "unverified_object_levels": [], "launch_fingerprint_verified": True,
             "actor_verified": True, "payment_checked_live": False, "mutation_posts": 0,
             "source": "saved_account_scoped_journal", "recovered_source_digest": source,
             "source_reviewed_for_mutation": source in {adapter.source_digest, *READ_ONLY_DRAFT_PREDECESSORS}}
@@ -404,7 +404,9 @@ async def inspect_saved_draft(adapter, *, profile_id, context, session, payload)
         "draft_verified": validation_complete,
         "pending_stage": pending, "uninspected_levels": [level for level in LEVELS if level not in inspected],
         "object_reads": object_reads,
-        "missing_direct_objects": [level for level in inspected_objects
+        # A failed direct read or missing exact account-list match does not
+        # establish that the native Meta object is absent.
+        "unverified_object_levels": [level for level in inspected_objects
             if not any(row["level"] == level and row["available"] for row in object_reads)],
         "launch_fingerprint_verified": True, "actor_verified": True,
         "editor_verified": False, "published": None, "payment_checked_live": False,
