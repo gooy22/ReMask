@@ -53,6 +53,9 @@ class ProfileContextError(RuntimeError):
             "auth_cookie_history_unverified": "AUTH_COOKIE_HISTORY_UNVERIFIED",
             "profile_identity_changed": "PROFILE_IDENTITY_CHANGED",
             "auth_cookie_revocation_store": "PROFILE_AUTH_GUARD_UNAVAILABLE",
+            "profile_identity_probe_unconfirmed": "PROFILE_IDENTITY_PROBE_UNCONFIRMED",
+            "profile_identity_probe_rate_limited": "PROFILE_IDENTITY_PROBE_RATE_LIMITED",
+            "profile_read_guard_unavailable": "PROFILE_READ_GUARD_UNAVAILABLE",
             "auth_gate_unclassified": "META_AUTH_GATE_UNCLASSIFIED",
         }.get(self.category, "PROFILE_CONTEXT_ERROR")
 
