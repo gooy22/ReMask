@@ -206,6 +206,7 @@ class SessionProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([row['header_auth_state'] for row in result['wire']['requests']], ['matches','absent'])
         self.assertEqual(result['wire']['requests'][0]['header_auth_cookie_names'], ['c_user','xs'])
         self.assertEqual(result['wire']['responses'][0]['auth_cookie_deleted'], ['c_user','xs'])
+        self.assertEqual(result['wire']['responses'][0]['profile_root_auth_cookie_deleted'], ['c_user','xs'])
         self.assertEqual(result['wire']['measurement_errors'], 0)
         self.assertTrue(all(row['method'] == 'GET' and row['user_agent_matches'] for row in result['wire']['requests']))
         self.assertTrue(created[0].client.is_closed)
@@ -214,6 +215,32 @@ class SessionProbeTests(unittest.IsolatedAsyncioTestCase):
         for secret in ('import-fixture-secret','uri-secret','proxy-fixture-secret','synthetic-session-value',
                 'synthetic-actor','synthetic-expired-xs'):
             self.assertNotIn(secret, str(result))
+
+    async def test_wire_reports_cookie_scope_and_does_not_call_scoped_or_empty_values_profile_deletions(self):
+        import httpx
+        from app.private_session_wire import SessionWireEvidence
+
+        evidence = SessionWireEvidence('123456', 'fixture-UA')
+        request = httpx.Request('GET', 'https://business.facebook.com/latest/home')
+        scoped = httpx.Response(200, request=request, headers=[
+            ('Set-Cookie', 'c_user=; Path=/; Max-Age=0; Secure'),
+            ('Set-Cookie', 'xs=; Domain=.facebook.com; Path=/business; Max-Age=0; Secure'),
+        ])
+        await evidence.response(scoped)
+        row = evidence.snapshot()['responses'][0]
+        self.assertEqual(row['auth_cookie_deleted'], ['c_user', 'xs'])
+        self.assertEqual(row['profile_root_auth_cookie_deleted'], [])
+
+        empty_value = httpx.Response(302, request=httpx.Request(
+            'GET', 'https://business.facebook.com/latest/home'), headers=[
+                ('Location', 'https://business.facebook.com/latest/home'),
+                ('Set-Cookie', 'c_user=; Domain=.facebook.com; Path=/; Secure'),
+            ])
+        await evidence.response(empty_value)
+        row = evidence.snapshot()['responses'][1]
+        self.assertEqual(row['auth_cookie_set'], ['c_user'])
+        self.assertEqual(row['auth_cookie_deleted'], [])
+        self.assertEqual(row['profile_root_auth_cookie_deleted'], [])
 
     async def test_wire_observer_failure_does_not_prevent_the_original_read(self):
         factory = self.factory()
