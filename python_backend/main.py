@@ -50,9 +50,13 @@ pool=WorkerPool(store,mirror,CONCURRENCY)
 _READ_CONTEXT_BUDGET_SECONDS=12.0
 
 
-async def _resolve_read_profile(profile_id: str):
+async def _resolve_read_profile(
+    profile_id: str, *, allow_inventory_probe: bool = False,
+):
+    resolve = getattr(pool.resolver, 'resolve_for_inventory_read', None) if allow_inventory_probe else None
+    resolver = resolve if callable(resolve) else pool.resolver.resolve
     return await asyncio.wait_for(
-        pool.resolver.resolve(profile_id),timeout=_READ_CONTEXT_BUDGET_SECONDS,
+        resolver(profile_id),timeout=_READ_CONTEXT_BUDGET_SECONDS,
     )
 
 
@@ -4066,7 +4070,7 @@ async def private_advertising_resources(profile_id: str, resource: str, account_
     try:
         account = pool.private_launch._id(account_id, 'account_id')
         with measure_phase('resolver'):
-            context = await _resolve_read_profile(profile)
+            context = await _resolve_read_profile(profile, allow_inventory_probe=True)
         rows = [row for row in (context.ad_accounts or []) if isinstance(row,dict)
                 and str(row.get('ad_account_id') or row.get('account_id') or row.get('id') or '').removeprefix('act_') == account]
         businesses = {str(row.get('business_id') or '') for row in rows if str(row.get('business_id') or '').isdigit()}
