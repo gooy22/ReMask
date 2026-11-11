@@ -6,6 +6,7 @@ ad_object_id receipt.
 """
 from __future__ import annotations
 
+import copy
 import logging
 
 from .private_ads_draft import FRAGMENT_FIELDS, fail, identity
@@ -124,7 +125,7 @@ async def _read_saved_campaign_by_object_id(
 
 async def _read_account_level_object(
     client, *, account_id, level, values, parent_id=None, draft_id=None, fragment_id=None,
-    fragment_read_error=None,
+    fragment_read_error=None, expected_object_id=None, use_account_ad_row=False,
 ):
     edge = _ALLOWED_EDGES.get(level)
     account_id = identity(account_id)
@@ -142,6 +143,8 @@ async def _read_account_level_object(
         or not isinstance(values.get("creative"), dict)
     ):
         raise fail("READ_RELATION_MISMATCH", "Saved Ad does not name the confirmed Ad Set and creative")
+    if expected_object_id is not None:
+        expected_object_id = identity(expected_object_id)
 
     list_fields = {"id", "account_id", *values.keys()}
     if level == "ad":
@@ -160,17 +163,33 @@ async def _read_account_level_object(
         raise fail("READ_PENDING", "Account object list is paginated; uniqueness was not confirmed")
 
     same_name = []
+    exact_id_count = 0
     for row in rows:
         if not isinstance(row, dict):
             raise fail("READ_SCOPE_MISMATCH", "Meta returned an invalid account object")
+        if expected_object_id is not None and row.get("id") != expected_object_id:
+            continue
+        if expected_object_id is not None:
+            exact_id_count += 1
+            _account(row, account_id, expected_object_id)
         if row.get("name") != name:
             continue
         _account(row, account_id)
         same_name.append(row)
 
+    if expected_object_id is not None and exact_id_count != 1:
+        log.warning("saved_account_object_read_unmatched level=%s outcome=exact_id_count count=%d",
+            level, exact_id_count)
+        raise fail("READ_RELATION_MISMATCH", "Meta account list did not return exactly one row for the saved object ID")
     if not same_name:
+        if expected_object_id is not None:
+            log.warning("saved_account_object_read_unmatched level=%s outcome=exact_id_name_mismatch", level)
+            raise fail("READ_RELATION_MISMATCH", "Meta account list did not return the exact saved object ID and name")
         log.warning("saved_account_object_read_unmatched level=%s outcome=no_saved_name same_name_count=0", level)
         raise fail("READ_RELATION_MISMATCH", "Meta did not return an object with the saved name")
+    if expected_object_id is not None and len(same_name) != exact_id_count:
+        log.warning("saved_account_object_read_unmatched level=%s outcome=exact_id_name_mismatch", level)
+        raise fail("READ_RELATION_MISMATCH", "Meta account list did not return the exact saved object ID and name")
     excluded = {"status"}
     if level == "ad":
         excluded.add("creative")
@@ -192,6 +211,7 @@ async def _read_account_level_object(
     object_id = identity(row.get("id"))
 
     creative_id = None
+    observed_creative_values = None
     checked_fields = fields
     if level == "campaign":
         source = "account_campaigns_read"
@@ -203,12 +223,18 @@ async def _read_account_level_object(
             raise fail("READ_RELATION_MISMATCH", "Account Ad belongs to another Campaign or Ad Set")
         ad_fields = sorted({"id", "account_id", *values.keys()} - {"creative"})
         ad_fields.append("creative{id}")
-        ad_row = await client.get("/" + object_id, {"fields": ad_fields})
-        _account(ad_row, account_id, object_id)
-        if ad_row.get("status") != "PAUSED" or not _matches(
-            ad_row, values, exclude={"creative"}
-        ):
-            raise fail("READ_SPEC_MISMATCH", "Direct Ad read differs from the saved Launch")
+        if use_account_ad_row:
+            # The caller reached this branch only after an exact 100/33 direct
+            # object rejection. Reuse the exact-ID, account-scoped list row;
+            # do not retry the same rejected detail read.
+            ad_row = row
+        else:
+            ad_row = await client.get("/" + object_id, {"fields": ad_fields})
+            _account(ad_row, account_id, object_id)
+            if ad_row.get("status") != "PAUSED" or not _matches(
+                ad_row, values, exclude={"creative"}
+            ):
+                raise fail("READ_SPEC_MISMATCH", "Direct Ad read differs from the saved Launch")
         creative = ad_row.get("creative")
         if not isinstance(creative, dict):
             raise fail("READ_SPEC_MISMATCH", "Direct Ad read did not return its Creative identity")
@@ -219,6 +245,9 @@ async def _read_account_level_object(
         _account(creative_row, account_id, creative_id)
         if not _matches(creative_row, creative_values):
             raise fail("READ_SPEC_MISMATCH", "Direct Creative read differs from the saved Launch")
+        observed_creative_values = {
+            key: copy.deepcopy(creative_row[key]) for key in creative_values if key in creative_row
+        }
         checked_fields = sorted(set(fields + ad_fields + creative_fields))
 
     return {
@@ -238,6 +267,10 @@ async def _read_account_level_object(
         "pagination_complete": True,
         "validation_unobserved": True,
         "fragment_read_error": fragment_read_error or {},
+        "object_values": {
+            key: copy.deepcopy(row[key]) for key in values if key != "creative" and key in row
+        },
+        "creative_values": observed_creative_values,
         "checked_fields": checked_fields,
     }
 

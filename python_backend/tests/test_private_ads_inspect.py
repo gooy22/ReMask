@@ -617,6 +617,109 @@ class SavedDraftInspectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result['published'])
         self.assertEqual(len(self.client.posts),4)
 
+    async def test_exact_account_list_rows_confirm_saved_ids_after_direct_100_33_without_post(self):
+        from app.private_ads_http import AdsManagerResponseError
+        await self.saved()
+        original = self.client.get
+        ids = {'campaign': '777771', 'ad_set': '777772', 'ad': '777773'}
+        edges = {'campaign': 'campaigns', 'ad_set': 'adsets', 'ad': 'ads'}
+
+        def values_for(level):
+            fragment = next(row for row in self.client.fragments.values()
+                            if row['ad_object_type'] == level)
+            return {row['field']: copy.deepcopy(row['new_value'])
+                    for row in fragment['values']}
+
+        async def exact_list_read(path, params):
+            if path in {'/777771', '/777772', '/777773'}:
+                raise AdsManagerResponseError({
+                    'http_status': 200, 'code': 100, 'error_subcode': 33,
+                    'type': 'GraphMethodException',
+                })
+            for level, edge in edges.items():
+                if path == '/act_111111/' + edge:
+                    values = values_for(level)
+                    if level == 'ad':
+                        self.expected_creative = values.pop('creative')
+                        values['creative'] = {'id': '777774'}
+                    return {'data': [{'id': ids[level], 'account_id': '111111', **values}]}
+            if path == '/777774':
+                return {'id': '777774', 'account_id': '111111',
+                    **copy.deepcopy(self.expected_creative)}
+            return await original(path, params)
+
+        self.client.get = exact_list_read
+        before = copy.deepcopy(await self.owner.state.all_steps('image-launch'))
+        post_count = len(self.client.posts)
+        with patch.object(self.client, 'post',
+                          new=AsyncMock(side_effect=AssertionError('Inspection cannot POST'))) as post:
+            result = await self.launch()
+        post.assert_not_awaited()
+        self.assertEqual(result['mutation_posts'], 0)
+        self.assertEqual(result['missing_direct_objects'], [])
+        self.assertEqual([row['level'] for row in result['object_reads']],
+                         ['campaign', 'ad_set', 'ad', 'creative'])
+        self.assertTrue(all(row['available'] and row['settings_match']
+                            for row in result['object_reads']))
+        self.assertTrue(all(row.get('identity_fallback_verified')
+                            for row in result['object_reads']))
+        self.assertEqual(result['object_reads'][2]['read_source'], 'account_ads_read')
+        self.assertEqual(result['object_reads'][2]['direct_read_diagnostic']['error_subcode'], 33)
+        self.assertEqual(result['object_reads'][3]['values'], values_for('ad')['creative'])
+        self.assertFalse(result['editor_verified'])
+        self.assertIsNone(result['published'])
+        self.assertEqual(len(self.client.posts), post_count)
+        self.assertEqual(await self.owner.state.all_steps('image-launch'), before)
+
+    async def test_account_list_candidate_with_another_id_cannot_confirm_saved_object(self):
+        from app.private_ads_http import AdsManagerResponseError
+        await self.saved()
+        original = self.client.get
+        edges = {'/act_111111/campaigns': 'campaign',
+                 '/act_111111/adsets': 'ad_set',
+                 '/act_111111/ads': 'ad'}
+
+        def values_for(level):
+            fragment = next(row for row in self.client.fragments.values()
+                            if row['ad_object_type'] == level)
+            return {row['field']: copy.deepcopy(row['new_value'])
+                    for row in fragment['values']}
+
+        async def wrong_identity(path, params):
+            if path in {'/777771', '/777772', '/777773'}:
+                raise AdsManagerResponseError({
+                    'http_status': 200, 'code': 100, 'error_subcode': 33,
+                    'type': 'GraphMethodException',
+                })
+            if path in edges:
+                values = values_for(edges[path])
+                if edges[path] == 'ad':
+                    values.pop('creative')
+                    values['creative'] = {'id': '777774'}
+                return {'data': [{'id': '777779', 'account_id': '111111', **values}]}
+            if path == '/777774':
+                self.fail('A different Ad ID must not trigger a Creative read')
+            return await original(path, params)
+
+        self.client.get = wrong_identity
+        post_count = len(self.client.posts)
+        with patch.object(self.client, 'post',
+                          new=AsyncMock(side_effect=AssertionError('Inspection cannot POST'))) as post:
+            result = await self.launch()
+        post.assert_not_awaited()
+        self.assertEqual(result['mutation_posts'], 0)
+        self.assertEqual(result['missing_direct_objects'],
+                         ['campaign', 'ad_set', 'ad', 'creative'])
+        self.assertTrue(all(not row['available'] for row in result['object_reads']))
+        self.assertTrue(all(row.get('identity_fallback_attempted')
+                            for row in result['object_reads']))
+        self.assertTrue(all(row['identity_fallback_diagnostic']['code']
+                            == 'PRIVATE_ADS_DRAFT_READ_RELATION_MISMATCH'
+                            for row in result['object_reads']))
+        self.assertEqual(len(self.client.posts), post_count)
+        self.assertFalse(result['editor_verified'])
+        self.assertIsNone(result['published'])
+
     async def test_direct_object_foreign_account_fails_closed(self):
         await self.saved()
         original = self.client.get
