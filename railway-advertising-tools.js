@@ -40,6 +40,8 @@
     let timer=null, generation=0, controller=null, lastFingerprint='', needsRefresh=true, lastReadAt=0;
     const blockedTargets=globalThis.remaskMetaStoppedScopes instanceof Set
         ?globalThis.remaskMetaStoppedScopes:(globalThis.remaskMetaStoppedScopes=new Set());
+    const profileGuardTargets=globalThis.remaskProfileGuardStoppedScopes instanceof Set
+        ?globalThis.remaskProfileGuardStoppedScopes:(globalThis.remaskProfileGuardStoppedScopes=new Set());
     const valid=n=>typeof n==='number'&&Number.isFinite(n)&&n>=0;
     const fmt=n=>new Intl.NumberFormat('ru-RU',{maximumFractionDigits:0}).format(n);
     function range(low,high,value) {
@@ -134,6 +136,18 @@
             if(/TWO_FACTOR_REQUIRED/.test(raw))return 'Meta запросила подтверждение входа.';
             if(/SESSION_EXPIRED|LOGIN_REQUIRED|BUSINESS_LOGIN_GATE|BOOTSTRAP_SCOPE_UNVERIFIED/.test(raw))return 'Meta не подтвердила вход.';
             if(/PAGE_ACCESS_UNVERIFIED|PAGE_UNVERIFIED|PAGE_ACCESS_REQUIRED/.test(raw))return 'Meta не подтвердила доступ к выбранной странице.';
+            if(code==='META_AUTH_COOKIE_REVOKED')
+                return 'ReMask остановил оценку на проверке профиля. Запрос оценки в Meta не отправлялся.';
+            if(code==='AUTH_COOKIE_HISTORY_UNVERIFIED')
+                return 'ReMask остановил оценку: старая запись профиля не подтверждает текущий снимок. Запрос оценки в Meta не отправлялся.';
+            if(code==='PROFILE_IDENTITY_CHANGED')
+                return 'ReMask остановил оценку: профиль не совпал с сохранённой записью проверки.';
+            if(code==='PROFILE_IDENTITY_PROBE_UNCONFIRMED')
+                return 'ReMask не подтвердил профиль для оценки. Запрос оценки в Meta не отправлялся.';
+            if(code==='PROFILE_IDENTITY_PROBE_RATE_LIMITED')
+                return 'ReMask не повторил оценку: проверка профиля выполнялась недавно.';
+            if(code==='PROFILE_AUTH_GUARD_UNAVAILABLE'||code==='PROFILE_READ_GUARD_UNAVAILABLE'||code==='META_AUTH_TOKEN_UNAVAILABLE')
+                return 'ReMask не смог проверить профиль и остановил оценку.';
             if(/TEMPLATE_LOOKUP_SOURCE_UNAVAILABLE|PRIVATE_HTTP_(?:PROXY|CONNECTION|PROTOCOL|READ)_UNAVAILABLE|PRIVATE_HTTP_PROTOCOL_ERROR|HTTP_UNAVAILABLE/.test(raw))return 'Не удалось связаться с Meta.';
             if(!message||/^[A-Z][A-Z0-9_]{2,}$/.test(message)||/\b(?:PRIVATE_ADS|BUSINESS|SESSION|CHECKPOINT)_[A-Z0-9_]+\b/.test(message))
                 return 'Meta не подтвердила запрос.';
@@ -147,12 +161,12 @@
         if(!force&&current.fingerprint===lastFingerprint)return;
         invalidate('Получаем оценку Meta…');lastFingerprint=current.fingerprint;
         const seq=generation;controller=new AbortController();const signal=controller.signal;
-        let success=0, pending=false, failed=false, blocked=false, sourceUnavailable=false, loginRequired=false, checkpointRequired=false, twoFactorRequired=false;lastReadAt=Date.now();
+        let success=0, pending=false, failed=false, blocked=false, profileGuardBlocked=false, sourceUnavailable=false, loginRequired=false, checkpointRequired=false, twoFactorRequired=false;lastReadAt=Date.now();
         // Bound concurrent profile reads; never reuse one account's numbers for another.
         for(const target of current.targets.slice(0,20)) {
             if(seq!==generation)return;
             const targetKey=JSON.stringify([target.profile||'',target.account_id||'']);
-            if(blockedTargets.has(targetKey)){blocked=true;continue;}
+            if(blockedTargets.has(targetKey)){blocked=true;profileGuardBlocked ||= profileGuardTargets.has(targetKey);continue;}
             try {
                 const data=await read('audience_estimate',requestSpec(current.spec,target),target,signal);
                 if(seq!==generation||snapshot().fingerprint!==current.fingerprint)return;
@@ -163,10 +177,13 @@
                 const failureText=errorCode+' '+String(error.message);
                 checkpointRequired ||= /CHECKPOINT/.test(failureText);
                 twoFactorRequired ||= /TWO_FACTOR_REQUIRED/.test(failureText);
+                const profileGuardFailure=/META_AUTH_COOKIE_REVOKED|AUTH_COOKIE_HISTORY_UNVERIFIED|PROFILE_IDENTITY_CHANGED|PROFILE_IDENTITY_PROBE_UNCONFIRMED|PROFILE_IDENTITY_PROBE_RATE_LIMITED|PROFILE_AUTH_GUARD_UNAVAILABLE|PROFILE_READ_GUARD_UNAVAILABLE|META_AUTH_TOKEN_UNAVAILABLE/.test(failureText);
                 if(/TEMPLATE_LOOKUP_SOURCE_UNAVAILABLE|PRIVATE_HTTP_(?:PROXY|CONNECTION|PROTOCOL|READ)_UNAVAILABLE|PRIVATE_HTTP_PROTOCOL_ERROR/.test(failureText)){
                     sourceUnavailable=true;blocked=true;
-                }else if(/CHECKPOINT_REQUIRED|SESSION_EXPIRED|TWO_FACTOR_REQUIRED|LOGIN_REQUIRED|BUSINESS_LOGIN_GATE|PROFILE_META_BLOCKED|BOOTSTRAP_SCOPE_UNVERIFIED|ACTOR_MISMATCH|RESOURCE_SCOPE_MISMATCH/.test(failureText)){
+                }else if(profileGuardFailure||/CHECKPOINT_REQUIRED|SESSION_EXPIRED|TWO_FACTOR_REQUIRED|LOGIN_REQUIRED|BUSINESS_LOGIN_GATE|PROFILE_META_BLOCKED|BOOTSTRAP_SCOPE_UNVERIFIED|ACTOR_MISMATCH|RESOURCE_SCOPE_MISMATCH/.test(failureText)){
                     loginRequired ||= /SESSION_EXPIRED|LOGIN_REQUIRED|BUSINESS_LOGIN_GATE|TWO_FACTOR_REQUIRED/.test(failureText);
+                    profileGuardBlocked ||= profileGuardFailure;
+                    if(profileGuardFailure)profileGuardTargets.add(targetKey);
                     blockedTargets.add(targetKey);blocked=true;
                 }
                 failed=true;const p=document.createElement('p');p.textContent=(target.account_id?'РК '+target.account_id+': ':'')+userFacingFailure(error,errorCode);results.appendChild(p);
@@ -174,7 +191,7 @@
         }
         if(seq!==generation)return;
         needsRefresh=!blocked&&attempt<2&&(pending||failed);
-        status.textContent=checkpointRequired?'Чекпоинт Meta: профиль остановлен. Новые проверки запрещены.':twoFactorRequired?'Meta запросила подтверждение входа.':loginRequired?'Meta не подтвердила вход для выбранного РК. Оценка недоступна.':sourceUnavailable?'Нет доступного соединения с источником оценки аудитории.':blocked?'Meta не подтвердила доступ к РК. Оценка остановлена.':pending?'Meta готовит размер аудитории…':failed?'Данные Meta временно недоступны. Шаблон можно сохранить.':'Размер аудитории получен из Meta.';
+        status.textContent=checkpointRequired?'Чекпоинт Meta: профиль остановлен. Новые проверки запрещены.':twoFactorRequired?'Meta запросила подтверждение входа.':loginRequired?'Meta не подтвердила вход для выбранного РК. Оценка недоступна.':sourceUnavailable?'Нет доступного соединения с источником оценки аудитории.':profileGuardBlocked?'ReMask остановил оценку на локальной проверке профиля.':blocked?'Meta не подтвердила доступ к РК. Оценка остановлена.':pending?'Meta готовит размер аудитории…':failed?'Данные Meta временно недоступны. Шаблон можно сохранить.':'Размер аудитории получен из Meta.';
         if(current.targets.length>20)status.textContent+=' Показаны первые 20 выбранных РК.';
         // Stop at authentication/scope gates; bound transient reads to three attempts.
         if(needsRefresh)timer=setTimeout(()=>{
