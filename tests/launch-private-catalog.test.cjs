@@ -358,6 +358,15 @@ const legacyPageFailure=context.remaskPrivatePageReadFailure({payload:{detail:{
 assert.equal(legacyPageFailure,
   'Профиль 32 / РК 120249233615830605: старая запись не доказывает отзыв текущего снимка, но вход нельзя безопасно подтвердить. Запросы к Meta остановлены.');
 assert.doesNotMatch(legacyPageFailure,/PRIVATE_SECRET/);
+const messageOnlyLegacyPageFailure=context.remaskPrivatePageReadFailure({payload:{
+  message:'AUTH_COOKIE_HISTORY_UNVERIFIED'
+}},'32','act_120249233615830605');
+assert.equal(messageOnlyLegacyPageFailure,legacyPageFailure,
+  'The PHP asset bridge may forward the worker code as error.message instead of error.code.');
+const embeddedLegacyPageFailure=context.remaskPrivatePageReadFailure({message:
+  'AUTH_COOKIE_HISTORY_UNVERIFIED: xs=PRIVATE_SECRET'},'32','act_120249233615830605');
+assert.equal(embeddedLegacyPageFailure,legacyPageFailure);
+assert.doesNotMatch(embeddedLegacyPageFailure,/PRIVATE_SECRET/);
 assert.match(context.remaskPrivatePageReadFailure({data:{error:{code:'META_AUTH_COOKIE_REVOKED'}}},'32','120249233615830605'),
   /ReMask заблокировал повтор ранее зафиксированного снимка auth-cookie/);
 const safePageFailure=context.remaskPrivatePageReadFailure({message:'xs=PRIVATE_SECRET'},'15','act_120249392950240046');
