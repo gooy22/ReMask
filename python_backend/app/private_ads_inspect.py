@@ -168,6 +168,7 @@ def validation_diagnostic(value, *, observed):
             "truncated": record["truncated"]})
 
     return {"observed": observed, "is_list": isinstance(value, list), "has_errors": bool(value),
+        "exact_cause_confirmed": False,
         "codes": [{"field": key, "value": number} for key, number in sorted(codes)],
         "terms": sorted(terms), "field_names": sorted(names), "records": diagnostic_records,
         "truncated": truncated}

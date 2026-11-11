@@ -895,12 +895,13 @@ class ValidationDiagnosticTests(unittest.TestCase):
 
     def test_payment_terms_are_evidence_only_without_exporting_card_or_credentials(self):
         from app.private_ads_inspect import validation_diagnostic
-        result = validation_diagnostic({'error_code':1359188,
+        result = validation_diagnostic({'error_code':987654321,
             'message':'Billing: payment method card funding confirmation required. Card 4111111111111111; private-person@example.invalid; access_token=DO_NOT_EXPOSE',
             'credentials': {'message':'secret payment method', 'code':1234},
             'cookie': 'session=DO_NOT_EXPOSE'}, observed=True)
+        self.assertFalse(result['exact_cause_confirmed'])
         self.assertTrue({'billing','payment','method','card','funding','confirmation','required'} <= set(result['terms']))
-        self.assertEqual(result['codes'], [{'field':'error_code','value':1359188}])
+        self.assertEqual(result['codes'], [{'field':'error_code','value':987654321}])
         self.assertEqual(result['field_names'], [])
         for private in ('4111111111111111', 'private-person', 'example.invalid', 'DO_NOT_EXPOSE', '1234'):
             self.assertNotIn(private, repr(result))
@@ -908,14 +909,15 @@ class ValidationDiagnosticTests(unittest.TestCase):
     def test_multiple_errors_keep_codes_and_ordered_safe_terms_separate(self):
         from app.private_ads_inspect import validation_diagnostic
         value = [
-            {'error_code':1359188,
+            {'error_code':987654321,
              'message':'Payment method is not required. access_token=DO_NOT_EXPOSE'},
             {'error_subcode':17,
              'message':'Unsupported objective for optimization_goal: discontinued.'},
         ]
         result = validation_diagnostic(value, observed=True)
+        self.assertFalse(result['exact_cause_confirmed'])
         self.assertEqual(result['records'], [
-            {'index':0,'codes':[{'field':'error_code','value':1359188}],
+            {'index':0,'codes':[{'field':'error_code','value':987654321}],
              'field_names':[],'matched_terms_in_order':['payment','method','not','required'],
              'truncated':False},
             {'index':1,'codes':[{'field':'error_subcode','value':17}],
@@ -932,12 +934,13 @@ class ValidationDiagnosticTests(unittest.TestCase):
     def test_encoded_error_wrappers_are_split_into_error_records(self):
         from app.private_ads_inspect import validation_diagnostic
         import json
-        value = json.dumps({'data':[{'error':{'error_code':1359188,
+        value = json.dumps({'data':[{'error':{'error_code':987654321,
             'message':'Payment method not required'}},
             {'error':{'error_code':1815706,'message':'Unsupported objective'}}]})
         result = validation_diagnostic(value, observed=True)
+        self.assertFalse(result['exact_cause_confirmed'])
         self.assertEqual([row['codes'] for row in result['records']], [
-            [{'field':'error_code','value':1359188}],
+            [{'field':'error_code','value':987654321}],
             [{'field':'error_code','value':1815706}],
         ])
         self.assertEqual([row['matched_terms_in_order'] for row in result['records']], [
