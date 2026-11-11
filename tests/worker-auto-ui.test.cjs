@@ -719,3 +719,28 @@ vm.createContext(sandbox); vm.runInContext(source.slice(start,end), sandbox);
     assert.doesNotMatch(texts.pythonPwStatus,/Создание BM|BM создан|Business Manager создан|CREATE/);
   }
 })().catch(error=>{console.error(error);process.exitCode=1;});
+
+
+// Re-running the same job can change its terminal state; refresh the profile status again.
+{
+  const scope = {
+    statusRefreshCalls: 0,
+    pythonWorkerLoadProfileStatuses() {
+      this.statusRefreshCalls += 1;
+      return Promise.resolve();
+    }
+  };
+  vm.createContext(scope);
+  const start = source.indexOf('function pythonWorkerRefreshProfileStatusesForJob(');
+  const end = source.indexOf('\nfunction pythonWorkerRenderJob', start);
+  assert.ok(start >= 0 && end > start);
+  const setup = "let pythonWorkerProfileStatusJobId = ''; let pythonWorkerProfileStatusJobState = '';\n";
+  vm.runInContext(setup + source.slice(start, end), scope);
+  scope.pythonWorkerRefreshProfileStatusesForJob({id:'retry-job',status:'FAILED'});
+  scope.pythonWorkerRefreshProfileStatusesForJob({id:'retry-job',status:'FAILED'});
+  scope.pythonWorkerRefreshProfileStatusesForJob({id:'retry-job',status:'RUNNING'});
+  scope.pythonWorkerRefreshProfileStatusesForJob({id:'retry-job',status:'SUCCESS'});
+  scope.pythonWorkerRefreshProfileStatusesForJob({id:'retry-job',status:'SUCCESS'});
+  scope.pythonWorkerRefreshProfileStatusesForJob({id:'next-job',status:'SUCCESS'});
+  assert.equal(scope.statusRefreshCalls, 3);
+}
