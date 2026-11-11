@@ -53,6 +53,9 @@ class ProfileContextError(RuntimeError):
             "auth_cookie_history_unverified": "AUTH_COOKIE_HISTORY_UNVERIFIED",
             "profile_identity_changed": "PROFILE_IDENTITY_CHANGED",
             "auth_cookie_revocation_store": "PROFILE_AUTH_GUARD_UNAVAILABLE",
+            "profile_identity_probe_unconfirmed": "PROFILE_IDENTITY_PROBE_UNCONFIRMED",
+            "profile_identity_probe_rate_limited": "PROFILE_IDENTITY_PROBE_RATE_LIMITED",
+            "profile_read_guard_unavailable": "PROFILE_READ_GUARD_UNAVAILABLE",
             "auth_gate_unclassified": "META_AUTH_GATE_UNCLASSIFIED",
         }.get(self.category, "PROFILE_CONTEXT_ERROR")
 
@@ -96,6 +99,9 @@ class ProfileResolver:
         self.key = internal_key
         self.auth_cookie_revocation_store: Any | None = None
         self._legacy_auth_probe_attempts: dict[tuple[str, str, str], float] = {}
+        self._readonly_inventory_probe_attempts: dict[tuple[str, str], float] = {}
+        self._readonly_inventory_probe_confirmed: dict[tuple[str, str], float] = {}
+        self._readonly_inventory_probe_lock = asyncio.Lock()
 
         clean_url = (self.url or "").lower()
         self.is_loopback = (
@@ -369,7 +375,7 @@ class ProfileResolver:
             )
             return False
 
-    async def resolve(self, profile_id: str) -> ProfileContext:
+    async def resolve(self, profile_id: str, *, _skip_auth_cookie_guard: bool = False) -> ProfileContext:
         payload = await self._fetch(
             params={"profile_id": profile_id},
             label="profile resolver",
@@ -552,8 +558,179 @@ class ProfileResolver:
         )
         context._loaded_cookies = dict(cookie_map)
         context._cookie_persistor = self.persist_cookie_refresh
-        await self._guard_auth_cookie_revocation(context)
+        if not _skip_auth_cookie_guard:
+            await self._guard_auth_cookie_revocation(context)
         return context
+
+    @staticmethod
+    def _saved_identity_probe_confirms_context(context: ProfileContext, proof: object) -> bool:
+        """Require exact same-profile GET /me evidence before the GET-only inventory path."""
+        if not isinstance(proof, dict):
+            return False
+        cookies = getattr(context, "cookies", None)
+        saved = getattr(context, "_loaded_cookies", None)
+        if not isinstance(cookies, dict) or not isinstance(saved, dict) or saved != cookies:
+            return False
+        actor = str(cookies.get("c_user") or "")
+        xs = str(cookies.get("xs") or "")
+        if not actor.isdigit() or not xs:
+            return False
+        auth_fingerprint = hashlib.sha256(json.dumps(
+            [actor, xs], ensure_ascii=True, separators=(",", ":")
+        ).encode("utf-8")).hexdigest()
+        if (
+            proof.get("profile_id") != str(context.profile_id)
+            or proof.get("document_kind") != "saved_identity"
+            or proof.get("response_received") is not True
+            or proof.get("identity_session_confirmed") is not True
+            or proof.get("http_status") != 200
+            or proof.get("final_host") != "www.facebook.com"
+            or proof.get("final_path") not in {"/me", "/profile.php"}
+            or proof.get("final_identity_target_matches") is not True
+            or proof.get("legacy_gate") != "none"
+            or proof.get("login_form") is not False
+            or proof.get("document_actor") != "matches"
+            or proof.get("profile_actor_matches") is not True
+            or proof.get("request_auth_matches") is not True
+            or proof.get("saved_auth_snapshot_sent") is not True
+            or proof.get("auth_cookie_directives_unchanged") is not True
+            or proof.get("profile_root_auth_cookie_deletion_names") != []
+            or proof.get("measurement_errors") != 0
+            or proof.get("auth_cookie_fingerprint") != auth_fingerprint
+            or proof.get("persisted") is not False
+            or proof.get("objects_created") is not False
+            or proof.get("browser_started") is not False
+        ):
+            return False
+        wire = proof.get("wire")
+        if not isinstance(wire, dict) or wire.get("measurement_errors") != 0:
+            return False
+        requests, responses = wire.get("requests"), wire.get("responses")
+        if not isinstance(requests, list) or not requests or not isinstance(responses, list) or not responses:
+            return False
+        if not isinstance(requests[0], dict) or requests[0].get("path") != "/me":
+            return False
+        allowed_hosts = {"www.facebook.com", "facebook.com"}
+        allowed_paths = {"/me", "/profile.php"}
+        directive_fields = (
+            "auth_cookie_deleted", "profile_root_auth_cookie_deleted",
+            "auth_cookie_set", "profile_root_auth_cookie_set",
+        )
+        for row in requests:
+            names = row.get("header_auth_cookie_names") if isinstance(row, dict) else None
+            if (
+                not isinstance(row, dict)
+                or row.get("host") not in allowed_hosts
+                or row.get("path") not in allowed_paths
+                or row.get("method") != "GET"
+                or row.get("user_agent_matches") is not True
+                or row.get("header_auth_state") != "matches"
+                or not isinstance(names, list)
+                or not {"c_user", "xs"} <= set(value for value in names if isinstance(value, str))
+            ):
+                return False
+        for row in responses:
+            if (
+                not isinstance(row, dict)
+                or row.get("host") not in allowed_hosts
+                or row.get("path") not in allowed_paths
+                or row.get("status") not in {200, 302, 303, 307, 308}
+                or row.get("protocol") not in {"HTTP/2", "HTTP/1.1"}
+                or any(not isinstance(row.get(field), list) or row.get(field) for field in directive_fields)
+            ):
+                return False
+        return True
+
+    async def resolve_for_inventory_read(self, profile_id: str) -> ProfileContext:
+        """Narrow GET-only recovery path for live inventory; CREATE stays guarded."""
+        context = await self.resolve(profile_id, _skip_auth_cookie_guard=True)
+        store = self.auth_cookie_revocation_store
+        has_marker = getattr(store, "has_profile_auth_cookie_revocation", None)
+        compare_snapshot = getattr(store, "profile_auth_cookie_revocation_for_context", None)
+        if not callable(has_marker):
+            return context
+        try:
+            if not await has_marker(context.profile_id):
+                return context
+            if not callable(compare_snapshot):
+                raise RuntimeError("auth-cookie revocation comparison is unavailable")
+            revocation = await compare_snapshot(context.profile_id, context.cookies)
+        except Exception as exc:
+            logging.getLogger("remask.profile_resolver").warning(
+                "profile_readonly_inventory_guard_unavailable profile=%s kind=%s",
+                context.profile_id, type(exc).__name__,
+            )
+            raise ProfileContextError(
+                "Не удалось проверить состояние ReMask; чтение инвентаря не отправлено.",
+                retryable=True,
+                category="profile_read_guard_unavailable",
+            ) from exc
+        if not revocation:
+            return context
+        code = str(revocation.get("status") or "META_AUTH_COOKIE_REVOKED").upper()
+        if code != "META_AUTH_COOKIE_REVOKED":
+            await self._guard_auth_cookie_revocation(context)
+            return context
+
+        snapshot = hashlib.sha256(json.dumps(
+            [
+                str(context.profile_id), context.cookies, context.proxy, context.user_agent,
+                str(revocation.get("source_job_id") or ""),
+                int(revocation.get("checked_at") or 0),
+            ],
+            sort_keys=True, ensure_ascii=True, separators=(",", ":"),
+        ).encode("utf-8")).hexdigest()
+        probe_key = (str(context.profile_id), snapshot)
+        async with self._readonly_inventory_probe_lock:
+            now = time.monotonic()
+            self._readonly_inventory_probe_attempts = {
+                key: checked for key, checked in self._readonly_inventory_probe_attempts.items()
+                if now - checked < 900
+            }
+            self._readonly_inventory_probe_confirmed = {
+                key: until for key, until in self._readonly_inventory_probe_confirmed.items()
+                if until > now
+            }
+            if self._readonly_inventory_probe_confirmed.get(probe_key, 0) > now:
+                return context
+            last_probe = self._readonly_inventory_probe_attempts.get(probe_key)
+            if last_probe is not None and now - last_probe < 300:
+                raise ProfileContextError(
+                    "Проверка профиля ReMask уже выполнялась недавно; повторное чтение не отправлено.",
+                    retryable=False,
+                    category="profile_identity_probe_rate_limited",
+                )
+            self._readonly_inventory_probe_attempts[probe_key] = now
+            try:
+                from .private_session_probe import probe_saved_identity
+                proof = await probe_saved_identity(context)
+            except Exception as exc:
+                logging.getLogger("remask.profile_resolver").info(
+                    "profile_readonly_inventory_probe_unavailable profile=%s kind=%s",
+                    context.profile_id, type(exc).__name__,
+                )
+                raise ProfileContextError(
+                    "ReMask не получил подтверждение для чтения профиля; инвентарный запрос не отправлен.",
+                    retryable=False,
+                    category="profile_identity_probe_unconfirmed",
+                ) from exc
+            if not self._saved_identity_probe_confirms_context(context, proof):
+                logging.getLogger("remask.profile_resolver").info(
+                    "profile_readonly_inventory_probe_unconfirmed profile=%s",
+                    context.profile_id,
+                )
+                raise ProfileContextError(
+                    "ReMask не получил подтверждение для чтения профиля; инвентарный запрос не отправлен.",
+                    retryable=False,
+                    category="profile_identity_probe_unconfirmed",
+                )
+            self._readonly_inventory_probe_attempts.pop(probe_key, None)
+            self._readonly_inventory_probe_confirmed[probe_key] = time.monotonic() + 60
+            logging.getLogger("remask.profile_resolver").info(
+                "profile_readonly_inventory_probe_confirmed profile=%s",
+                context.profile_id,
+            )
+            return context
 
     async def _guard_auth_cookie_revocation(self, context: ProfileContext) -> None:
         """Fail closed on unresolved auth-cookie evidence without overclaiming causation."""

@@ -72,6 +72,51 @@ class ProfileResolverRevocationGuardTests(unittest.IsolatedAsyncioTestCase):
         resolver.auth_cookie_revocation_store = store
         return resolver, store
 
+    def identity_probe_proof(self, profile_id, cookies, **overrides):
+        auth_fingerprint = hashlib.sha256(json.dumps(
+            [cookies["c_user"], cookies["xs"]],
+            ensure_ascii=True, separators=(",", ":"),
+        ).encode("utf-8")).hexdigest()
+        proof = {
+            "profile_id": profile_id,
+            "document_kind": "saved_identity",
+            "response_received": True,
+            "identity_session_confirmed": True,
+            "http_status": 200,
+            "final_host": "www.facebook.com",
+            "final_path": "/me",
+            "final_identity_target_matches": True,
+            "legacy_gate": "none",
+            "login_form": False,
+            "document_actor": "matches",
+            "profile_actor_matches": True,
+            "request_auth_matches": True,
+            "saved_auth_snapshot_sent": True,
+            "auth_cookie_directives_unchanged": True,
+            "profile_root_auth_cookie_deletion_names": [],
+            "measurement_errors": 0,
+            "auth_cookie_fingerprint": auth_fingerprint,
+            "persisted": False,
+            "objects_created": False,
+            "browser_started": False,
+            "wire": {
+                "measurement_errors": 0,
+                "requests": [{
+                    "host": "www.facebook.com", "path": "/me", "method": "GET",
+                    "user_agent_matches": True, "header_auth_state": "matches",
+                    "header_auth_cookie_names": ["c_user", "xs"],
+                }],
+                "responses": [{
+                    "host": "www.facebook.com", "path": "/me", "status": 200,
+                    "protocol": "HTTP/2", "auth_cookie_deleted": [],
+                    "profile_root_auth_cookie_deleted": [], "auth_cookie_set": [],
+                    "profile_root_auth_cookie_set": [],
+                }],
+            },
+        }
+        proof.update(overrides)
+        return proof
+
     async def test_same_revoked_snapshot_stops_before_any_meta_session(self):
         cookies = {"c_user": "123456789", "xs": "revoked-session"}
         resolver, store = self.resolver(cookies, {
@@ -88,6 +133,47 @@ class ProfileResolverRevocationGuardTests(unittest.IsolatedAsyncioTestCase):
         store.profile_auth_cookie_revocation_for_context.assert_awaited_once_with(
             "fixture-profile", cookies,
         )
+
+    async def test_readonly_inventory_requires_exact_same_actor_identity_proof(self):
+        cookies = {"c_user": "123456789", "xs": "revoked-session"}
+        resolver, store = self.resolver(cookies, {
+            "status": "META_AUTH_COOKIE_REVOKED",
+            "deleted_names": ["c_user", "xs"],
+        })
+        proof = self.identity_probe_proof("fixture-profile", cookies)
+
+        with patch("app.private_session_probe.probe_saved_identity",
+                   new=AsyncMock(return_value=proof)) as probe:
+            context = await resolver.resolve_for_inventory_read("fixture-profile")
+
+        self.assertEqual(context.profile_id, "fixture-profile")
+        self.assertEqual(context.cookies, cookies)
+        probe.assert_awaited_once_with(context)
+        with self.assertRaises(ProfileContextError) as caught:
+            await resolver.resolve("fixture-profile")
+        self.assertEqual(caught.exception.code, "META_AUTH_COOKIE_REVOKED")
+        store.profile_auth_cookie_revocation_for_context.assert_awaited()
+
+    async def test_unconfirmed_readonly_inventory_probe_blocks_and_is_rate_limited(self):
+        cookies = {"c_user": "123456789", "xs": "revoked-session"}
+        resolver, _ = self.resolver(cookies, {
+            "status": "META_AUTH_COOKIE_REVOKED",
+            "deleted_names": ["c_user", "xs"],
+        })
+        proof = self.identity_probe_proof(
+            "fixture-profile", cookies, identity_session_confirmed=False,
+        )
+
+        with patch("app.private_session_probe.probe_saved_identity",
+                   new=AsyncMock(return_value=proof)) as probe:
+            with self.assertRaises(ProfileContextError) as first:
+                await resolver.resolve_for_inventory_read("fixture-profile")
+            self.assertEqual(first.exception.code, "PROFILE_IDENTITY_PROBE_UNCONFIRMED")
+            with self.assertRaises(ProfileContextError) as second:
+                await resolver.resolve_for_inventory_read("fixture-profile")
+            self.assertEqual(second.exception.code, "PROFILE_IDENTITY_PROBE_RATE_LIMITED")
+
+        probe.assert_awaited_once()
 
     async def test_new_session_for_same_actor_clears_marker_before_returning_context(self):
         cookies = {"c_user": "123456789", "xs": "new-session"}

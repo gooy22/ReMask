@@ -2066,8 +2066,16 @@ async def profile_live_inventory(
     # even opens, so impose one endpoint-level resolver wall-clock bound.
     try:
         with measure_phase('resolver'):
+            inventory_resolver = getattr(
+                pool.resolver, 'resolve_for_inventory_read', None
+            )
+            resolver_call = (
+                inventory_resolver(clean_profile)
+                if callable(inventory_resolver)
+                else pool.resolver.resolve(clean_profile)
+            )
             context=await asyncio.wait_for(
-                pool.resolver.resolve(clean_profile),
+                resolver_call,
                 timeout=12.0,
             )
     except asyncio.TimeoutError as exc:
