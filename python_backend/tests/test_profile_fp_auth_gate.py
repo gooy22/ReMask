@@ -9,6 +9,29 @@ from app.facebook_business_browser import BrowserBusinessError, BrowserPreflight
 
 
 class ProfileFpAuthGateTests(unittest.IsolatedAsyncioTestCase):
+    async def test_legacy_auth_cookie_history_is_unverified_preflight_block(self):
+        fake = SimpleNamespace(
+            has_profile_auth_cookie_revocation=AsyncMock(return_value=True),
+        )
+        worker = SimpleNamespace(resolver=SimpleNamespace(resolve=AsyncMock(
+            side_effect=ProfileContextError(
+                "Старое событие не сопоставлено с текущим снимком.",
+                category="auth_cookie_history_unverified",
+            ),
+        )))
+        with patch.object(api, 'store', fake), patch.object(api, 'pool', worker):
+            statuses = await api._auth_cookie_revocation_profile_statuses(['32'])
+        self.assertEqual(statuses['32']['status'], 'AUTH_COOKIE_HISTORY_UNVERIFIED')
+        self.assertIn('Старое событие', statuses['32']['message'])
+
+    async def test_unverified_history_blocks_failed_item_for_profile(self):
+        view = {'items': [{
+            'status': 'FAILED', 'profile_id': '32',
+            'error_code': 'PRIVATE_ADS_DRAFT_READ_SPEC_MISMATCH',
+        }]}
+        statuses = [{'profile_id': '32', 'status': 'AUTH_COOKIE_HISTORY_UNVERIFIED'}]
+        self.assertEqual(api._view_failed_profiles_with_known_session_blocks(view, statuses), {'32'})
+
     async def test_100_automatic_profiles_enqueue_without_http_browser_preflights(self):
         request=api.CreateJobRequest(profiles=[{'profile_id':str(i),'tasks':[{
             'action':'provisioning','payload':{'steps':['PROXY_CHECK','FAN_PAGES','PAGE_ACCESS'],

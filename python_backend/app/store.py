@@ -2165,14 +2165,16 @@ class JobStore:
 
     @staticmethod
     def _auth_cookie_fingerprint(cookies: dict[str, Any]) -> tuple[str, str]:
-        """Return one-way fingerprints of the selected actor and c_user/xs."""
+        """Return the actor fingerprint even when the xs cookie is missing."""
         if not isinstance(cookies, dict):
             return "", ""
         actor = str(cookies.get("c_user") or "").strip()
         xs = str(cookies.get("xs") or "").strip()
-        if not re.fullmatch(r"\d{1,30}", actor) or not xs or len(xs) > 8192:
+        if not re.fullmatch(r"\d{1,30}", actor):
             return "", ""
         actor_fingerprint = hashlib.sha256(actor.encode("utf-8")).hexdigest()
+        if not xs or len(xs) > 8192:
+            return actor_fingerprint, ""
         payload = json.dumps([actor, xs], ensure_ascii=True, separators=(",", ":"))
         return actor_fingerprint, hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -2191,7 +2193,14 @@ class JobStore:
             history = self._latest_explicit_auth_cookie_deletion_sync(con, profile_id)
             if row is None:
                 return history is not None
-            if str(row["evidence_kind"] or "snapshot_pending") != "resolved":
+            evidence_kind = str(row["evidence_kind"] or "snapshot_pending")
+            if evidence_kind in {"legacy_parser_unverified", "legacy_history_unverified"}:
+                # Unverified means the old event cannot be attributed to the
+                # current cookie snapshot. It must not be reported as a proven
+                # revocation, but it remains a fail-closed auth gate until an
+                # explicit trusted resolution is recorded.
+                return True
+            if evidence_kind != "resolved":
                 return True
             return bool(history and str(history["source_job_id"] or "") != str(row["source_job_id"] or ""))
 
@@ -2249,7 +2258,7 @@ class JobStore:
         return await asyncio.to_thread(
             self._record_profile_auth_cookie_revocation_sync,
             clean, actor_fingerprint, auth_fingerprint, names, now,
-            str(source_job_id or "").strip()[:160], message, "snapshot_pending",
+            str(source_job_id or "").strip()[:160], message, "snapshot_pending_v2",
         )
 
     def _record_profile_auth_cookie_revocation_sync(
@@ -2308,59 +2317,125 @@ class JobStore:
                 (profile_id,),
             ).fetchone()
             now = _now()
-            if row is None or (
-                str(row["evidence_kind"] or "snapshot_pending") == "resolved"
-                and history is not None
+            row_evidence_kind = str(row["evidence_kind"] or "snapshot_pending") if row else ""
+            newer_legacy_history = bool(
+                row
+                and history
                 and str(history.get("source_job_id") or "") != str(row["source_job_id"] or "")
+            )
+            if row is None or (
+                row_evidence_kind in {
+                    "resolved", "legacy_parser_unverified", "legacy_history_unverified",
+                }
+                and newer_legacy_history
             ):
                 if history is None:
                     return None
-                if not actor_fingerprint or not auth_fingerprint:
-                    return {
-                        "status": "META_AUTH_COOKIE_REVOKED",
-                        "checked_at": int(history.get("checked_at") or now),
-                        "deleted_names": [],
-                        "source_job_id": str(history.get("source_job_id") or ""),
-                        "evidence_kind": "legacy_history_pending",
-                        "message": (
-                            "В старом задании Meta явно удалила auth-cookie, но отпечаток той сессии не сохранялся. "
-                            "Текущий вход не подтверждён; запрос к Meta не отправлен."
-                        ),
-                    }
                 source_job_id = str(history.get("source_job_id") or "")[:160]
                 message = (
-                    "В старом задании Meta явно удалила auth-cookie; отпечаток использованной тогда сессии "
-                    "не сохранялся. Текущий снимок профиля заблокирован до обновления входа того же Facebook ID. "
-                    "Запрос к Meta не отправлен."
+                    "Старое задание содержит сообщение об удалении auth-cookie, но не сохраняет отпечаток "
+                    "той сессии и порядок Set-Cookie. Это сообщение нельзя отнести к текущим cookies; "
+                    "оно не доказывает отзыв текущего снимка. Запросы к Meta по профилю остановлены "
+                    "до подтверждения входа."
                 )
                 con.execute(
                     """INSERT INTO profile_auth_cookie_revocations(
                            profile_id,actor_fingerprint,auth_fingerprint,deleted_names_json,
                            checked_at,source_job_id,message,evidence_kind
-                       ) VALUES(?,?,?,?,?,?,?, 'legacy_history_pending')
+                       ) VALUES(?,?,?,?,?,?,?, 'legacy_history_unverified')
                        ON CONFLICT(profile_id) DO UPDATE SET
                          actor_fingerprint=excluded.actor_fingerprint,
                          auth_fingerprint=excluded.auth_fingerprint,
-                         deleted_names_json=excluded.deleted_names_json,
                          checked_at=excluded.checked_at,
                          source_job_id=excluded.source_job_id,
                          message=excluded.message,
+                         deleted_names_json='[]',
                          evidence_kind=excluded.evidence_kind""",
-                    (profile_id, actor_fingerprint, auth_fingerprint, "[]", now,
+                    (profile_id, "", "", "[]", now,
                      source_job_id, message),
                 )
                 return {
-                    "status": "META_AUTH_COOKIE_REVOKED",
+                    "status": "AUTH_COOKIE_HISTORY_UNVERIFIED",
                     "checked_at": now,
                     "deleted_names": [],
                     "source_job_id": source_job_id,
-                    "evidence_kind": "legacy_history_pending",
+                    "evidence_kind": "legacy_history_unverified",
+                    "blocking": True,
                     "message": message,
                 }
-            if str(row["evidence_kind"] or "snapshot_pending") == "resolved":
+            evidence_kind = str(row["evidence_kind"] or "snapshot_pending")
+            if evidence_kind == "resolved":
                 return None
             original_actor = str(row["actor_fingerprint"] or "")
             original_fingerprint = str(row["auth_fingerprint"] or "")
+
+            if evidence_kind != "snapshot_pending_v2":
+                # Records created before ordered, root-scoped Set-Cookie
+                # tracking cannot prove the final action for c_user/xs. Their
+                # hashes may identify the old snapshot, but the persisted row
+                # omitted the parser version and ordered response evidence.
+                # Keep these records visible without claiming that Meta
+                # revoked the current snapshot. Since the old evidence cannot
+                # be tied to this snapshot, stop before sending it to Meta.
+                if evidence_kind == "snapshot_pending" and actor_fingerprint and original_actor:
+                    if actor_fingerprint != original_actor:
+                        return {
+                            "status": "PROFILE_IDENTITY_CHANGED",
+                            "checked_at": int(row["checked_at"] or 0),
+                            "deleted_names": [],
+                            "source_job_id": str(row["source_job_id"] or ""),
+                            "evidence_kind": evidence_kind,
+                            "blocking": True,
+                            "message": (
+                                "ID Facebook-профиля отличается от старой записи. Поскольку запись "
+                                "об удалении cookies не содержит версии парсера, удаление не подтверждено; "
+                                "перед использованием проверьте привязку профиля."
+                            ),
+                        }
+                if evidence_kind == "snapshot_pending":
+                    message = (
+                        "Старая запись об удалении auth-cookie создана до исправления порядка Set-Cookie. "
+                        "Финальное действие Meta и связь с текущим снимком не подтверждены. "
+                        "Запросы к Meta по профилю остановлены до подтверждения входа."
+                    )
+                    con.execute(
+                        """UPDATE profile_auth_cookie_revocations
+                           SET actor_fingerprint='',auth_fingerprint='',
+                               evidence_kind='legacy_parser_unverified',deleted_names_json='[]',
+                               checked_at=?,message=? WHERE profile_id=?""",
+                        (now, message, profile_id),
+                    )
+                    evidence_kind = "legacy_parser_unverified"
+                elif evidence_kind == "legacy_history_pending":
+                    message = (
+                        "Старое задание не сохранило отпечаток сессии; запись нельзя связать с текущими cookies. "
+                        "Это не доказывает отзыв текущего снимка; запросы к Meta по профилю остановлены "
+                        "до подтверждения входа."
+                    )
+                    con.execute(
+                        """UPDATE profile_auth_cookie_revocations
+                           SET actor_fingerprint='',auth_fingerprint='',deleted_names_json='[]',
+                               evidence_kind='legacy_history_unverified',checked_at=?,message=?
+                           WHERE profile_id=?""",
+                        (now, message, profile_id),
+                    )
+                    evidence_kind = "legacy_history_unverified"
+                else:
+                    message = str(row["message"] or "").strip() or (
+                        "Старая запись об удалении auth-cookie не содержит версии обработки Set-Cookie. "
+                        "Итоговое действие Meta и связь с текущими cookies не подтверждены; "
+                        "запросы к Meta по профилю остановлены до подтверждения входа."
+                    )
+                return {
+                    "status": "AUTH_COOKIE_HISTORY_UNVERIFIED",
+                    "checked_at": int(row["checked_at"] or 0),
+                    "deleted_names": [],
+                    "source_job_id": str(row["source_job_id"] or ""),
+                    "evidence_kind": evidence_kind,
+                    "blocking": True,
+                    "message": message,
+                }
+
             if actor_fingerprint == original_actor and (auth_fingerprint == original_fingerprint or not auth_fingerprint):
                 try:
                     names = json.loads(row["deleted_names_json"] or "[]")
@@ -2373,6 +2448,7 @@ class JobStore:
                         if isinstance(names, list) else [],
                     "source_job_id": str(row["source_job_id"] or ""),
                     "evidence_kind": str(row["evidence_kind"] or "snapshot_pending"),
+                    "blocking": True,
                     "message": str(row["message"] or ""),
                 }
             if actor_fingerprint != original_actor:
@@ -2390,6 +2466,7 @@ class JobStore:
                     "deleted_names": [],
                     "source_job_id": str(row["source_job_id"] or ""),
                     "evidence_kind": evidence_kind,
+                    "blocking": True,
                     "message": identity_message,
                 }
             # Only a same-actor replacement of the auth session can clear the
@@ -2454,8 +2531,9 @@ class JobStore:
             ).fetchall()
             for row in revocation_rows:
                 profile_id = str(row["profile_id"] or "").strip()
+                evidence_kind = str(row["evidence_kind"] or "snapshot_pending")
                 if (not profile_id
-                        or str(row["evidence_kind"] or "snapshot_pending") == "resolved"
+                        or evidence_kind == "resolved"
                         or terminal_by_profile.get(profile_id, {}).get("status") == "CHECKPOINT"):
                     continue
                 try:
@@ -2466,12 +2544,29 @@ class JobStore:
                     name for name in raw_names
                     if isinstance(name, str) and name in {"c_user", "xs"}
                 }) if isinstance(raw_names, list) else []
+                verified = evidence_kind == "snapshot_pending_v2"
                 terminal_by_profile[profile_id] = {
-                    "status": "AUTH_COOKIE_REVOKED",
+                    "status": (
+                        "AUTH_COOKIE_HISTORY_UNVERIFIED"
+                        if not verified
+                        else "AUTH_COOKIE_REVOKED"
+                    ),
                     "checked_at": int(row["checked_at"] or 0),
-                    "message": str(row["message"] or "Meta явно удалила auth-cookie выбранного профиля."),
-                    "auth_cookie_deletions": deleted_names,
+                    "message": (
+                        str(row["message"] or "Meta явно удалила auth-cookie выбранного профиля.")
+                        if verified else
+                        (
+                            "Старое задание не сохранило отпечаток сессии; запись нельзя связать с текущими cookies. "
+                            "Старая запись не доказывает отзыв текущего снимка; запросы к Meta по профилю остановлены."
+                            if evidence_kind in {"legacy_history_pending", "legacy_history_unverified"} else
+                            "Старая запись об удалении auth-cookie не содержит версии обработки Set-Cookie. "
+                            "Итоговое действие Meta и связь с текущими cookies не подтверждены; "
+                            "запросы к Meta по профилю остановлены."
+                        )
+                    ),
+                    "auth_cookie_deletions": deleted_names if verified else [],
                     "source_job_id": str(row["source_job_id"] or ""),
+                    "evidence_kind": evidence_kind,
                 }
             rows = con.execute(
                 """

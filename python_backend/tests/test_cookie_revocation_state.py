@@ -111,6 +111,25 @@ class ProfileResolverRevocationGuardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(caught.exception.code, "PROFILE_IDENTITY_CHANGED")
         self.assertIn("ID Facebook-профиля изменился", str(caught.exception))
 
+    async def test_unverified_legacy_deletion_blocks_before_meta_session(self):
+        cookies = {"c_user": "123456789", "xs": "current-session"}
+        resolver, store = self.resolver(cookies, {
+            "status": "AUTH_COOKIE_HISTORY_UNVERIFIED",
+            "deleted_names": [],
+            "evidence_kind": "legacy_history_pending",
+            "blocking": False,
+            "message": "Старая запись не доказывает отзыв текущего снимка. Запросы к Meta остановлены.",
+        })
+
+        with self.assertRaises(ProfileContextError) as caught:
+            await resolver.resolve("fixture-profile")
+
+        self.assertEqual(caught.exception.code, "AUTH_COOKIE_HISTORY_UNVERIFIED")
+        self.assertIn("Запросы к Meta", str(caught.exception))
+        store.profile_auth_cookie_revocation_for_context.assert_awaited_once_with(
+            "fixture-profile", cookies,
+        )
+
     async def test_guard_store_failure_fails_closed_before_meta_session(self):
         cookies = {"c_user": "123456789", "xs": "revoked-session"}
         resolver, store = self.resolver(cookies, None)

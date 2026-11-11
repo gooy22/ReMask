@@ -575,6 +575,11 @@ class WorkerPool:
                                 f'Meta явно удалила cookies {names_text}. Этот сохранённый снимок не отправлялся повторно. '
                                 'Обновите вход выбранного профиля Facebook перед повтором Prepare.'
                             )
+                        elif code == 'AUTH_COOKIE_HISTORY_UNVERIFIED':
+                            message = (
+                                'Старая запись об удалении auth-cookie не подтверждает итоговый ответ Meta '
+                                'или связь с текущим снимком. Запрос к Meta не отправлялся.'
+                            )
                         else:
                             message = (
                                 'ID Facebook-профиля изменился после удаления auth-cookie. Запрос к Meta не отправлялся; '
@@ -859,6 +864,7 @@ class WorkerPool:
                     code = getattr(exc, 'code', 'PROFILE_CONTEXT_ERROR')
                     if code not in {
                         'META_AUTH_COOKIE_REVOKED',
+                        'AUTH_COOKIE_HISTORY_UNVERIFIED',
                         'PROFILE_IDENTITY_CHANGED',
                         'PROFILE_AUTH_GUARD_UNAVAILABLE',
                     }:

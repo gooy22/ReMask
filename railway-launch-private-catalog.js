@@ -1,9 +1,14 @@
 /* REMASK_PRIVATE_LAUNCH_CATALOG_V1 */
 /* REMASK_PRIVATE_LAUNCH_CATALOG_V2 */
 function remaskPrivatePageReadFailure(error, profile, accountId) {
-    const rawCode=String(error?.code||error?.payload?.code||error?.payload?.error?.code||error?.error?.code||error?.data?.error?.code||'');
-    const rawMessage=String(error?.message||error?.payload?.message||error?.payload?.error?.message||error||'');
-    const gate=(rawCode+' '+rawMessage).match(/(?:\b|_)(CHECKPOINT_REQUIRED|TWO_FACTOR_REQUIRED|SESSION_EXPIRED|BUSINESS_LOGIN_GATE)\b/)?.[1];
+    const rawCode=String(error?.code||error?.payload?.code||error?.payload?.detail?.code||
+        error?.payload?.error?.code||error?.error?.code||error?.data?.code||
+        error?.data?.detail?.code||error?.data?.error?.code||error?.response?.data?.detail?.code||'').toUpperCase();
+    const rawMessage=String(error?.message||error?.payload?.message||error?.payload?.detail?.message||
+        error?.payload?.error?.message||error?.data?.message||error?.data?.detail?.message||
+        error?.data?.error?.message||error||'');
+    const evidence=(rawCode+' '+rawMessage).toUpperCase();
+    const gate=evidence.match(/(?:\b|_)(CHECKPOINT_REQUIRED|TWO_FACTOR_REQUIRED|SESSION_EXPIRED|BUSINESS_LOGIN_GATE)\b/)?.[1];
     const profileLabel=String(profile||'?').replace(/[^0-9]/g,'').slice(0,12)||'?';
     const accountLabel=String(accountId||'').replace(/^act_/,'').replace(/[^0-9]/g,'').slice(0,30)||'?';
     const scope=`Профиль ${profileLabel} / РК ${accountLabel}`;
@@ -15,6 +20,16 @@ function remaskPrivatePageReadFailure(error, profile, accountId) {
         return `${scope}: Meta запросила подтверждение 2FA. FP не загружены.`;
     if(gate==='SESSION_EXPIRED')
         return `${scope}: Meta не подтвердила вход. FP не загружены.`;
+    if(rawCode==='AUTH_COOKIE_HISTORY_UNVERIFIED')
+        return `${scope}: старая запись не доказывает отзыв текущего снимка, но вход нельзя безопасно подтвердить. Запросы к Meta остановлены.`;
+    if(rawCode==='META_AUTH_COOKIE_REVOKED')
+        return `${scope}: ReMask заблокировал повтор ранее зафиксированного снимка auth-cookie. Запрос к Meta не отправлен.`;
+    if(rawCode==='PROFILE_IDENTITY_CHANGED')
+        return `${scope}: ID профиля не совпадает с профилем, связанным с локальной записью блокировки. Запрос к Meta не отправлен.`;
+    if(rawCode==='PROFILE_AUTH_GUARD_UNAVAILABLE')
+        return `${scope}: ReMask не смог проверить локальную запись входа. Запрос к Meta не отправлен.`;
+    if(rawCode==='META_AUTH_TOKEN_UNAVAILABLE')
+        return `${scope}: ReMask не получил подтверждённый контекст входа. Чтение FP не выполнено.`;
     return `${scope}: не удалось загрузить FP из Meta. Попробуйте позже.`;
 }
 function remaskFundingState(info) {

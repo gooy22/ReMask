@@ -48,6 +48,7 @@ class ProfileContextError(RuntimeError):
             "checkpoint_required": "CHECKPOINT_REQUIRED",
             "two_factor_required": "TWO_FACTOR_REQUIRED",
             "meta_auth_cookie_revoked": "META_AUTH_COOKIE_REVOKED",
+            "auth_cookie_history_unverified": "AUTH_COOKIE_HISTORY_UNVERIFIED",
             "profile_identity_changed": "PROFILE_IDENTITY_CHANGED",
             "auth_cookie_revocation_store": "PROFILE_AUTH_GUARD_UNAVAILABLE",
             "auth_gate_unclassified": "META_AUTH_GATE_UNCLASSIFIED",
@@ -552,7 +553,7 @@ class ProfileResolver:
         return context
 
     async def _guard_auth_cookie_revocation(self, context: ProfileContext) -> None:
-        """Block Meta use of a snapshot Meta explicitly revoked on an earlier request."""
+        """Fail closed on unresolved auth-cookie evidence without overclaiming causation."""
         store = self.auth_cookie_revocation_store
         has_marker = getattr(store, "has_profile_auth_cookie_revocation", None)
         compare_snapshot = getattr(store, "profile_auth_cookie_revocation_for_context", None)
@@ -585,6 +586,15 @@ class ProfileResolver:
                 "Запрос к Meta не отправлялся; проверьте привязанный аккаунт."
             )
             category = "profile_identity_changed"
+        elif code == "AUTH_COOKIE_HISTORY_UNVERIFIED" or str(
+            revocation.get("evidence_kind") or ""
+        ) == "legacy_history_pending":
+            stored_message = str(revocation.get("message") or "").strip()
+            message = stored_message or (
+                "Старая запись не доказывает отзыв текущего снимка, но её нельзя надёжно сопоставить "
+                "с сохранённым входом. Запрос к Meta не отправлен до подтверждения входа."
+            )
+            category = "auth_cookie_history_unverified"
         else:
             names = [
                 name for name in (revocation.get("deleted_names") or [])
