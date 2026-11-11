@@ -240,7 +240,27 @@ class SessionProbeTests(unittest.IsolatedAsyncioTestCase):
         row = evidence.snapshot()['responses'][1]
         self.assertEqual(row['auth_cookie_set'], ['c_user'])
         self.assertEqual(row['auth_cookie_deleted'], [])
+        self.assertEqual(row['profile_root_auth_cookie_set'], ['c_user'])
         self.assertEqual(row['profile_root_auth_cookie_deleted'], [])
+
+    async def test_wire_reports_final_profile_cookie_action_when_response_replaces_it(self):
+        import httpx
+        from app.private_session_wire import SessionWireEvidence
+
+        evidence = SessionWireEvidence('123456', 'fixture-UA')
+        response = httpx.Response(302,
+            request=httpx.Request('GET', 'https://business.facebook.com/latest/home'),
+            headers=[
+                ('Location', 'https://business.facebook.com/latest/home'),
+                ('Set-Cookie', 'xs=; Domain=.facebook.com; Path=/; Max-Age=0; Secure'),
+                ('Set-Cookie', 'xs=replacement-xs; Domain=.facebook.com; Path=/; Secure'),
+            ])
+        await evidence.response(response)
+        row = evidence.snapshot()['responses'][0]
+        self.assertEqual(row['auth_cookie_deleted'], ['xs'])
+        self.assertEqual(row['profile_root_auth_cookie_deleted'], [])
+        self.assertEqual(row['profile_root_auth_cookie_set'], ['xs'])
+        self.assertNotIn('replacement-xs', str(row))
 
     async def test_wire_observer_failure_does_not_prevent_the_original_read(self):
         factory = self.factory()

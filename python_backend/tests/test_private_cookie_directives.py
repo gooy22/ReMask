@@ -3,7 +3,12 @@ import unittest
 
 import httpx
 
-from app.private_cookie_directives import auth_cookie_deletes_profile_root, auth_cookie_directive
+from app.private_cookie_directives import (
+    auth_cookie_deletes_profile_root,
+    auth_cookie_directive,
+    auth_cookie_targets_profile_root,
+    effective_profile_root_auth_cookie_actions,
+)
 from app.private_http import PrivateHttpClient
 
 
@@ -108,6 +113,25 @@ class AuthCookieDirectiveTests(unittest.TestCase):
             response_host="business.facebook.com", response_path="/", now=self.NOW,
         ))
 
+    def test_root_set_and_expiry_are_scoped_to_the_imported_cookie(self):
+        self.assertTrue(auth_cookie_targets_profile_root(
+            "xs=rotated; Domain=.facebook.com; Path=/",
+            response_host="business.facebook.com", response_path="/latest/home",
+        ))
+        self.assertFalse(auth_cookie_targets_profile_root(
+            "xs=host-only; Path=/",
+            response_host="business.facebook.com", response_path="/latest/home",
+        ))
+
+    def test_last_matching_root_directive_wins_in_response_order(self):
+        actions = effective_profile_root_auth_cookie_actions([
+            "c_user=; Domain=.facebook.com; Path=/; Max-Age=0",
+            "xs=replacement; Domain=.facebook.com; Path=/",
+            "c_user=replacement; Domain=.facebook.com; Path=/",
+            "xs=; Domain=.facebook.com; Path=/; Max-Age=0",
+        ], response_host="business.facebook.com", response_path="/latest/home", now=self.NOW)
+        self.assertEqual(actions, {"c_user": False, "xs": True})
+
 
 class AuthCookieDeletionFlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_expired_auth_directives_are_recorded_without_cookie_values(self):
@@ -172,6 +196,128 @@ class AuthCookieDeletionFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(directive['deletions'], [])
         self.assertEqual(directive['observed_deletions'], [])
         self.assertEqual(client.meta_auth_cookie_deletions, set())
+
+    async def test_final_set_cookie_action_wins_when_response_deletes_then_replaces(self):
+        client = object.__new__(PrivateHttpClient)
+        client.profile_name = 'fixture'
+        client._trusted_meta_xs_fingerprints = set()
+        client._meta_redirect_auth_cookie_directive_pending = False
+        client.meta_auth_cookie_deletions = set()
+
+        request = httpx.Request('GET', 'https://business.facebook.com/latest/home')
+        response = httpx.Response(302, request=request, headers=[
+            ('Location', 'https://business.facebook.com/latest/home'),
+            ('Set-Cookie', 'xs=; Domain=.facebook.com; Path=/; Max-Age=0; Secure'),
+            ('Set-Cookie', 'xs=replacement-xs; Domain=.facebook.com; Path=/; Secure'),
+        ])
+        await client._track_meta_xs_cookie_updates(response)
+
+        directive = response.extensions['remask_meta_auth_cookie_directive']
+        self.assertEqual(directive['deletions'], [])
+        self.assertEqual(directive['observed_deletions'], ['xs'])
+        self.assertEqual(directive['effective_profile_root_sets'], ['xs'])
+        self.assertEqual(client.meta_auth_cookie_deletions, set())
+        self.assertTrue(client._meta_redirect_auth_cookie_directive_pending)
+        self.assertNotIn('replacement-xs', str(response.extensions))
+
+    async def test_new_root_set_clears_prior_meta_deletion_state(self):
+        client = object.__new__(PrivateHttpClient)
+        client.profile_name = 'fixture'
+        client._trusted_meta_xs_fingerprints = set()
+        client._meta_redirect_auth_cookie_directive_pending = False
+        client.meta_auth_cookie_deletions = set()
+
+        first = httpx.Response(302,
+            request=httpx.Request('GET', 'https://business.facebook.com/latest/home'),
+            headers=[
+                ('Location', 'https://business.facebook.com/latest/home'),
+                ('Set-Cookie', 'xs=; Domain=.facebook.com; Path=/; Max-Age=0; Secure'),
+            ])
+        await client._track_meta_xs_cookie_updates(first)
+        self.assertEqual(client.meta_auth_cookie_deletions, {'xs'})
+
+        replacement = httpx.Response(200,
+            request=httpx.Request('GET', 'https://business.facebook.com/latest/home'),
+            headers=[
+                ('Set-Cookie', 'xs=replacement-xs; Domain=.facebook.com; Path=/; Secure'),
+            ])
+        await client._track_meta_xs_cookie_updates(replacement)
+        self.assertEqual(client.meta_auth_cookie_deletions, set())
+        self.assertNotIn('replacement-xs', str(replacement.extensions))
+
+    async def test_httpx_jar_and_guard_follow_last_set_cookie_for_same_root_key(self):
+        tracker = object.__new__(PrivateHttpClient)
+        tracker.profile_name = 'fixture'
+        tracker._trusted_meta_xs_fingerprints = set()
+        tracker._meta_redirect_auth_cookie_directive_pending = False
+        tracker.meta_auth_cookie_deletions = set()
+
+        async def handler(request):
+            return httpx.Response(302, request=request, headers=[
+                ('Location', 'https://business.facebook.com/latest/home'),
+                ('Set-Cookie', 'xs=; Domain=.facebook.com; Path=/; Max-Age=0; Secure'),
+                ('Set-Cookie', 'xs=replacement-xs; Domain=.facebook.com; Path=/; Secure'),
+            ])
+
+        client = httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+            event_hooks={'response': [tracker._track_meta_xs_cookie_updates]},
+        )
+        try:
+            response = await client.get(
+                'https://business.facebook.com/latest/home', follow_redirects=False,
+            )
+            self.assertEqual(client.cookies.get(
+                'xs', domain='.facebook.com', path='/',
+            ), 'replacement-xs')
+            self.assertEqual(tracker.meta_auth_cookie_deletions, set())
+            self.assertEqual(
+                response.extensions['remask_meta_auth_cookie_directive']['deletions'],
+                [],
+            )
+        finally:
+            await client.aclose()
+
+    async def test_httpx_replacement_on_later_response_clears_deletion_state(self):
+        tracker = object.__new__(PrivateHttpClient)
+        tracker.profile_name = 'fixture'
+        tracker._trusted_meta_xs_fingerprints = set()
+        tracker._meta_redirect_auth_cookie_directive_pending = False
+        tracker.meta_auth_cookie_deletions = set()
+        calls = []
+
+        async def handler(request):
+            calls.append(request.url.path)
+            if request.url.path.endswith('/start'):
+                return httpx.Response(302, request=request, headers=[
+                    ('Location', '/latest/home'),
+                    ('Set-Cookie', 'xs=; Domain=.facebook.com; Path=/; Max-Age=0; Secure'),
+                ])
+            return httpx.Response(200, request=request, headers=[
+                ('Set-Cookie', 'xs=replacement-xs; Domain=.facebook.com; Path=/; Secure'),
+            ])
+
+        client = httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+            event_hooks={'response': [tracker._track_meta_xs_cookie_updates]},
+        )
+        try:
+            first = await client.get(
+                'https://business.facebook.com/latest/start', follow_redirects=False,
+            )
+            self.assertEqual(first.extensions['remask_meta_auth_cookie_directive']['deletions'], ['xs'])
+            self.assertEqual(tracker.meta_auth_cookie_deletions, {'xs'})
+
+            await client.get(
+                'https://business.facebook.com/latest/home', follow_redirects=False,
+            )
+            self.assertEqual(calls, ['/latest/start', '/latest/home'])
+            self.assertEqual(client.cookies.get(
+                'xs', domain='.facebook.com', path='/',
+            ), 'replacement-xs')
+            self.assertEqual(tracker.meta_auth_cookie_deletions, set())
+        finally:
+            await client.aclose()
 
 
 if __name__ == "__main__":

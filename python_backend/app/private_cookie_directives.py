@@ -59,15 +59,15 @@ def auth_cookie_directive(raw, *, now=None):
         return None
 
 
-def auth_cookie_deletes_profile_root(raw, *, response_host, response_path, now=None):
-    """Whether an expired directive targets an imported .facebook.com/ cookie.
+def auth_cookie_targets_profile_root(raw, *, response_host, response_path, now=None):
+    """Whether a directive targets an imported .facebook.com/ cookie.
 
     The stored profile cookies are domain cookies for ``facebook.com`` at the
     root path. Host-only cookies and cookies with narrower domain/path scopes
-    are separate cookie records and cannot delete that imported snapshot.
+    are separate cookie records and cannot change that imported snapshot.
     """
     directive = auth_cookie_directive(raw, now=now)
-    if directive is None or not directive[1]:
+    if directive is None:
         return False
 
     try:
@@ -102,6 +102,33 @@ def auth_cookie_deletes_profile_root(raw, *, response_host, response_path, now=N
         return path == "/"
     except (TypeError, ValueError, OverflowError):
         return False
+
+
+def auth_cookie_deletes_profile_root(raw, *, response_host, response_path, now=None):
+    """Whether an expired directive targets an imported .facebook.com/ cookie."""
+    directive = auth_cookie_directive(raw, now=now)
+    return bool(directive and directive[1] and auth_cookie_targets_profile_root(
+        raw, response_host=response_host, response_path=response_path, now=now,
+    ))
+
+
+def effective_profile_root_auth_cookie_actions(headers, *, response_host, response_path, now=None):
+    """Return each profile-root auth cookie's final Set-Cookie action in wire order.
+
+    Values are booleans: True means the last matching directive expires the
+    imported root cookie; False means a later directive sets/replaces it.
+    """
+    actions = {}
+    for raw in headers or ():
+        directive = auth_cookie_directive(raw, now=now)
+        if directive is None:
+            continue
+        name, is_deletion = directive
+        if auth_cookie_targets_profile_root(
+            raw, response_host=response_host, response_path=response_path, now=now,
+        ):
+            actions[name] = is_deletion
+    return actions
 
 
 def _default_cookie_path(request_path):
