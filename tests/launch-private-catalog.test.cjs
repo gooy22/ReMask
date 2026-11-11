@@ -65,7 +65,14 @@ assert.ok(privateCatalogOverlay.includes('id="remaskLaunchModeBanner"') &&
         observed:{status:{present:true,type:'str',value:'PAUSED'},
           validation_status:{present:true,type:'str',value:'VALIDATED'},parent_ad_object_id:{present:true,type:'int',value:120256450355860322}},
         settings_diagnostic:{fields:[{field:'name',matches:true},{field:'daily_budget',matches:true},
-          {field:'targeting',matches:true}]},
+          {field:'targeting',matches:true,targeting_diagnostic:{
+            expected:{geo_locations:{countries:['PL']},age_min:25,age_max:32,
+              flexible_spec:[{interests:[{id:'202',name:'Air travel'}],
+                behaviors:[{id:'303',name:'Frequent Travelers'}]}],locales:[24]},
+            observed:{geo_locations:{countries:['PL']},age_min:25,age_max:32,
+              flexible_spec:[{interests:[{id:'202',name:'Air travel'}],
+                behaviors:[{id:'303',name:'Frequent Travelers'}]}],locales:[24]}
+          }}]},
         active_error_diagnostic:{observed:false,has_errors:false,is_list:false,codes:[],field_names:[],terms:[]}},
       {level:'ad',relationships_match:true,settings_match:true,
         observed:{status:{present:true,type:'str',value:'PAUSED'},
@@ -165,6 +172,8 @@ assert.ok(source.includes('const message=remaskPrivateLaunchUserMessage(error)')
   assert.ok(!verifiedIdsCell.textContent.includes('статус str:7'));
   assert.match(verifiedIdsCell.textContent,/VALIDATED/);
   assert.match(verifiedIdsCell.textContent,/HAS_ERRORS/);
+  assert.match(verifiedIdsCell.textContent,/Аудитория, прочитанная из Meta/);
+  assert.match(verifiedIdsCell.textContent,/Frequent Travelers/);
   assert.match(verifiedIdsCell.textContent,/1359188/);
   assert.match(verifiedIdsCell.textContent,/billing \/ method \/ payment/);
   assert.match(verifiedIdsCell.textContent,/Ad Set: значения из сохранённого задания и результат сравнения с прочитанным фрагментом Meta/);
