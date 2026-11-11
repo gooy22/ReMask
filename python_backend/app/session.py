@@ -616,8 +616,57 @@ class ProfileResolver:
                 if last_probe is None or now - last_probe >= 300:
                     self._legacy_auth_probe_attempts[probe_key] = now
                     try:
-                        from .private_session_probe import probe_saved_identity
+                        from .private_session_probe import (
+                            probe_saved_identity,
+                            profile_root_auth_cookie_deletion_names,
+                        )
                         identity_proof = await probe_saved_identity(context)
+                        identity_auth_fingerprint = hashlib.sha256(json.dumps(
+                            [actor, xs], ensure_ascii=True, separators=(",", ":")
+                        ).encode("utf-8")).hexdigest()
+                        deletion_names = profile_root_auth_cookie_deletion_names(identity_proof)
+                        if (deletion_names
+                                and isinstance(identity_proof, dict)
+                                and identity_proof.get("profile_id") == str(context.profile_id)
+                                and identity_proof.get("auth_cookie_fingerprint") == identity_auth_fingerprint):
+                            record_deletion = getattr(store, "record_profile_auth_cookie_revocation", None)
+                            if not callable(record_deletion):
+                                raise ProfileContextError(
+                                    "Meta явно прислала удаление auth-cookie в ответе GET /me, "
+                                    "но сохранить это событие не удалось. Повторные запросы к Meta остановлены.",
+                                    retryable=False,
+                                    category="auth_cookie_revocation_store",
+                                )
+                            try:
+                                recorded = await record_deletion(
+                                    context.profile_id, context.cookies, deletion_names,
+                                )
+                            except Exception as exc:
+                                raise ProfileContextError(
+                                    "Meta явно прислала удаление auth-cookie в ответе GET /me, "
+                                    "но сохранить это событие не удалось. Повторные запросы к Meta остановлены.",
+                                    retryable=False,
+                                    category="auth_cookie_revocation_store",
+                                ) from exc
+                            if not recorded:
+                                raise ProfileContextError(
+                                    "Meta явно прислала удаление auth-cookie в ответе GET /me, "
+                                    "но сохранить это событие не удалось. Повторные запросы к Meta остановлены.",
+                                    retryable=False,
+                                    category="auth_cookie_revocation_store",
+                                )
+                            self._legacy_auth_probe_attempts.pop(probe_key, None)
+                            logging.getLogger("remask.profile_resolver").info(
+                                "profile_auth_cookie_probe_deletion_persisted profile=%s names=%s",
+                                context.profile_id, ",".join(deletion_names),
+                            )
+                            raise ProfileContextError(
+                                f"Meta явно прислала удаление auth-cookie ({', '.join(deletion_names)}) "
+                                "в ответе GET /me. Событие сохранено; запросы к Meta остановлены.",
+                                retryable=False,
+                                category="meta_auth_cookie_revoked",
+                                auth_cookie_deletions=deletion_names,
+                            )
                         if await resolve_legacy(context.profile_id, context.cookies, identity_proof):
                             self._legacy_auth_probe_attempts.pop(probe_key, None)
                             logging.getLogger("remask.profile_resolver").info(
@@ -625,6 +674,8 @@ class ProfileResolver:
                                 context.profile_id,
                             )
                             return
+                    except ProfileContextError:
+                        raise
                     except Exception as exc:
                         logging.getLogger("remask.profile_resolver").warning(
                             "legacy_auth_cookie_identity_probe_unavailable profile=%s kind=%s",

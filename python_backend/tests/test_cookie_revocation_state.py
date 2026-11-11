@@ -1,3 +1,5 @@
+import hashlib
+import json
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -154,6 +156,54 @@ class ProfileResolverRevocationGuardTests(unittest.IsolatedAsyncioTestCase):
         store.resolve_legacy_auth_cookie_history.assert_awaited_once_with(
             "fixture-profile", cookies, proof,
         )
+
+    async def test_identity_probe_deletion_is_persisted_as_snapshot_revocation(self):
+        cookies = {"c_user": "123456789", "xs": "current-session"}
+        resolver, store = self.resolver(cookies, {
+            "status": "AUTH_COOKIE_HISTORY_UNVERIFIED",
+            "deleted_names": [],
+            "evidence_kind": "legacy_history_unverified",
+            "source_job_id": "legacy-job",
+            "blocking": True,
+            "message": "Старая запись не подтверждает текущую сессию.",
+        })
+        store.resolve_legacy_auth_cookie_history = AsyncMock(return_value=False)
+        store.record_profile_auth_cookie_revocation = AsyncMock(return_value=True)
+        auth_fingerprint = hashlib.sha256(json.dumps(
+            [cookies["c_user"], cookies["xs"]],
+            ensure_ascii=True, separators=(",", ":"),
+        ).encode("utf-8")).hexdigest()
+        proof = {
+            "profile_id": "fixture-profile",
+            "document_kind": "saved_identity",
+            "auth_cookie_fingerprint": auth_fingerprint,
+            "request_auth_matches": True,
+            "saved_auth_snapshot_sent": True,
+            "measurement_errors": 0,
+            "wire": {
+                "measurement_errors": 0,
+                "requests": [{
+                    "host": "www.facebook.com", "path": "/me", "method": "GET",
+                    "user_agent_matches": True, "header_auth_state": "matches",
+                    "header_auth_cookie_names": ["c_user", "xs"],
+                }],
+                "responses": [{
+                    "host": "www.facebook.com", "path": "/me", "status": 302,
+                    "protocol": "HTTP/2", "profile_root_auth_cookie_deleted": ["c_user", "xs"],
+                }],
+            },
+        }
+
+        with patch("app.private_session_probe.probe_saved_identity", new=AsyncMock(return_value=proof)):
+            with self.assertRaises(ProfileContextError) as caught:
+                await resolver.resolve("fixture-profile")
+
+        self.assertEqual(caught.exception.code, "META_AUTH_COOKIE_REVOKED")
+        self.assertEqual(caught.exception.auth_cookie_deletions, ["c_user", "xs"])
+        store.record_profile_auth_cookie_revocation.assert_awaited_once_with(
+            "fixture-profile", cookies, ["c_user", "xs"],
+        )
+        store.resolve_legacy_auth_cookie_history.assert_not_awaited()
 
     async def test_legacy_marker_resolves_only_after_same_actor_identity_probe(self):
         cookies = {"c_user": "123456789", "xs": "current-session"}
