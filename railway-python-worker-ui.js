@@ -999,6 +999,7 @@ function pythonWorkerPrepareResult(item) {
 const pythonWorkerProfileSessionStatuses = new Map();
 let pythonWorkerProfileStatusRequest = null;
 let pythonWorkerProfileStatusJobId = '';
+let pythonWorkerProfileStatusJobState = '';
 
 function pythonWorkerItemErrorCode(item) {
   const failedTasks = (Array.isArray(item && item.tasks) ? item.tasks : []).filter(function(task) {
@@ -1330,9 +1331,19 @@ async function pythonWorkerLoadProfileStatuses() {
 function pythonWorkerRefreshProfileStatusesForJob(job) {
   const jobId = String(job && job.id || '');
   const status = String(job && job.status || '').toUpperCase();
-  if (!jobId || !['SUCCESS','FAILED','PARTIAL'].includes(status) || jobId === pythonWorkerProfileStatusJobId) return;
+  if (!jobId || !['SUCCESS','FAILED','PARTIAL'].includes(status)
+      || (jobId === pythonWorkerProfileStatusJobId && status === pythonWorkerProfileStatusJobState)) return;
   pythonWorkerProfileStatusJobId = jobId;
-  pythonWorkerLoadProfileStatuses().catch(function(){});
+  pythonWorkerProfileStatusJobState = status;
+  const refresh = function() {
+    if (pythonWorkerProfileStatusJobId !== jobId || pythonWorkerProfileStatusJobState !== status) return;
+    pythonWorkerLoadProfileStatuses().catch(function(){});
+  };
+  if (pythonWorkerProfileStatusRequest) {
+    pythonWorkerProfileStatusRequest.then(refresh, refresh);
+    return;
+  }
+  refresh();
 }
 
 function pythonWorkerRenderJob(job) {
