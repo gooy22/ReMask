@@ -1100,7 +1100,7 @@ function remaskPrivateRenderJob(job) {
                                     const itemDetails=[];
                                     if(codes.length)itemDetails.push('коды '+codes.join(', '));
                                     if(fields.length)itemDetails.push('поля '+fields.join(', '));
-                                    if(terms.length)itemDetails.push('термины в исходном порядке '+terms.join(' / '));
+                                    if(terms.length)itemDetails.push('слова из ответа Meta (подсказки, не причина): '+terms.join(' / '));
                                     return itemDetails.length?'ошибка '+(index+1)+' ['+itemDetails.join('; ')+']':'';
                                 }).filter(Boolean);
                                 if(perError.length)details.push('безопасные термины, исходный текст скрыт: '+perError.join(' | '));
@@ -1113,8 +1113,9 @@ function remaskPrivateRenderJob(job) {
                                     typeof item==='string'&&/^[a-z_']{1,32}$/.test(item)):[];
                                 if(codes.length)details.push('коды '+codes.join(', '));
                                 if(fields.length)details.push('поля '+fields.join(', '));
-                                if(terms.length)details.push('термины '+terms.join(' / '));
+                                if(terms.length)details.push('слова из ответа Meta (подсказки, не причина): '+terms.join(' / '));
                             }
+                            if(diagnostic.exact_cause_confirmed!==true)details.push('точная причина Meta не установлена');
                             return 'есть'+(details.length?' ('+details.join('; ')+')':'');
                         };
                         const checks=rows.map(row=>{

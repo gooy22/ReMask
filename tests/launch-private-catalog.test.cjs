@@ -77,9 +77,9 @@ assert.ok(privateCatalogOverlay.includes('id="remaskLaunchModeBanner"') &&
       {level:'ad',relationships_match:true,settings_match:true,
         observed:{status:{present:true,type:'str',value:'PAUSED'},
           validation_status:{present:true,type:'str',value:'HAS_ERRORS'},parent_ad_object_id:{present:true,type:'int',value:120256450356070322}},
-        active_error_diagnostic:{observed:true,has_errors:true,is_list:true,
-          codes:[{field:'error_code',value:1359188}],field_names:[],terms:['billing','method','payment'],
-          records:[{index:0,codes:[{field:'error_code',value:1359188}],field_names:[],
+        active_error_diagnostic:{observed:true,has_errors:true,exact_cause_confirmed:false,is_list:true,
+          codes:[{field:'error_code',value:987654321}],field_names:[],terms:['billing','method','payment'],
+          records:[{index:0,codes:[{field:'error_code',value:987654321}],field_names:[],
             matched_terms_in_order:['payment','method','not','required'],truncated:false}]}}
     ]};
   let legacyRenders=0;
@@ -174,11 +174,12 @@ assert.ok(source.includes('const message=remaskPrivateLaunchUserMessage(error)')
   assert.ok(!verifiedIdsCell.textContent.includes('статус str:7'));
   assert.match(verifiedIdsCell.textContent,/VALIDATED/);
   assert.match(verifiedIdsCell.textContent,/HAS_ERRORS/);
-  assert.match(verifiedIdsCell.textContent,/ошибка 1 \[коды 1359188; термины в исходном порядке payment \/ method \/ not \/ required\]/);
+  assert.match(verifiedIdsCell.textContent,/слова из ответа Meta \(подсказки, не причина\): payment \/ method \/ not \/ required/);
   assert.match(verifiedIdsCell.textContent,/исходный текст скрыт/);
   assert.match(verifiedIdsCell.textContent,/Аудитория, прочитанная из Meta/);
   assert.match(verifiedIdsCell.textContent,/Frequent Travelers/);
-  assert.match(verifiedIdsCell.textContent,/1359188/);
+  assert.match(verifiedIdsCell.textContent,/987654321/);
+  assert.match(verifiedIdsCell.textContent,/точная причина Meta не установлена/);
   assert.match(verifiedIdsCell.textContent,/payment \/ method \/ not \/ required/);
   assert.match(verifiedIdsCell.textContent,/Ad Set: значения из сохранённого задания и результат сравнения с прочитанным фрагментом Meta/);
   assert.match(verifiedIdsCell.textContent,/targeting — СОВПАЛО/);
