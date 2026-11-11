@@ -16,7 +16,11 @@ from typing import Any
 
 import httpx
 from .direct_test import direct_test_deadline
-from .private_cookie_directives import auth_cookie_deletes_profile_root, auth_cookie_directive
+from .private_cookie_directives import (
+    auth_cookie_targets_profile_root,
+    auth_cookie_directive,
+    effective_profile_root_auth_cookie_actions,
+)
 from .private_http_metrics import begin_request, end_request, request_hook, response_hook, error_kind
 from .private_http_stages import PrivateRequestStages
 from .private_session_wire import cookie_evidence
@@ -369,7 +373,17 @@ class PrivateHttpClient:
             )
             auth_directives: set[str] = set()
             auth_deletions: set[str] = set()
-            profile_auth_deletions: set[str] = set()
+            profile_auth_actions = effective_profile_root_auth_cookie_actions(
+                response.headers.get_list("set-cookie"),
+                response_host=host,
+                response_path=str(response.url.path or "/"),
+            )
+            profile_auth_deletions = {
+                name for name, is_deletion in profile_auth_actions.items() if is_deletion
+            }
+            profile_auth_sets = {
+                name for name, is_deletion in profile_auth_actions.items() if not is_deletion
+            }
             auth_deletion_scopes: list[dict[str, str]] = []
             auth_scope_evidence: set[str] = set()
             for raw in response.headers.get_list("set-cookie"):
@@ -382,44 +396,48 @@ class PrivateHttpClient:
                 if not separator:
                     continue
                 value = value.strip().strip('"')
-                if cookie_name in {"c_user", "xs"} and (is_redirect or is_cookie_deletion):
+                targets_profile_root = (
+                    cookie_name in {"c_user", "xs"}
+                    and auth_cookie_targets_profile_root(
+                        raw, response_host=host,
+                        response_path=str(response.url.path or "/"),
+                    )
+                )
+                if cookie_name in {"c_user", "xs"}:
                     if is_cookie_deletion:
                         auth_deletions.add(cookie_name)
-                        if auth_cookie_deletes_profile_root(
-                            raw, response_host=host, response_path=str(response.url.path or "/"),
-                        ):
-                            profile_auth_deletions.add(cookie_name)
-                    else:
+                    elif is_redirect:
                         auth_directives.add(cookie_name)
-                    attributes: dict[str, str] = {}
-                    for attribute in str(raw).split(";")[1:]:
-                        key, _, attribute_value = attribute.strip().partition("=")
-                        key = key.strip().casefold()
-                        if key in {"domain", "path"}:
-                            attributes[key] = attribute_value.strip()
-                    domain = attributes.get("domain", "").lstrip(".").casefold().rstrip(".")
-                    domain_scope = (
-                        "shared" if domain == "facebook.com"
-                        else "facebook_subdomain" if domain.endswith(".facebook.com")
-                        else "host" if not domain
-                        else "other"
-                    )
-                    path = attributes.get("path", "")
-                    path_scope = (
-                        "root" if path == "/"
-                        else "narrow" if path.startswith("/")
-                        else "default"
-                    )
-                    action = "delete" if is_cookie_deletion else "set"
-                    auth_scope_evidence.add(
-                        f"{cookie_name}:{action}:{domain_scope}:{path_scope}"
-                    )
-                    if is_cookie_deletion:
-                        auth_deletion_scopes.append({
-                            "name": cookie_name,
-                            "domain": domain_scope,
-                            "path": path_scope,
-                        })
+                    if is_redirect or is_cookie_deletion or targets_profile_root:
+                        attributes: dict[str, str] = {}
+                        for attribute in str(raw).split(";")[1:]:
+                            key, _, attribute_value = attribute.strip().partition("=")
+                            key = key.strip().casefold()
+                            if key in {"domain", "path"}:
+                                attributes[key] = attribute_value.strip()
+                        domain = attributes.get("domain", "").lstrip(".").casefold().rstrip(".")
+                        domain_scope = (
+                            "shared" if domain == "facebook.com"
+                            else "facebook_subdomain" if domain.endswith(".facebook.com")
+                            else "host" if not domain
+                            else "other"
+                        )
+                        path = attributes.get("path", "")
+                        path_scope = (
+                            "root" if path == "/"
+                            else "narrow" if path.startswith("/")
+                            else "default"
+                        )
+                        action = "delete" if is_cookie_deletion else "set"
+                        auth_scope_evidence.add(
+                            f"{cookie_name}:{action}:{domain_scope}:{path_scope}"
+                        )
+                        if is_cookie_deletion:
+                            auth_deletion_scopes.append({
+                                "name": cookie_name,
+                                "domain": domain_scope,
+                                "path": path_scope,
+                            })
                 if cookie_name != "xs" or is_cookie_deletion:
                     continue
                 self._trusted_meta_xs_fingerprints.add(
@@ -427,15 +445,21 @@ class PrivateHttpClient:
                 )
                 if len(self._trusted_meta_xs_fingerprints) > 64:
                     self._trusted_meta_xs_fingerprints.pop()
+            for cookie_name, is_deletion in profile_auth_actions.items():
+                if is_deletion:
+                    self.meta_auth_cookie_deletions.add(cookie_name)
+                else:
+                    self.meta_auth_cookie_deletions.discard(cookie_name)
             if auth_deletions or (is_redirect and auth_directives):
                 # Preserve Meta's explicit auth-cookie decisions for the
                 # bootstrap guard. Only expiry directives matching the imported
                 # shared root cookie count as profile-cookie deletion. Cookie
                 # values are excluded from the evidence.
                 response.extensions["remask_meta_auth_cookie_directive"] = {
-                    "sets": sorted(auth_directives),
+                    "sets": sorted(auth_directives | profile_auth_sets),
                     "deletions": sorted(profile_auth_deletions),
                     "observed_deletions": sorted(auth_deletions),
+                    "effective_profile_root_sets": sorted(profile_auth_sets),
                     "deletion_scopes": auth_deletion_scopes,
                 }
                 if profile_auth_deletions or (is_redirect and auth_directives):
@@ -444,7 +468,7 @@ class PrivateHttpClient:
                 log.info(
                     "[%s] private_http_meta_auth_cookie_directive status=%d host=%s names=%s deleted_profile=%s observed_deleted=%s scope=%s",
                     self.profile_name, response.status_code, host,
-                    ",".join(sorted(auth_directives | auth_deletions)),
+                    ",".join(sorted(auth_directives | profile_auth_sets | auth_deletions)),
                     ",".join(sorted(profile_auth_deletions)),
                     ",".join(sorted(auth_deletions)),
                     ",".join(sorted(auth_scope_evidence)),
