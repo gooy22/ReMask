@@ -8,9 +8,14 @@ import logging
 import re
 
 from .private_ads_draft import LEVELS, fail, fragment_parent_matches, fragment_values_match, identity
-from .private_ads_draft_fallback import read_fragment_with_account_object_fallback
+from .private_ads_draft_fallback import (
+    _read_account_level_object,
+    is_exact_fragment_read_rejection,
+    read_fragment_with_account_object_fallback,
+)
 from .private_ads_http import AdsManagerPrivateHttp
 from .private_launch import _launch_fingerprint
+from .provisioning.models import ProvisioningError
 
 # Exact reviewed senders at main 2f5444324d8e and 3a225cf6dac8. Inspection only;
 # it does not authorize a current sender to resume an old mutation.
@@ -300,8 +305,47 @@ async def inspect_saved_draft(adapter, *, profile_id, context, session, payload)
         except AdsManagerResponseError as exc:
             if exc.diagnostic.get("code") in {102, 190}:
                 raise  # Do not repeat reads after an explicit session refusal.
-            object_reads.append({"level": level, "id": entity, "available": False,
-                "diagnostic": exc.diagnostic, "publication_verified": False})
+            fallback_error = None
+            proof = None
+            if is_exact_fragment_read_rejection(exc):
+                try:
+                    proof = await _read_account_level_object(
+                        client, account_id=target["ad_account_id"], level=level,
+                        values=fragment["submitted_values"],
+                        parent_id=objects.get("ad_set" if level == "ad" else "campaign")
+                            if level != "campaign" else None,
+                        draft_id=draft_id, fragment_id=fragment["fragment_id"],
+                        fragment_read_error=exc.diagnostic,
+                        expected_object_id=entity,
+                        use_account_ad_row=level == "ad",
+                    )
+                except AdsManagerResponseError as fallback_exc:
+                    if fallback_exc.diagnostic.get("code") in {102, 190}:
+                        raise  # Do not continue after an explicit session refusal.
+                    fallback_error = fallback_exc.diagnostic
+                except ProvisioningError as fallback_exc:
+                    fallback_error = {"code": fallback_exc.code}
+            if proof is not None:
+                observed_values = proof.get("object_values", {})
+                object_reads.append({"level": level, "id": entity, "available": True,
+                    "values": copy.deepcopy(observed_values), "settings_match": True,
+                    "missing_fields": sorted((set(expected) - {"creative"}) - set(observed_values)),
+                    "effective_status": None, "publication_verified": False,
+                    "read_source": proof["source"], "identity_fallback_verified": True,
+                    "direct_read_diagnostic": exc.diagnostic})
+                if level == "ad":
+                    object_reads.append({"level": "creative", "id": proof["creative_id"],
+                        "available": True, "settings_match": True, "missing_fields": [],
+                        "publication_verified": False, "read_source": "creative_exact_id_read",
+                        "identity_fallback_verified": True})
+                continue
+            unavailable = {"level": level, "id": entity, "available": False,
+                "diagnostic": exc.diagnostic, "publication_verified": False}
+            if is_exact_fragment_read_rejection(exc):
+                unavailable["identity_fallback_attempted"] = True
+                if fallback_error is not None:
+                    unavailable["identity_fallback_diagnostic"] = fallback_error
+            object_reads.append(unavailable)
             continue
         _scope(row, target["ad_account_id"], entity)
         settings_match = all(field in row and _same(row[field], value, field)
