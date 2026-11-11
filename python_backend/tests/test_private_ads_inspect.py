@@ -371,7 +371,7 @@ class SavedDraftInspectionTests(unittest.IsolatedAsyncioTestCase):
         result = await self.launch()
         self.assertEqual([row['level'] for row in result['object_reads']], ['campaign','ad_set','ad','creative'])
         self.assertTrue(all(row['available'] and row['settings_match'] for row in result['object_reads']))
-        self.assertEqual(result['missing_direct_objects'], [])
+        self.assertEqual(result['unverified_object_levels'], [])
         self.assertTrue(result['launch_fingerprint_verified'])
         self.assertTrue(result['actor_verified'])
         self.assertFalse(result['editor_verified'])
@@ -600,7 +600,7 @@ class SavedDraftInspectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(final['published'])
         self.assertFalse(final['editor_verified'])
 
-    async def test_unavailable_object_read_records_exact_rejection_without_claiming_absence(self):
+    async def test_unavailable_object_read_records_rejection_and_marks_level_unverified(self):
         from app.private_ads_http import AdsManagerResponseError
         await self.saved()
         original = self.client.get
@@ -613,7 +613,8 @@ class SavedDraftInspectionTests(unittest.IsolatedAsyncioTestCase):
         row = next(row for row in result['object_reads'] if row['level'] == 'ad_set')
         self.assertFalse(row['available'])
         self.assertEqual(row['diagnostic']['error_subcode'],33)
-        self.assertEqual(result['missing_direct_objects'], ['ad_set'])
+        self.assertEqual(result['unverified_object_levels'], ['ad_set'])
+        self.assertNotIn('missing_direct_objects', result)
         self.assertIsNone(result['published'])
         self.assertEqual(len(self.client.posts),4)
 
@@ -656,7 +657,7 @@ class SavedDraftInspectionTests(unittest.IsolatedAsyncioTestCase):
             result = await self.launch()
         post.assert_not_awaited()
         self.assertEqual(result['mutation_posts'], 0)
-        self.assertEqual(result['missing_direct_objects'], [])
+        self.assertEqual(result['unverified_object_levels'], [])
         self.assertEqual([row['level'] for row in result['object_reads']],
                          ['campaign', 'ad_set', 'ad', 'creative'])
         self.assertTrue(all(row['available'] and row['settings_match']
@@ -708,7 +709,7 @@ class SavedDraftInspectionTests(unittest.IsolatedAsyncioTestCase):
             result = await self.launch()
         post.assert_not_awaited()
         self.assertEqual(result['mutation_posts'], 0)
-        self.assertEqual(result['missing_direct_objects'],
+        self.assertEqual(result['unverified_object_levels'],
                          ['campaign', 'ad_set', 'ad', 'creative'])
         self.assertTrue(all(not row['available'] for row in result['object_reads']))
         self.assertTrue(all(row.get('identity_fallback_attempted')
