@@ -1634,9 +1634,11 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
         status = next(row for row in await self.store.latest_profile_session_statuses()
                       if row["profile_id"] == profile)
         self.assertEqual(status["status"], "AUTH_COOKIE_REVOKED")
+        self.assertEqual(status["evidence_kind"], "snapshot_pending_v2")
         self.assertEqual(status["auth_cookie_deletions"], ["c_user", "xs"])
         marker = await self.store.profile_auth_cookie_revocation_for_context(profile, original)
         self.assertEqual(marker["status"], "META_AUTH_COOKIE_REVOKED")
+        self.assertTrue(marker["blocking"])
         self.assertEqual(marker["deleted_names"], ["c_user", "xs"])
         self.assertNotIn("auth_fingerprint", marker)
         with self.store._connect() as con:
@@ -1669,6 +1671,49 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(marker["status"], "PROFILE_IDENTITY_CHANGED")
         self.assertTrue(await self.store.has_profile_auth_cookie_revocation(profile))
+
+    async def test_legacy_snapshot_pending_record_is_unverified_and_fails_closed(self):
+        profile = "32"
+        cookies = {"c_user": "61596084833362", "xs": "old-snapshot"}
+        actor_fp, auth_fp = self.store._auth_cookie_fingerprint(cookies)
+        now = int(time.time())
+        self.store._record_profile_auth_cookie_revocation_sync(
+            profile, actor_fp, auth_fp, ["c_user", "xs"], now,
+            "job-created-before-ordered-parser", "Meta removed cookies", "snapshot_pending",
+        )
+
+        marker = await self.store.profile_auth_cookie_revocation_for_context(profile, cookies)
+
+        self.assertEqual(marker["status"], "AUTH_COOKIE_HISTORY_UNVERIFIED")
+        self.assertTrue(marker["blocking"])
+        self.assertEqual(marker["deleted_names"], [])
+        self.assertIn("до исправления порядка set-cookie", marker["message"].casefold())
+        state = next(row for row in await self.store.latest_profile_session_statuses()
+                     if row["profile_id"] == profile)
+        self.assertEqual(state["status"], "AUTH_COOKIE_HISTORY_UNVERIFIED")
+        self.assertEqual(state["auth_cookie_deletions"], [])
+        self.assertIn("связь с текущими cookies не подтверждены", state["message"].casefold())
+        with self.store._connect() as con:
+            migrated = dict(con.execute(
+                "SELECT actor_fingerprint,auth_fingerprint,deleted_names_json,evidence_kind "
+                "FROM profile_auth_cookie_revocations WHERE profile_id=?", (profile,),
+            ).fetchone())
+        self.assertEqual(migrated["actor_fingerprint"], "")
+        self.assertEqual(migrated["auth_fingerprint"], "")
+        self.assertEqual(migrated["deleted_names_json"], "[]")
+        self.assertEqual(migrated["evidence_kind"], "legacy_parser_unverified")
+
+        refreshed = await self.store.profile_auth_cookie_revocation_for_context(
+            profile, {**cookies, "xs": "same-actor-new-snapshot"},
+        )
+        self.assertEqual(refreshed["status"], "AUTH_COOKIE_HISTORY_UNVERIFIED")
+        self.assertTrue(refreshed["blocking"])
+        self.assertTrue(await self.store.has_profile_auth_cookie_revocation(profile))
+
+    async def test_actor_fingerprint_is_preserved_when_xs_is_missing(self):
+        actor_fp, auth_fp = self.store._auth_cookie_fingerprint({"c_user": "61596084833362"})
+        self.assertRegex(actor_fp, r"^[a-f0-9]{64}$")
+        self.assertEqual(auth_fp, "")
 
     async def test_terminal_checkpoint_survives_newer_success_and_blocks_store_retry(self):
         now=int(time.time())
@@ -1865,7 +1910,7 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(failed["status"], "FAILED")
         self.assertEqual(failed["error_code"], "META_AUTH_TOKEN_UNAVAILABLE")
 
-    async def test_legacy_explicit_cookie_deletion_blocks_new_snapshot_until_same_actor_refresh(self):
+    async def test_legacy_explicit_cookie_deletion_stays_unverified_and_blocking(self):
         now = int(time.time())
         message = (
             "Meta explicitly removed a selected-profile authentication cookie. "
@@ -1886,34 +1931,37 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await self.store.has_profile_auth_cookie_revocation("32"))
         current = {"c_user": "61596084833362", "xs": "current-snapshot"}
         marker = await self.store.profile_auth_cookie_revocation_for_context("32", current)
-        self.assertEqual(marker["status"], "META_AUTH_COOKIE_REVOKED")
-        self.assertEqual(marker["evidence_kind"], "legacy_history_pending")
+        self.assertEqual(marker["status"], "AUTH_COOKIE_HISTORY_UNVERIFIED")
+        self.assertEqual(marker["evidence_kind"], "legacy_history_unverified")
+        self.assertTrue(marker["blocking"])
         self.assertEqual(marker["deleted_names"], [])
-        self.assertIn("отпечаток использованной тогда сессии не сохранялся", marker["message"])
-        self.assertIn("Текущий снимок профиля заблокирован", marker["message"])
+        self.assertIn("не сохраняет отпечаток той сессии", marker["message"])
+        self.assertIn("не доказывает отзыв текущего снимка", marker["message"])
+        self.assertIn("запросы к meta по профилю остановлены", marker["message"].casefold())
 
         state = next(row for row in await self.store.latest_profile_session_statuses()
                      if row["profile_id"] == "32")
-        self.assertEqual(state["status"], "AUTH_COOKIE_REVOKED")
-        self.assertIn("отпечаток использованной тогда сессии не сохранялся", state["message"])
+        self.assertEqual(state["status"], "AUTH_COOKIE_HISTORY_UNVERIFIED")
+        self.assertEqual(state["evidence_kind"], "legacy_history_unverified")
+        self.assertIn("запросы к meta по профилю остановлены", state["message"].casefold())
         with self.store._connect() as con:
             saved = dict(con.execute(
                 "SELECT * FROM profile_auth_cookie_revocations WHERE profile_id='32'"
             ).fetchone())
         self.assertNotIn(current["c_user"], str(saved))
         self.assertNotIn(current["xs"], str(saved))
-        self.assertEqual(saved["evidence_kind"], "legacy_history_pending")
+        self.assertEqual(saved["actor_fingerprint"], "")
+        self.assertEqual(saved["auth_fingerprint"], "")
+        self.assertEqual(saved["evidence_kind"], "legacy_history_unverified")
 
-        # Only a same-actor auth snapshot change clears the local guard.
-        self.assertIsNone(await self.store.profile_auth_cookie_revocation_for_context(
+        # A changed snapshot cannot resolve evidence whose original fingerprint
+        # was never saved; the unverified record remains blocking history.
+        refreshed = await self.store.profile_auth_cookie_revocation_for_context(
             "32", {**current, "xs": "refreshed-same-actor-session"},
-        ))
-        self.assertFalse(await self.store.has_profile_auth_cookie_revocation("32"))
-
-        # The retained old error does not recreate the guard after that refresh.
-        self.assertIsNone(await self.store.profile_auth_cookie_revocation_for_context(
-            "32", {**current, "xs": "refreshed-same-actor-session"},
-        ))
+        )
+        self.assertEqual(refreshed["status"], "AUTH_COOKIE_HISTORY_UNVERIFIED")
+        self.assertTrue(refreshed["blocking"])
+        self.assertTrue(await self.store.has_profile_auth_cookie_revocation("32"))
 
     async def test_generic_auth_failure_without_cookie_deletion_evidence_does_not_create_guard(self):
         now = int(time.time())
@@ -1934,7 +1982,7 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
             "32", {"c_user": "61596084833362", "xs": "still-current-session"},
         ))
 
-    async def test_new_legacy_deletion_event_reblocks_after_earlier_refresh(self):
+    async def test_new_legacy_deletion_event_remains_fail_closed_after_earlier_refresh(self):
         now = int(time.time())
         current = {"c_user": "61596084833362", "xs": "refreshed-session"}
         await self.store.record_profile_auth_cookie_revocation(
@@ -1961,10 +2009,43 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(await self.store.has_profile_auth_cookie_revocation("32"))
         marker = await self.store.profile_auth_cookie_revocation_for_context("32", current)
-        self.assertEqual(marker["status"], "META_AUTH_COOKIE_REVOKED")
+        self.assertEqual(marker["status"], "AUTH_COOKIE_HISTORY_UNVERIFIED")
+        self.assertEqual(marker["evidence_kind"], "legacy_history_unverified")
+        self.assertTrue(marker["blocking"])
         self.assertEqual(marker["source_job_id"], "job-new-legacy-auth-cookie-deletion")
+        self.assertTrue(await self.store.has_profile_auth_cookie_revocation("32"))
 
-    async def test_resolver_blocks_legacy_deletion_history_before_returning_meta_context(self):
+    async def test_later_legacy_event_refreshes_existing_unverified_history(self):
+        now = int(time.time())
+        message = (
+            "Meta explicitly removed a selected-profile authentication cookie. "
+            "No GraphQL POST was sent."
+        )
+        self.store._record_profile_auth_cookie_revocation_sync(
+            "32", "", "", [], now, "job-old-history", "Old history", "legacy_history_unverified",
+        )
+        with self.store._connect() as con:
+            con.execute(
+                "INSERT INTO jobs(id,status,idempotency_key,created_at,updated_at) VALUES(?,?,?,?,?)",
+                ("job-later-legacy-history", "FAILED", "idem-later-legacy-history", now + 1, now + 1),
+            )
+            con.execute(
+                "INSERT INTO job_items(id,job_id,profile_id,status,error_code,error_message,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                ("item-later-legacy-history", "job-later-legacy-history", "32", "FAILED",
+                 "META_AUTH_TOKEN_UNAVAILABLE", message, now + 1, now + 1),
+            )
+
+        self.assertTrue(await self.store.has_profile_auth_cookie_revocation("32"))
+        marker = await self.store.profile_auth_cookie_revocation_for_context(
+            "32", {"c_user": "61596084833362", "xs": "current-snapshot"},
+        )
+        self.assertEqual(marker["status"], "AUTH_COOKIE_HISTORY_UNVERIFIED")
+        self.assertEqual(marker["source_job_id"], "job-later-legacy-history")
+        self.assertTrue(marker["blocking"])
+        self.assertTrue(await self.store.has_profile_auth_cookie_revocation("32"))
+
+    async def test_resolver_blocks_on_unverified_legacy_deletion_history(self):
         now = int(time.time())
         message = (
             "Meta explicitly removed a selected-profile authentication cookie. "
@@ -1993,12 +2074,13 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ProfileContextError) as caught:
             await resolver.resolve("32")
 
-        self.assertEqual(caught.exception.code, "META_AUTH_COOKIE_REVOKED")
-        self.assertIn("отпечаток использованной тогда сессии не сохранялся", str(caught.exception))
+        self.assertEqual(caught.exception.code, "AUTH_COOKIE_HISTORY_UNVERIFIED")
+        self.assertIn("Запросы к Meta", str(caught.exception))
         resolver._fetch.assert_awaited_once_with(params={"profile_id": "32"}, label="profile resolver")
         self.assertTrue(await self.store.has_profile_auth_cookie_revocation("32"))
         marker = await self.store.profile_auth_cookie_revocation_for_context("32", cookies)
-        self.assertEqual(marker["evidence_kind"], "legacy_history_pending")
+        self.assertEqual(marker["evidence_kind"], "legacy_history_unverified")
+        self.assertTrue(marker["blocking"])
 
     async def test_auth_revocation_evidence_kind_migrates_existing_database(self):
         with self.store._connect() as con:

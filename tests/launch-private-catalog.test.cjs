@@ -351,6 +351,15 @@ assert.equal(Boolean(controls.reviewStatus.textContent),false);
 assert.equal(controls.preflight.textContent,'Загрузить сохранённые РК');
 assert.equal(context.remaskPrivatePageReadFailure({message:'Meta requires sign-in',payload:{code:'PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE',message:'Meta requires sign-in'}},'15','act_120249392950240046'),
   'Профиль 15 / РК 120249392950240046: Meta остановила доступ. FP не загружены; новые действия запрещены.');
+const legacyPageFailure=context.remaskPrivatePageReadFailure({payload:{detail:{
+  code:'AUTH_COOKIE_HISTORY_UNVERIFIED',
+  message:'xs=PRIVATE_SECRET; старый снимок не сохранён.'
+}}},'32','act_120249233615830605');
+assert.equal(legacyPageFailure,
+  'Профиль 32 / РК 120249233615830605: старая запись не доказывает отзыв текущего снимка, но вход нельзя безопасно подтвердить. Запросы к Meta остановлены.');
+assert.doesNotMatch(legacyPageFailure,/PRIVATE_SECRET/);
+assert.match(context.remaskPrivatePageReadFailure({data:{error:{code:'META_AUTH_COOKIE_REVOKED'}}},'32','120249233615830605'),
+  /ReMask заблокировал повтор ранее зафиксированного снимка auth-cookie/);
 const safePageFailure=context.remaskPrivatePageReadFailure({message:'xs=PRIVATE_SECRET'},'15','act_120249392950240046');
 assert.match(safePageFailure,/не удалось загрузить FP из Meta/);
 assert.doesNotMatch(safePageFailure,/PAGE_READ_FAILED|BUSINESS_LOGIN_GATE|SESSION_EXPIRED/);

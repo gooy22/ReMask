@@ -404,7 +404,7 @@ function pythonWorkerItemBlockedByKnownProfileStatus(item) {
   const profileId = String(item && item.profile_id || '').trim();
   const session = profileId ? sessions.get(profileId) : null;
   const status = String(session && session.status || '').toUpperCase();
-  return ['CHECKPOINT','BUSINESS_LOGIN_GATE','AUTH_COOKIE_REVOKED','PROFILE_IDENTITY_CHANGED','PROFILE_AUTH_GUARD_UNAVAILABLE','LOGIN_REQUIRED','TWO_FACTOR','LIMITED','IN_PROGRESS'].includes(status);
+  return ['CHECKPOINT','BUSINESS_LOGIN_GATE','AUTH_COOKIE_REVOKED','AUTH_COOKIE_HISTORY_UNVERIFIED','PROFILE_IDENTITY_CHANGED','PROFILE_AUTH_GUARD_UNAVAILABLE','LOGIN_REQUIRED','TWO_FACTOR','LIMITED','IN_PROGRESS'].includes(status);
 }
 
 function pythonWorkerFailureDetails(item) {
@@ -743,6 +743,7 @@ function pythonWorkerIsProfileAuthBlockedCode(code) {
     'SESSION_EXPIRED',
     'BUSINESS_LOGIN_GATE',
     'META_AUTH_COOKIE_REVOKED',
+    'AUTH_COOKIE_HISTORY_UNVERIFIED',
     'PROFILE_IDENTITY_CHANGED',
     'PROFILE_AUTH_GUARD_UNAVAILABLE',
     'TWO_FACTOR_REQUIRED',
@@ -762,6 +763,9 @@ async function pythonWorkerProfilePreflight(profileId) {
   }
   if (savedState === 'BUSINESS_LOGIN_GATE') {
     throw new Error('Meta остановила доступ. Новые действия запрещены.');
+  }
+  if (savedState === 'AUTH_COOKIE_HISTORY_UNVERIFIED') {
+    throw new Error('AUTH_COOKIE_HISTORY_UNVERIFIED: старая запись не доказывает отзыв текущего снимка, но вход нельзя безопасно подтвердить. Запросы к Meta остановлены.');
   }
   const data = await pythonWorkerBridge({
     action: 'preflight',
@@ -821,7 +825,7 @@ async function pythonWorkerProfilePreflight(profileId) {
     browser.create_surface_ready === true &&
     preflight.facebook_session_ready === true;
 
-  if (savedState === 'AUTH_COOKIE_REVOKED' && typeof pythonWorkerLoadProfileStatuses === 'function') {
+  if (['AUTH_COOKIE_REVOKED','AUTH_COOKIE_HISTORY_UNVERIFIED'].includes(savedState) && typeof pythonWorkerLoadProfileStatuses === 'function') {
     await pythonWorkerLoadProfileStatuses();
   }
 
@@ -1045,6 +1049,9 @@ function pythonWorkerJobStatusView(item) {
   if (/BUSINESS_LOGIN_GATE$/.test(code)) {
     return {label:'ДОСТУП META ОСТАНОВЛЕН', key:'BUSINESS_LOGIN_GATE', message:'Meta остановила доступ. Новые задачи запрещены.'};
   }
+  if (code === 'AUTH_COOKIE_HISTORY_UNVERIFIED') {
+    return {label:'СТАРАЯ ЗАПИСЬ НЕ СВЕРЕНА', key:'LOGIN_REQUIRED', message:'Старая запись не доказывает отзыв текущего снимка, но вход нельзя безопасно подтвердить. Запросы к Meta остановлены.'};
+  }
   if (code === 'META_AUTH_COOKIE_REVOKED') {
     return {label:'META УДАЛИЛА COOKIE', key:'LOGIN_REQUIRED', message:'Meta явно удалила auth-cookie. Сохранённый вход не отправлен повторно.'};
   }
@@ -1097,6 +1104,9 @@ function pythonWorkerUserFailureText(item) {
   }
   if (/BUSINESS_LOGIN_GATE$/.test(code) || code === 'PROFILE_META_BLOCKED') {
     return 'Meta остановила доступ. Новые действия по профилю запрещены.';
+  }
+  if (code === 'AUTH_COOKIE_HISTORY_UNVERIFIED') {
+    return 'Старая запись не доказывает отзыв текущего снимка, но её нельзя надёжно сопоставить с сохранённым входом. Запросы к Meta по профилю остановлены.';
   }
   if (code === 'META_AUTH_COOKIE_REVOKED') {
     return 'Meta явно удалила auth-cookie. Этот снимок не отправлялся повторно; перед Prepare нужно обновить вход выбранного Facebook-профиля.';
@@ -1200,6 +1210,7 @@ function pythonWorkerProfileSessionView(value) {
     CHECKPOINT:{label:'ЧЕКПОИНТ',className:'warn'},
     BUSINESS_LOGIN_GATE:{label:'ДОСТУП META ОСТАНОВЛЕН',className:'warn'},
     AUTH_COOKIE_REVOKED:{label:'META УДАЛИЛА COOKIE',className:'warn'},
+    AUTH_COOKIE_HISTORY_UNVERIFIED:{label:'СТАРАЯ ЗАПИСЬ НЕ СВЕРЕНА',className:'warn'},
     PROFILE_IDENTITY_CHANGED:{label:'ID ПРОФИЛЯ ИЗМЕНИЛСЯ',className:'warn'},
     PROFILE_AUTH_GUARD_UNAVAILABLE:{label:'ПРОВЕРКА ВХОДА НЕ УДАЛАСЬ',className:'warn'},
     LOGIN_REQUIRED:{label:'НУЖЕН ВХОД',className:'warn'},
@@ -5045,19 +5056,24 @@ async function pythonWorkerOpenAutoModal() {
           if (!acceptedProfiles.has(String(profileId))) blockedProfiles.add(String(profileId));
         });
       }
+      const cookieHistoryUnverifiedProfiles = profiles.filter(function(profileId) {
+        const saved = pythonWorkerProfileSessionStatuses.get(String(profileId));
+        return String(saved && saved.status || '').toUpperCase() === 'AUTH_COOKIE_HISTORY_UNVERIFIED';
+      });
       profiles.forEach(function(profileId) {
         const saved = pythonWorkerProfileSessionStatuses.get(String(profileId));
-        if (['CHECKPOINT','BUSINESS_LOGIN_GATE','AUTH_COOKIE_REVOKED','PROFILE_IDENTITY_CHANGED','PROFILE_AUTH_GUARD_UNAVAILABLE'].includes(String(saved && saved.status || '').toUpperCase())) {
+        if (['CHECKPOINT','BUSINESS_LOGIN_GATE','AUTH_COOKIE_REVOKED','AUTH_COOKIE_HISTORY_UNVERIFIED','PROFILE_IDENTITY_CHANGED','PROFILE_AUTH_GUARD_UNAVAILABLE'].includes(String(saved && saved.status || '').toUpperCase())) {
           blockedProfiles.add(String(profileId));
         }
       });
-      const checkpointProfiles=[],metaBlockedProfiles=[],cookieRevokedProfiles=[],identityChangedProfiles=[],guardUnavailableProfiles=[];
+      const checkpointProfiles=[],metaBlockedProfiles=[],cookieRevokedProfiles=[],cookieHistoryProfiles=[],identityChangedProfiles=[],guardUnavailableProfiles=[];
       blockedProfiles.forEach(function(profileId){
         const saved=pythonWorkerProfileSessionStatuses.get(String(profileId));
         const status=String(saved && saved.status || '').toUpperCase();
         if(status==='CHECKPOINT')checkpointProfiles.push(String(profileId));
         else if(status==='BUSINESS_LOGIN_GATE')metaBlockedProfiles.push(String(profileId));
         else if(status==='AUTH_COOKIE_REVOKED')cookieRevokedProfiles.push(String(profileId));
+        else if(status==='AUTH_COOKIE_HISTORY_UNVERIFIED')cookieHistoryProfiles.push(String(profileId));
         else if(status==='PROFILE_IDENTITY_CHANGED')identityChangedProfiles.push(String(profileId));
         else if(status==='PROFILE_AUTH_GUARD_UNAVAILABLE')guardUnavailableProfiles.push(String(profileId));
       });
@@ -5067,6 +5083,8 @@ async function pythonWorkerOpenAutoModal() {
         pythonWorkerUiState.jobNotice='ID Facebook-профиля изменился у профилей '+identityChangedProfiles.join(', ')+'. Запросы к Meta не отправлены; проверьте привязку.';
       }else if(cookieRevokedProfiles.length){
         pythonWorkerUiState.jobNotice='Meta явно удалила auth-cookie у профилей '+cookieRevokedProfiles.join(', ')+'. Повторные запросы остановлены до обновления входа.';
+      }else if(cookieHistoryProfiles.length){
+        pythonWorkerUiState.jobNotice='Старая запись об auth-cookie у профилей '+cookieHistoryProfiles.join(', ')+' не доказывает отзыв текущего снимка, но не позволяет безопасно подтвердить вход. Запросы к Meta остановлены.';
       }else if(checkpointProfiles.length&&metaBlockedProfiles.length){
         pythonWorkerUiState.jobNotice='Meta остановила профили: чекпоинт — '+
           checkpointProfiles.join(', ')+'; доступ закрыт — '+metaBlockedProfiles.join(', ')+'.';
@@ -5074,6 +5092,8 @@ async function pythonWorkerOpenAutoModal() {
         pythonWorkerUiState.jobNotice='Чекпоинт Meta: пропущены профили '+checkpointProfiles.join(', ')+'.';
       }else if(metaBlockedProfiles.length){
         pythonWorkerUiState.jobNotice='Meta остановила доступ: пропущены профили '+metaBlockedProfiles.join(', ')+'.';
+      }else if(cookieHistoryUnverifiedProfiles.length){
+        pythonWorkerUiState.jobNotice='Старая запись об auth-cookie у профилей '+cookieHistoryUnverifiedProfiles.join(', ')+' не подтверждает отзыв текущего снимка. Запросы к Meta по этим профилям остановлены.';
       }else if(blockedProfiles.size){
         pythonWorkerUiState.jobNotice='Meta остановила часть профилей. Они пропущены без запросов.';
       }else{

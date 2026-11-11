@@ -1191,14 +1191,18 @@ async def _auth_cookie_revocation_profile_statuses(
         try:
             if not await has_marker(profile_id):
                 continue
-            # ProfileResolver compares the current c_user/xs fingerprint before
-            # returning a context. A same-actor refresh clears the marker here;
-            # unchanged or changed-actor snapshots fail without a Meta request.
+            # ProfileResolver blocks unresolved auth-cookie evidence. Older
+            # records remain explicitly unverified: they do not prove that
+            # Meta revoked the current snapshot, but cannot authorize sending
+            # that snapshot either.
             await pool.resolver.resolve(profile_id)
         except ProfileContextError as exc:
             code = getattr(exc, 'code', 'PROFILE_CONTEXT_ERROR')
             if code == 'META_AUTH_COOKIE_REVOKED':
                 status = 'AUTH_COOKIE_REVOKED'
+                message = str(exc)
+            elif code == 'AUTH_COOKIE_HISTORY_UNVERIFIED':
+                status = 'AUTH_COOKIE_HISTORY_UNVERIFIED'
                 message = str(exc)
             elif code == 'PROFILE_IDENTITY_CHANGED':
                 status = 'PROFILE_IDENTITY_CHANGED'
@@ -1406,7 +1410,7 @@ def _view_failed_profiles_with_known_session_blocks(
         for row in profile_statuses
         if isinstance(row, dict) and str(row.get('profile_id') or '').strip()
     }
-    blocked_states = {'CHECKPOINT', 'BUSINESS_LOGIN_GATE', 'AUTH_COOKIE_REVOKED', 'PROFILE_IDENTITY_CHANGED', 'PROFILE_AUTH_GUARD_UNAVAILABLE', 'LOGIN_REQUIRED', 'TWO_FACTOR', 'LIMITED', 'IN_PROGRESS'}
+    blocked_states = {'CHECKPOINT', 'BUSINESS_LOGIN_GATE', 'AUTH_COOKIE_REVOKED', 'AUTH_COOKIE_HISTORY_UNVERIFIED', 'PROFILE_IDENTITY_CHANGED', 'PROFILE_AUTH_GUARD_UNAVAILABLE', 'LOGIN_REQUIRED', 'TWO_FACTOR', 'LIMITED', 'IN_PROGRESS'}
     blocked: set[str] = set()
     for item in view.get('items') or []:
         if not isinstance(item, dict) or str(item.get('status') or '').upper() != 'FAILED':
@@ -4450,11 +4454,13 @@ async def create_job(request: CreateJobRequest) -> JobAccepted:
                 message = "Чекпоинт Meta: выбранные профили остановлены. Prepare не запущен."
             elif states == {'AUTH_COOKIE_REVOKED'}:
                 message = "Meta явно удалила auth-cookie сохранённого входа. Тот же набор не отправлен повторно; Prepare не создан."
+            elif states == {'AUTH_COOKIE_HISTORY_UNVERIFIED'}:
+                message = "Старая запись не доказывает отзыв текущего снимка, но её нельзя надёжно сопоставить. Запрос к Meta не отправлен; Prepare не создан."
             elif states == {'PROFILE_IDENTITY_CHANGED'}:
                 message = "ID Facebook-профиля изменился после зафиксированного удаления auth-cookie. Запрос к Meta не отправлен; проверьте привязанный аккаунт."
             elif states == {'PROFILE_AUTH_GUARD_UNAVAILABLE'}:
                 message = "Не удалось проверить сохранённый вход выбранного профиля. Запрос к Meta не отправлен; Prepare не создан."
-            elif states & {'AUTH_COOKIE_REVOKED', 'PROFILE_IDENTITY_CHANGED', 'PROFILE_AUTH_GUARD_UNAVAILABLE'}:
+            elif states & {'AUTH_COOKIE_REVOKED', 'AUTH_COOKIE_HISTORY_UNVERIFIED', 'PROFILE_IDENTITY_CHANGED', 'PROFILE_AUTH_GUARD_UNAVAILABLE'}:
                 message = "Не удалось безопасно подтвердить вход выбранных профилей. Запрос к Meta не отправлен; Prepare не создан."
             elif states == {'BUSINESS_LOGIN_GATE'}:
                 message = "Meta остановила доступ выбранных профилей. Prepare не запущен."
