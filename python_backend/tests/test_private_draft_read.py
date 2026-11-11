@@ -81,11 +81,11 @@ class DraftReadDiagnosticTests(unittest.IsolatedAsyncioTestCase):
         ):
             client = SimpleNamespace(read_only=False,
                 get=AsyncMock(return_value=draft), post=AsyncMock())
-            with self.subTest(expected_flag=expected_flag), \\
+            with self.subTest(expected_flag=expected_flag), \
                     patch('app.private_draft_read_diagnostic.saved_draft_intent',
-                        new=AsyncMock(return_value=intent)), \\
+                        new=AsyncMock(return_value=intent)), \
                     patch('app.private_draft_read_diagnostic.AdsManagerPrivateHttp.open',
-                        new=AsyncMock(return_value=client)), \\
+                        new=AsyncMock(return_value=client)), \
                     self.assertLogs('app.private_draft_read_diagnostic', level='WARNING') as captured:
                 with self.assertRaises(ProvisioningError) as caught:
                     await read_diagnostic(object(), profile_id='4', context=object(),
