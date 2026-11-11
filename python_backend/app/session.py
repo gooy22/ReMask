@@ -605,10 +605,14 @@ class ProfileResolver:
         requests, responses = wire.get("requests"), wire.get("responses")
         if not isinstance(requests, list) or not requests or not isinstance(responses, list) or not responses:
             return False
-        if requests[0].get("path") != "/me":
+        if not isinstance(requests[0], dict) or requests[0].get("path") != "/me":
             return False
         allowed_hosts = {"www.facebook.com", "facebook.com"}
         allowed_paths = {"/me", "/profile.php"}
+        directive_fields = (
+            "auth_cookie_deleted", "profile_root_auth_cookie_deleted",
+            "auth_cookie_set", "profile_root_auth_cookie_set",
+        )
         for row in requests:
             names = row.get("header_auth_cookie_names") if isinstance(row, dict) else None
             if (
@@ -629,10 +633,7 @@ class ProfileResolver:
                 or row.get("path") not in allowed_paths
                 or row.get("status") not in {200, 302, 303, 307, 308}
                 or row.get("protocol") not in {"HTTP/2", "HTTP/1.1"}
-                or row.get("auth_cookie_deleted")
-                or row.get("profile_root_auth_cookie_deleted")
-                or row.get("auth_cookie_set")
-                or row.get("profile_root_auth_cookie_set")
+                or any(not isinstance(row.get(field), list) or row.get(field) for field in directive_fields)
             ):
                 return False
         return True
