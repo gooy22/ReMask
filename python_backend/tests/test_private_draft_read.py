@@ -67,6 +67,36 @@ class DraftReadDiagnosticTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(read['observed']['parent_ad_object_id']['value'], '0')
         self.assertTrue(read['settings_match'])
 
+    async def test_scope_mismatch_logs_only_the_failed_identity_check(self):
+        target = {'ad_account_id':'111111', 'business_id':'222222'}
+        intent = (target, 'saved-key', 'fingerprint', '333333', 'source', '444444',
+                  [('campaign', '555555', {'name':'fixture'}, None)], None)
+        session = SimpleNamespace(facebook_web=AsyncMock(return_value=object()))
+
+        for draft, expected_flag in (
+            ({'id':'444444', 'account_id':'111111', 'author_id':'999999',
+              'ownership_type':'USER'}, 'author_id_matches'),
+            ({'id':'444444', 'account_id':'999999', 'author_id':'333333',
+              'ownership_type':'USER'}, 'account_id_matches'),
+        ):
+            client = SimpleNamespace(read_only=False,
+                get=AsyncMock(return_value=draft), post=AsyncMock())
+            with self.subTest(expected_flag=expected_flag), \\
+                    patch('app.private_draft_read_diagnostic.saved_draft_intent',
+                        new=AsyncMock(return_value=intent)), \\
+                    patch('app.private_draft_read_diagnostic.AdsManagerPrivateHttp.open',
+                        new=AsyncMock(return_value=client)), \\
+                    self.assertLogs('app.private_draft_read_diagnostic', level='WARNING') as captured:
+                with self.assertRaises(ProvisioningError) as caught:
+                    await read_diagnostic(object(), profile_id='4', context=object(),
+                        session=session, payload={})
+            self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_READ_SCOPE_MISMATCH')
+            diagnostic = '\\n'.join(captured.output)
+            self.assertIn(expected_flag + '":false', diagnostic)
+            self.assertNotIn('333333', diagnostic)
+            self.assertNotIn('999999', diagnostic)
+            client.post.assert_not_awaited()
+
     async def test_exact_unsupported_fragment_read_uses_only_unique_paused_account_object(self):
         from app.private_ads_http import AdsManagerResponseError
         target = {'ad_account_id':'111111', 'business_id':'222222'}
