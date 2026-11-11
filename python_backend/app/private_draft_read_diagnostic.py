@@ -87,6 +87,59 @@ def safe_reviewed_value_shape(field, value):
     return result
 
 
+def safe_targeting_value(value):
+    """Return bounded, user-readable targeting values without exposing secrets."""
+    if isinstance(value, str):
+        def unique_members(pairs):
+            parsed = {}
+            for name, item in pairs:
+                if name in parsed:
+                    raise ValueError("Ambiguous duplicate targeting key")
+                parsed[name] = item
+            return parsed
+
+        def reject_constant(_value):
+            raise ValueError("Non-finite targeting value")
+
+        try:
+            value = json.loads(value, object_pairs_hook=unique_members,
+                               parse_constant=reject_constant)
+        except (TypeError, ValueError, RecursionError):
+            return {"type": "str", "length": len(value)}
+
+    budget = {"nodes": 0}
+
+    def visit(item, depth=0):
+        budget["nodes"] += 1
+        if budget["nodes"] > 96:
+            return {"truncated": True}
+        if depth >= 8:
+            return {"type": type(item).__name__, "truncated": True}
+        if isinstance(item, dict):
+            result = {}
+            for key, child in sorted(item.items()):
+                if (not isinstance(key, str) or not re.fullmatch(r"[A-Za-z0-9_:-]{1,64}", key)
+                        or _SENSITIVE_SHAPE_KEY.search(key)):
+                    continue
+                if len(result) >= 40:
+                    result["_truncated"] = True
+                    break
+                result[key] = visit(child, depth + 1)
+            return result
+        if isinstance(item, list):
+            result = [visit(child, depth + 1) for child in item[:20]]
+            if len(item) > 20:
+                result.append({"_truncated": True, "remaining": len(item) - 20})
+            return result
+        if item is None or type(item) in {bool, int, float}:
+            return item
+        if isinstance(item, str):
+            return item if len(item) <= 160 else item[:159] + "…"
+        return {"type": type(item).__name__}
+
+    return visit(value)
+
+
 def values_diagnostic(rows, expected, business_id):
     """Explain the existing strict comparison without returning ad text or secrets."""
     result = {"collection": scalar_shape(rows), "fields": []}
@@ -110,6 +163,11 @@ def values_diagnostic(rows, expected, business_id):
         found = [row for row in rows if isinstance(row, dict) and row.get("field") == field]
         item = {"field": field, "count": len(found), "expected": scalar_shape(value),
                 "matches": fragment_values_match(found, {field: value})}
+        if field == "targeting":
+            item["targeting_diagnostic"] = {
+                "expected": safe_targeting_value(value),
+                "observed": safe_targeting_value(found[0].get("new_value")) if len(found) == 1 else None,
+            }
         if len(found) == 1:
             actual = found[0].get("new_value")
             item["observed"] = scalar_shape(actual)

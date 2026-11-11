@@ -1,3 +1,4 @@
+import json
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -7,6 +8,34 @@ from app.provisioning.models import ProvisioningError
 
 
 class DraftReadDiagnosticTests(unittest.IsolatedAsyncioTestCase):
+    def test_targeting_readback_shows_bounded_geo_interest_behavior_values(self):
+        targeting = {
+            "geo_locations": {"countries": ["UA"], "regions": [{"key": "123", "name": "Kyiv"}]},
+            "age_min": 23,
+            "age_max": 33,
+            "flexible_spec": [{
+                "interests": [{"id": "6004160395895", "name": "Travel (travel & tourism)"}],
+                "behaviors": [{"id": "6002714895372", "name": "Frequent Travelers"}],
+            }],
+            "locales": [24],
+            "access_token": "must-not-appear",
+        }
+        diagnostic = values_diagnostic(
+            [{"field": "targeting", "new_value": json.dumps(targeting)}],
+            {"targeting": targeting},
+            "business-id",
+        )["fields"][0]
+
+        self.assertTrue(diagnostic["matches"])
+        visible = diagnostic["targeting_diagnostic"]
+        self.assertEqual(visible["expected"]["geo_locations"]["countries"], ["UA"])
+        self.assertEqual(visible["observed"]["flexible_spec"][0]["interests"][0],
+                         {"id": "6004160395895", "name": "Travel (travel & tourism)"})
+        self.assertEqual(visible["observed"]["flexible_spec"][0]["behaviors"][0],
+                         {"id": "6002714895372", "name": "Frequent Travelers"})
+        self.assertNotIn("access_token", json.dumps(visible))
+        self.assertNotIn("must-not-appear", json.dumps(visible))
+
     async def test_exact_saved_handles_are_read_without_post_or_journal_changes(self):
         target = {'ad_account_id':'111111', 'business_id':'222222'}
         values = {'name':'fixture campaign', 'status':'PAUSED'}

@@ -1114,8 +1114,16 @@ function remaskPrivateRenderJob(job) {
                         });
                         const pending=read.pending_stage&&typeof read.pending_stage==='object'
                             ?String(read.pending_stage.stage||'unknown')+' ('+String(read.pending_stage.reason||'unknown')+')':'';
+                        const targetingDetails=rows.flatMap(row=>{
+                            const fields=Array.isArray(row.settings_diagnostic?.fields)?row.settings_diagnostic.fields:[];
+                            const targeting=fields.find(field=>field.field==='targeting'&&
+                                field.targeting_diagnostic&&typeof field.targeting_diagnostic==='object');
+                            if(!targeting)return [];
+                            return ['Аудитория, прочитанная из Meta ('+(row.level||'fragment')+'):\n'+
+                                JSON.stringify(targeting.targeting_diagnostic.observed,null,2)];
+                        }).join('\n\n');
                         const adsetSettings=remaskPrivateDraftAdsetSettingsSummary(task,rows);
-                        const technical=[checks.join('\n'),adsetSettings,
+                        const technical=[checks.join('\n'),targetingDetails,adsetSettings,
                             pending?'Ожидающий этап: '+pending:'',
                             'Полнота черновика и редактор не проверялись.'].filter(Boolean).join('\n\n');
                         const message='Черновик '+String(read.draft_id||'')+' прочитан. Совпали связи и настройки: '+
