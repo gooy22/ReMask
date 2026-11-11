@@ -9,7 +9,7 @@ function fixture(targets, failure) {
   let reads = 0;
   const current = {fingerprint:'fixture',targets,spec:{targeting:{geo_locations:{countries:['UA']}}}};
   const c = {document:{hidden:false,createElement:()=>({})},creative:false,
-    snapshot:()=>current,blockedTargets:new Set(),lastFingerprint:'',generation:0,
+    snapshot:()=>current,blockedTargets:new Set(),profileGuardTargets:new Set(),lastFingerprint:'',generation:0,
     controller:null,needsRefresh:true,lastReadAt:0,timer:null,AbortController,Date,JSON,
     requestSpec:()=>({}),status:{},results:{querySelector:()=>null,appendChild:node=>renderedErrors.push(node)},render:()=>{},
     read:async()=>{reads++;if(failure)throw typeof failure==='string'?new Error(failure):failure;return {estimate_ready:false};},
