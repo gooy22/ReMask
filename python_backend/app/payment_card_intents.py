@@ -53,6 +53,21 @@ class CardIntentLedger:
             con.execute('''CREATE UNIQUE INDEX IF NOT EXISTS card_http_pending_account
                 ON card_http_intents(profile, account)
                 WHERE phase IN ('SUBMITTED', 'SUBMITTED_UNVERIFIED', 'ACTION_REQUIRED', 'VERIFYING')''')
+            # A completed Save is durable evidence for this vault card/RK.
+            # A fresh attempt_id must never bypass that evidence and POST again.
+            con.execute('''CREATE TRIGGER IF NOT EXISTS card_http_no_rebind_linked
+                BEFORE INSERT ON card_http_intents
+                WHEN EXISTS (
+                    SELECT 1 FROM card_http_intents
+                    WHERE profile=NEW.profile AND account=NEW.account
+                      AND card_id=NEW.card_id AND phase='LINKED')
+                BEGIN SELECT RAISE(ABORT,'CARD_ALREADY_LINKED'); END''')
+            # Once Meta has independently confirmed the exact linked card,
+            # no stale worker or direct SQLite writer may demote that result.
+            con.execute('''CREATE TRIGGER IF NOT EXISTS card_http_linked_phase_terminal
+                BEFORE UPDATE OF phase ON card_http_intents
+                WHEN OLD.phase='LINKED' AND NEW.phase!='LINKED'
+                BEGIN SELECT RAISE(ABORT,'CARD_LINKED_TERMINAL'); END''')
             con.execute('''CREATE TABLE IF NOT EXISTS card_bank_verification_intents (
                 attempt_id TEXT PRIMARY KEY,
                 profile TEXT NOT NULL, account TEXT NOT NULL,
@@ -185,8 +200,20 @@ class CardIntentLedger:
             con = self.connect()
             try:
                 con.execute('BEGIN IMMEDIATE')
-                changed = con.execute("UPDATE card_http_intents SET phase='REVIEWED_EMPTY',updated_at=? WHERE attempt_id=? AND profile=? AND account=? AND card_id=? AND phase IN ('SUBMITTED','SUBMITTED_UNVERIFIED','VERIFYING') AND updated_at<=?",
-                    (int(time.time()),attempt_id,profile,account,card_id,int(time.time())-180)).rowcount
+                # A prior issuer authorization, even with an unknown result,
+                # must never be retired to permit a fresh card Save. The
+                # restriction is deliberately account-wide when evidence is
+                # incomplete: a different credential alias cannot evade it.
+                changed = con.execute("""UPDATE card_http_intents
+                    SET phase='REVIEWED_EMPTY',updated_at=?
+                    WHERE attempt_id=? AND profile=? AND account=? AND card_id=?
+                      AND phase IN ('SUBMITTED','SUBMITTED_UNVERIFIED','VERIFYING')
+                      AND updated_at<=?
+                      AND NOT EXISTS (
+                        SELECT 1 FROM card_bank_verification_intents
+                        WHERE profile=? AND account=?)""",
+                    (int(time.time()),attempt_id,profile,account,card_id,
+                     int(time.time())-180,profile,account)).rowcount
                 if changed != 1:
                     raise ValueError('CARD_BINDING_CHANGED')
                 con.commit()
@@ -201,7 +228,12 @@ class CardIntentLedger:
         con = self.connect()
         try:
             con.execute('BEGIN IMMEDIATE')
-            existing = con.execute('SELECT result FROM card_http_intents WHERE attempt_id=?', (attempt_id,)).fetchone()
+            existing = con.execute('SELECT phase,result FROM card_http_intents WHERE attempt_id=?', (attempt_id,)).fetchone()
+            if existing and existing['phase'] == 'LINKED':
+                # Late or duplicated worker results cannot overwrite confirmed
+                # linkage, including its exact credential evidence.
+                con.commit()
+                return
             if existing:
                 safe = {**json.loads(existing['result']), **safe}
             con.execute('UPDATE card_http_intents SET phase=?,result=?,updated_at=? WHERE attempt_id=?',
