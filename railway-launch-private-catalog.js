@@ -8,6 +8,10 @@ function remaskPrivatePageReadFailure(error, profile, accountId) {
         error?.payload?.error?.message||error?.data?.message||error?.data?.detail?.message||
         error?.data?.error?.message||error||'');
     const evidence=(rawCode+' '+rawMessage).toUpperCase();
+    // The PHP asset bridge currently forwards worker error codes as the
+    // exception message. Recognize only fixed, safe codes; never render the
+    // raw error message or any cookie/session material in the Launch UI.
+    const code=evidence.match(/(?:^|[^A-Z0-9_])(AUTH_COOKIE_HISTORY_UNVERIFIED|META_AUTH_COOKIE_REVOKED|PROFILE_IDENTITY_CHANGED|PROFILE_AUTH_GUARD_UNAVAILABLE|META_AUTH_TOKEN_UNAVAILABLE)(?=$|[^A-Z0-9_])/)?.[1]||rawCode;
     const gate=evidence.match(/(?:\b|_)(CHECKPOINT_REQUIRED|TWO_FACTOR_REQUIRED|SESSION_EXPIRED|BUSINESS_LOGIN_GATE)\b/)?.[1];
     const profileLabel=String(profile||'?').replace(/[^0-9]/g,'').slice(0,12)||'?';
     const accountLabel=String(accountId||'').replace(/^act_/,'').replace(/[^0-9]/g,'').slice(0,30)||'?';
@@ -20,15 +24,15 @@ function remaskPrivatePageReadFailure(error, profile, accountId) {
         return `${scope}: Meta запросила подтверждение 2FA. FP не загружены.`;
     if(gate==='SESSION_EXPIRED')
         return `${scope}: Meta не подтвердила вход. FP не загружены.`;
-    if(rawCode==='AUTH_COOKIE_HISTORY_UNVERIFIED')
+    if(code==='AUTH_COOKIE_HISTORY_UNVERIFIED')
         return `${scope}: старая запись не доказывает отзыв текущего снимка, но вход нельзя безопасно подтвердить. Запросы к Meta остановлены.`;
-    if(rawCode==='META_AUTH_COOKIE_REVOKED')
+    if(code==='META_AUTH_COOKIE_REVOKED')
         return `${scope}: ReMask заблокировал повтор ранее зафиксированного снимка auth-cookie. Запрос к Meta не отправлен.`;
-    if(rawCode==='PROFILE_IDENTITY_CHANGED')
+    if(code==='PROFILE_IDENTITY_CHANGED')
         return `${scope}: ID профиля не совпадает с профилем, связанным с локальной записью блокировки. Запрос к Meta не отправлен.`;
-    if(rawCode==='PROFILE_AUTH_GUARD_UNAVAILABLE')
+    if(code==='PROFILE_AUTH_GUARD_UNAVAILABLE')
         return `${scope}: ReMask не смог проверить локальную запись входа. Запрос к Meta не отправлен.`;
-    if(rawCode==='META_AUTH_TOKEN_UNAVAILABLE')
+    if(code==='META_AUTH_TOKEN_UNAVAILABLE')
         return `${scope}: ReMask не получил подтверждённый контекст входа. Чтение FP не выполнено.`;
     return `${scope}: не удалось загрузить FP из Meta. Попробуйте позже.`;
 }
