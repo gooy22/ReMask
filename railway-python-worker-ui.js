@@ -282,7 +282,25 @@ function pythonWorkerDraftValidationMessages(result) {
   for(const row of Array.isArray(result?.fragment_reads)?result.fragment_reads:[]){
     if(!row||!Object.prototype.hasOwnProperty.call(labels,row.level))continue;
     if(row.validation_status!=='HAS_ERRORS'&&row.active_errors_present!==true)continue;
-    messages.push(labels[row.level]+': Meta нашла ошибки проверки.');
+    const diagnostic=row.active_error_diagnostic&&typeof row.active_error_diagnostic==='object'
+      ?row.active_error_diagnostic:{};
+    const records=Array.isArray(diagnostic.records)?diagnostic.records.slice(0,8):[];
+    const safeValues=(values,pattern)=>Array.isArray(values)?values.filter(value=>
+      typeof value==='string'&&pattern.test(value)):[];
+    const evidence=records.map((record,index)=>{
+      if(!record||typeof record!=='object')return '';
+      const codes=Array.isArray(record.codes)?record.codes.map(item=>
+        Number.isSafeInteger(item?.value)&&item.value>=0?String(item.value):'').filter(Boolean):[];
+      const fields=safeValues(record.field_names,/^[a-z_]{1,64}$/);
+      const terms=safeValues(record.matched_terms_in_order,/^[a-z_']{1,32}$/);
+      const details=[];
+      if(codes.length)details.push('коды '+codes.join(', '));
+      if(fields.length)details.push('поля '+fields.join(', '));
+      if(terms.length)details.push('термины в исходном порядке '+terms.join(' / '));
+      return details.length?'ошибка '+(index+1)+' ['+details.join('; ')+']':'';
+    }).filter(Boolean);
+    const suffix=evidence.length?' Безопасные термины; исходный текст ответа скрыт: '+evidence.join(' | ')+'.':'';
+    messages.push(labels[row.level]+': Meta нашла ошибки проверки.'+suffix);
   }
   if(Array.isArray(result?.object_reads)&&result.object_reads.some(row=>row?.available===false)){
     messages.push('Не удалось отдельно проверить рекламные объекты. Наличие и публикация не подтверждены.');
