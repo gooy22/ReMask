@@ -1114,7 +1114,7 @@ class ReadOnlyReferenceBootstrapReuseTests(unittest.IsolatedAsyncioTestCase):
                                     "should_randomize": False}],
         ])
         ads_document = json.dumps(ads_document)
-        self.web.bootstrap = AsyncMock(return_value=SimpleNamespace(
+        bootstrap_result = SimpleNamespace(
             actor_id="123456", profile_actor_verified=True,
             fb_dtsg="synthetic-fresh-csrf", lsd="synthetic-fresh-lsd",
             jazoest="", request_context={"__rev": "12345"},
@@ -1123,7 +1123,14 @@ class ReadOnlyReferenceBootstrapReuseTests(unittest.IsolatedAsyncioTestCase):
                 "param_name": "jazoest",
                 "version": "2",
                 "should_randomize": False,
-            }))
+            })
+        async def bootstrap(**kwargs):
+            # FacebookWebSession.bootstrap refreshes reviewed modules after its
+            # document read unless the caller explicitly defers that work.
+            if not getattr(self.web, "defer_module_refresh", False):
+                await self.web.refresh_reviewed_modules(ads_document, return_url)
+            return bootstrap_result
+        self.web.bootstrap = bootstrap
         self.web.session.facebook_cookie_snapshot = lambda: dict(self.web.profile.cookies)
         calls = []
 
@@ -1183,6 +1190,15 @@ class ReadOnlyReferenceBootstrapReuseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client.context.actor_id, "123456")
         await self._assert_business_gate_http_flow(calls)
         self.web.refresh_reviewed_modules.assert_not_awaited()
+
+    async def test_reference_renewal_defers_module_refresh_when_flag_is_absent(self):
+        await self._mock_business_gate_session()
+        self.assertFalse(hasattr(self.web, "defer_module_refresh"))
+        client = await self.open_reference()
+        self.assertTrue(client.read_only)
+        self.web.refresh_reviewed_modules.assert_not_awaited()
+        self.assertFalse(hasattr(self.web, "defer_module_refresh"),
+            "temporary read-only deferral must be removed after bootstrap")
 
     async def test_paused_draft_gate_uses_http_handoff_and_exact_account_proof(self):
         calls = await self._mock_business_gate_session()

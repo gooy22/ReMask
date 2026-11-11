@@ -1102,9 +1102,10 @@ class AdsManagerPrivateHttp:
             # before the exact account + Business read below gets a chance to prove
             # the selected scope. The saved c_user, profile, proxy and cookie snapshot
             # are still pinned by _profile_matches(), and no write is enabled yet.
-            previous_defer_module_refresh = getattr(self.web, "defer_module_refresh", None)
-            if previous_defer_module_refresh is not None:
-                self.web.defer_module_refresh = True
+            had_defer_module_refresh = hasattr(self.web, "defer_module_refresh")
+            previous_defer_module_refresh = getattr(
+                self.web, "defer_module_refresh", False)
+            self.web.defer_module_refresh = True
             bootstrap_options = {
                 # Renew from the selected RK without carrying a BM into Meta's
                 # login handoff. The exact RK+BM relationship is proven by the
@@ -1117,8 +1118,13 @@ class AdsManagerPrivateHttp:
             try:
                 bootstrap = await self.web.bootstrap(**bootstrap_options)
             finally:
-                if previous_defer_module_refresh is not None:
+                if had_defer_module_refresh:
                     self.web.defer_module_refresh = previous_defer_module_refresh
+                else:
+                    try:
+                        del self.web.defer_module_refresh
+                    except AttributeError:
+                        pass
             bootstrap_fb_dtsg = getattr(bootstrap, "fb_dtsg", "")
             bootstrap_source_is_document = False
             try:
