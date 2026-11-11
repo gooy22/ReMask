@@ -11,7 +11,7 @@ function remaskPrivatePageReadFailure(error, profile, accountId) {
     // The PHP asset bridge currently forwards worker error codes as the
     // exception message. Recognize only fixed, safe codes; never render the
     // raw error message or any cookie/session material in the Launch UI.
-    const code=evidence.match(/(?:^|[^A-Z0-9_])(AUTH_COOKIE_HISTORY_UNVERIFIED|META_AUTH_COOKIE_REVOKED|PROFILE_IDENTITY_CHANGED|PROFILE_AUTH_GUARD_UNAVAILABLE|META_AUTH_TOKEN_UNAVAILABLE)(?=$|[^A-Z0-9_])/)?.[1]||rawCode;
+    const code=evidence.match(/(?:^|[^A-Z0-9_])(AUTH_COOKIE_HISTORY_UNVERIFIED|META_AUTH_COOKIE_REVOKED|PROFILE_IDENTITY_CHANGED|PROFILE_AUTH_GUARD_UNAVAILABLE|META_AUTH_TOKEN_UNAVAILABLE|PROFILE_IDENTITY_PROBE_UNCONFIRMED|PROFILE_IDENTITY_PROBE_RATE_LIMITED|PROFILE_READ_GUARD_UNAVAILABLE|META_AUTH_GATE_UNCLASSIFIED)(?=$|[^A-Z0-9_])/)?.[1]||rawCode;
     const gate=evidence.match(/(?:\b|_)(CHECKPOINT_REQUIRED|TWO_FACTOR_REQUIRED|SESSION_EXPIRED|BUSINESS_LOGIN_GATE)\b/)?.[1];
     const profileLabel=String(profile||'?').replace(/[^0-9]/g,'').slice(0,12)||'?';
     const accountLabel=String(accountId||'').replace(/^act_/,'').replace(/[^0-9]/g,'').slice(0,30)||'?';
@@ -33,7 +33,15 @@ function remaskPrivatePageReadFailure(error, profile, accountId) {
     if(code==='PROFILE_AUTH_GUARD_UNAVAILABLE')
         return `${scope}: ReMask не смог проверить локальную запись входа. Запрос к Meta не отправлен.`;
     if(code==='META_AUTH_TOKEN_UNAVAILABLE')
-        return `${scope}: ReMask не получил подтверждённый контекст входа. Чтение FP не выполнено.`;
+        return `${scope}: ReMask не получил подтверждённый контекст входа. Чтение списка страниц не выполнено.`;
+    if(code==='PROFILE_IDENTITY_PROBE_UNCONFIRMED')
+        return `${scope}: ReMask не подтвердил профиль для списка FP. Список страниц не загружен; запрос списка страниц не отправлен.`;
+    if(code==='PROFILE_IDENTITY_PROBE_RATE_LIMITED')
+        return `${scope}: проверка профиля ReMask выполнялась недавно. Повторное чтение списка страниц не отправлено.`;
+    if(code==='PROFILE_READ_GUARD_UNAVAILABLE')
+        return `${scope}: ReMask не проверил локальное состояние профиля. Чтение списка страниц не отправлено.`;
+    if(code==='META_AUTH_GATE_UNCLASSIFIED')
+        return `${scope}: ReMask остановил чтение списка страниц после неподтверждённого ответа Meta. Ответ не классифицирован.`;
     return `${scope}: не удалось загрузить FP из Meta. Попробуйте позже.`;
 }
 function remaskFundingState(info) {
