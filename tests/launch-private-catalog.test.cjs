@@ -369,6 +369,23 @@ assert.equal(embeddedLegacyPageFailure,legacyPageFailure);
 assert.doesNotMatch(embeddedLegacyPageFailure,/PRIVATE_SECRET/);
 assert.match(context.remaskPrivatePageReadFailure({data:{error:{code:'META_AUTH_COOKIE_REVOKED'}}},'32','120249233615830605'),
   /ReMask заблокировал повтор ранее зафиксированного снимка auth-cookie/);
+const probeFailure=context.remaskPrivatePageReadFailure({payload:{detail:{
+  code:'PROFILE_IDENTITY_PROBE_UNCONFIRMED',
+  message:'probe details are deliberately not rendered.'
+}}},'32','120249233615830605');
+assert.equal(probeFailure,
+  'Профиль 32 / РК 120249233615830605: ReMask не подтвердил профиль для списка FP. Список страниц не загружен; запрос списка страниц не отправлен.');
+const probeMessageOnly=context.remaskPrivatePageReadFailure({message:'PROFILE_IDENTITY_PROBE_UNCONFIRMED'},
+  '32','120249233615830605');
+assert.equal(probeMessageOnly,probeFailure,
+  'worker guard codes forwarded as an error message must remain diagnosable');
+assert.doesNotMatch(probeFailure,/probe details|cookies|аккаунт/);
+assert.match(context.remaskPrivatePageReadFailure({payload:{code:'PROFILE_IDENTITY_PROBE_RATE_LIMITED'}},
+  '32','120249233615830605'),/повторное чтение списка страниц не отправлено/i);
+assert.match(context.remaskPrivatePageReadFailure({payload:{code:'PROFILE_READ_GUARD_UNAVAILABLE'}},
+  '32','120249233615830605'),/локальное состояние профиля/);
+assert.match(context.remaskPrivatePageReadFailure({payload:{code:'META_AUTH_GATE_UNCLASSIFIED'}},
+  '32','120249233615830605'),/Ответ не классифицирован/);
 const safePageFailure=context.remaskPrivatePageReadFailure({message:'xs=PRIVATE_SECRET'},'15','act_120249392950240046');
 assert.match(safePageFailure,/не удалось загрузить FP из Meta/);
 assert.doesNotMatch(safePageFailure,/PAGE_READ_FAILED|BUSINESS_LOGIN_GATE|SESSION_EXPIRED/);

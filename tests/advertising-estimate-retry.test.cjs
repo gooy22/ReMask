@@ -9,7 +9,7 @@ function fixture(targets, failure) {
   let reads = 0;
   const current = {fingerprint:'fixture',targets,spec:{targeting:{geo_locations:{countries:['UA']}}}};
   const c = {document:{hidden:false,createElement:()=>({})},creative:false,
-    snapshot:()=>current,blockedTargets:new Set(),lastFingerprint:'',generation:0,
+    snapshot:()=>current,blockedTargets:new Set(),profileGuardTargets:new Set(),lastFingerprint:'',generation:0,
     controller:null,needsRefresh:true,lastReadAt:0,timer:null,AbortController,Date,JSON,
     requestSpec:()=>({}),status:{},results:{querySelector:()=>null,appendChild:node=>renderedErrors.push(node)},render:()=>{},
     read:async()=>{reads++;if(failure)throw typeof failure==='string'?new Error(failure):failure;return {estimate_ready:false};},
@@ -29,6 +29,24 @@ function fixture(targets, failure) {
     if(code==='BUSINESS_LOGIN_GATE'||code==='SESSION_EXPIRED')assert.match(f.c.status.textContent,/Meta не подтвердила вход/);
     if(code==='TWO_FACTOR_REQUIRED')assert.match(f.c.status.textContent,/Meta запросила подтверждение входа/);
     await f.c.estimate(true);assert.equal(f.reads(),1); // focus/change cannot reopen the gated scope
+  }
+  for(const code of ['META_AUTH_COOKIE_REVOKED','AUTH_COOKIE_HISTORY_UNVERIFIED','PROFILE_IDENTITY_CHANGED',
+    'PROFILE_IDENTITY_PROBE_UNCONFIRMED','PROFILE_IDENTITY_PROBE_RATE_LIMITED','PROFILE_AUTH_GUARD_UNAVAILABLE',
+    'PROFILE_READ_GUARD_UNAVAILABLE','META_AUTH_TOKEN_UNAVAILABLE']) {
+    const failure=new Error('local profile guard');
+    failure.meta={code};
+    const f=fixture([target],failure);await f.c.estimate();
+    assert.equal(f.reads(),1,code+' should make only one ReMask helper call');
+    assert.equal(f.scheduled.length,0,code+' should not enter transient retry');
+    assert.equal(f.c.needsRefresh,false,code+' should stop automatic retry');
+    assert.match(f.c.status.textContent,/ReMask остановил оценку на локальной проверке профиля/);
+    assert.match(f.renderedErrors[0].textContent,/ReMask/);
+    assert.doesNotMatch(f.renderedErrors[0].textContent,/Meta не подтвердила запрос/);
+    if(code==='META_AUTH_COOKIE_REVOKED')
+      assert.match(f.renderedErrors[0].textContent,/Запрос оценки в Meta не отправлялся/);
+    await f.c.estimate(true);
+    assert.equal(f.reads(),1,code+' should remain stopped on a forced refresh');
+    assert.match(f.c.status.textContent,/ReMask остановил оценку на локальной проверке профиля/);
   }
   for(const failure of ['HTTP_UNAVAILABLE',null]) {
     const f=fixture([target],failure);await f.c.estimate();
