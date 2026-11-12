@@ -99,6 +99,32 @@ assert.ok(privateCatalogOverlay.includes('id="remaskLaunchModeBanner"') &&
       throw new Error('Unexpected write: '+request.action);
     }};
   vm.createContext(ctx);vm.runInContext(source,ctx);
+  const accountId='120000000000001';
+  const sharedTargeting={geo_locations:{countries:['UA']},age_min:23,age_max:33,
+    flexible_spec:[{interests:[{id:'travel'}],behaviors:[{id:'traveler'}]}],locales:[24],
+    custom_audiences:[{id:'shared-include'}],excluded_custom_audiences:[{id:'shared-exclude'}]};
+  const accountAudiences={custom_audiences:[{id:'rk-include'}],
+    excluded_custom_audiences:[{id:'rk-exclude'}]};
+  ctx.targetMode=()=>true;
+  ctx.targetForAccount=()=>({profile:'33',business_id:'130000000000001'});
+  ctx.bindingFor=()=>({page_id:'140000000000001'});
+  const rows=ctx.remaskPrivateTargetRows({accountIds:[accountId],
+    payload:{campaign:{name:'Shared campaign'},adset:{targeting:sharedTargeting},creative:{}},
+    accountOverrides:{[accountId]:{adset:{targeting:accountAudiences}}}});
+  const completeTargeting={geo_locations:{countries:['UA']},age_min:23,age_max:33,
+    flexible_spec:[{interests:[{id:'travel'}],behaviors:[{id:'traveler'}]}],locales:[24],
+    custom_audiences:[{id:'rk-include'}],excluded_custom_audiences:[{id:'rk-exclude'}]};
+  assert.deepEqual(JSON.parse(JSON.stringify(rows[0].launch.override.adset.targeting)),
+    completeTargeting,'the per-RK request carries all shared Ad Set targeting plus that RK’s audiences');
+  assert.deepEqual(JSON.parse(JSON.stringify(rows[0].launch.base.adset.targeting)),sharedTargeting,
+    'building an account override does not mutate the shared form targeting');
+  const legacyPartial=ctx.remaskPrivateEffectiveSavedLaunchSections({payload:{launch:{
+    base:{adset:{targeting:sharedTargeting}},
+    override:{adset:{targeting:accountAudiences}}
+  }}});
+  assert.deepEqual(JSON.parse(JSON.stringify(legacyPartial.adset.targeting)),completeTargeting,
+    'older saved audience-only overrides display the complete effective targeting');
+
 assert.equal(ctx.remaskPrivateLaunchUserMessage({code:'PRIVATE_ADS_DRAFT_BUSINESS_LOGIN_GATE'}),
   'Meta не подтвердила вход','draft errors use a short Russian message without internal codes');
 assert.equal(ctx.remaskPrivateLaunchUserMessage({code:'SESSION_EXPIRED'}),
