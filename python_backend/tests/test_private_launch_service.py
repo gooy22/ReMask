@@ -702,6 +702,7 @@ class PrivateLaunchTests(unittest.IsolatedAsyncioTestCase):
             "base": {
                 "campaign": {"name": "Shared campaign"},
                 "adset": {"targeting": shared_targeting},
+                "ad": {},
                 "creative": {},
             },
             "override": {"adset": {"targeting": account_audiences}},
