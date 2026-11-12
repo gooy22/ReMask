@@ -231,6 +231,8 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
             'account_scope_verified':True,'business_scope_verified':True,
             'payment_account_relation_verified':True,'methods_query_verified':True,
             'checked_live':True,'card_linked':True, 'inventory_complete':True,
+            'all_credential_ids':['credential:visa:1234'],
+            'card_credential_count':1, 'non_card_credential_count':0,
             'payment_methods':[{'type':'Visa','last4':'1234',
                 'needs_verification':False, 'verification_tasks_observed':True,
                 'verification_tasks':[], 'card_confirmation_status':'CLEAR',
@@ -310,19 +312,22 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.client.uploads, 0)
         self.assertEqual(self.client.posts, [])
 
-    async def test_real_draft_mode_verifies_fragments_without_payment_publish_or_delivery(self):
+    async def test_real_draft_mode_verifies_fragments_with_payment_preflight_and_no_publish(self):
         self.payload['launch']['execution_mode'] = 'DRAFT'
         self.payload['launch']['adset']['targeting'] = {'geo_locations': {'countries': ['UA']},
             'age_min': 23, 'age_max': 33, 'locales': [52],
             'interests': [{'id': '6003139266461', 'name': 'Physical fitness'}],
             'behaviors': [{'id': '6015548561283', 'name': 'Chrome'}]}
-        with patch('app.static_payment_read.inspect_methods',new=AsyncMock(side_effect=AssertionError('No billing read'))) as payment, \
+        with patch('app.static_payment_read.inspect_methods',
+                   new=AsyncMock(return_value=self.funding)) as payment, \
                 patch.object(self.owner.ads_manager, '_finish_delivery',new=AsyncMock(side_effect=AssertionError('No delivery'))) as delivery:
             review = await self.owner.review(profile_id='19',context=self.context,payload=self.payload,
                 transport=SimpleNamespace(session=self.session))
             self.assertTrue(review['ready'])
             self.assertEqual(review['ready_for'], 'DRAFT')
-            self.assertFalse(review['preflight']['payment_checked_live'])
+            self.assertTrue(review['preflight']['payment_checked_live'])
+            self.assertTrue(review['preflight']['payment_inventory_complete'])
+            self.assertEqual(review['preflight']['payment_credential_count'], 1)
             self.assertFalse(review['preflight']['publication_ready'])
             result = await self.launch()
             repeated = await self.launch()
@@ -338,8 +343,20 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.client.posts), 4)
         self.assertEqual(self.client.uploads, 1)
         self.assertFalse(any(row['step'] == 'ADS_MANAGER:PUBLISH' for row in await self.owner.state.all_steps('image-launch')))
-        payment.assert_not_awaited()
+        self.assertEqual(payment.await_count, 3)
         delivery.assert_not_awaited()
+
+    async def test_empty_complete_payment_inventory_stops_draft_before_upload_or_ad_posts(self):
+        self.payload['launch']['execution_mode'] = 'DRAFT'
+        empty_funding = {**self.funding, 'card_linked':False, 'payment_methods':[],
+            'all_credential_ids':[], 'card_credential_count':0, 'non_card_credential_count':0}
+        with patch('app.static_payment_read.inspect_methods',
+                   new=AsyncMock(return_value=empty_funding)):
+            with self.assertRaises(ProvisioningError) as caught:
+                await self.launch()
+        self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_PAYMENT_METHOD_REQUIRED')
+        self.assertEqual(self.client.uploads, 0)
+        self.assertEqual(self.client.posts, [])
 
     async def test_draft_never_requests_promotable_projection_and_denied_owned_page_stops_posts(self):
         self.payload['launch']['execution_mode'] = 'DRAFT'

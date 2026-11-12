@@ -308,10 +308,35 @@ class AdsManagerLaunch:
         if draft_only:
             from .private_draft_pages import verify_draft_page
             page_proof = await verify_draft_page(web, target=target, client=client)
+            funding = await inspect_methods(web, account=account, business_id=target["business_id"])
+            if (funding.get("account_scope_verified") is True
+                    and funding.get("business_scope_verified") is True
+                    and funding.get("payment_account_relation_verified") is True
+                    and funding.get("methods_query_verified") is True
+                    and funding.get("inventory_complete") is not True):
+                # The first Meta methods response is filtered; expand it before
+                # treating an empty list as a missing payment method.
+                funding = await complete_methods(web, funding, business_id=target["business_id"])
+            if not all(funding.get(field) is True for field in (
+                    "account_scope_verified", "business_scope_verified",
+                    "payment_account_relation_verified", "methods_query_verified",
+                    "checked_live", "inventory_complete")):
+                raise fail("PAYMENT_UNVERIFIED", "A complete fresh account-scoped payment read is required")
+            if (funding.get("account_id") != account
+                    or funding.get("business_id") != target["business_id"]
+                    or not isinstance(funding.get("payment_account_id"), str)
+                    or not funding["payment_account_id"].isdigit()):
+                raise fail("PAYMENT_SCOPE_UNVERIFIED", "Complete payment read belongs to another account or Business")
+            credentials = funding.get("all_credential_ids")
+            if not isinstance(credentials, list) or len(credentials) > 500:
+                raise fail("PAYMENT_UNVERIFIED", "Complete payment inventory is unavailable")
+            if not credentials:
+                raise fail("PAYMENT_METHOD_REQUIRED", "Meta requires a payment method before the paused draft can be completed")
             return {**target, "account_status": 1, "browser_started": False,
                 "transport": "private_http_h2", "page_access_checked_live": False,
                 "draft_page": page_proof, "draft_ready": True, "publication_ready": False,
-                "payment_checked_live": False, "payment_selection_required": False}
+                "payment_checked_live": True, "payment_inventory_complete": True,
+                "payment_credential_count": len(credentials), "payment_selection_required": False}
         if not isinstance(pages, list) or target["page_id"] not in pages:
             raise fail("PAGE_UNVERIFIED", "Live account response did not confirm advertising access to this Page")
         funding = await inspect_methods(web, account=account, business_id=target["business_id"])
