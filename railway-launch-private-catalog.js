@@ -1134,27 +1134,23 @@ function remaskPrivateRenderJob(job) {
                                     if(!record||typeof record!=='object')return '';
                                     const codes=Array.isArray(record.codes)?record.codes.map(item=>
                                         item&&Number.isSafeInteger(item.value)&&item.value>=0?String(item.value):'').filter(Boolean):[];
-                                    const fields=Array.isArray(record.field_names)?record.field_names.filter(item=>
-                                        typeof item==='string'&&/^[a-z_]{1,64}$/.test(item)):[];
-                                    const terms=Array.isArray(record.matched_terms_in_order)?record.matched_terms_in_order.filter(item=>
-                                        typeof item==='string'&&/^[a-z_']{1,32}$/.test(item)):[];
+                                    const paths=Array.isArray(record.reported_field_paths)?record.reported_field_paths.filter(item=>
+                                        typeof item==='string'&&/^[A-Za-z][A-Za-z0-9_.\[\]]{0,255}$/.test(item)):[];
                                     const itemDetails=[];
                                     if(codes.length)itemDetails.push('коды '+codes.join(', '));
-                                    if(fields.length)itemDetails.push('поля '+fields.join(', '));
-                                    if(terms.length)itemDetails.push('слова из ответа Meta (подсказки, не причина): '+terms.join(' / '));
+                                    if(paths.length)itemDetails.push('поле/путь, явно указанный Meta: '+paths.join(', '));
+                                    else itemDetails.push('Meta не указала поле/путь');
                                     return itemDetails.length?'ошибка '+(index+1)+' ['+itemDetails.join('; ')+']':'';
                                 }).filter(Boolean);
-                                if(perError.length)details.push('безопасные термины, исходный текст скрыт: '+perError.join(' | '));
+                                if(perError.length)details.push('ответ Meta: '+perError.join(' | '));
                             }else{
                                 const codes=Array.isArray(diagnostic.codes)?diagnostic.codes.map(item=>
                                     item&&Number.isSafeInteger(item.value)&&item.value>=0?String(item.value):'').filter(Boolean):[];
-                                const fields=Array.isArray(diagnostic.field_names)?diagnostic.field_names.filter(item=>
-                                    typeof item==='string'&&/^[a-z_]{1,64}$/.test(item)):[];
-                                const terms=Array.isArray(diagnostic.terms)?diagnostic.terms.filter(item=>
-                                    typeof item==='string'&&/^[a-z_']{1,32}$/.test(item)):[];
+                                const paths=Array.isArray(diagnostic.reported_field_paths)?diagnostic.reported_field_paths.filter(item=>
+                                    typeof item==='string'&&/^[A-Za-z][A-Za-z0-9_.\[\]]{0,255}$/.test(item)):[];
                                 if(codes.length)details.push('коды '+codes.join(', '));
-                                if(fields.length)details.push('поля '+fields.join(', '));
-                                if(terms.length)details.push('слова из ответа Meta (подсказки, не причина): '+terms.join(' / '));
+                                if(paths.length)details.push('поле/путь, явно указанный Meta: '+paths.join(', '));
+                                else details.push('Meta не указала поле/путь');
                             }
                             if(diagnostic.exact_cause_confirmed!==true)details.push('точная причина Meta не установлена');
                             return 'есть'+(details.length?' ('+details.join('; ')+')':'');
