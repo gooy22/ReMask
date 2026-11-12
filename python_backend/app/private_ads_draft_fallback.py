@@ -343,6 +343,7 @@ async def read_fragment_with_account_object_fallback(
         proof = await _read_account_level_object(
             client, account_id=account_id, level=level, values=values,
             parent_id=parent_id, draft_id=draft_id, fragment_id=fragment_id,
-            fragment_read_error=read_error,
+            fragment_read_error=read_error, expected_object_id=object_id,
+            use_account_ad_row=level == "ad" and object_id is not None,
         )
         return {"row": None, "fallback": proof, "source": "account_object"}
