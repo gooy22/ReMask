@@ -225,7 +225,8 @@ class ReadRouteAuthRecoveryTests(unittest.IsolatedAsyncioTestCase):
                 _id=lambda value, field: str(value).removeprefix('act_')))
         namespace = {'asyncio':asyncio, 'HTTPException':_RouteHTTPError,
             'ProvisioningError':ProvisioningError, 'ProfileContextError':type('ProfileContextError',(Exception,),{}),
-            'read_with_saved_auth_refresh':read_with_saved_auth_refresh, 'pool':pool,
+            'read_with_saved_auth_refresh':read_with_saved_auth_refresh,
+            '_terminal_profile_statuses':AsyncMock(return_value={}), 'pool':pool,
             'store':SimpleNamespace(
                 job_view=AsyncMock(return_value=view),
                 record_terminal_profile_status=AsyncMock(return_value=True),

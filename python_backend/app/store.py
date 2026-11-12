@@ -2131,6 +2131,37 @@ class JobStore:
             )
         return cursor.rowcount > 0
 
+    async def clear_terminal_checkpoint_after_revalidation(
+        self, profile_id: str, checked_at: int
+    ) -> bool:
+        """Clear one checkpoint only after a matching live read-only check."""
+        clean = str(profile_id or "").strip()
+        observed = int(checked_at or 0)
+        if not clean or observed <= 0:
+            return False
+        try:
+            return await asyncio.to_thread(
+                self._clear_terminal_checkpoint_after_revalidation_sync, clean, observed
+            )
+        except sqlite3.OperationalError as exc:
+            if "no such table: profile_terminal_statuses" not in str(exc):
+                raise
+            await self.init()
+            return await asyncio.to_thread(
+                self._clear_terminal_checkpoint_after_revalidation_sync, clean, observed
+            )
+
+    def _clear_terminal_checkpoint_after_revalidation_sync(
+        self, profile_id: str, checked_at: int
+    ) -> bool:
+        with self._connect() as con:
+            cursor = con.execute(
+                "DELETE FROM profile_terminal_statuses "
+                "WHERE profile_id=? AND status='CHECKPOINT' AND checked_at=?",
+                (profile_id, int(checked_at)),
+            )
+        return cursor.rowcount > 0
+
     async def terminal_profile_statuses(self, profile_ids: list[str]) -> dict[str, dict[str, Any]]:
         clean = list(dict.fromkeys(
             str(value or "").strip() for value in profile_ids if str(value or "").strip()

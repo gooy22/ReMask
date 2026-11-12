@@ -1111,21 +1111,33 @@ function remaskPrivateRenderJob(job) {
                 const terminalReadKey='remask_private_meta_terminal_v1:'+String(item.profile_id||'');
                 let terminalReadCode='';
                 try{terminalReadCode=String(localStorage.getItem(terminalReadKey)||'');}catch(_){}
-                let terminalStopped=Boolean(terminalReadCode);
+                const checkpointReadCodes=['CHECKPOINT_REQUIRED','PRIVATE_ADS_DRAFT_CHECKPOINT_REQUIRED'];
+                let checkpointRevalidation=checkpointReadCodes.includes(terminalReadCode);
+                let terminalStopped=Boolean(terminalReadCode)&&!checkpointRevalidation;
                 if(terminalStopped){
                     button.disabled=true;button.textContent='Действия остановлены';
                     if(savedRead&&!savedRead.ok)remaskPrivateShowSavedDraftRead(result,savedRead);
                     else result.textContent=remaskPrivateErrorLabel(terminalReadCode);
+                }else if(checkpointRevalidation){
+                    button.textContent='Повторно сверить Meta (только чтение)';
+                    result.textContent=remaskPrivateErrorLabel(terminalReadCode)+' Повторная сверка не создаёт объекты.';
                 }else if(savedRead)remaskPrivateShowSavedDraftRead(result,savedRead);
                 button.addEventListener('click',async()=>{
                     if(terminalStopped)return;
-                    button.disabled=true;result.textContent='Читаю сохранённый черновик…';
+                    button.disabled=true;result.textContent=checkpointRevalidation
+                        ?'Сверяю сохранённый черновик в Meta, только чтение…'
+                        :'Читаю сохранённый черновик…';
                     try{
                         const response=await remaskPrivateWorker({action:'private_draft_read',
                             profile_id:String(item.profile_id),job_id:job.id,task_id:String(task.id)});
                         const read=response?.read;
                         if(read?.draft_verified!==false||read?.advertising_mutation_posts!==0||read?.persisted!==false)
                             throw new Error('Сервер не подтвердил режим чтения.');
+                        if(read?.profile_gate_revalidated!==true)
+                            throw new Error('Meta черновик прочитан, но блокировка профиля не снята.');
+                        try{localStorage.removeItem(terminalReadKey);}catch(_){}
+                        terminalStopped=false;checkpointRevalidation=false;
+                        button.textContent='Проверить черновик в Meta';
                         const rows=Array.isArray(read.fragment_reads)?read.fragment_reads:[];
                         const matching=rows.filter(row=>row.relationships_match===true&&row.settings_match===true).length;
                         const safeShape=value=>{

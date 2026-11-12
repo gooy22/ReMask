@@ -4319,7 +4319,7 @@ async def private_session_probe(profile_id: str, payload: dict = Body(...)):
             'message':'Saved profile context is unavailable.', 'retryable':False}) from None
 
 
-@app.post('/api/v1/profiles/{profile_id}/private-draft-read',dependencies=[Depends(require_key),Depends(_require_profile_not_checkpoint)])
+@app.post('/api/v1/profiles/{profile_id}/private-draft-read',dependencies=[Depends(require_key)])
 async def private_draft_read(profile_id: str, payload: dict = Body(...)):
     import re
     job_id = payload.get('job_id')
@@ -4337,6 +4337,21 @@ async def private_draft_read(profile_id: str, payload: dict = Body(...)):
     tasks = candidates if task_id is None else [task for task in candidates if str(task.get('id') or '') == task_id]
     if len(tasks) != 1 or not isinstance(tasks[0].get('payload'), dict):
         raise HTTPException(status_code=409, detail='PRIVATE_DRAFT_READ_TARGET_AMBIGUOUS')
+    terminal = (await _terminal_profile_statuses([profile_id])).get(profile_id)
+    terminal_state = str((terminal or {}).get('status') or '').upper()
+    checkpoint_revalidation = terminal_state == 'CHECKPOINT'
+    if terminal_state == 'BUSINESS_LOGIN_GATE':
+        raise HTTPException(status_code=409, detail={
+            'code': 'PROFILE_META_BLOCKED',
+            'message': str((terminal or {}).get('message') or 'Meta stopped this profile.'),
+        })
+    if checkpoint_revalidation:
+        checker = getattr(pool.private_launch.ads_manager, 'is_paused_draft_revalidation', None)
+        if not callable(checker) or not checker(profile_id, tasks[0]['payload']):
+            raise HTTPException(status_code=409, detail={
+                'code': 'CHECKPOINT_REQUIRED',
+                'message': 'Чекпоинт Meta: доступна только сверка сохранённого PAUSED-черновика.',
+            })
     from app.private_draft_read_diagnostic import read_diagnostic
     from app.private_auth import private_auth_error
     from app.session import ProfileSession
@@ -4350,7 +4365,33 @@ async def private_draft_read(profile_id: str, payload: dict = Body(...)):
                         profile_id=profile_id, context=context, session=session, payload=tasks[0]['payload'])
             except AuthenticationError as error:
                 raise private_auth_error(error) from None
-        result = await read_with_saved_auth_refresh(pool.resolver, context, read_draft_once)
+        if checkpoint_revalidation:
+            # Recheck the exact saved PAUSED draft once, using the current saved
+            # session only. No renewal path, publication, or mutation is allowed.
+            result = await read_draft_once()
+            verified_access = (
+                isinstance(result, dict)
+                and result.get('source') == 'independent_private_ads_http'
+                and result.get('transport') == 'private_ads_manager_http_h2'
+                and result.get('advertising_mutation_posts') == 0
+                and result.get('persisted') is False
+                and isinstance(result.get('draft_id'), str)
+                and result.get('draft_id').isdigit()
+                and isinstance(result.get('fragment_reads'), list)
+                and len(result.get('fragment_reads')) > 0
+            )
+            if not verified_access:
+                raise HTTPException(status_code=502, detail={
+                    'code': 'PRIVATE_DRAFT_READ_REVALIDATION_UNCONFIRMED',
+                    'message': 'The read-only Meta recheck did not confirm the saved draft scope.',
+                })
+            cleared = await store.clear_terminal_checkpoint_after_revalidation(
+                profile_id, int((terminal or {}).get('checked_at') or 0)
+            )
+            result['profile_gate_revalidated'] = bool(cleared)
+        else:
+            result = await read_with_saved_auth_refresh(pool.resolver, context, read_draft_once)
+            result['profile_gate_revalidated'] = True
         return {'ok': True, **result}
     except ProvisioningError as error:
         # Ads Manager's exact checkpoint route is a terminal profile status.

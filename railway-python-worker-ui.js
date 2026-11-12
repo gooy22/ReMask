@@ -661,7 +661,11 @@ async function pythonWorkerBridge(payload, csrfRetried) {
   }
 
   if (!response.ok || !(data && data.ok)) {
-    throw new Error(errorText);
+    const error = new Error(errorText);
+    error.httpStatus = Number(response.status);
+    error.code = String(data && (data.code || data.error) || '');
+    error.retryable = data && data.retryable === true;
+    throw error;
   }
   return data;
 }
@@ -4990,8 +4994,11 @@ async function pythonWorkerOpenAutoModal() {
     input.addEventListener('change', refresh);
   });
 
-  const random = new Uint32Array(4); crypto.getRandomValues(random);
-  const nonce = Array.from(random, function(x) { return x.toString(16); }).join('-');
+  function newPrepareNonce() {
+    const random = new Uint32Array(4); crypto.getRandomValues(random);
+    return Array.from(random, function(x) { return x.toString(16); }).join('-');
+  }
+  let nonce = newPrepareNonce();
 
   create.addEventListener('click', async function() {
     if (create.disabled) return;
@@ -5128,7 +5135,19 @@ async function pythonWorkerOpenAutoModal() {
     } catch (error) {
       pythonWorkerUiState.busy = false; refresh(); pythonWorkerSelectionRefresh();
       const errorMessage = String(error.message || error);
-      if (/чекпоинт meta/i.test(errorMessage)) {
+      const httpStatus = Number(error && error.httpStatus) || 0;
+      if (httpStatus >= 400 && httpStatus < 500) {
+        // A worker 4xx is a definitive rejection before Job storage/queueing.
+        // Release the pending key so edits can produce a fresh Prepare request.
+        localStorage.removeItem(pendingKey);
+        acceptedRequest = null;
+        nonce = newPrepareNonce();
+        [count, category, currency, timezone].forEach(function(input) { input.disabled = false; });
+        create.textContent = 'Prepare';
+        refresh();
+        status.textContent = 'Запрос отклонён: ' + errorMessage +
+          '. Prepare Job не создан и не поставлен в очередь. Исправьте причину; для другого профиля закройте окно, поменяйте выбор и откройте Prepare заново.';
+      } else if (/чекпоинт meta/i.test(errorMessage)) {
         localStorage.removeItem(pendingKey);
         acceptedRequest = null;
         create.disabled = true;
