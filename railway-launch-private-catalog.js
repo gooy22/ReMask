@@ -1139,7 +1139,7 @@ function remaskPrivateRenderJob(job) {
                                     const itemDetails=[];
                                     if(codes.length)itemDetails.push('коды '+codes.join(', '));
                                     if(paths.length)itemDetails.push('поле/путь, явно указанный Meta: '+paths.join(', '));
-                                    else itemDetails.push('в разобранных структурированных данных поле/путь не обнаружены');
+                                    else itemDetails.push('в разобранном ответе поле/путь не обнаружены');
                                     return itemDetails.length?'ошибка '+(index+1)+' ['+itemDetails.join('; ')+']':'';
                                 }).filter(Boolean);
                                 if(perError.length)details.push('ответ Meta: '+perError.join(' | '));
@@ -1150,7 +1150,7 @@ function remaskPrivateRenderJob(job) {
                                     typeof item==='string'&&/^[A-Za-z][A-Za-z0-9_.\[\]]{0,255}$/.test(item)):[];
                                 if(codes.length)details.push('коды '+codes.join(', '));
                                 if(paths.length)details.push('поле/путь, явно указанный Meta: '+paths.join(', '));
-                                else details.push('Meta не указала поле/путь');
+                                else details.push('в разобранном ответе поле/путь не обнаружены');
                             }
                             if(diagnostic.exact_cause_confirmed!==true)details.push('точная причина Meta не установлена');
                             return 'есть'+(details.length?' ('+details.join('; ')+')':'');
