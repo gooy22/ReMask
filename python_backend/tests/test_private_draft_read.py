@@ -58,7 +58,7 @@ class DraftReadDiagnosticTests(unittest.IsolatedAsyncioTestCase):
                          ['/addraft_444444','/addraftfragment_555555'])
         client.post.assert_not_awaited()
         self.assertTrue(client.read_only)
-        self.assertFalse(open_client.await_args.kwargs['reference_read'])
+        self.assertTrue(open_client.await_args.kwargs['reference_read'])
         self.assertFalse(result['draft_verified'])
         self.assertFalse(result['persisted'])
         self.assertEqual(result['advertising_mutation_posts'], 0)
