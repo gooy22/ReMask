@@ -80,7 +80,12 @@ assert.ok(privateCatalogOverlay.includes('id="remaskLaunchModeBanner"') &&
         active_error_diagnostic:{observed:true,has_errors:true,exact_cause_confirmed:false,is_list:true,
           codes:[{field:'error_code',value:987654321}],field_names:[],terms:['billing','method','payment'],
           records:[{index:0,codes:[{field:'error_code',value:987654321}],field_names:[],
-            matched_terms_in_order:['payment','method','not','required'],truncated:false}]}}
+            matched_terms_in_order:['payment','method','not','required'],
+             response_keys:['error_code','error_user_title','error_user_msg'],
+             text_evidence:[
+               {key_path:'error_user_title',matched_terms_in_order:['no','payment','method'],reported_field_paths:[]},
+               {key_path:'error_user_msg',matched_terms_in_order:['payment','method','billing','payment'],reported_field_paths:[]}
+             ],truncated:false}]}}
     ]};
   let legacyRenders=0;
   const ctx={console,URL,queueMicrotask,setTimeout:handler=>queueMicrotask(handler),
@@ -200,6 +205,9 @@ assert.ok(source.includes('const message=remaskPrivateLaunchUserMessage(error)')
   assert.ok(!verifiedIdsCell.textContent.includes('статус str:7'));
   assert.match(verifiedIdsCell.textContent,/VALIDATED/);
   assert.match(verifiedIdsCell.textContent,/HAS_ERRORS/);
+  assert.ok(verifiedIdsCell.textContent.includes('ключи ответа error_code, error_user_msg, error_user_title'));
+  assert.ok(verifiedIdsCell.textContent.includes('текстовые поля ответа error_user_title [no/payment/method] | error_user_msg [payment/method/billing/payment]'));
+  assert.doesNotMatch(verifiedIdsCell.textContent,/No Payment Method|Update payment method|DO_NOT_EXPOSE/);
   assert.match(verifiedIdsCell.textContent,/слова из ответа Meta \(подсказки, не причина\): payment \/ method \/ not \/ required/);
   assert.match(verifiedIdsCell.textContent,/исходный текст скрыт/);
   assert.match(verifiedIdsCell.textContent,/Аудитория, прочитанная из Meta/);

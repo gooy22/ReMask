@@ -1137,6 +1137,20 @@ function remaskPrivateRenderJob(job) {
                                     const paths=Array.isArray(record.reported_field_paths)?record.reported_field_paths.filter(item=>
                                         typeof item==='string'&&/^[A-Za-z][A-Za-z0-9_.\[\]]{0,255}$/.test(item)):[];
                                     const itemDetails=[];
+                                    const responseKeys=Array.isArray(record.response_keys)?record.response_keys.filter(item=>
+                                        typeof item==='string'&&/^[A-Za-z_][A-Za-z0-9_]{0,63}(?:\[\])?(?:\.[A-Za-z_][A-Za-z0-9_]{0,63}(?:\[\])?){0,8}$/.test(item)).slice(0,12):[];
+                                    if(responseKeys.length)itemDetails.push('ключи ответа '+responseKeys.join(', '));
+                                    const textEvidence=Array.isArray(record.text_evidence)?record.text_evidence.slice(0,12).map(item=>{
+                                        if(!item||typeof item!=='object'||typeof item.key_path!=='string'||
+                                           !/^[A-Za-z_][A-Za-z0-9_]{0,63}(?:\[\])?(?:\.[A-Za-z_][A-Za-z0-9_]{0,63}(?:\[\])?){0,8}$/.test(item.key_path))return '';
+                                        const matched=Array.isArray(item.matched_terms_in_order)?item.matched_terms_in_order.filter(term=>
+                                            typeof term==='string'&&/^[a-z_]+(?:n't)?$/.test(term)).slice(0,24):[];
+                                        const reported=Array.isArray(item.reported_field_paths)?item.reported_field_paths.filter(path=>
+                                            typeof path==='string'&&/^[A-Za-z][A-Za-z0-9_.\[\]]{0,255}$/.test(path)).slice(0,16):[];
+                                        if(!matched.length&&!reported.length)return '';
+                                        return item.key_path+' ['+(matched.length?matched.join('/'):reported.join(', '))+']';
+                                    }).filter(Boolean):[];
+                                    if(textEvidence.length)itemDetails.push('текстовые поля ответа '+textEvidence.join(' | '));
                                     if(codes.length)itemDetails.push('коды '+codes.join(', '));
                                     if(paths.length)itemDetails.push('поле/путь, явно указанный Meta: '+paths.join(', '));
                                     else itemDetails.push('в разобранном ответе поле/путь не обнаружены');
