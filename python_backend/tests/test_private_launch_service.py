@@ -12,6 +12,7 @@ from app.private_launch import (
     PrivateLaunchService,
     PrivateLaunchStep,
     _auto_entity_id,
+    _effective_launch_payload,
     _payment_selector,
     _select_payment_method,
 )
@@ -677,6 +678,51 @@ class PrivateLaunchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(effective["creative"]["name"], "Base creative")
         self.assertEqual(self.web.graphql.await_args_list[1].args[1]["input"]["targeting"], {"age_max": 35})
         self.assertEqual(self.web.graphql.await_args_list[2].args[1]["input"]["message"], "RK override")
+
+    def test_audience_only_per_rk_targeting_override_preserves_shared_fields(self):
+        shared_targeting = {
+            "age_min": 23,
+            "age_max": 33,
+            "geo_locations": {"countries": ["UA"]},
+            "flexible_spec": [
+                {
+                    "interests": [{"id": "travel", "name": "Travel"}],
+                    "behaviors": [{"id": "traveler", "name": "Frequent Travelers"}],
+                }
+            ],
+            "locales": [24],
+            "custom_audiences": [{"id": "shared-include"}],
+            "excluded_custom_audiences": [{"id": "shared-exclude"}],
+        }
+        account_audiences = {
+            "custom_audiences": [{"id": "rk-include"}],
+            "excluded_custom_audiences": [{"id": "rk-exclude"}],
+        }
+        effective = _effective_launch_payload({
+            "base": {
+                "campaign": {"name": "Shared campaign"},
+                "adset": {"targeting": shared_targeting},
+                "creative": {},
+            },
+            "override": {"adset": {"targeting": account_audiences}},
+        })
+        self.assertEqual(
+            effective["adset"]["targeting"],
+            {
+                "age_min": 23,
+                "age_max": 33,
+                "geo_locations": {"countries": ["UA"]},
+                "flexible_spec": [
+                    {
+                        "interests": [{"id": "travel", "name": "Travel"}],
+                        "behaviors": [{"id": "traveler", "name": "Frequent Travelers"}],
+                    }
+                ],
+                "locales": [24],
+                "custom_audiences": [{"id": "rk-include"}],
+                "excluded_custom_audiences": [{"id": "rk-exclude"}],
+            },
+        )
 
     async def test_unsupported_budget_blocks_before_preflight_and_create(self):
         self.payload["launch"]["campaign"]["daily_budget"] = 1000
