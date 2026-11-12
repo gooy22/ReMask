@@ -984,7 +984,7 @@ function remaskPrivateEffectiveSavedLaunchSections(task) {
             patch&&typeof patch==='object'&&!Array.isArray(patch)?patch:{},[name]);
     };
     const saved={};
-    for(const name of ['campaign','adset']){
+    for(const name of ['campaign','adset','ad','creative']){
         const value=section(name);
         const safe=remaskPrivateSafeSavedValue(value,name);
         if(safe&&typeof safe==='object'&&Object.keys(safe).length)saved[name]=safe;
@@ -996,7 +996,7 @@ function remaskPrivateSavedLaunchSummary(task) {
     if(!Object.keys(saved).length)return '';
     const serialized=JSON.stringify(saved,null,2);
     const limit=100000;
-    return 'Конфигурация из сохранённой задачи; это не чтение текущего объекта Meta.\n'+
+    return 'Вход Launch из сохранённой задачи; это не чтение текущего объекта Meta.\n'+
         serialized.slice(0,limit)+(serialized.length>limit?'\n[показана ограниченная часть; превышен лимит 100000 символов]':'');
 }
 function remaskPrivateDraftAdsetSettingsSummary(task,rows) {
@@ -1017,6 +1017,18 @@ function remaskPrivateDraftAdsetSettingsSummary(task,rows) {
     if(!lines.length)return '';
     return 'Ad Set: значения из сохранённого задания и результат сравнения с прочитанным фрагментом Meta.\n'+
         lines.join('\n\n');
+}
+function remaskPrivateDraftAdSerializationSummary(rows) {
+    const read=Array.isArray(rows)?rows.find(row=>row?.level==='ad'):null;
+    const values=read?.submitted_values;
+    if(!values||typeof values!=='object'||Array.isArray(values))return '';
+    const safe=remaskPrivateSafeSavedValue(values,'ad');
+    const serialized=JSON.stringify(safe,null,2);
+    if(!serialized)return '';
+    const limit=20000;
+    return 'Точные значения Ad, сохранённые с исходным запросом фрагмента; это не вывод причины HAS_ERRORS.\n'+
+        serialized.slice(0,limit)+(serialized.length>limit
+            ?'\n[показана ограниченная часть; превышен лимит 20000 символов]':'');
 }
 function remaskPrivateShowReadResult(container,message,technical) {
     container.replaceChildren();
@@ -1083,7 +1095,7 @@ function remaskPrivateRenderJob(job) {
             }
             const savedConfig=remaskPrivateSavedLaunchSummary(task);
             if(task.action==='private_launch'&&savedConfig)
-                remaskPrivateAppendDetails(tr.children[5],'Сохранённые параметры Campaign и Ad Set',savedConfig,
+                remaskPrivateAppendDetails(tr.children[5],'Сохранённый вход Launch: Campaign, Ad Set, Ad и Creative',savedConfig,
                     'remask-private-technical remask-private-saved-config');
             const launch=payload.launch;
             const draftMode=(launch?.base?.execution_mode||launch?.execution_mode)==='DRAFT';
@@ -1196,7 +1208,8 @@ function remaskPrivateRenderJob(job) {
                                 JSON.stringify(targeting.targeting_diagnostic.observed,null,2)];
                         }).join('\n\n');
                         const adsetSettings=remaskPrivateDraftAdsetSettingsSummary(task,rows);
-                        const technical=[checks.join('\n'),targetingDetails,adsetSettings,
+                        const adSerialization=remaskPrivateDraftAdSerializationSummary(rows);
+                        const technical=[checks.join('\n'),targetingDetails,adsetSettings,adSerialization,
                             pending?'Ожидающий этап: '+pending:'',
                             'Полнота черновика и редактор не проверялись.'].filter(Boolean).join('\n\n');
                         const message='Черновик '+String(read.draft_id||'')+' прочитан. Совпали связи и настройки: '+
