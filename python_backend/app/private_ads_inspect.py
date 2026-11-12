@@ -41,6 +41,25 @@ _REPORTED_FIELD_VALUE_KEYS = frozenset({
 _FIELD_PATH_PATTERN = re.compile(
     r"^[A-Za-z][A-Za-z0-9_]*(?:(?:\.[A-Za-z][A-Za-z0-9_]*)|(?:\[[0-9]{1,3}\])){0,12}$"
 )
+_FIELD_TOKEN = r"[A-Za-z][A-Za-z0-9_]*(?:(?:\.[A-Za-z][A-Za-z0-9_]*)|(?:\[[0-9]{1,3}\])){0,12}"
+_MESSAGE_FIELD_PATTERNS = (
+    re.compile(
+        r"\b(?:field(?:\s+(?:name|path))?|parameter|param)\b"
+        r"\s*(?:[:=]|\b(?:is|was|named|called)\b)\s*[\x60'\"“”]*("
+        + _FIELD_TOKEN + r")",
+        re.I,
+    ),
+    re.compile(
+        r"\b(?:invalid|unknown|unsupported|required|missing)\s+(?:field|parameter|param)\s+[\x60'\"“”]*("
+        + _FIELD_TOKEN + r")",
+        re.I,
+    ),
+    re.compile(
+        r"\b(?:field(?:\s+(?:name|path))?|parameter|param)\s+[\x60'\"“”]+("
+        + _FIELD_TOKEN + r")[\x60'\"“”]+",
+        re.I,
+    ),
+)
 _MAX_REPORTED_FIELD_PATHS_PER_RECORD = 16
 _MAX_DIAGNOSTIC_RECORDS = 8
 _MAX_DIAGNOSTIC_TERMS_PER_RECORD = 24
@@ -189,6 +208,10 @@ def validation_diagnostic(value, *, observed):
                 record["truncated"] = True
                 truncated = True
             source = node[:16000]
+            if isinstance(key, str) and key.casefold() in _ERROR_MESSAGE_KEYS:
+                for pattern in _MESSAGE_FIELD_PATTERNS:
+                    for match in pattern.finditer(source):
+                        collect_reported_field_paths(match.group(1), record)
             decoded = parse_encoded(source)
             if decoded is not None:
                 walk_record(decoded, key, depth + 1, record)
