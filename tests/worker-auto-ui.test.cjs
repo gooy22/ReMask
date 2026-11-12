@@ -487,6 +487,32 @@ vm.createContext(sandbox); vm.runInContext(source.slice(start,end), sandbox);
   assert.equal(captured[0].profiles[0].tasks[0].payload.scope_key,'prepare:7');
   assert.equal(captured[0].profiles[0].tasks[0].idempotency_key,'prepare:7');
   assert.equal(captured[0].profiles[1].tasks[0].payload.scope_key,'prepare:8');
+  // A definitive worker 409 rejected before Job creation must release the
+  // stale pending request and create a fresh idempotency key on the next submit.
+  state.busy=false; state.jobId=''; state.job=null; elements.length=0; captured.length=0;
+  sandbox.pythonWorkerSelectedProfiles=()=>['33'];
+  sandbox.pythonWorkerBridge=async payload=>{
+    captured.push(JSON.parse(JSON.stringify(payload)));
+    if(captured.length===1){
+      const error=new Error('Чекпоинт Meta: выбранные профили остановлены. Prepare не запущен.');
+      error.httpStatus=409;
+      throw error;
+    }
+    return {job:{job_id:'new-prepare-job'}};
+  };
+  await sandbox.pythonWorkerOpenAutoModal();
+  const rejectedPrepare=elements.find(el=>el.textContent==='Prepare');
+  const rejectedInputs=elements.filter(el=>el.tag==='input');
+  const rejectedStatus=elements.find(el=>el.className==='pwbm-status');
+  await rejectedPrepare.events.click();
+  assert.equal(storage.has('remask_python_worker_prepare_pending_v1'),false);
+  assert.equal(rejectedPrepare.textContent,'Prepare');
+  assert.ok(rejectedInputs.every(el=>el.disabled===false));
+  assert.match(rejectedStatus.textContent,/Prepare Job не создан/);
+  const rejectedKey=captured[0].idempotency_key;
+  await rejectedPrepare.events.click();
+  assert.notEqual(captured[1].idempotency_key,rejectedKey);
+  assert.equal(state.jobId,'new-prepare-job');
   // Independent BM: an empty optional Page must not block submission or
   // turn different explicit CREATE requests into the same empty-Page scope.
   const bmStart=source.indexOf('async function pythonWorkerStartBusiness(');
