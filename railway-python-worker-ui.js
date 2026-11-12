@@ -5146,7 +5146,7 @@ async function pythonWorkerOpenAutoModal() {
         create.textContent = 'Prepare';
         refresh();
         status.textContent = 'Запрос отклонён: ' + errorMessage +
-          '. Prepare Job не создан. Измените параметры здесь или выберите другие профили.';
+          '. Prepare Job не создан и не поставлен в очередь. Исправьте причину; для другого профиля закройте окно, поменяйте выбор и откройте Prepare заново.';
       } else if (/чекпоинт meta/i.test(errorMessage)) {
         localStorage.removeItem(pendingKey);
         acceptedRequest = null;
