@@ -1139,7 +1139,7 @@ function remaskPrivateRenderJob(job) {
                                     const itemDetails=[];
                                     if(codes.length)itemDetails.push('коды '+codes.join(', '));
                                     if(paths.length)itemDetails.push('поле/путь, явно указанный Meta: '+paths.join(', '));
-                                    else itemDetails.push('Meta не указала поле/путь');
+                                    else itemDetails.push('в разобранных структурированных данных поле/путь не обнаружены');
                                     return itemDetails.length?'ошибка '+(index+1)+' ['+itemDetails.join('; ')+']':'';
                                 }).filter(Boolean);
                                 if(perError.length)details.push('ответ Meta: '+perError.join(' | '));
