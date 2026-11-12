@@ -29,6 +29,19 @@ _ERROR_TERMS = frozenset("objective discontinued unsupported optimization billin
 _ERROR_CODES = frozenset({"code", "error_code", "error_subcode", "subcode", "exception_code"})
 _SECRET_KEYS = re.compile(r"cookie|token|secret|password|credential|authorization|dtsg|lsd|session", re.I)
 _ERROR_MESSAGE_KEYS = frozenset({"message", "error_message", "user_message", "error_user_msg"})
+_REPORTED_FIELD_KEYS = frozenset({
+    "field", "field_name", "field_names", "param", "parameter", "parameter_name",
+    "blame_field_specs", "blame_field_names", "blame_fields", "field_path", "field_paths",
+    "invalid_field", "unsupported_field",
+})
+_REPORTED_FIELD_VALUE_KEYS = frozenset({
+    "field", "field_name", "field_names", "param", "parameter", "parameter_name",
+    "path", "paths", "fields",
+})
+_FIELD_PATH_PATTERN = re.compile(
+    r"^[A-Za-z][A-Za-z0-9_]*(?:(?:\.[A-Za-z][A-Za-z0-9_]*)|(?:\[[0-9]{1,3}\])){0,12}$"
+)
+_MAX_REPORTED_FIELD_PATHS_PER_RECORD = 16
 _MAX_DIAGNOSTIC_RECORDS = 8
 _MAX_DIAGNOSTIC_TERMS_PER_RECORD = 24
 
@@ -109,6 +122,36 @@ def validation_diagnostic(value, *, observed):
         record_nodes.append(value)
 
     diagnostic_records = []
+    reported_fields = set()
+
+    def collect_reported_field_paths(node, record, depth=0):
+        nonlocal truncated
+        if depth > 8:
+            record["truncated"] = True
+            truncated = True
+            return
+        if isinstance(node, str):
+            candidate = node.strip()
+            if len(candidate) <= 256 and _FIELD_PATH_PATTERN.fullmatch(candidate):
+                paths = record["reported_field_paths"]
+                if candidate not in paths and len(paths) >= _MAX_REPORTED_FIELD_PATHS_PER_RECORD:
+                    record["truncated"] = True
+                    truncated = True
+                else:
+                    paths.add(candidate)
+        elif isinstance(node, list):
+            if len(node) > 64:
+                record["truncated"] = True
+                truncated = True
+            for child in node[:64]:
+                collect_reported_field_paths(child, record, depth + 1)
+        elif isinstance(node, dict):
+            if len(node) > 64:
+                record["truncated"] = True
+                truncated = True
+            for child_key, child in list(node.items())[:64]:
+                if isinstance(child_key, str) and child_key.casefold() in _REPORTED_FIELD_VALUE_KEYS:
+                    collect_reported_field_paths(child, record, depth + 1)
 
     def walk_record(node, key, depth, record):
         nonlocal walk_visited, truncated
@@ -119,6 +162,8 @@ def validation_diagnostic(value, *, observed):
             return
         if _SECRET_KEYS.search(key):
             return
+        if isinstance(key, str) and key.casefold() in _REPORTED_FIELD_KEYS:
+            collect_reported_field_paths(node, record)
         if key in fields:
             record["field_names"].add(key)
         if key in _ERROR_CODES:
@@ -155,22 +200,27 @@ def validation_diagnostic(value, *, observed):
                     record["field_names"].add(word)
 
     for index, record_node in enumerate(record_nodes):
-        record = {"codes": set(), "field_names": set(), "matched_terms_in_order": [], "truncated": False}
+        record = {"codes": set(), "field_names": set(), "reported_field_paths": set(),
+                  "matched_terms_in_order": [], "truncated": False}
         walk_record(record_node, "", 0, record)
         record_codes = [{"field": field, "value": number} for field, number in sorted(record["codes"])]
         record_fields = sorted(record["field_names"])
+        record_reported_fields = sorted(record["reported_field_paths"])
         record_terms = record["matched_terms_in_order"]
         codes.update((entry["field"], entry["value"]) for entry in record_codes)
         names.update(record_fields)
+        reported_fields.update(record_reported_fields)
         terms.update(record_terms)
         diagnostic_records.append({"index": index, "codes": record_codes,
-            "field_names": record_fields, "matched_terms_in_order": record_terms,
+            "field_names": record_fields, "reported_field_paths": record_reported_fields,
+            "matched_terms_in_order": record_terms,
             "truncated": record["truncated"]})
 
     return {"observed": observed, "is_list": isinstance(value, list), "has_errors": bool(value),
         "exact_cause_confirmed": False,
         "codes": [{"field": key, "value": number} for key, number in sorted(codes)],
-        "terms": sorted(terms), "field_names": sorted(names), "records": diagnostic_records,
+        "terms": sorted(terms), "field_names": sorted(names),
+        "reported_field_paths": sorted(reported_fields), "records": diagnostic_records,
         "truncated": truncated}
 
 
