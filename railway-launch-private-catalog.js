@@ -259,6 +259,19 @@ function remaskPrivateAccountId(value) {
     const id=String(value||'').replace(/^act_/i,'').trim();
     return /^\d{5,30}$/.test(id)?id:'';
 }
+function remaskPrivateIsAudienceOnlyTargeting(value) {
+    if(!value||typeof value!=='object'||Array.isArray(value))return false;
+    const keys=Object.keys(value);
+    return keys.length>0&&keys.every(key=>
+        key==='custom_audiences'||key==='excluded_custom_audiences'
+    );
+}
+function remaskPrivateMergeAudienceTargeting(base,patch) {
+    const result=base&&typeof base==='object'&&!Array.isArray(base)?{...base}:{};
+    delete result.custom_audiences;
+    delete result.excluded_custom_audiences;
+    return {...result,...patch};
+}
 function remaskPrivateTargetRows(config) {
     const executionMode=remaskPrivateExecutionMode(config);
     if(executionMode==='DRAFT'){
@@ -316,6 +329,12 @@ function remaskPrivateTargetRows(config) {
         delete override.execution_mode;
         const base={...(config.payload||{})};delete base.execution_mode;
         base.execution_mode=executionMode;
+        const targetingPatch=override.adset?.targeting;
+        if(remaskPrivateIsAudienceOnlyTargeting(targetingPatch)){
+            override.adset={...(override.adset||{}),targeting:remaskPrivateMergeAudienceTargeting(
+                base.adset?.targeting,targetingPatch
+            )};
+        }
         if(config.payload?.creative?.page_id||override.creative?.page_id)
             override.creative={...(override.creative||{}),page_id:pageId};
         if(config.payload?.adset?.promoted_object?.page_id||override.adset?.promoted_object?.page_id)
@@ -935,10 +954,13 @@ function remaskPrivateMergeSavedLaunchObject(base,patch,path=[]) {
     const result={...base};
     for(const [key,value] of Object.entries(patch)){
         const childPath=[...path,key];
-        // Match the worker: a per-RK targeting selection replaces the full
-        // shared audience object, while other nested settings inherit fields.
+        // Audience-only overrides from older saved jobs replace the two
+        // account-specific selectors while keeping the shared Ad Set fields.
+        // Full per-RK targeting selections remain atomic replacements.
         if(childPath.length===2&&childPath[0]==='adset'&&childPath[1]==='targeting'){
-            result[key]=value;
+            result[key]=remaskPrivateIsAudienceOnlyTargeting(value)
+                ?remaskPrivateMergeAudienceTargeting(result[key],value)
+                :value;
         }else if(isRecord(result[key])&&isRecord(value)){
             result[key]=remaskPrivateMergeSavedLaunchObject(result[key],value,childPath);
         }else{
