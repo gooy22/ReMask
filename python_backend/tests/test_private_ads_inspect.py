@@ -880,6 +880,18 @@ class SavedDraftInspectionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ValidationDiagnosticTests(unittest.TestCase):
+    def test_explicit_field_path_in_error_text_is_extracted_without_raw_text(self):
+        from app.private_ads_inspect import validation_diagnostic
+        result = validation_diagnostic({
+            'error_code': 1359188,
+            'error_user_msg': 'Invalid parameter \'creative.object_story_spec.link_data.image_hash\'. See example.com.',
+        }, observed=True)
+        self.assertEqual(result['reported_field_paths'], [
+            'creative.object_story_spec.link_data.image_hash',
+        ])
+        self.assertNotIn('Invalid parameter', repr(result))
+        self.assertNotIn('example.com', repr(result))
+
     def test_meta_reported_unknown_field_paths_survive_catalog_filter_without_raw_text(self):
         from app.private_ads_inspect import validation_diagnostic
         result = validation_diagnostic({
