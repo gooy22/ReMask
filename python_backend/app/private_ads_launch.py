@@ -331,7 +331,7 @@ class AdsManagerLaunch:
             if not isinstance(credentials, list) or len(credentials) > 500:
                 raise fail("PAYMENT_UNVERIFIED", "Complete payment inventory is unavailable")
             if not credentials:
-                raise fail("PAYMENT_METHOD_REQUIRED", "Meta requires a payment method before the paused draft can be completed")
+                raise fail("PAYMENT_METHOD_REQUIRED", "Complete account-scoped payment inventory is empty; draft submission was stopped")
             return {**target, "account_status": 1, "browser_started": False,
                 "transport": "private_http_h2", "page_access_checked_live": False,
                 "draft_page": page_proof, "draft_ready": True, "publication_ready": False,
