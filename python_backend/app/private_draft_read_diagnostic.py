@@ -202,11 +202,11 @@ async def read_diagnostic(adapter, *, profile_id, context, session, payload):
         raise fail("RECONCILE_REQUIRED", "Saved draft has no exact read handle")
     try:
         web = await session.facebook_web()
-        # Saved-draft diagnostics are read-only and use the exact-account
-        # reference context. The subsequent draft and fragment GETs independently
-        # verify the saved IDs, owner, parent relations, values, and validation.
+        # The fresh context resolved Profile 33's saved fragment nodes; the
+        # cached reference context returned Graph 100/33 for those same IDs.
+        # Lock the client read-only before issuing any draft or fragment GET.
         client = await AdsManagerPrivateHttp.open(web, account_id=target["ad_account_id"],
-            business_id=target["business_id"], actor_id=actor, reference_read=True)
+            business_id=target["business_id"], actor_id=actor, reference_read=False)
     except Exception as exc:
         from fb_worker import RemoteRequestError
         import httpx
@@ -268,7 +268,8 @@ async def read_diagnostic(adapter, *, profile_id, context, session, payload):
                 "observed": observed, "settings_match": fallback.get("settings_match") is True,
                 "settings_diagnostic": None,
                 "active_error_diagnostic": validation_diagnostic(None, observed=False),
-                "account_object_read": fallback})
+                "account_object_read": fallback,
+                **({"submitted_values": values} if level == "ad" else {})})
             if not all(checks.values()):
                 break
             parent = fallback.get("object_id")
@@ -294,7 +295,8 @@ async def read_diagnostic(adapter, *, profile_id, context, session, payload):
                               "parent_ad_object_id", "validation_status", "status")},
             "settings_match": settings_match,
             "settings_diagnostic": settings_diagnostic,
-            "active_error_diagnostic": validation_diagnostic(row.get("active_errors"), observed="active_errors" in row)})
+            "active_error_diagnostic": validation_diagnostic(row.get("active_errors"), observed="active_errors" in row),
+            **({"submitted_values": values} if level == "ad" else {})})
         if not all(checks.values()):
             break
         parent = row.get("ad_object_id")
