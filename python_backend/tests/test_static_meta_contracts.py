@@ -260,6 +260,47 @@ class StaticReadBootstrapRetryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(http.posts[0]['data']['doc_id'], command('READ_RK', business=BM)['doc_id'])
         self.assertEqual(json.loads(http.posts[0]['data']['variables']), command('READ_RK',business=BM)['variables'])
 
+    @staticmethod
+    def submitted_timeout():
+        from fb_worker import RemoteRequestError
+        error = RemoteRequestError(
+            'Facebook GraphQL request timeout',
+            request_may_have_been_sent=True,
+            transport_stage='graphql_submit',
+        )
+        error.__cause__ = TimeoutError('fixture response-header timeout')
+        return error
+
+    async def test_exact_read_rk_retries_one_typed_post_submit_timeout(self):
+        error = self.submitted_timeout()
+        web = SimpleNamespace(graphql=AsyncMock(side_effect=[
+            error, {'data': {'account': {'id': RK}}},
+        ]))
+        result = await execute(web, 'READ_RK', business=BM)
+        self.assertEqual(result, {'data': {'account': {'id': RK}}})
+        self.assertEqual(web.graphql.await_count, 2)
+        self.assertEqual(web.graphql.await_args_list[0], web.graphql.await_args_list[1])
+        self.assertTrue(web.graphql.call_args.kwargs['read_timeout_seconds'] == 30)
+        self.assertNotIn('before_submit', web.graphql.call_args.kwargs)
+
+    async def test_post_submit_timeout_for_other_queries_is_not_retried(self):
+        error = self.submitted_timeout()
+        web = SimpleNamespace(graphql=AsyncMock(side_effect=error))
+        with self.assertRaises(type(error)) as caught:
+            await execute(web, 'READ_BM')
+        self.assertIs(caught.exception, error)
+        self.assertEqual(web.graphql.await_count, 1)
+
+    async def test_exhausted_post_submit_read_timeout_is_classified_and_bounded(self):
+        web = SimpleNamespace(graphql=AsyncMock(side_effect=[
+            self.submitted_timeout(), self.submitted_timeout(),
+        ]))
+        with self.assertRaises(ProvisioningError) as caught:
+            await execute(web, 'READ_RK', business=BM)
+        self.assertEqual(caught.exception.code, 'PRIVATE_STATIC_READ_TIMEOUT')
+        self.assertTrue(caught.exception.retryable)
+        self.assertEqual(web.graphql.await_count, 2)
+
     async def test_exhausted_read_is_classified_and_has_a_finite_retry_limit(self):
         web=SimpleNamespace(graphql=AsyncMock(side_effect=self.timeout()))
         with self.assertRaises(ProvisioningError) as caught:

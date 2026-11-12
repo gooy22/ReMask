@@ -880,6 +880,88 @@ class SavedDraftInspectionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ValidationDiagnosticTests(unittest.TestCase):
+    def test_explicit_field_path_in_error_text_is_extracted_without_raw_text(self):
+        from app.private_ads_inspect import validation_diagnostic
+        result = validation_diagnostic({
+            'error_code': 1359188,
+            'error_user_msg': 'Invalid parameter \'creative.object_story_spec.link_data.image_hash\'. See example.com.',
+        }, observed=True)
+        self.assertEqual(result['reported_field_paths'], [
+            'creative.object_story_spec.link_data.image_hash',
+        ])
+        self.assertNotIn('Invalid parameter', repr(result))
+        self.assertNotIn('example.com', repr(result))
+
+    def test_meta_reported_unknown_field_paths_survive_catalog_filter_without_raw_text(self):
+        from app.private_ads_inspect import validation_diagnostic
+        result = validation_diagnostic({
+            'error_code': 1359188,
+            'message': 'No payment method. raw response text must not be retained.',
+            'blame_field_specs': [['legacy_ad_setting']],
+            'param': 'creative.object_story_spec.link_data.legacy_mode',
+            'field_name': 'unknown_server_field',
+            'credentials': {'field': 'private_token'},
+            'cookie': {'field': 'secret_cookie'},
+        }, observed=True)
+        self.assertEqual(result['reported_field_paths'], [
+            'creative.object_story_spec.link_data.legacy_mode',
+            'legacy_ad_setting',
+            'unknown_server_field',
+        ])
+        self.assertEqual(result['field_names'], [])
+        self.assertNotIn('raw response text', repr(result))
+        self.assertNotIn('private_token', repr(result))
+        self.assertNotIn('secret_cookie', repr(result))
+
+    def test_explicit_paths_are_extracted_from_any_error_text_value_without_raw_text(self):
+        from app.private_ads_inspect import validation_diagnostic
+        source = [{
+            'error_code': 1359188,
+            'summary': 'Invalid parameter `creative.object_story_spec.link_data.call_to_action`',
+            'details': 'Private text that must not be retained: secret_cookie=DO_NOT_EXPOSE',
+        }]
+        result = validation_diagnostic(source, observed=True)
+        self.assertEqual(result['codes'], [{'field': 'error_code', 'value': 1359188}])
+        self.assertEqual(result['reported_field_paths'], [
+            'creative.object_story_spec.link_data.call_to_action',
+        ])
+        self.assertNotIn('Invalid parameter', repr(result))
+        self.assertNotIn('DO_NOT_EXPOSE', repr(result))
+
+    def test_response_keys_bind_safe_terms_to_meta_error_text_fields(self):
+        from app.private_ads_inspect import validation_diagnostic
+        source = [{
+            "error_code": 1359188,
+            "error_user_title": "No Payment Method",
+            "error_user_msg": "Update payment method at Billing and payment center. access_token=DO_NOT_EXPOSE",
+            "error_data": {
+                "description": "Billing payment method is required.",
+                "session_token": "DO_NOT_EXPOSE",
+            },
+            "cookie": "c_user=DO_NOT_EXPOSE",
+        }]
+        result = validation_diagnostic(source, observed=True)
+        record = result["records"][0]
+        self.assertEqual(record["response_keys"], [
+            "error_code", "error_data", "error_data.description",
+            "error_user_msg", "error_user_title",
+        ])
+        self.assertEqual(record["text_evidence"], [
+            {"key_path": "error_user_title",
+             "matched_terms_in_order": ["no", "payment", "method"],
+             "reported_field_paths": []},
+            {"key_path": "error_user_msg",
+             "matched_terms_in_order": ["payment", "method", "billing", "payment"],
+             "reported_field_paths": []},
+            {"key_path": "error_data.description",
+             "matched_terms_in_order": ["billing", "payment", "method", "required"],
+             "reported_field_paths": []},
+        ])
+        for secret in ("DO_NOT_EXPOSE", "c_user", "access_token", "session_token"):
+            self.assertNotIn(secret, repr(result))
+        for raw in ("No Payment Method", "Update payment method", "Billing payment method"):
+            self.assertNotIn(raw, repr(result))
+
     def test_nested_and_encoded_codes_keep_reviewed_fields_without_raw_messages(self):
         from app.private_ads_inspect import validation_diagnostic
         source = {'data': [{'error': {'error_code': '1815706', 'error_subcode': 100,
@@ -890,6 +972,7 @@ class ValidationDiagnosticTests(unittest.TestCase):
         self.assertEqual(result['codes'], [{'field':'error_code','value':1815706}, {'field':'error_subcode','value':100}])
         self.assertIn('objective', result['terms'])
         self.assertIn('optimization_goal', result['field_names'])
+        self.assertIn('optimization_goal', result['reported_field_paths'])
         self.assertNotIn('DO_NOT_EXPOSE', repr(result))
         self.assertNotIn('private.invalid', repr(result))
 
@@ -918,10 +1001,10 @@ class ValidationDiagnosticTests(unittest.TestCase):
         self.assertFalse(result['exact_cause_confirmed'])
         self.assertEqual(result['records'], [
             {'index':0,'codes':[{'field':'error_code','value':987654321}],
-             'field_names':[],'matched_terms_in_order':['payment','method','not','required'],
+             'field_names':[],'reported_field_paths':[],'matched_terms_in_order':['payment','method','not','required'],
              'truncated':False},
             {'index':1,'codes':[{'field':'error_subcode','value':17}],
-             'field_names':['objective','optimization_goal'],
+             'field_names':['objective','optimization_goal'],'reported_field_paths':[],
              'matched_terms_in_order':['unsupported','objective','discontinued'],
              'truncated':False},
         ])

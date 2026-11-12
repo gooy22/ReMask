@@ -1134,27 +1134,37 @@ function remaskPrivateRenderJob(job) {
                                     if(!record||typeof record!=='object')return '';
                                     const codes=Array.isArray(record.codes)?record.codes.map(item=>
                                         item&&Number.isSafeInteger(item.value)&&item.value>=0?String(item.value):'').filter(Boolean):[];
-                                    const fields=Array.isArray(record.field_names)?record.field_names.filter(item=>
-                                        typeof item==='string'&&/^[a-z_]{1,64}$/.test(item)):[];
-                                    const terms=Array.isArray(record.matched_terms_in_order)?record.matched_terms_in_order.filter(item=>
-                                        typeof item==='string'&&/^[a-z_']{1,32}$/.test(item)):[];
+                                    const paths=Array.isArray(record.reported_field_paths)?record.reported_field_paths.filter(item=>
+                                        typeof item==='string'&&/^[A-Za-z][A-Za-z0-9_.\[\]]{0,255}$/.test(item)):[];
                                     const itemDetails=[];
+                                    const responseKeys=Array.isArray(record.response_keys)?record.response_keys.filter(item=>
+                                        typeof item==='string'&&/^[A-Za-z_][A-Za-z0-9_]{0,63}(?:\[\])?(?:\.[A-Za-z_][A-Za-z0-9_]{0,63}(?:\[\])?){0,8}$/.test(item)).slice(0,12):[];
+                                    if(responseKeys.length)itemDetails.push('ключи ответа '+responseKeys.join(', '));
+                                    const textEvidence=Array.isArray(record.text_evidence)?record.text_evidence.slice(0,12).map(item=>{
+                                        if(!item||typeof item!=='object'||typeof item.key_path!=='string'||
+                                           !/^[A-Za-z_][A-Za-z0-9_]{0,63}(?:\[\])?(?:\.[A-Za-z_][A-Za-z0-9_]{0,63}(?:\[\])?){0,8}$/.test(item.key_path))return '';
+                                        const matched=Array.isArray(item.matched_terms_in_order)?item.matched_terms_in_order.filter(term=>
+                                            typeof term==='string'&&/^[a-z_]+(?:n't)?$/.test(term)).slice(0,24):[];
+                                        const reported=Array.isArray(item.reported_field_paths)?item.reported_field_paths.filter(path=>
+                                            typeof path==='string'&&/^[A-Za-z][A-Za-z0-9_.\[\]]{0,255}$/.test(path)).slice(0,16):[];
+                                        if(!matched.length&&!reported.length)return '';
+                                        return item.key_path+' ['+(matched.length?matched.join('/'):reported.join(', '))+']';
+                                    }).filter(Boolean):[];
+                                    if(textEvidence.length)itemDetails.push('текстовые поля ответа '+textEvidence.join(' | '));
                                     if(codes.length)itemDetails.push('коды '+codes.join(', '));
-                                    if(fields.length)itemDetails.push('поля '+fields.join(', '));
-                                    if(terms.length)itemDetails.push('слова из ответа Meta (подсказки, не причина): '+terms.join(' / '));
+                                    if(paths.length)itemDetails.push('поле/путь, явно указанный Meta: '+paths.join(', '));
+                                    else itemDetails.push('в разобранном ответе поле/путь не обнаружены');
                                     return itemDetails.length?'ошибка '+(index+1)+' ['+itemDetails.join('; ')+']':'';
                                 }).filter(Boolean);
-                                if(perError.length)details.push('безопасные термины, исходный текст скрыт: '+perError.join(' | '));
+                                if(perError.length)details.push('ответ Meta: '+perError.join(' | '));
                             }else{
                                 const codes=Array.isArray(diagnostic.codes)?diagnostic.codes.map(item=>
                                     item&&Number.isSafeInteger(item.value)&&item.value>=0?String(item.value):'').filter(Boolean):[];
-                                const fields=Array.isArray(diagnostic.field_names)?diagnostic.field_names.filter(item=>
-                                    typeof item==='string'&&/^[a-z_]{1,64}$/.test(item)):[];
-                                const terms=Array.isArray(diagnostic.terms)?diagnostic.terms.filter(item=>
-                                    typeof item==='string'&&/^[a-z_']{1,32}$/.test(item)):[];
+                                const paths=Array.isArray(diagnostic.reported_field_paths)?diagnostic.reported_field_paths.filter(item=>
+                                    typeof item==='string'&&/^[A-Za-z][A-Za-z0-9_.\[\]]{0,255}$/.test(item)):[];
                                 if(codes.length)details.push('коды '+codes.join(', '));
-                                if(fields.length)details.push('поля '+fields.join(', '));
-                                if(terms.length)details.push('слова из ответа Meta (подсказки, не причина): '+terms.join(' / '));
+                                if(paths.length)details.push('поле/путь, явно указанный Meta: '+paths.join(', '));
+                                else details.push('в разобранном ответе поле/путь не обнаружены');
                             }
                             if(diagnostic.exact_cause_confirmed!==true)details.push('точная причина Meta не установлена');
                             return 'есть'+(details.length?' ('+details.join('; ')+')':'');

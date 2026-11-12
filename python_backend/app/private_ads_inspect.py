@@ -29,8 +29,44 @@ _ERROR_TERMS = frozenset("objective discontinued unsupported optimization billin
 _ERROR_CODES = frozenset({"code", "error_code", "error_subcode", "subcode", "exception_code"})
 _SECRET_KEYS = re.compile(r"cookie|token|secret|password|credential|authorization|dtsg|lsd|session", re.I)
 _ERROR_MESSAGE_KEYS = frozenset({"message", "error_message", "user_message", "error_user_msg"})
+_REPORTED_FIELD_KEYS = frozenset({
+    "field", "field_name", "field_names", "param", "parameter", "parameter_name",
+    "blame_field_specs", "blame_field_names", "blame_fields", "field_path", "field_paths",
+    "invalid_field", "unsupported_field",
+})
+_REPORTED_FIELD_VALUE_KEYS = frozenset({
+    "field", "field_name", "field_names", "param", "parameter", "parameter_name",
+    "path", "paths", "fields",
+})
+_FIELD_PATH_PATTERN = re.compile(
+    r"^[A-Za-z][A-Za-z0-9_]*(?:(?:\.[A-Za-z][A-Za-z0-9_]*)|(?:\[[0-9]{1,3}\])){0,12}$"
+)
+_FIELD_TOKEN = r"[A-Za-z][A-Za-z0-9_]*(?:(?:\.[A-Za-z][A-Za-z0-9_]*)|(?:\[[0-9]{1,3}\])){0,12}"
+_MESSAGE_FIELD_PATTERNS = (
+    re.compile(
+        r"\b(?:field(?:\s+(?:name|path))?|parameter|param)\b"
+        r"\s*(?:[:=]|\b(?:is|was|named|called)\b)\s*[\x60'\"“”]*("
+        + _FIELD_TOKEN + r")",
+        re.I,
+    ),
+    re.compile(
+        r"\b(?:invalid|unknown|unsupported|required|missing)\s+(?:field|parameter|param)\s+[\x60'\"“”]*("
+        + _FIELD_TOKEN + r")",
+        re.I,
+    ),
+    re.compile(
+        r"\b(?:field(?:\s+(?:name|path))?|parameter|param)\s+[\x60'\"“”]+("
+        + _FIELD_TOKEN + r")[\x60'\"“”]+",
+        re.I,
+    ),
+)
+_MAX_REPORTED_FIELD_PATHS_PER_RECORD = 16
 _MAX_DIAGNOSTIC_RECORDS = 8
 _MAX_DIAGNOSTIC_TERMS_PER_RECORD = 24
+_SAFE_RESPONSE_KEY_SEGMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+_MAX_DIAGNOSTIC_RESPONSE_KEYS = 64
+_MAX_DIAGNOSTIC_TEXT_FIELDS = 16
+_MAX_DIAGNOSTIC_SHAPE_NODES = 256
 
 
 @lru_cache(maxsize=1)
@@ -109,6 +145,117 @@ def validation_diagnostic(value, *, observed):
         record_nodes.append(value)
 
     diagnostic_records = []
+    reported_fields = set()
+
+    def collect_reported_field_paths(node, record, depth=0):
+        nonlocal truncated
+        if depth > 8:
+            record["truncated"] = True
+            truncated = True
+            return
+        if isinstance(node, str):
+            candidate = node.strip()
+            if len(candidate) <= 256 and _FIELD_PATH_PATTERN.fullmatch(candidate):
+                paths = record["reported_field_paths"]
+                if candidate not in paths and len(paths) >= _MAX_REPORTED_FIELD_PATHS_PER_RECORD:
+                    record["truncated"] = True
+                    truncated = True
+                else:
+                    paths.add(candidate)
+        elif isinstance(node, list):
+            if len(node) > 64:
+                record["truncated"] = True
+                truncated = True
+            for child in node[:64]:
+                collect_reported_field_paths(child, record, depth + 1)
+        elif isinstance(node, dict):
+            if len(node) > 64:
+                record["truncated"] = True
+                truncated = True
+            for child_key, child in list(node.items())[:64]:
+                if isinstance(child_key, str) and child_key.casefold() in _REPORTED_FIELD_VALUE_KEYS:
+                    collect_reported_field_paths(child, record, depth + 1)
+
+    def safe_record_shape(node):
+        """Keep bounded response-key paths and allowlisted words, never raw values."""
+        response_keys = set()
+        text_evidence = []
+        visited = 0
+        shape_truncated = False
+
+        def add_key_path(path):
+            nonlocal shape_truncated
+            if not path:
+                return
+            if len(path) > 180:
+                shape_truncated = True
+                return
+            if path not in response_keys and len(response_keys) >= _MAX_DIAGNOSTIC_RESPONSE_KEYS:
+                shape_truncated = True
+                return
+            response_keys.add(path)
+
+        def visit(value, path="", depth=0):
+            nonlocal visited, shape_truncated
+            visited += 1
+            if visited > _MAX_DIAGNOSTIC_SHAPE_NODES or depth > 8:
+                shape_truncated = True
+                return
+            if isinstance(value, dict):
+                if len(value) > 64:
+                    shape_truncated = True
+                for raw_key, child in list(value.items())[:64]:
+                    if not isinstance(raw_key, str):
+                        shape_truncated = True
+                        continue
+                    if _SECRET_KEYS.search(raw_key):
+                        continue
+                    if not _SAFE_RESPONSE_KEY_SEGMENT.fullmatch(raw_key):
+                        shape_truncated = True
+                        visit(child, path, depth + 1)
+                        continue
+                    child_path = f"{path}.{raw_key}" if path else raw_key
+                    add_key_path(child_path)
+                    visit(child, child_path, depth + 1)
+            elif isinstance(value, list):
+                if len(value) > 64:
+                    shape_truncated = True
+                child_path = path + "[]" if path else "value[]"
+                for child in value[:64]:
+                    visit(child, child_path, depth + 1)
+            elif isinstance(value, str):
+                if len(value) > 16000:
+                    shape_truncated = True
+                source = value[:16000]
+                decoded = parse_encoded(source)
+                if decoded is not None:
+                    visit(decoded, path, depth + 1)
+                    return
+                matched_terms = []
+                for word in re.findall(r"[a-z_]+n't|[a-z_]+", source.casefold()):
+                    if word in _ERROR_TERMS and len(matched_terms) < _MAX_DIAGNOSTIC_TERMS_PER_RECORD:
+                        matched_terms.append(word)
+                field_paths = set()
+                for pattern in _MESSAGE_FIELD_PATTERNS:
+                    for match in pattern.finditer(source):
+                        field_paths.add(match.group(1))
+                if not matched_terms and not field_paths:
+                    return
+                if len(text_evidence) >= _MAX_DIAGNOSTIC_TEXT_FIELDS:
+                    shape_truncated = True
+                    return
+                text_evidence.append({
+                    "key_path": path or "value",
+                    "matched_terms_in_order": matched_terms,
+                    "reported_field_paths": sorted(field_paths)[:_MAX_REPORTED_FIELD_PATHS_PER_RECORD],
+                })
+
+        visit(node)
+        return {
+            "response_keys": sorted(response_keys),
+            "text_evidence": text_evidence,
+            "truncated": shape_truncated,
+        }
 
     def walk_record(node, key, depth, record):
         nonlocal walk_visited, truncated
@@ -119,6 +266,8 @@ def validation_diagnostic(value, *, observed):
             return
         if _SECRET_KEYS.search(key):
             return
+        if isinstance(key, str) and key.casefold() in _REPORTED_FIELD_KEYS:
+            collect_reported_field_paths(node, record)
         if key in fields:
             record["field_names"].add(key)
         if key in _ERROR_CODES:
@@ -144,6 +293,13 @@ def validation_diagnostic(value, *, observed):
                 record["truncated"] = True
                 truncated = True
             source = node[:16000]
+            # Meta places human-readable validation text under keys that vary
+            # by operation (for example summary/details). Scan every bounded,
+            # non-secret string leaf for an explicit field/parameter phrase;
+            # only the captured path is retained, never the source text.
+            for pattern in _MESSAGE_FIELD_PATTERNS:
+                for match in pattern.finditer(source):
+                    collect_reported_field_paths(match.group(1), record)
             decoded = parse_encoded(source)
             if decoded is not None:
                 walk_record(decoded, key, depth + 1, record)
@@ -155,22 +311,31 @@ def validation_diagnostic(value, *, observed):
                     record["field_names"].add(word)
 
     for index, record_node in enumerate(record_nodes):
-        record = {"codes": set(), "field_names": set(), "matched_terms_in_order": [], "truncated": False}
+        record = {"codes": set(), "field_names": set(), "reported_field_paths": set(),
+                  "matched_terms_in_order": [], "truncated": False}
         walk_record(record_node, "", 0, record)
         record_codes = [{"field": field, "value": number} for field, number in sorted(record["codes"])]
         record_fields = sorted(record["field_names"])
+        record_reported_fields = sorted(record["reported_field_paths"])
         record_terms = record["matched_terms_in_order"]
+        shape = safe_record_shape(record_node)
+        record_truncated = record["truncated"] or shape["truncated"]
+        truncated = truncated or shape["truncated"]
         codes.update((entry["field"], entry["value"]) for entry in record_codes)
         names.update(record_fields)
+        reported_fields.update(record_reported_fields)
         terms.update(record_terms)
         diagnostic_records.append({"index": index, "codes": record_codes,
-            "field_names": record_fields, "matched_terms_in_order": record_terms,
-            "truncated": record["truncated"]})
+            "field_names": record_fields, "reported_field_paths": record_reported_fields,
+            "matched_terms_in_order": record_terms,
+            "response_keys": shape["response_keys"], "text_evidence": shape["text_evidence"],
+            "truncated": record_truncated})
 
     return {"observed": observed, "is_list": isinstance(value, list), "has_errors": bool(value),
         "exact_cause_confirmed": False,
         "codes": [{"field": key, "value": number} for key, number in sorted(codes)],
-        "terms": sorted(terms), "field_names": sorted(names), "records": diagnostic_records,
+        "terms": sorted(terms), "field_names": sorted(names),
+        "reported_field_paths": sorted(reported_fields), "records": diagnostic_records,
         "truncated": truncated}
 
 

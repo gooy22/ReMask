@@ -202,8 +202,11 @@ async def read_diagnostic(adapter, *, profile_id, context, session, payload):
         raise fail("RECONCILE_REQUIRED", "Saved draft has no exact read handle")
     try:
         web = await session.facebook_web()
+        # Freshly resolve the Ads Manager document/module context for each
+        # diagnostic read. The cached reference context returned 100/33 for
+        # saved fragment nodes that the standard fresh-context read had resolved.
         client = await AdsManagerPrivateHttp.open(web, account_id=target["ad_account_id"],
-            business_id=target["business_id"], actor_id=actor, reference_read=True)
+            business_id=target["business_id"], actor_id=actor, reference_read=False)
     except Exception as exc:
         from fb_worker import RemoteRequestError
         import httpx

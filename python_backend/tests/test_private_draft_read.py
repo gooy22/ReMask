@@ -58,7 +58,7 @@ class DraftReadDiagnosticTests(unittest.IsolatedAsyncioTestCase):
                          ['/addraft_444444','/addraftfragment_555555'])
         client.post.assert_not_awaited()
         self.assertTrue(client.read_only)
-        self.assertTrue(open_client.await_args.kwargs['reference_read'])
+        self.assertFalse(open_client.await_args.kwargs['reference_read'])
         self.assertFalse(result['draft_verified'])
         self.assertFalse(result['persisted'])
         self.assertEqual(result['advertising_mutation_posts'], 0)
@@ -149,6 +149,44 @@ class DraftReadDiagnosticTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result['fragment_reads'][0]['settings_match'])
         self.assertEqual(result['advertising_mutation_posts'], 0)
         self.assertFalse(result['persisted'])
+
+    async def test_ad_fragment_fallback_uses_saved_object_id_and_account_row(self):
+        from app.private_ads_draft_fallback import read_fragment_with_account_object_fallback
+        from app.private_ads_http import AdsManagerResponseError
+
+        values = {
+            'name': 'fixture ad',
+            'status': 'PAUSED',
+            'campaign_id': '222222',
+            'adset_id': '333333',
+            'creative': {'name': 'fixture creative'},
+        }
+        rejected = AdsManagerResponseError({
+            'http_status': 200, 'code': 100, 'error_subcode': 33,
+            'type': 'GraphMethodException',
+        })
+
+        async def get(path, params):
+            if path == '/addraftfragment_555555':
+                raise rejected
+            if path == '/addraft_444444/addraft_fragments':
+                return {'data': []}
+            raise AssertionError('Unexpected read path: ' + path)
+
+        client = SimpleNamespace(get=AsyncMock(side_effect=get))
+        proof = {'level': 'ad', 'object_id': '666666', 'settings_match': True}
+        with patch('app.private_ads_draft_fallback._read_account_level_object',
+                   new=AsyncMock(return_value=proof)) as read_object:
+            result = await read_fragment_with_account_object_fallback(
+                client, account_id='111111', draft_id='444444',
+                fragment_id='555555', level='ad', values=values,
+                parent_id='333333', object_id='666666', allow_fallback=True)
+
+        read_object.assert_awaited_once()
+        self.assertEqual(read_object.await_args.kwargs['expected_object_id'], '666666')
+        self.assertTrue(read_object.await_args.kwargs['use_account_ad_row'])
+        self.assertEqual(result['fallback'], proof)
+        self.assertEqual(result['source'], 'account_object')
 
     async def test_saved_campaign_object_receipt_is_read_by_its_exact_id(self):
         from app.private_ads_http import AdsManagerResponseError
