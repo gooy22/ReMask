@@ -880,6 +880,27 @@ class SavedDraftInspectionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ValidationDiagnosticTests(unittest.TestCase):
+    def test_meta_reported_unknown_field_paths_survive_catalog_filter_without_raw_text(self):
+        from app.private_ads_inspect import validation_diagnostic
+        result = validation_diagnostic({
+            'error_code': 1359188,
+            'message': 'No payment method. raw response text must not be retained.',
+            'blame_field_specs': [['legacy_ad_setting']],
+            'param': 'creative.object_story_spec.link_data.legacy_mode',
+            'field_name': 'unknown_server_field',
+            'credentials': {'field': 'private_token'},
+            'cookie': {'field': 'secret_cookie'},
+        }, observed=True)
+        self.assertEqual(result['reported_field_paths'], [
+            'creative.object_story_spec.link_data.legacy_mode',
+            'legacy_ad_setting',
+            'unknown_server_field',
+        ])
+        self.assertEqual(result['field_names'], [])
+        self.assertNotIn('raw response text', repr(result))
+        self.assertNotIn('private_token', repr(result))
+        self.assertNotIn('secret_cookie', repr(result))
+
     def test_nested_and_encoded_codes_keep_reviewed_fields_without_raw_messages(self):
         from app.private_ads_inspect import validation_diagnostic
         source = {'data': [{'error': {'error_code': '1815706', 'error_subcode': 100,
@@ -890,6 +911,7 @@ class ValidationDiagnosticTests(unittest.TestCase):
         self.assertEqual(result['codes'], [{'field':'error_code','value':1815706}, {'field':'error_subcode','value':100}])
         self.assertIn('objective', result['terms'])
         self.assertIn('optimization_goal', result['field_names'])
+        self.assertIn('optimization_goal', result['reported_field_paths'])
         self.assertNotIn('DO_NOT_EXPOSE', repr(result))
         self.assertNotIn('private.invalid', repr(result))
 
@@ -918,10 +940,10 @@ class ValidationDiagnosticTests(unittest.TestCase):
         self.assertFalse(result['exact_cause_confirmed'])
         self.assertEqual(result['records'], [
             {'index':0,'codes':[{'field':'error_code','value':987654321}],
-             'field_names':[],'matched_terms_in_order':['payment','method','not','required'],
+             'field_names':[],'reported_field_paths':[],'matched_terms_in_order':['payment','method','not','required'],
              'truncated':False},
             {'index':1,'codes':[{'field':'error_subcode','value':17}],
-             'field_names':['objective','optimization_goal'],
+             'field_names':['objective','optimization_goal'],'reported_field_paths':[],
              'matched_terms_in_order':['unsupported','objective','discontinued'],
              'truncated':False},
         ])
