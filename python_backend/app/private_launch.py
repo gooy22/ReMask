@@ -1266,31 +1266,46 @@ def _extract_entity_id(payload: Any, paths: tuple[str, ...]) -> tuple[str, str]:
 
 
 def _deep_merge(base: Any, override: Any, path: tuple[str, ...] = ()) -> Any:
-    """Merge an RK override, replacing each selected targeting value atomically.
+    """Merge per-RK overrides without dropping shared Ad Set targeting.
 
-    An override may select an entirely new nested exclusion, geo object or
-    logical targeting group. Merging within that field retains stale audience
-    conditions from another form/account even though the draft matches the
-    resulting (incorrect) merged intent. Other independent targeting fields
-    and ordinary per-RK overrides still inherit the shared configuration.
+    Full per-RK targeting objects remain atomic replacements. Launch-generated
+    audience-only overrides replace the two account-specific audience selectors
+    while retaining shared GEO, age, interests, behaviors, languages and
+    placements. Clearing both inherited audience selectors also prevents an RK
+    from receiving another RK's include/exclude audiences.
     """
     if not isinstance(base, dict):
         return override
     if not isinstance(override, dict):
         return dict(base)
     out = dict(base)
+    audience_fields = {"custom_audiences", "excluded_custom_audiences"}
     for key, value in override.items():
-        # Replace the targeting object as a unit when a per-RK override
-        # explicitly supplies it. Merging nested groups can resurrect stale
-        # placements, GEO, audience conditions or exclusions from the base.
-        if ((*path, key) == ("adset", "targeting")
-                or not isinstance(out.get(key), dict)
-                or not isinstance(value, dict)):
+        if (*path, key) == ("adset", "targeting"):
+            if (
+                isinstance(value, dict)
+                and value
+                and set(value).issubset(audience_fields)
+            ):
+                shared = out.get(key)
+                if isinstance(shared, dict):
+                    targeting = {
+                        name: item
+                        for name, item in shared.items()
+                        if name not in audience_fields
+                    }
+                    targeting.update(value)
+                    out[key] = targeting
+                else:
+                    out[key] = value
+            else:
+                # Explicit full targeting overrides retain atomic replacement.
+                out[key] = value
+        elif not isinstance(out.get(key), dict) or not isinstance(value, dict):
             out[key] = value
         else:
             out[key] = _deep_merge(out[key], value, (*path, key))
     return out
-
 
 def _effective_launch_payload(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
