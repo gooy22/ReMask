@@ -96,7 +96,7 @@
     .wf-launch label{display:block!important;margin:0 0 7px!important;font-size:12px!important;font-weight:600;color:#bccbdd;line-height:1.5}
     .wf-launch label:has(input[type=checkbox],input[type=radio]){display:flex!important;align-items:center;gap:8px}
     .wf-launch .form-control:not(.rm-meta-visual-source):not(.rm-module-source):not(.wf-profile-native):not([type=hidden]):not([hidden]){display:block!important;width:100%!important;box-sizing:border-box;min-width:0;min-height:42px;border-radius:8px!important;margin:0!important}
-    .wf-launch .row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px;margin-left:0;margin-right:0}
+    .wf-launch .row{display:grid;grid-template-columns:repeat(2,minmax(280px,1fr));gap:22px;margin-left:0;margin-right:0}
     .wf-launch .row>[class*="col-"]{width:auto;max-width:none;min-width:0;flex:none;padding:0;grid-column:auto}
     .wf-launch .row>.col-md-12,.wf-launch .row>.col-12{grid-column:1/-1}
     .wf-launch .row>.wf-account-selector{grid-column:span 2}
@@ -104,21 +104,43 @@
     .wf-launch small.muted{display:block;font-size:11px;margin-top:6px}.wf-launch .table-responsive{border:1px solid #344151;border-radius:10px;margin-top:15px}
     .wf-launch td,.wf-launch th{padding:12px!important;vertical-align:middle}.wf-launch .wf-section-heading{font-size:13px;color:#87b4f8;border-top:1px solid #344151;padding-top:20px;margin:24px 0 15px}
     .wf-launch>.launch-card{scroll-margin-top:140px}
-    .wf-launch .wf-step-nav{position:sticky;top:64px;z-index:80;display:flex;gap:6px;padding:10px;background:#151b24ee;border:1px solid #344151;border-radius:12px;margin:20px 0;backdrop-filter:blur(12px);overflow:auto}
-    .wf-step-nav a{flex:1;min-width:max-content;padding:10px 14px;border-radius:7px;font-size:12px;color:#b5c6dd;text-decoration:none}.wf-step-nav a:hover,.wf-step-nav a:focus{background:#263d61;color:#fff}
+    .wf-launch .wf-step-nav{position:sticky;top:64px;z-index:80;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;padding:8px;background:#151b24e8;border:1px solid #344151;border-radius:16px;margin:18px 0;backdrop-filter:blur(14px)}
+    .wf-step-nav a{display:flex;align-items:center;gap:10px;min-width:0;padding:10px 12px;border:1px solid transparent;border-radius:11px;font-size:12px;color:#aebdd1;text-decoration:none;transition:background .16s ease,border-color .16s ease,color .16s ease}
+    .wf-step-nav a:hover,.wf-step-nav a:focus-visible{background:#222e3d;color:#f3f7fc}
+    .wf-step-nav a.is-current{background:linear-gradient(135deg,#1b3a61,#1d2e44);border-color:#385d87;color:#f4f8ff}
+    .wf-step-index{display:grid;place-items:center;flex:0 0 26px;height:26px;border:1px solid #44536a;border-radius:50%;font-size:11px;color:#c4d2e4}
+    .wf-step-nav a.is-current .wf-step-index{background:#2573d5;border-color:#4794ee;color:#fff}
+    .wf-step-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .wf-profile-grid{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px}.wf-profile-grid label{display:flex;align-items:center;gap:9px;border:1px solid #3a4a60;border-radius:9px;padding:10px 14px;background:#111923;cursor:pointer}
     .wf-profile-grid label:has(input:checked){background:#243e65;border-color:#85b5ff;color:#fff}.wf-profile-grid input{accent-color:#8db9ff;width:16px;height:16px}
     .wf-launch .wf-profile-native{display:none!important}.wf-launch .wf-profile-grid label{margin:0!important}
+    .wf-launch .wf-profile-native{display:none!important}.wf-launch .wf-profile-grid label{margin:0!important}
+    .wf-device-targeting{margin:22px 0 8px;border:1px solid #35465b;border-radius:16px;background:linear-gradient(145deg,#1d2836,#19212d);overflow:hidden}
+    .wf-device-targeting>summary{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:18px 20px;cursor:pointer;list-style:none}
+    .wf-device-targeting>summary::-webkit-details-marker{display:none}
+    .wf-device-title{font-size:15px;font-weight:700;color:#edf3fc}
+    .wf-device-summary{font-size:12px;color:#a9b9ce;text-align:right}
+    .wf-device-targeting[open]>summary{border-bottom:1px solid #344357}
+    .wf-device-note{margin:14px 20px 0;color:#9aaabd;font-size:12px;line-height:1.55}
+    .wf-device-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:14px;padding:16px 20px 20px}
+    .wf-device-field{min-width:0;padding:14px 15px;border:1px solid rgba(104,126,153,.26);border-radius:12px;background:rgba(13,20,29,.38)}
+    .wf-device-field>label{display:block!important;margin:0 0 8px!important;color:#d3deeb!important;font-size:13px!important;font-weight:650}
+    .wf-device-field .rm-module-control{margin-top:4px}
+    .wf-device-field .rm-module-results{max-height:220px;overflow:auto;background:#111a25}
+    .wf-device-source{display:none!important}
+    .wf-device-status{padding:0 20px 16px;color:#99a9bf;font-size:12px}
     #launchMetaAllFields.wf-advanced{max-width:100%;margin:0 0 20px;padding:22px;background:#1a212c;border:1px solid #344151;border-radius:14px}
     #launchMetaAllFields h3{font-size:18px;color:#e6effc}#launchMetaAllFields .rm-meta-note{font-size:12px;line-height:1.6}#launchMetaAllFields .rm-meta-grid{gap:18px;padding:6px 18px 18px}
     #launchMetaAllFields .rm-meta-field label,.cr-sdk-field label{align-items:center!important}.rm-meta-type,.cr-sdk-type{display:none!important}
     .wf-code{font-size:10px;color:#778aa6;margin-top:6px;overflow-wrap:anywhere}.wf-launch .rm-meta-search{max-width:420px}
     .wf-launch .btn,.cr-foot-actions .btn{border-radius:8px;padding:10px 16px;font-weight:600}
     @media(max-width:700px){.wf-launch>.launch-card>.d-flex{flex-wrap:wrap;gap:8px}}
-    @media(max-width:1050px){#creativeForm{grid-template-columns:150px minmax(0,1fr) 250px}.wf-summary{padding:18px 12px}}
+    @media(max-width:1050px){#creativeForm{grid-template-columns:150px minmax(0,1fr) 250px}.wf-summary{padding:18px 12px}.wf-launch .row{grid-template-columns:repeat(2,minmax(0,1fr))}}
+    @media(max-width:880px){.wf-launch .wf-step-nav{grid-template-columns:repeat(5,minmax(92px,1fr));overflow:auto}.wf-launch .row{grid-template-columns:repeat(2,minmax(0,1fr))}}
+    
     @media(max-width:900px){#creativeForm{grid-template-columns:150px minmax(0,1fr);grid-template-rows:170px minmax(0,1fr) auto}#creativeForm>.wf-summary{grid-column:1/-1;grid-row:1;border-left:0;border-bottom:1px solid var(--wf-line);padding:12px 16px;min-height:0}#creativeForm>.wf-summary>:not(.rm-ad-estimate){display:none}#creativeForm>.cr-tabs,#creativeForm>.cr-editor{grid-row:2}#creativeForm>.cr-modal-foot{grid-row:3}}
     @media(max-width:1000px){.wf-launch .row{grid-template-columns:repeat(2,minmax(0,1fr))}.wf-launch .row>.wf-account-selector{grid-column:1/-1}}
-    @media(max-width:700px){#creativeModal .cr-modal{width:calc(100vw - 12px);max-height:calc(100dvh - 12px)}#creativeForm{display:flex;flex-direction:column}#creativeForm>.cr-tabs{flex-direction:row;flex-shrink:0;border-right:0;border-bottom:1px solid var(--wf-line);padding:8px}.cr-tab{white-space:nowrap!important}#creativeForm>.cr-editor{padding:16px}.wf-fields{grid-template-columns:1fr}.wf-fields>.wf-wide{grid-column:auto}.cr-form-grid>.cr-field,.cr-form-grid>.cr-target-box{grid-column:span 12}.wf-launch>.launch-card{padding:18px}.wf-launch .row{grid-template-columns:1fr}.wf-launch .row>*{grid-column:1/-1!important}.wf-step-nav a{padding:9px}.cr-modal-foot{flex-wrap:wrap}#launchMetaAllFields .rm-meta-search{min-width:0;width:100%}.cr-carousel-row{grid-template-columns:48px minmax(0,1fr)}}
+    @media(max-width:700px){.wf-device-targeting>summary{align-items:flex-start;flex-direction:column;gap:6px}.wf-device-summary{text-align:left}.wf-device-fields{grid-template-columns:1fr;padding:14px}.wf-device-note{margin:12px 14px 0}#creativeModal .cr-modal{width:calc(100vw - 12px);max-height:calc(100dvh - 12px)}#creativeForm{display:flex;flex-direction:column}#creativeForm>.cr-tabs{flex-direction:row;flex-shrink:0;border-right:0;border-bottom:1px solid var(--wf-line);padding:8px}.cr-tab{white-space:nowrap!important}#creativeForm>.cr-editor{padding:16px}.wf-fields{grid-template-columns:1fr}.wf-fields>.wf-wide{grid-column:auto}.cr-form-grid>.cr-field,.cr-form-grid>.cr-target-box{grid-column:span 12}.wf-launch>.launch-card{padding:18px}.wf-launch .row{grid-template-columns:1fr}.wf-launch .row>*{grid-column:1/-1!important}.wf-step-nav a{padding:9px}.cr-modal-foot{flex-wrap:wrap}#launchMetaAllFields .rm-meta-search{min-width:0;width:100%}.cr-carousel-row{grid-template-columns:48px minmax(0,1fr)}}
     @media(max-width:700px){#creativeForm{display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:auto 155px minmax(0,1fr) auto}#creativeForm>.cr-tabs{grid-column:1;grid-row:1}#creativeForm>.wf-summary{grid-column:1;grid-row:2}#creativeForm>.cr-editor{grid-column:1;grid-row:3;min-height:0}#creativeForm>.cr-modal-foot{grid-column:1;grid-row:4}}
     @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
     `;
@@ -203,12 +225,112 @@
         if(grid.dataset.signature!==signature){grid.dataset.signature=signature;grid.replaceChildren();for(const option of select.options){if(!option.value)continue;const label=document.createElement('label'),input=document.createElement('input');input.type='checkbox';input.value=option.value;input.disabled=option.disabled;input.addEventListener('change',()=>{option.selected=input.checked;select.dispatchEvent(new Event('change',{bubbles:true}));});label.append(input,document.createTextNode(option.textContent));grid.appendChild(label);}select.classList.add('wf-profile-native');}
         grid.querySelectorAll('input').forEach(input=>{const option=Array.from(select.options).find(o=>o.value===input.value);input.checked=Boolean(option?.selected);input.disabled=select.disabled||Boolean(option?.disabled);});
     }
+    function setupAudienceDevices() {
+        const adsetCard=$('adsetName')?.closest('.launch-card');
+        if(!adsetCard)return;
+        let panel=$('wfDeviceTargeting');
+        if(!panel){
+            panel=document.createElement('details');panel.id='wfDeviceTargeting';panel.className='wf-device-targeting';
+            const summary=document.createElement('summary');
+            const title=document.createElement('span');title.className='wf-device-title';title.textContent='Устройства и операционные системы';
+            const state=document.createElement('span');state.className='wf-device-summary';state.dataset.wfDeviceSummary='1';state.textContent='Любые устройства';
+            summary.append(title,state);
+            const note=document.createElement('p');note.className='wf-device-note';note.textContent='Выбирайте платформы, модели и версии ОС из справочника Meta.';
+            const fields=document.createElement('div');fields.className='wf-device-fields';fields.dataset.wfDeviceFields='1';
+            const status=document.createElement('div');status.className='wf-device-status';status.dataset.wfDeviceStatus='1';status.textContent='Загружаю варианты Meta…';
+            panel.append(summary,note,fields,status);
+            const anchors=['ageMin','geoQuery','interestQuery','behaviorQuery','customAudiences']
+                .map(id=>$(id)?.closest('.row')).filter(row=>row&&adsetCard.contains(row));
+            anchors.sort((a,b)=>a===b?0:(a.compareDocumentPosition(b)&Node.DOCUMENT_POSITION_FOLLOWING?-1:1));
+            const anchor=anchors[anchors.length-1];
+            if(anchor)anchor.after(panel);else adsetCard.appendChild(panel);
+            panel.addEventListener('input',updateDeviceSummary);
+            panel.addEventListener('change',updateDeviceSummary);
+        }
+        const fields=panel.querySelector('[data-wf-device-fields]');
+        const specs=[
+            ['device_platforms','Платформы устройств'],
+            ['user_device','Модели устройств'],
+            ['user_os','Операционные системы'],
+        ];
+        let available=0;
+        for(const [field,label] of specs){
+            const source=document.querySelector('[data-launch-meta-group="targeting"][data-launch-meta-field="'+field+'"]');
+            const wrapper=source?.closest('.rm-meta-field');
+            if(source&&source.dataset.wfDeviceSummaryBound!=='1'){
+                source.dataset.wfDeviceSummaryBound='1';
+                source.addEventListener('input',updateDeviceSummary);
+                source.addEventListener('change',updateDeviceSummary);
+            }
+            const picker=wrapper?.querySelector('.rm-module-control');
+            let row=fields.querySelector('[data-wf-device-field="'+field+'"]');
+            if(row){
+                available++;
+                if(picker&&picker.parentElement!==row)row.appendChild(picker);
+                continue;
+            }
+            if(!source||!wrapper||!picker)continue;
+            row=document.createElement('div');row.className='wf-device-field';row.dataset.wfDeviceField=field;
+            const caption=document.createElement('label');caption.textContent=label;
+            caption.htmlFor=picker.querySelector('input')?.id||'';
+            row.append(caption,picker);fields.appendChild(row);
+            wrapper.classList.add('wf-device-source');available++;
+        }
+        const sourceCount=specs.filter(([field])=>Boolean(document.querySelector('[data-launch-meta-group="targeting"][data-launch-meta-field="'+field+'"]'))).length;
+        const status=panel.querySelector('[data-wf-device-status]');
+        if(status){
+            status.hidden=available===specs.length;
+            if(!status.hidden)status.textContent=sourceCount===0
+                ?'Загружаю варианты Meta…'
+                :'Варианты выбора пока недоступны. Поля остаются в дополнительных параметрах.';
+        }
+        updateDeviceSummary();
+    }
+    function updateDeviceSummary() {
+        const panel=$('wfDeviceTargeting');if(!panel)return;
+        const summary=panel.querySelector('[data-wf-device-summary]');if(!summary)return;
+        const counts={device_platforms:0,user_device:0,user_os:0};
+        for(const field of Object.keys(counts)){
+            const source=document.querySelector('[data-launch-meta-group="targeting"][data-launch-meta-field="'+field+'"]');
+            const raw=String(source?.value||'').trim();if(!raw)continue;
+            let values=[];
+            try{const decoded=JSON.parse(raw);if(Array.isArray(decoded))values=decoded;else if(decoded!==null&&decoded!==undefined)values=[decoded];}
+            catch{values=raw.split(',').map(value=>value.trim()).filter(Boolean);}
+            counts[field]=values.length;
+        }
+        const labels=[];
+        if(counts.device_platforms)labels.push(counts.device_platforms+' платформ');
+        if(counts.user_device)labels.push(counts.user_device+' моделей');
+        if(counts.user_os)labels.push(counts.user_os+' ОС');
+        summary.textContent=labels.length?labels.join(' · '):'Любые устройства';
+    }
     function setupLaunch() {
         const root=document.querySelector('.launch-wrap');if(!root || root.dataset.wfReady)return;root.dataset.wfReady='1';root.classList.add('wf-launch');
-        const entries=[['profile','1. Профили и рекламные кабинеты'],['campaignName','2. Кампания'],['adsetName','3. Бюджет и аудитория'],['creativeName','4. Объявление'],['reviewLaunch','5. Сохранение черновика']];
-        const nav=document.createElement('nav');nav.className='wf-step-nav';nav.setAttribute('aria-label','Этапы подготовки рекламы');
-        for(const [id,title] of entries){const card=$(id)?.closest('.launch-card');if(!card)continue;if(!card.id)card.id='wf-launch-'+id;setText(card.querySelector('h5'),title);const a=document.createElement('a');a.href='#'+card.id;a.textContent=title;nav.appendChild(a);}
+        const entries=[['profile','Ресурсы','Профили и рекламные кабинеты'],['campaignName','Кампания','Кампания'],['adsetName','Аудитория','Бюджет и аудитория'],['creativeName','Объявление','Объявление'],['reviewLaunch','Черновик','Сохранение черновика']];
+        const nav=document.createElement('nav');nav.className='wf-step-nav';nav.setAttribute('aria-label','Разделы автозалива');
+        const stepCards=[];
+        entries.forEach(([id,title,cardTitle],index)=>{
+            const card=$(id)?.closest('.launch-card');if(!card)return;
+            if(!card.id)card.id='wf-launch-'+id;
+            setText(card.querySelector('h5'),cardTitle||title);
+            const a=document.createElement('a');a.href='#'+card.id;a.setAttribute('aria-label',(index+1)+'. '+title);
+            const number=document.createElement('span');number.className='wf-step-index';number.textContent=String(index+1);
+            const label=document.createElement('span');label.className='wf-step-label';label.textContent=title;
+            a.append(number,label);nav.appendChild(a);stepCards.push({link:a,card});
+        });
         root.querySelector('.launch-card')?.before(nav);
+        if('IntersectionObserver' in window){
+            const observer=new IntersectionObserver(rows=>{
+                const current=rows.filter(row=>row.isIntersecting).sort((a,b)=>b.intersectionRatio-a.intersectionRatio)[0];
+                if(!current)return;
+                for(const item of stepCards){
+                    const active=item.card===current.target;
+                    item.link.classList.toggle('is-current',active);
+                    if(active)item.link.setAttribute('aria-current','location');else item.link.removeAttribute('aria-current');
+                }
+            },{rootMargin:'-20% 0px -65% 0px',threshold:[0.05,0.2,0.45]});
+            stepCards.forEach(item=>observer.observe(item.card));
+        }
         [['bundleSelect','Сохранённые настройки'],['loadFunding','Состояние оплаты'],['recentJobSelect','Задачи и результаты']].forEach(([id,title])=>setText($(id)?.closest('.launch-card')?.querySelector('h5'),title));
         const adset=$('adsetName')?.closest('.launch-card');
         [['adsetName','Оптимизация и бюджет'],['ageMin','Аудитория и конверсии'],['geoQuery','География и интересы'],['customAudiences','Свои аудитории']].forEach(([id,title])=>{const row=$(id)?.closest('.row');if(row && adset?.contains(row)){const h=document.createElement('h6');h.className='wf-section-heading';h.textContent=title;row.before(h);}});
@@ -254,6 +376,7 @@
         if(launch){const walker=document.createTreeWalker(launch,NodeFilter.SHOW_TEXT);let node;while((node=walker.nextNode())){if(node.parentElement.closest('textarea,code,article'))continue;const key=node.textContent.trim();let caption=captions[key];if(/^Selected FB: \d+$/.test(key))caption=key.replace('Selected FB:','Выбрано профилей:');else if(/^Selected: \d+$/.test(key))caption=key.replace('Selected:','Выбрано РК:');if(caption && key!==caption)node.textContent=caption;}}
         for(const [id,placeholder] of [['geoQuery','Страна, регион или город'],['interestQuery','Выберите интерес или найдите по названию'],['behaviorQuery','Выберите поведение или найдите по названию']])if($(id))$(id).placeholder=placeholder;
         setupProfilePicker();
+        setupAudienceDevices();
         updateCreativeSummary();
     }
     function init() {

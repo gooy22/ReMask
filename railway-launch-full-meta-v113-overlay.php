@@ -85,8 +85,7 @@ const remaskLaunchCoveredFields = {
     ]),
     targeting:new Set([
         'age_min','age_max','locales','geo_locations',
-        'interests','behaviors','custom_audiences','excluded_custom_audiences','publisher_platforms',
-        'device_platforms'
+        'interests','behaviors','custom_audiences','excluded_custom_audiences','publisher_platforms'
     ]),
     creative:new Set([
         'name','url_tags','image_hash','video_id','source_instagram_media_id'

@@ -40,7 +40,10 @@ const remaskModuleControls = (() => {
         function values() {
             const raw=String(descriptor.get.call(source)||'').trim();if(!raw)return [];
             if(csv)return raw.split(',').map(v=>v.trim()).filter(Boolean);
-            try{const rows=JSON.parse(raw);return Array.isArray(rows)?rows:[];}catch{return [];}
+            try{const rows=JSON.parse(raw);if(Array.isArray(rows))return rows;}catch{}
+            const type=source.dataset.launchMetaType||source.dataset.metaType||'';
+            if(type==='list<string>'||type==='list<enum>')return raw.split(',').map(v=>v.trim()).filter(Boolean);
+            return [];
         }
         function label(value) {
             const id=key(value);return (typeof value==='object'&&value.name)||spec.options?.find(row=>key(row)===id)?.name||id;

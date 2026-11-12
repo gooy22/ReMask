@@ -294,10 +294,37 @@ require_once __DIR__ . '/../checkpassword.php';
 require_once __DIR__ . '/../classes/MetaEndpoint.php';
 require_once __DIR__ . '/../classes/MetaSdkSchema.php';
 try {
+    $schema=MetaSdkSchema::schema();
+    $modulePath='/opt/remask-python/app/contracts/meta_editor_modules_20261014.json';
+    $module=null;
+    $moduleRaw=@file_get_contents($modulePath);
+    if (is_string($moduleRaw)) {
+        try {
+            $decoded=json_decode($moduleRaw,true,512,JSON_THROW_ON_ERROR);
+            if (is_array($decoded) && is_array($decoded['field_controls'] ?? null)) $module=$decoded;
+        } catch (Throwable $ignored) {}
+    }
+
+    $controls=[];
+    foreach (($module['field_controls'] ?? []) as $group=>$fields) {
+        if (!isset($schema[$group]['fields']) || !is_array($fields)) continue;
+        foreach ($fields as $field=>$control) {
+            if (!array_key_exists($field,$schema[$group]['fields']) || !is_array($control)) continue;
+            $controls[$group][$field]=$control;
+        }
+    }
     MetaEndpoint::ok([
         'source' => 'facebook/facebook-python-business-sdk',
         'captured_at' => '2026-09-19',
-        'schema' => MetaSdkSchema::schema(),
+        'schema' => $schema,
+        'field_controls' => $controls,
+        'targeting_types' => is_array($module['targeting_types'] ?? null) ? $module['targeting_types'] : [],
+        'object_definitions' => is_array($module['object_definitions'] ?? null) ? $module['object_definitions'] : [],
+        'module_catalog' => [
+            'available' => is_array($module),
+            'source' => $module['source'] ?? 'reviewed_private_ads_manager_modules',
+            'captured_at' => $module['captured_at'] ?? '',
+        ],
     ]);
 } catch (Throwable $e) {
     MetaEndpoint::fail($e);
