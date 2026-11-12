@@ -913,6 +913,21 @@ class ValidationDiagnosticTests(unittest.TestCase):
         self.assertNotIn('private_token', repr(result))
         self.assertNotIn('secret_cookie', repr(result))
 
+    def test_explicit_paths_are_extracted_from_any_error_text_value_without_raw_text(self):
+        from app.private_ads_inspect import validation_diagnostic
+        source = [{
+            'error_code': 1359188,
+            'summary': 'Invalid parameter `creative.object_story_spec.link_data.call_to_action`',
+            'details': 'Private text that must not be retained: secret_cookie=DO_NOT_EXPOSE',
+        }]
+        result = validation_diagnostic(source, observed=True)
+        self.assertEqual(result['codes'], [{'field': 'error_code', 'value': 1359188}])
+        self.assertEqual(result['reported_field_paths'], [
+            'creative.object_story_spec.link_data.call_to_action',
+        ])
+        self.assertNotIn('Invalid parameter', repr(result))
+        self.assertNotIn('DO_NOT_EXPOSE', repr(result))
+
     def test_nested_and_encoded_codes_keep_reviewed_fields_without_raw_messages(self):
         from app.private_ads_inspect import validation_diagnostic
         source = {'data': [{'error': {'error_code': '1815706', 'error_subcode': 100,

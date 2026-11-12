@@ -208,10 +208,13 @@ def validation_diagnostic(value, *, observed):
                 record["truncated"] = True
                 truncated = True
             source = node[:16000]
-            if isinstance(key, str) and key.casefold() in _ERROR_MESSAGE_KEYS:
-                for pattern in _MESSAGE_FIELD_PATTERNS:
-                    for match in pattern.finditer(source):
-                        collect_reported_field_paths(match.group(1), record)
+            # Meta places human-readable validation text under keys that vary
+            # by operation (for example summary/details). Scan every bounded,
+            # non-secret string leaf for an explicit field/parameter phrase;
+            # only the captured path is retained, never the source text.
+            for pattern in _MESSAGE_FIELD_PATTERNS:
+                for match in pattern.finditer(source):
+                    collect_reported_field_paths(match.group(1), record)
             decoded = parse_encoded(source)
             if decoded is not None:
                 walk_record(decoded, key, depth + 1, record)

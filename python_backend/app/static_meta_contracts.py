@@ -107,9 +107,10 @@ async def execute(web, operation, *, before_submit=None, business='', variables=
             return await submit(row['doc_id'], row['variables'], **kwargs)
         except RemoteRequestError as exc:
             failure = exc.meta_payload.get('transport_failure')
-            # Only a reviewed query whose bootstrap GET timed out before
-            # dispatch may retry here. Mutation senders and unknown POST
-            # outcomes retain their original durable reconciliation path.
+            # A bootstrap timeout happened before dispatch. A timeout after
+            # dispatch is retried only for the exact static READ_RK query:
+            # it is idempotent, has no before_submit mutation intent, and one
+            # identical retry can safely recover the account identity proof.
             read_bootstrap_timeout = (
                 row['operation_kind'] == 'query'
                 and before_submit is None
@@ -118,15 +119,28 @@ async def execute(web, operation, *, before_submit=None, business='', variables=
                 and isinstance(failure, dict)
                 and failure.get('kind') in {'TimeoutError', 'ReadTimeout', 'ConnectTimeout', 'PoolTimeout'}
             )
-            if not read_bootstrap_timeout:
+            cause = exc.__cause__
+            submitted_read_timeout = (
+                operation == 'READ_RK'
+                and row['operation_kind'] == 'query'
+                and before_submit is None
+                and exc.transport_stage == 'graphql_submit'
+                and exc.request_may_have_been_sent is True
+                and cause is not None
+                and type(cause).__name__ in {
+                    'TimeoutError', 'ReadTimeout', 'WriteTimeout', 'ConnectTimeout', 'PoolTimeout',
+                }
+            )
+            if not (read_bootstrap_timeout or submitted_read_timeout):
                 raise
+            stage = 'after GraphQL submit' if submitted_read_timeout else 'during HTTP bootstrap'
             if attempt:
                 raise ProvisioningError(
                     'PRIVATE_STATIC_READ_TIMEOUT',
-                    'Meta read ' + operation + ' timed out during HTTP bootstrap.',
+                    'Meta read ' + operation + ' timed out ' + stage + '.',
                     retryable=True,
                 ) from exc
-            log.info('static_contract read bootstrap retry operation=%s attempt=2', operation)
+            log.info('static_contract read timeout retry operation=%s stage=%s attempt=2', operation, stage)
 
 
 class StaticAssetContracts:
