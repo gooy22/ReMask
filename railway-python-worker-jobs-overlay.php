@@ -65,9 +65,11 @@ function rmx_pwj_input(): array {
 
 final class RmxPwjWorkerHttpError extends RuntimeException {
     public array $detail;
-    public function __construct(string $message, array $detail) {
+    public int $httpStatus;
+    public function __construct(string $message, array $detail, int $httpStatus) {
         parent::__construct($message);
         $this->detail = $detail;
+        $this->httpStatus = $httpStatus;
     }
 }
 
@@ -127,6 +129,16 @@ function rmx_pwj_worker_request(string $method, string $path, ?array $payload = 
         // or raw response fragments. Retain only safe, typed diagnostics.
         $detailValue = $decoded['detail'] ?? $decoded['error'] ?? null;
         $safe = [];
+        $safeCreateRejectionMessages = [
+            'Чекпоинт Meta: выбранные профили остановлены. Prepare не запущен.',
+            'Meta явно удалила auth-cookie сохранённого входа. Тот же набор не отправлен повторно; Prepare не создан.',
+            'Старая запись не доказывает отзыв текущего снимка, но её нельзя надёжно сопоставить. Запрос к Meta не отправлен; Prepare не создан.',
+            'ID Facebook-профиля изменился после зафиксированного удаления auth-cookie. Запрос к Meta не отправлен; проверьте привязанный аккаунт.',
+            'Не удалось проверить сохранённый вход выбранного профиля. Запрос к Meta не отправлен; Prepare не создан.',
+            'Не удалось безопасно подтвердить вход выбранных профилей. Запрос к Meta не отправлен; Prepare не создан.',
+            'Meta остановила доступ выбранных профилей. Prepare не запущен.',
+            'Meta остановила выбранные профили. Prepare не запущен.',
+        ];
         if (is_array($detailValue)) {
             $code = $detailValue['code'] ?? null;
             if (is_string($code) && preg_match('/^[A-Z0-9_]{1,100}$/D', $code)) $safe['code'] = $code;
@@ -146,8 +158,17 @@ function rmx_pwj_worker_request(string $method, string $path, ?array $payload = 
                 }
             }
             if (($detailValue['retryable'] ?? false) === true) $safe['retryable'] = true;
+        } elseif (is_string($detailValue)) {
+            $candidate = trim($detailValue);
+            if (preg_match('/^[A-Z][A-Z0-9_]{2,100}$/D', $candidate)) {
+                $safe['code'] = $candidate;
+            } elseif ($status === 409 && in_array($candidate, $safeCreateRejectionMessages, true)) {
+                // These are fixed messages emitted by the worker before a Job
+                // is stored or queued. Never forward arbitrary upstream text.
+                $safe['message'] = $candidate;
+            }
         }
-        throw new RmxPwjWorkerHttpError('PYTHON_WORKER_HTTP_' . $status, $safe);
+        throw new RmxPwjWorkerHttpError('PYTHON_WORKER_HTTP_' . $status, $safe, $status);
     }
     return $decoded;
 }
@@ -634,6 +655,14 @@ try {
     $safeMessage = preg_match('/^[A-Z][A-Z0-9_]{2,100}$/D', $message)
         ? $message : 'PYTHON_WORKER_FAILED';
     error_log('[python-worker-jobs] ' . get_class($e) . ': ' . $safeMessage);
+    if (($action ?? '') === 'create' && $e instanceof RmxPwjWorkerHttpError
+        && $e->httpStatus >= 400 && $e->httpStatus < 500) {
+        $code = (string)($e->detail['code'] ?? ('PYTHON_WORKER_HTTP_' . $e->httpStatus));
+        $message = (string)($e->detail['message'] ?? $code);
+        $response = ['ok'=>false, 'error'=>$code, 'code'=>$code, 'message'=>$message];
+        if (($e->detail['retryable'] ?? false) === true) $response['retryable'] = true;
+        rmx_pwj_out($response, $e->httpStatus);
+    }
     if (in_array(($action ?? ''), ['private_launch_review','private_draft_read'], true) && $e instanceof RmxPwjWorkerHttpError
         && preg_match('/^[A-Z0-9_]{1,100}$/D', (string)($e->detail['code'] ?? ''))) {
         // Preserve the typed readiness failure across PHP. Do not make the
