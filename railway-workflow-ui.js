@@ -520,7 +520,7 @@
             const next=document.createElement('button');next.type='button';next.className='wf-mobile-next';next.textContent='Далее';next.setAttribute('aria-label','Следующий этап');
             mobileBar.append(state,back,status,summaryButton,saveButton,next);document.body.appendChild(mobileBar);
             back.addEventListener('click',()=>{if(activeStep>0)stepTo(activeStep-1);});
-            next.addEventListener('click',()=>{if(activeStep<reviewIndex-1)stepTo(activeStep+1);else if(reviewIndex>=0)stepTo(reviewIndex);});
+            next.addEventListener('click',()=>{if(activeStep<reviewIndex-1)stepTo(activeStep+1);else if(reviewIndex>=0){stepTo(reviewIndex);const review=$('reviewLaunch');if(review&&!review.disabled)review.click();}});
             summaryButton.addEventListener('click',()=>{
                 const panel=$('wfLiveSummary');if(!panel)return;
                 panel.open=true;panel.scrollIntoView({behavior:window.matchMedia?.('(prefers-reduced-motion: reduce)').matches?'auto':'smooth',block:'center'});
