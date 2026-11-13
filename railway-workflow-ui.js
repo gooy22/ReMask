@@ -584,7 +584,8 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
     .wf-launch.wf-studio-v2>.wf-step-nav a:not(:last-child)::after{right:-8px;top:50%;width:10px;background:rgba(142,165,193,.2)}
     .wf-launch.wf-studio-v2>.wf-step-nav a.is-current{border-color:rgba(99,165,255,.22);background:linear-gradient(100deg,rgba(62,139,230,.15),rgba(133,108,236,.08));color:#f1f6fd;box-shadow:none}
     .wf-launch.wf-studio-v2>.wf-step-nav a.is-complete .wf-step-index{border-color:rgba(91,195,151,.45);background:rgba(52,151,115,.12);color:#9ee4c3}
-    .wf-step-progress{height:2px;margin:-2px 0 12px;overflow:hidden;border-radius:99px;background:rgba(148,173,206,.12)}
+    .wf-launch.wf-studio-v2>.wf-step-progress{grid-column:1/-1}
+    .wf-launch.wf-studio-v2 .wf-step-progress{height:2px;margin:-2px 0 12px;overflow:hidden;border-radius:99px;background:rgba(148,173,206,.12)}
     .wf-step-progress>span{display:block;width:var(--wf-step-progress,20%);height:100%;border-radius:inherit;background:linear-gradient(90deg,var(--studio-blue),var(--studio-violet));transition:width .22s ease}
     .wf-launch.wf-studio-v2>.launch-card.wf-step-card{margin:0 0 14px!important;padding:24px 26px!important;border:1px solid var(--studio-line)!important;border-radius:18px!important;background:linear-gradient(150deg,rgba(20,30,44,.98),rgba(14,22,34,.98))!important;box-shadow:0 16px 38px rgba(2,8,17,.17)!important}
     .wf-launch.wf-studio-v2>.launch-card.wf-step-card[hidden],.wf-launch.wf-studio-v2>.wf-step-card[hidden]{display:none!important}
@@ -650,8 +651,9 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
       .wf-launch.wf-studio-v2 .wf-empty-state>a{margin-left:48px}
       .wf-launch.wf-studio-v2 .wf-step-context{margin:-8px 0 17px!important}
       .wf-launch.wf-studio-v2 .wf-mobile-actions{left:0!important;right:0!important;grid-template-columns:auto minmax(0,1fr) auto auto!important;padding:8px 9px calc(8px + env(safe-area-inset-bottom))!important}
+      .wf-launch.wf-studio-v2 .wf-live-summary:not([open]) .wf-summary-quickfacts{display:none!important}
     }
-    @media(max-width:390px){
+    @media(max-width:360px){
       .wf-launch.wf-studio-v2>.wf-step-nav a{min-width:84px}
       .wf-launch.wf-studio-v2 #wfResourceActions{grid-template-columns:minmax(0,1fr)}
     }
@@ -1083,8 +1085,8 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
         compactCard('jobsCard','Задачи и результаты');
         const entries=[
             {key:'resources',title:'Ресурсы',ids:['profile'],cardTitle:'Профили и рекламные кабинеты',description:'Выберите профили и кабинеты для черновика.'},
-            {key:'campaign',title:'Кампания',ids:['campaignName'],cardTitle:'Кампания',description:'Задайте цель и бюджет кампании.'},
-            {key:'audience',title:'Аудитория',ids:['adsetName'],cardTitle:'Аудитория',description:'Настройте географию, демографию и доступные параметры Meta.'},
+            {key:'campaign',title:'Кампания',ids:['campaignName'],cardTitle:'Кампания',description:'Укажите имя кампании, цель и особую категорию.'},
+            {key:'audience',title:'Аудитория',ids:['adsetName'],cardTitle:'Бюджет и аудитория',description:'Задайте бюджет, аудиторию и стратегию доставки.'},
             {key:'ad',title:'Объявление',ids:['creativeName'],cardTitle:'Объявление',description:'Добавьте медиа, текст, ссылку и оформление объявления.'},
             {key:'review',title:'Проверка',ids:['reviewLaunch','launchButton','jobsCard'],cardTitle:'Проверка черновика',description:'Проверьте итоговые настройки перед созданием PAUSED-черновика.'}
         ];
