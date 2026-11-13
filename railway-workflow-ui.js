@@ -1261,11 +1261,22 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
 
     function normalizePausedSafetySpacing(){
         const root=document.querySelector('.launch-wrap');if(!root)return;
-        const label=Array.from(root.querySelectorAll('strong,b')).find(node=>node.textContent.trim()==='Режим PAUSED:');
-        if(!label)return;
-        label.classList.add('wf-paused-safety-label');
-        const next=label.nextSibling;
-        if(next?.nodeType===Node.TEXT_NODE&&next.nodeValue&&!/^\s/.test(next.nodeValue))next.nodeValue=' '+next.nodeValue;
+        const labels=Array.from(root.querySelectorAll('strong,b'));
+        const lead=labels.find(node=>node.textContent.trim()==='Режим PAUSED:');
+        if(lead){
+            lead.classList.add('wf-paused-safety-label');
+            const next=lead.nextSibling;
+            if(next?.nodeType===Node.TEXT_NODE)next.nodeValue=' '+String(next.nodeValue||'').replace(/^\s+/,'');
+            else lead.after(document.createTextNode(' '));
+        }
+        const status=labels.find(node=>node!==lead&&node.textContent.trim()==='PAUSED');
+        if(status){
+            const previous=status.previousSibling;
+            if(previous?.nodeType===Node.TEXT_NODE)previous.nodeValue=String(previous.nodeValue||'').replace(/\s*$/,' ');
+            else if(previous)previous.after(document.createTextNode(' '));
+            const next=status.nextSibling;
+            if(next?.nodeType===Node.TEXT_NODE)next.nodeValue=String(next.nodeValue||'').replace(/^\s+/,'');
+        }
     }
 
     function ensureTargetingDisclosure(card, root) {
