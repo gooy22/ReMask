@@ -799,7 +799,10 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
         if(filter&&!filter.dataset.wfAccountFilterBound){filter.dataset.wfAccountFilterBound='1';filter.addEventListener('input',()=>{const query=filter.value.trim().toLocaleLowerCase();grid.querySelectorAll('.wf-account-choice').forEach(item=>{item.hidden=!!query&&!item.dataset.search.includes(query);});});}
         if(filter){const query=filter.value.trim().toLocaleLowerCase();grid.querySelectorAll('.wf-account-choice').forEach(item=>{item.hidden=!!query&&!item.dataset.search.includes(query);});}
         const table=select.closest('.launch-card')?.querySelector('.table-responsive');
-        if(table){const text=table.textContent.toLocaleLowerCase();table.classList.toggle('wf-empty-inventory',!options.length&&(/выберите профили|сначала загрузите|select profiles/.test(text)));}
+        const noAccounts=options.length===0;
+        if(table){const text=table.textContent.toLocaleLowerCase();table.classList.toggle('wf-empty-inventory',noAccounts&&(/выберите профили|сначала загрузите|select profiles/.test(text)));}
+        if(filter)filter.hidden=noAccounts;
+        for(const id of ['rkSelectAll','rkClear']){const button=$(id);if(button)button.hidden=noAccounts;}
     }
         const wfTargetGroups = [
         {key:'demographics',title:'Демография',note:'Возраст, пол, образование, семейный статус и социальные параметры.',fields:new Set(['age_min','age_max','genders','education_statuses','education_schools','education_majors','college_years','relationship_statuses','family_statuses','household_composition','ethnic_affinity','generation','interested_in','income','net_worth','politics'])},
