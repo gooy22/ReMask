@@ -1049,6 +1049,21 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
 @media(max-width:480px){
   .wf-launch.wf-studio-v3 .wf-choice-segments{grid-template-columns:1fr!important}
 }
+/* AutoUpload Studio V7: remove the remaining inherited blue status surfaces */
+.app-shell.wf-autoupload-open .app-sidebar .app-nav a.active{
+  border-color:transparent!important;border-left:2px solid #9a8cff!important;border-radius:9px!important;
+  background:rgba(154,140,255,.10)!important;background-image:none!important;color:#e2ddff!important;box-shadow:none!important
+}
+.app-shell.wf-autoupload-open .app-sidebar .app-nav a.active:hover{
+  background:rgba(154,140,255,.16)!important;color:#f2efff!important
+}
+.app-shell.wf-autoupload-open .app-connection{
+  border-color:#35404d!important;background:#1c2530!important;color:#b8c3d0!important;box-shadow:none!important
+}
+.app-shell.wf-autoupload-open .app-connection i{color:#45c9a2!important}
+#wfMobileActions .wf-workflow-status{
+  border-color:#303a46!important;background:#161d26!important;color:#aeb9c7!important;box-shadow:none!important
+}
 @media(prefers-reduced-motion:reduce){.wf-launch.wf-studio-v3 *{transition:none!important;scroll-behavior:auto!important}}
 `;
     document.head.appendChild(studioV3Style);
