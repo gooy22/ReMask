@@ -681,11 +681,15 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
       position:static!important;top:auto!important;grid-row:auto!important;
       max-height:none!important;overflow:visible!important;margin:0 0 4px!important
     }
-    .wf-launch.wf-studio-v2 .wf-profile-grid>.wf-profile-empty,
+    .wf-launch.wf-studio-v2 .row>.wf-profile-selector{grid-column:1/-1!important}
+    .wf-launch.wf-studio-v2 .wf-profile-grid{grid-template-columns:repeat(auto-fill,minmax(min(100%,260px),1fr))}
+    .wf-launch.wf-studio-v2 .wf-profile-grid>.wf-profile-empty{grid-column:1/-1;width:min(100%,720px);min-width:0}
     .wf-launch.wf-studio-v2 .wf-account-grid>.wf-account-empty{grid-column:1/-1;width:100%;min-width:0}
+    .wf-launch.wf-studio-v2 .wf-legacy-resource-guidance,
+    .wf-launch.wf-studio-v2 .wf-empty-api-status{display:none!important}
     .wf-launch.wf-studio-v2 .form-control.wf-account-native,
     .wf-launch.wf-studio-v2 #adAccount{display:none!important}
-    .wf-launch.wf-studio-v2 #wf-launch-resources .table-responsive.wf-empty-inventory{display:none!important}
+    .wf-launch.wf-studio-v2 #wf-launch-resources .table-responsive{display:none!important}
     .wf-launch.wf-studio-v2 .wf-audience-estimate{
       margin:18px 0 12px;border:1px solid var(--studio-line);
       border-radius:15px;background:rgba(7,14,24,.32);overflow:hidden
@@ -1344,6 +1348,7 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
             setText($('preflight'),'Проверить профиль');setText($('syncMeta'),'Обновить данные Meta');
             for(const row of formerRows){if(!row.querySelector('button,input,select,textarea,a'))row.remove();}
         }
+        $('profile')?.closest('[class*="col-"]')?.classList.add('wf-profile-selector');
         $('adAccount')?.closest('[class*="col-"]')?.classList.add('wf-account-selector');
         const liveSummary=setupLiveSummary(root);
         const progressTrackNode=root.querySelector('.wf-step-progress');
@@ -1448,7 +1453,9 @@ function setupVisualChoices() {
             'Bundle stores Campaign, Ad Set, targeting, Page/IG/Pixel selection, creative text, CTA, URL and UTM. Media file must be selected for each launch.':'Набор сохраняет настройки рекламы, медиа и порядок карточек. Для бюджета на весь срок укажите окончание показа.'
         };
         const launch=document.querySelector('.launch-wrap');
-        if(launch){const walker=document.createTreeWalker(launch,NodeFilter.SHOW_TEXT);let node;while((node=walker.nextNode())){if(node.parentElement.closest('textarea,code,article'))continue;const key=node.textContent.trim();let caption=captions[key];if(/^Selected FB: \d+$/.test(key))caption=key.replace('Selected FB:','Выбрано профилей:');else if(/^Selected: \d+$/.test(key))caption=key.replace('Selected:','Выбрано РК:');if(caption && key!==caption)node.textContent=caption;}}
+        if(launch){const walker=document.createTreeWalker(launch,NodeFilter.SHOW_TEXT);let node;while((node=walker.nextNode())){if(node.parentElement.closest('textarea,code,article'))continue;const key=node.textContent.trim();let caption=captions[key];if(/^Selected FB: \d+$/.test(key))caption=key.replace('Selected FB:','Выбрано профилей:');else if(/^Selected: \d+$/.test(key))caption=key.replace('Selected:','Выбрано РК:');if(caption && key!==caption)node.textContent=caption;
+                if(key==='Choose one or more Facebook profiles and run preflight.')node.parentElement?.closest('.alert,.alert-info,.alert-warning,.muted,.small')?.classList.add('wf-legacy-resource-guidance');
+                if(key==='API usage: no data yet.')node.parentElement?.classList.add('wf-empty-api-status');}}
         for(const [id,placeholder] of [['geoQuery','Страна, регион или город'],['interestQuery','Выберите интерес или найдите по названию'],['behaviorQuery','Выберите поведение или найдите по названию']])if($(id))$(id).placeholder=placeholder;
         setupProfilePicker();
         setupAudienceTargeting();
