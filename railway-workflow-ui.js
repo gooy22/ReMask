@@ -841,7 +841,7 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
         for(const [key,value] of Object.entries(rows)){
             const node=panel.querySelector('[data-wf-summary-value="'+key+'"]');if(node)setText(node,value);
         }
-        const quickValues={campaign:(campaignName==='Название не задано'?'':campaignName+' · ')+objective,budget:budgetText,resources:profiles.length+' профилей · '+accounts.length+' РК',audience:(ageMin||'по умолчанию')+'–'+(ageMax||'по умолчанию')+' · '+(geo.length+moduleGeoCount)+' гео · '+(interests.length+behaviors.length)+' интересов/поведения'};
+        const quickValues={campaign:(campaignName==='Название не задано'?'':campaignName+' · ')+objective,budget:budgetText,resources:profiles.length+' профилей · '+accounts.length+' РК',audience:audienceParts[0]+' · '+(geo.length+moduleGeoCount)+' гео · '+(interests.length+behaviors.length)+' интересов/поведения'};
         for(const [key,value] of Object.entries(quickValues)){const node=panel.querySelector('[data-wf-summary-quick="'+key+'"]');if(node)setText(node,value);}
         const foot=panel.querySelector('[data-wf-summary-foot]');
         if(foot)setText(foot,'Объекты сохраняются на паузе. Публикация выключена.');
@@ -996,11 +996,19 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
             if(reviewButton)reviewButton.hidden=!isReview||createReady;
             if(createButton)createButton.hidden=!isReview||!createReady;
         }
+        function isStepComplete(index){
+            if(index===0)return selectedLabels('profile').length>0&&selectedLabels('adAccount').length>0;
+            if(index===1)return !!String($('campaignName')?.value||'').trim()&&!!selectedLabels('objective').length;
+            if(index===2)return !!String($('adsetName')?.value||'').trim()&&Number($('dailyBudget')?.value||0)>0&&!!selectedLabels('optimizationGoal').length&&!!selectedLabels('billingEvent').length;
+            if(index===3){const media=$('media');return !!selectedLabels('page').length&&!!String($('adName')?.value||'').trim()&&!!(media?.files?.length||selectedLabels('creativeLibrarySelect').length);}
+            return false;
+        }
+        function syncCompletedStates(){stepCards.forEach((item,i)=>item.link.classList.toggle('is-complete',i!==activeStep&&isStepComplete(i)));}
         function setCurrentStep(index){
             if(!stepCards.length)return;
             activeStep=Math.max(0,Math.min(index,stepCards.length-1));
             stepCards.forEach((item,i)=>{
-                const active=i===activeStep;item.link.classList.toggle('is-current',active);item.link.classList.toggle('is-complete',i<activeStep);
+                const active=i===activeStep;item.link.classList.toggle('is-current',active);item.link.classList.toggle('is-complete',!active&&isStepComplete(i));
                 item.cards.forEach(card=>{
                     card.classList.toggle('is-current-step',active);
                     card.setAttribute('aria-hidden',active?'false':'true');
@@ -1023,6 +1031,7 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
         }
         stepCards.forEach((item,index)=>item.link.addEventListener('click',event=>{event.preventDefault();stepTo(index);}));
         setCurrentStep(0);
+        ['input','change'].forEach(type=>root.addEventListener(type,syncCompletedStates,true));
         root._wfSyncToolbar=syncToolbarActions;
         if(createButton&&'MutationObserver'in window){
             const actionObserver=new MutationObserver(syncToolbarActions);
