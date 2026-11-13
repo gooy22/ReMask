@@ -1029,6 +1029,31 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
             }
         });
     }
+    function ensureMetaChoicePrompts() {
+        for (const [id, message] of [
+            ['optimizationGoal','Сначала загрузите рекламный кабинет на шаге «Ресурсы»'],
+            ['billingEvent','Сначала загрузите рекламный кабинет на шаге «Ресурсы»']
+        ]) {
+            const select=$(id);
+            if (!(select instanceof HTMLSelectElement)) continue;
+            const prompt=select.querySelector('option[data-wf-empty-prompt]');
+            const hasChoice=Array.from(select.options).some(option=>option.value&&!option.disabled);
+            if (hasChoice) {
+                prompt?.remove();
+                select.classList.remove('wf-empty-choice');
+                continue;
+            }
+            if (!prompt) {
+                const option=document.createElement('option');
+                option.value='';
+                option.dataset.wfEmptyPrompt='1';
+                option.textContent=message;
+                select.prepend(option);
+                option.selected=true;
+            }
+            select.classList.add('wf-empty-choice');
+        }
+    }
     function fieldGroup(panel, title, note, ids, extra=false) {
         const fields=ids.map(id=>$(id)?.closest('.cr-field')).filter(Boolean);
         if(!fields.length) return;
@@ -1719,6 +1744,7 @@ function setupVisualChoices() {
         });
         document.querySelectorAll('[data-launch-meta-group] > summary > span:first-child,.cr-sdk-group > summary > span:first-child').forEach(span=>{const key=span.parentElement.parentElement.dataset.launchMetaGroup||span.parentElement.parentElement.dataset.sdkGroup;if(groups[key])setText(span,groups[key]);});
         translateOptions(document);
+        ensureMetaChoicePrompts();
         setupVisualChoices();
         const captions={
             'MASS META LAUNCH':'ЗАПУСК РЕКЛАМЫ', 'Run preflight first.':'Выберите профили и загрузите РК.', 'Run preflight first':'Сначала загрузите РК',
@@ -1750,7 +1776,7 @@ function setupVisualChoices() {
         updateCreativeSummary();
         applyStudioV3();
     }
-    style.textContent += '\n.wf-launch.wf-studio-v3 .wf-summary-quickfacts{display:none!important}.wf-launch.wf-studio-v3 .wf-live-summary-body{gap:0;padding:0 16px 8px}.wf-launch.wf-studio-v3 .wf-live-row{display:grid;grid-template-columns:68px minmax(0,1fr);align-items:center;gap:8px;padding:9px 0!important}.wf-launch.wf-studio-v3 .wf-live-row-label{font-size:8px!important;line-height:1.3;white-space:nowrap}.wf-launch.wf-studio-v3 .wf-live-row-value{font-size:11px!important;line-height:1.4}\n@media(max-width:720px){body.wf-autoupload-open{padding-bottom:calc(132px + env(safe-area-inset-bottom))}.wf-mobile-actions{grid-template-columns:minmax(0,1fr) auto auto!important;grid-template-areas:"state summary save" "step back next";row-gap:8px}.wf-workflow-status{grid-area:state;min-width:0}.wf-mobile-step{grid-area:step;text-align:left}.wf-mobile-summary{grid-area:summary}.wf-mobile-back{grid-area:back}.wf-mobile-next,#reviewLaunch,#launchButton{grid-area:next}#wfSaveTemplateButton{grid-area:save}}';\n    function safeEnhance(name, task) {
+    style.textContent += '\n.wf-launch.wf-studio-v3 .wf-summary-quickfacts{display:none!important}.wf-launch.wf-studio-v3 .wf-live-summary-body{gap:0;padding:0 16px 8px}.wf-launch.wf-studio-v3 .wf-live-row{display:grid;grid-template-columns:68px minmax(0,1fr);align-items:center;gap:8px;padding:9px 0!important}.wf-launch.wf-studio-v3 .wf-live-row-label{font-size:8px!important;line-height:1.3;white-space:nowrap}.wf-launch.wf-studio-v3 .wf-live-row-value{font-size:11px!important;line-height:1.4}.wf-launch.wf-studio-v3 .form-control.wf-empty-choice{color:#97a9c2!important}\n@media(max-width:720px){body.wf-autoupload-open{padding-bottom:calc(132px + env(safe-area-inset-bottom))}.wf-mobile-actions{grid-template-columns:minmax(0,1fr) auto auto!important;grid-template-areas:"state summary save" "step back next";row-gap:8px}.wf-workflow-status{grid-area:state;min-width:0}.wf-mobile-step{grid-area:step;text-align:left}.wf-mobile-summary{grid-area:summary}.wf-mobile-back{grid-area:back}.wf-mobile-next,#reviewLaunch,#launchButton{grid-area:next}#wfSaveTemplateButton{grid-area:save}}';\n    function safeEnhance(name, task) {
         try { return task(); }
         catch (error) { console.error('[AutoUpload] '+name+' failed', error); return null; }
     }
