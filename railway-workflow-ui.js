@@ -719,7 +719,7 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
         const panels=Array.from(list.querySelectorAll(':scope > [data-wf-target-group]'))
             .filter(panel=>panel.dataset.wfStudioPromoted!=='1'&&panel.querySelectorAll('[data-wf-target-field]').length>0);
         if(!panels.length)return;
-        const active=panels.find(panel=>panel.dataset.wfTargetGroup===key)||panels.find(panel=>panel.dataset.wfTargetGroup==='detailed')||panels[0];
+        const active=panels.find(panel=>panel.dataset.wfTargetGroup===key)||panels.find(panel=>panel.dataset.wfTargetGroup==='demographics')||panels[0];
         const activeKey=active.dataset.wfTargetGroup;
         root.dataset.wfActiveTargetGroup=activeKey;
         for(const panel of panels){
@@ -752,7 +752,8 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
         const panels=Array.from(list.querySelectorAll(':scope > [data-wf-target-group]'));
         for(const panel of panels){
             const key=panel.dataset.wfTargetGroup;
-            const name=panel.querySelector('[data-wf-target-name]')?.textContent?.trim()||key;
+            const fullName=panel.querySelector('[data-wf-target-name]')?.textContent?.trim()||key;
+            const name=({demographics:'Демография',devices:'Устройства',placements:'Показы',geography:'Гео и язык',exclusions:'Исключения',detailed:'Детальный таргетинг'})[key]||fullName;
             const count=panel.querySelectorAll('[data-wf-target-field]').length;
             let tab=tabs.querySelector('[data-wf-target-tab="'+key+'"]');
             if(!tab){
@@ -769,6 +770,7 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
             }
             const label=tab.querySelector('.wf-target-tab-label');
             if(label)label.textContent=name;
+            tab.setAttribute('aria-label',fullName);tab.title=fullName;
             tab.hidden=count===0;
             panel.id=panel.id||'wfTargetPanel-'+key;
             panel.hidden=count===0;
@@ -1137,6 +1139,36 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
             if(tabCount){tabCount.textContent=selected?String(selected):'';tabCount.hidden=selected===0;}
         }
     }
+    function setupAudienceMetaDisclosure(){
+        const card=$('adsetName')?.closest('.launch-card');
+        const meta=$('launchMetaAllFields');
+        if(!card||!meta||!card.contains(meta))return;
+        let disclosure=card.querySelector(':scope > details.wf-meta-extra-disclosure');
+        if(!disclosure){
+            disclosure=document.createElement('details');
+            disclosure.className='wf-meta-extra-disclosure';
+            disclosure.open=false;
+            const summary=document.createElement('summary');
+            summary.className='wf-meta-extra-summary';
+            const label=document.createElement('span');label.textContent='Дополнительные поля Meta';
+            const hint=document.createElement('span');hint.className='wf-meta-extra-hint';hint.textContent='Полная схема API';
+            summary.append(label,hint);
+            const body=document.createElement('div');body.className='wf-meta-extra-body';
+            disclosure.append(summary,body);
+            card.appendChild(disclosure);
+        }
+        const body=disclosure.querySelector(':scope > .wf-meta-extra-body');
+        if(body&&meta.parentElement!==body)body.appendChild(meta);
+        const heading=meta.querySelector('.rm-meta-head h3');
+        if(heading)heading.textContent='Поля схемы Meta';
+        const note=meta.querySelector('.rm-meta-head .rm-meta-note');
+        if(note)note.textContent='Параметры, которых нет в основных настройках. Значения участвуют в проверке и сборке черновика.';
+        const estimate=card.querySelector(':scope > .wf-audience-estimate');
+        const target=card.querySelector(':scope > #wfTargetingOptions');
+        const anchor=estimate||target||card.querySelector(':scope > .wf-audience-inline');
+        if(anchor&&anchor.nextElementSibling!==disclosure)anchor.after(disclosure);
+    }
+
     function setupAudienceTargeting() {
         const adsetCard=$('adsetName')?.closest('.launch-card');if(!adsetCard)return;
         let root=$('wfTargetingOptions');
@@ -1144,8 +1176,8 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
             root=document.createElement('section');root.id='wfTargetingOptions';root.className='wf-target-groups';
             const head=document.createElement('div');head.className='wf-target-head';
             const copy=document.createElement('div'),title=document.createElement('h6'),description=document.createElement('p');
-            title.textContent='Дополнительные настройки аудитории';
-            description.textContent='Выбирайте доступные параметры Meta через поиск; точные значения сохраняются в настройки аудитории.';
+            title.textContent='Настройки Meta';
+            description.textContent='Выберите категорию. Внутри останутся только поля, относящиеся к ней.';
             copy.append(title,description);head.appendChild(copy);
             const list=document.createElement('div');list.className='wf-target-list';
             for(const group of wfTargetGroups){
@@ -1225,6 +1257,7 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
         root.dataset.wfReady=visibleGroups?'1':'0';
         updateAudienceTargetingSummary();
         setupStudioTargetTabs();
+        setupAudienceMetaDisclosure();
     }
     function selectedLabels(id) {
         const element=$(id);if(!element)return [];
@@ -1910,7 +1943,110 @@ body.wf-autoupload-open main:has(.wf-launch){background:#f4f6f9!important;color:
   color:#8591a2!important;box-shadow:none!important;font-size:10px!important;line-height:1.4!important;
 }
 `;
-    function safeEnhance(name, task) {
+    studioV3Style.textContent += `
+/* AutoUpload Studio V14: neutral surface, short category navigation and consistent controls. */
+body.wf-autoupload-open main:has(.wf-launch){background:#f7f8fb!important;color:#1d2735!important}
+.wf-launch.wf-studio-v3{
+  --studio-ink:#1d2735;--studio-muted:#687587;--studio-border:#e1e6ee;
+  --studio-border-strong:#cbd4e0;--studio-surface:#fff;--studio-surface-2:#f8fafc;
+  --studio-accent:#6d4ed7;--studio-accent-strong:#5b3bc6;--studio-accent-soft:#f4f0ff;
+  background:#f7f8fb!important;color:var(--studio-ink)!important;
+}
+.wf-launch.wf-studio-v3>.launch-card.wf-step-card{
+  background:#fff!important;border-color:#e1e6ee!important;box-shadow:0 8px 24px rgba(28,38,52,.045)!important;
+}
+.wf-launch.wf-studio-v3 .wf-audience-inline{
+  grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:10px 18px!important;
+}
+.wf-launch.wf-studio-v3 .wf-audience-inline>.wf-audience-field,
+.wf-launch.wf-studio-v3 .wf-audience-inline .wf-audience-field,
+.wf-launch.wf-studio-v3 .wf-audience-inline .wf-audience-field .rm-module-control{
+  min-width:0!important;border:0!important;border-bottom:0!important;border-radius:0!important;
+  background:transparent!important;box-shadow:none!important;
+}
+.wf-launch.wf-studio-v3 #wf-launch-audience .wf-audience-inline .wf-audience-field::before,
+.wf-launch.wf-studio-v3 #wf-launch-audience .wf-audience-inline .wf-audience-field::after,
+.wf-launch.wf-studio-v3 #wf-launch-audience .wf-audience-inline .wf-audience-field .rm-module-control::before,
+.wf-launch.wf-studio-v3 #wf-launch-audience .wf-audience-inline .wf-audience-field .rm-module-control::after{
+  content:none!important;display:none!important;border:0!important;box-shadow:none!important;
+}
+.wf-launch.wf-studio-v3 #wf-launch-audience .wf-audience-inline .wf-audience-field :is(input:not([type=hidden]),select,textarea,[role=combobox],.rm-module-search),
+.wf-launch.wf-studio-v3 #wf-launch-audience .wf-audience-inline .wf-audience-field .rm-module-control :is(input,select,textarea,[role=combobox]),
+.wf-launch.wf-studio-v3 #wf-launch-audience .wf-target-field .rm-module-control :is(input,select,textarea,[role=combobox]){
+  box-sizing:border-box!important;min-height:40px!important;padding:8px 11px!important;
+  border:1px solid #cfd7e2!important;border-bottom:1px solid #cfd7e2!important;border-radius:9px!important;
+  background:#fff!important;color:#1d2735!important;box-shadow:none!important;outline:0!important;
+  font-size:12px!important;line-height:1.4!important;
+}
+.wf-launch.wf-studio-v3 #wf-launch-audience .wf-audience-inline .wf-audience-field :is(input,select,textarea,[role=combobox],.rm-module-search):focus,
+.wf-launch.wf-studio-v3 #wf-launch-audience .wf-target-field .rm-module-control :is(input,select,textarea,[role=combobox]):focus{
+  border-color:#9079df!important;box-shadow:0 0 0 3px rgba(109,78,215,.12)!important;
+}
+.wf-launch.wf-studio-v3 .wf-audience-inline> *:has(.wf-audience-subgroup),
+.wf-launch.wf-studio-v3 .wf-audience-inline> #singleAudienceBox{
+  grid-column:1/-1!important;min-width:0!important;
+}
+.wf-launch.wf-studio-v3 .wf-target-head h6{font-size:13px!important;letter-spacing:0!important}
+.wf-launch.wf-studio-v3 .wf-target-head p{font-size:11px!important;max-width:68ch!important}
+.wf-launch.wf-studio-v3 .wf-target-tabs{
+  gap:2px!important;border-bottom:1px solid #e1e6ee!important;scrollbar-width:none!important;
+}
+.wf-launch.wf-studio-v3 .wf-target-tab{
+  min-height:36px!important;padding:7px 9px!important;font-size:11px!important;
+  color:#677487!important;
+}
+.wf-launch.wf-studio-v3 .wf-target-tab:hover{background:#f7f5fc!important;color:#463b65!important}
+.wf-launch.wf-studio-v3 .wf-target-tab[aria-selected="true"]{
+  border-bottom-color:#6d4ed7!important;background:transparent!important;color:#3e3261!important;
+}
+.wf-launch.wf-studio-v3 .wf-target-tab-count{background:#f1eef8!important;color:#5c4b82!important}
+.wf-launch.wf-studio-v3 .wf-target-fields{
+  grid-template-columns:repeat(3,minmax(0,1fr))!important;gap:11px 16px!important;
+}
+.wf-launch.wf-studio-v3 .wf-target-field>label{font-size:10px!important;color:#536174!important}
+.wf-launch.wf-studio-v3 .wf-meta-extra-disclosure{
+  width:100%!important;margin:10px 0 0!important;padding:0!important;
+  border:0!important;border-top:1px solid #e1e6ee!important;border-radius:0!important;
+  background:transparent!important;box-shadow:none!important;
+}
+.wf-launch.wf-studio-v3 .wf-meta-extra-summary{
+  display:flex!important;align-items:center!important;justify-content:space-between!important;gap:12px!important;
+  min-height:42px!important;padding:8px 0!important;list-style:none!important;cursor:pointer!important;
+  color:#273345!important;font-size:12px!important;font-weight:650!important;
+}
+.wf-launch.wf-studio-v3 .wf-meta-extra-summary::-webkit-details-marker{display:none!important}
+.wf-launch.wf-studio-v3 .wf-meta-extra-hint{color:#7a8798!important;font-size:10px!important;font-weight:500!important}
+.wf-launch.wf-studio-v3 .wf-meta-extra-body{padding:0 0 12px!important}
+.wf-launch.wf-studio-v3 #launchMetaAllFields{
+  margin:0!important;padding:12px 0 0!important;border:0!important;border-radius:0!important;
+  background:transparent!important;box-shadow:none!important;
+}
+.wf-launch.wf-studio-v3 #launchMetaAllFields .rm-meta-head{align-items:center!important;gap:12px!important}
+.wf-launch.wf-studio-v3 #launchMetaAllFields .rm-meta-head h3{color:#273345!important;font-size:13px!important}
+.wf-launch.wf-studio-v3 #launchMetaAllFields .rm-meta-note{max-width:70ch!important;color:#7a8798!important}
+body.wf-autoupload-open div[style*="z-index:14000"]{background:rgba(24,34,48,.26)!important}
+body.wf-autoupload-open section[role="dialog"][aria-modal="true"]{
+  background:#fff!important;color:#1d2735!important;border:1px solid #dce3ec!important;border-radius:16px!important;
+  box-shadow:0 24px 70px rgba(24,34,48,.2)!important;
+}
+body.wf-autoupload-open section[role="dialog"][aria-modal="true"] h3{color:#1d2735!important}
+body.wf-autoupload-open section[role="dialog"][aria-modal="true"] div[style*="border:1px solid #334155"]{
+  border-color:#e1e6ee!important;background:#f8fafc!important;color:#273345!important;
+}
+body.wf-autoupload-open section[role="dialog"][aria-modal="true"] :is(input,select,textarea,.form-control){
+  border:1px solid #d2dbe6!important;border-radius:8px!important;background:#fff!important;color:#1d2735!important;box-shadow:none!important;
+}
+body.wf-autoupload-open section[role="dialog"][aria-modal="true"] .btn-secondary{
+  border:1px solid #dce3ec!important;border-radius:8px!important;background:#f8fafc!important;color:#344154!important;
+}
+body.wf-autoupload-open section[role="dialog"][aria-modal="true"] [role="alert"]{color:#b42318!important}
+@media(max-width:640px){
+  .wf-launch.wf-studio-v3 .wf-target-fields{grid-template-columns:minmax(0,1fr)!important}
+  .wf-launch.wf-studio-v3 .wf-target-tab{padding:7px 8px!important;font-size:10px!important}
+  .wf-launch.wf-studio-v3 .wf-meta-extra-summary{align-items:flex-start!important;flex-direction:column!important;gap:2px!important}
+}
+`;
+        function safeEnhance(name, task) {
         try { return task(); }
         catch (error) { console.error('[AutoUpload] '+name+' failed', error); return null; }
     }
