@@ -1247,10 +1247,10 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
         }
         const empty=root.querySelector('[data-wf-target-empty]');
         if(empty){
-            empty.hidden=available>0||sourceCount===0;
-            if(sourceCount===0)setText(empty,'Загружаю доступные параметры аудитории Meta…');
+            empty.hidden=available>0;
+            if(sourceCount===0)setText(empty,'Выберите профиль и рекламный кабинет на шаге «Ресурсы», затем загрузите данные Meta. Здесь появятся прямые настройки географии, интересов, поведения, языков, размещений, устройств и операционных систем.');
         }
-        root.hidden=sourceCount===0&&available===0;
+        root.hidden=false;
         root.dataset.wfReady=visibleGroups?'1':'0';
         updateAudienceTargetingSummary();
     }
@@ -1750,11 +1750,27 @@ function setupVisualChoices() {
         updateCreativeSummary();
         applyStudioV3();
     }
+    function safeEnhance(name, task) {
+        try { return task(); }
+        catch (error) { console.error('[AutoUpload] '+name+' failed', error); return null; }
+    }
     function init() {
         if(!$('creativeForm')&&!document.querySelector('.launch-wrap'))return;
-        setupCreative();setupLaunch();enhanceDynamic();
+        safeEnhance('creative setup',setupCreative);
+        safeEnhance('workflow setup',setupLaunch);
+        safeEnhance('studio layout',applyStudioV3);
+        safeEnhance('dynamic controls',enhanceDynamic);
         let queued=false;
-        const observer=new MutationObserver(()=>{if(queued)return;queued=true;requestAnimationFrame(()=>{queued=false;observer.disconnect();enhanceDynamic();observer.observe(document.body,{childList:true,subtree:true});});});
+        const observer=new MutationObserver(()=>{
+            if(queued)return;
+            queued=true;
+            requestAnimationFrame(()=>{
+                queued=false;
+                observer.disconnect();
+                safeEnhance('dynamic refresh',enhanceDynamic);
+                observer.observe(document.body,{childList:true,subtree:true});
+            });
+        });
         observer.observe(document.body,{childList:true,subtree:true});
     }
     if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init,{once:true});else init();
