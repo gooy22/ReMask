@@ -1252,10 +1252,11 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
         const accountActions=document.createElement('div');
         if($('preflight')&&$('syncMeta')&&!$('wfResourceActions')){
             accountActions.id='wfResourceActions';accountActions.className='wf-resource-actions';accountActions.setAttribute('aria-label','Действия с ресурсами');
-            for(const button of [$('preflight'),$('syncMeta')]){if(button){button.classList.add(button.id==='syncMeta'?'wf-resource-primary':'wf-resource-secondary');accountActions.appendChild(button);}}
+            const accountButtons=[$('preflight'),$('syncMeta')].filter(Boolean);
+            const formerRows=[...new Set(accountButtons.map(button=>button.closest('.row')).filter(Boolean))];
+            for(const button of accountButtons){button.classList.add(button.id==='syncMeta'?'wf-resource-primary':'wf-resource-secondary');accountActions.appendChild(button);}
             const anchor=$('wfAdAccountPicker')||$('adAccount');if(anchor)anchor.insertAdjacentElement('afterend',accountActions);
             setText($('preflight'),'Проверить профиль');setText($('syncMeta'),'Обновить данные Meta');
-            const formerRows=[...new Set([$('preflight'),$('syncMeta')].map(button=>button?.parentElement?.closest('.row')).filter(Boolean))];
             for(const row of formerRows){if(!row.querySelector('button,input,select,textarea,a'))row.remove();}
         }
         $('adAccount')?.closest('[class*="col-"]')?.classList.add('wf-account-selector');
