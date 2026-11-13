@@ -129,7 +129,8 @@
     @media(max-width:700px){#creativeForm{display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:auto 155px minmax(0,1fr) auto}#creativeForm>.cr-tabs{grid-column:1;grid-row:1}#creativeForm>.wf-summary{grid-column:1;grid-row:2}#creativeForm>.cr-editor{grid-column:1;grid-row:3;min-height:0}#creativeForm>.cr-modal-foot{grid-column:1;grid-row:4}}
     @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
     `;
-    style.textContent += '\n'+".wf-launch.rm-estimate-layout{width:100%;max-width:1480px!important;grid-template-columns:minmax(0,1fr) 304px!important;gap:24px!important;align-items:start}\n.wf-launch .launch-main,.wf-launch .rm-estimate-rail{min-width:0}\n.wf-launch .rm-estimate-rail{position:sticky;top:88px;align-self:start;display:grid;gap:16px}\n.wf-launch>.launch-card{padding:26px;border:1px solid #2f3d50;border-radius:20px;background:linear-gradient(160deg,#19222f 0%,#151d28 100%);box-shadow:0 14px 34px rgba(3,8,16,.18);margin-bottom:22px}\n.wf-launch h5{font-size:19px;letter-spacing:-.02em;margin-bottom:24px}\n.wf-launch .row{gap:22px 20px}\n.wf-launch label{font-size:12px!important;color:#c1cede!important;margin-bottom:8px!important}\n.wf-launch .form-control:not(.rm-meta-visual-source):not(.rm-module-source):not(.wf-profile-native):not([type=hidden]):not([hidden]){min-height:46px!important;border-radius:11px!important;border-color:#3a4b61!important;background:#111923!important;color:#eef3fb!important;padding:11px 13px!important;transition:border-color .16s ease,box-shadow .16s ease}\n.wf-launch .form-control:focus{border-color:#6e9eea!important;box-shadow:0 0 0 3px rgba(83,137,218,.18)!important}\n.wf-launch textarea.form-control{min-height:112px!important}\n.wf-launch .wf-step-nav{top:70px;gap:8px;padding:9px;border-color:#33445a;border-radius:17px;background:rgba(17,24,34,.88);box-shadow:0 10px 28px rgba(3,8,16,.2)}\n.wf-step-nav a{padding:10px 11px;border-radius:12px}\n.wf-step-index{width:28px;height:28px;flex-basis:28px}\n.wf-launch .wf-section-heading{border:0;padding:0;margin:30px 0 2px;color:#9db7da;font-size:12px;font-weight:750;letter-spacing:.08em;text-transform:uppercase}\n .wf-launch .wf-profile-grid{gap:10px}\n.wf-launch .wf-profile-grid label{flex:1 1 230px;min-width:0}\n.wf-launch .wf-profile-grid label{min-height:44px;padding:10px 14px;border-radius:12px;background:#151e2a}\n.wf-launch .wf-profile-grid label:has(input:checked){background:linear-gradient(135deg,#203c60,#202c40);border-color:#6592cc}\n.wf-target-groups{margin:30px 0 4px}\n.wf-target-head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin:0 0 14px}\n.wf-target-head h6{margin:0;color:#e7eef9;font-size:15px;font-weight:750}\n.wf-target-head p{margin:5px 0 0;color:#9cabc0;font-size:12px;line-height:1.55}\n.wf-target-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}\n.wf-target-panel{min-width:0;border:1px solid #35465b;border-radius:16px;background:linear-gradient(145deg,rgba(31,43,58,.9),rgba(23,32,44,.9));overflow:hidden}\n.wf-target-panel>summary{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 17px;cursor:pointer;list-style:none}\n.wf-target-panel>summary::-webkit-details-marker{display:none}\n.wf-target-panel>summary::after,.wf-live-summary>summary::after{content:'';flex:0 0 8px;width:8px;height:8px;border-right:1.5px solid #91a8c6;border-bottom:1.5px solid #91a8c6;transform:rotate(45deg);transition:transform .16s ease}\n.wf-target-panel[open]>summary::after,.wf-live-summary[open]>summary::after{transform:rotate(225deg)}\n.wf-target-panel>summary:focus-visible,.wf-live-summary>summary:focus-visible{outline:2px solid #75a8ee;outline-offset:-3px}\n.wf-target-panel[open]>summary{border-bottom:1px solid #344357}\n.wf-target-name{color:#eef3fc;font-size:13px;font-weight:700}\n.wf-target-count{flex:0 0 auto;color:#9eb2cd;font-size:11px}\n.wf-target-note{margin:0;padding:13px 17px 0;color:#a5b4c8;font-size:11px;line-height:1.55}\n.wf-target-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;padding:14px 15px 16px}\n.wf-target-field{min-width:0;padding:13px;border:1px solid rgba(104,126,153,.24);border-radius:13px;background:rgba(12,19,28,.38)}\n.wf-target-field>label{display:block!important;margin:0 0 8px!important;color:#d4dfed!important;font-size:12px!important;font-weight:650}\n.wf-target-field .rm-module-control{min-width:0}\n.wf-target-field .rm-module-results{max-height:210px;overflow:auto;background:#111a25}\n.wf-target-empty{margin-top:12px;padding:12px 14px;border:1px dashed #43536a;border-radius:12px;color:#a9b7ca;font-size:12px;line-height:1.55}\n.wf-target-source{display:none!important}\n.wf-live-summary{border:1px solid #35465a;border-radius:18px;background:linear-gradient(165deg,#1c2735,#171f2b);box-shadow:0 12px 30px rgba(3,8,16,.18);overflow:hidden}\n.wf-live-summary>summary{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:17px 18px;cursor:pointer;list-style:none}\n.wf-live-summary>summary::-webkit-details-marker{display:none}\n.wf-live-summary-title{display:block;color:#edf3fc;font-size:14px;font-weight:750}\n.wf-live-summary-caption{display:block;margin-top:4px;color:#95a6bc;font-size:11px}\n.wf-live-status{flex:0 0 auto;border:1px solid rgba(92,166,128,.4);border-radius:999px;padding:6px 9px;background:rgba(37,105,76,.2);color:#9fe0bd;font-size:10px;font-weight:700}\n.wf-live-summary-body{display:grid;gap:0;padding:0 18px 8px}\n.wf-live-row{padding:12px 0;border-top:1px solid rgba(114,134,159,.18)}\n.wf-live-row-label{display:block;margin-bottom:5px;color:#91a4bd;font-size:10px;font-weight:750;letter-spacing:.07em;text-transform:uppercase}\n.wf-live-row-value{display:block;color:#e0e8f4;font-size:12px;line-height:1.5;overflow-wrap:anywhere}\n.wf-live-summary-foot{padding:10px 18px 16px;color:#95a6bc;font-size:11px;line-height:1.5}\n.wf-mobile-actions{display:none}\n#launchMetaAllFields.wf-advanced{margin:8px 0 24px;padding:24px;border:1px solid #33445a;border-radius:18px;background:linear-gradient(160deg,#19222f,#151c27);box-shadow:0 12px 28px rgba(3,8,16,.14)}\n#launchMetaAllFields h3{font-size:18px;letter-spacing:-.02em}\n#launchMetaAllFields .rm-meta-note{max-width:760px;color:#a2b2c8;font-size:12px;line-height:1.65}\n#launchMetaAllFields .rm-meta-groups{gap:12px}\n#launchMetaAllFields details{border-color:#34455b;border-radius:14px;background:rgba(12,19,28,.32)}\n#launchMetaAllFields summary{padding:15px 16px}\n#launchMetaAllFields .rm-meta-grid{gap:14px;padding:2px 15px 16px}\n@media(max-width:1120px){.wf-launch.rm-estimate-layout{grid-template-columns:minmax(0,1fr)!important;gap:18px!important}.wf-launch .rm-estimate-rail{position:static;grid-template-columns:repeat(2,minmax(0,1fr));align-items:start}.wf-launch .wf-step-nav{top:62px}}\n@media(max-width:900px){.wf-launch .wf-step-nav{grid-template-columns:repeat(5,minmax(96px,1fr));overflow:auto}.wf-launch .wf-step-nav a{scroll-snap-align:start}.wf-launch .rm-estimate-rail{grid-template-columns:minmax(0,1fr)}}\n@media(max-width:720px){\n.wf-launch .wf-step-nav{display:none!important}\n.wf-launch .wf-step-card:not(.is-mobile-current){display:none!important}\nbody.wf-autoupload-open{padding-bottom:calc(84px + env(safe-area-inset-bottom))}\n.wf-launch.rm-estimate-layout{display:grid;grid-template-columns:minmax(0,1fr)!important;gap:16px!important}\n.wf-launch>.launch-card{padding:19px 17px;border-radius:17px;margin-bottom:16px}\n.wf-launch h5{font-size:17px;margin-bottom:19px}\n.wf-launch .row{grid-template-columns:minmax(0,1fr);gap:17px}\n.wf-launch .row>*{grid-column:1/-1!important}\n.wf-launch .wf-profile-grid label{flex-basis:100%}\n.wf-launch .wf-step-nav{position:sticky;top:56px;display:flex;gap:7px;margin:12px 0 16px;padding:7px;border-radius:14px;overflow-x:auto;overscroll-behavior-x:contain;scroll-snap-type:x mandatory}\n.wf-launch .wf-step-nav a{flex:0 0 auto;min-width:106px;padding:9px 10px;scroll-snap-align:start}\n.wf-step-index{width:25px;height:25px;flex-basis:25px}\n.wf-target-list,.wf-target-fields{grid-template-columns:minmax(0,1fr)}\n.wf-target-panel>summary{padding:14px}\n.wf-target-fields{padding:12px}\n.wf-target-head{align-items:flex-start;flex-direction:column;gap:4px}\n.wf-launch .rm-estimate-rail{display:grid;grid-template-columns:minmax(0,1fr);gap:12px}\n.wf-live-summary{border-radius:15px}\n.wf-live-summary>summary{padding:15px}\n.wf-live-summary:not([open]) .wf-live-summary-body,.wf-live-summary:not([open]) .wf-live-summary-foot{display:none}\n.wf-mobile-actions{position:fixed;z-index:500;left:0;right:0;bottom:0;display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;align-items:center;gap:8px;padding:10px 12px calc(10px + env(safe-area-inset-bottom));border-top:1px solid #34445a;background:rgba(15,22,32,.94);box-shadow:0 -12px 30px rgba(0,0,0,.24);backdrop-filter:blur(18px)}\n.wf-mobile-actions button{min-height:42px;border:1px solid #3a4b61;border-radius:12px;padding:9px 12px;background:#1b2634;color:#e8eef8;font:inherit;font-size:12px;font-weight:600;line-height:1.1;white-space:nowrap}\n.wf-mobile-actions button:disabled{opacity:.45;cursor:not-allowed}\n.wf-mobile-actions .wf-mobile-next{border-color:#6795d2;background:linear-gradient(135deg,#315f98,#28456c);color:#fff}\n.wf-mobile-step{min-width:0;color:#b9c7d9;font-size:11px;line-height:1.3;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}\n.wf-mobile-step strong{display:block;color:#eef4fc;font-size:12px;margin-bottom:3px}\n#launchMetaAllFields.wf-advanced{padding:18px 15px;border-radius:16px}\n#launchMetaAllFields .rm-meta-search{min-width:0;width:100%;max-width:none}\n#launchMetaAllFields .rm-meta-grid{grid-template-columns:minmax(0,1fr);padding:0 10px 12px}\n#creativeModal .cr-modal{width:calc(100vw - 10px);max-height:calc(100dvh - 10px)}\n#creativeForm{display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:auto 145px minmax(0,1fr) auto}\n#creativeForm>.cr-tabs{grid-column:1;grid-row:1;flex-direction:row;overflow:auto;border-right:0;border-bottom:1px solid var(--wf-line);padding:8px}\n#creativeForm>.wf-summary{grid-column:1;grid-row:2;border-left:0;border-bottom:1px solid var(--wf-line);padding:11px 15px;min-height:0}\n#creativeForm>.wf-summary>:not(.rm-ad-estimate){display:none}\n#creativeForm>.cr-editor{grid-column:1;grid-row:3;padding:16px}\n#creativeForm>.cr-modal-foot{grid-column:1;grid-row:4;flex-wrap:wrap;padding:12px}\n.cr-tab{white-space:nowrap!important}\n.wf-fields{grid-template-columns:minmax(0,1fr)}\n.wf-fields>.wf-wide{grid-column:auto}\n.cr-form-grid>.cr-field,.cr-form-grid>.cr-target-box{grid-column:span 12}\n.cr-carousel-row{grid-template-columns:48px minmax(0,1fr)}\n}";
+    style.textContent += '\n'+".wf-launch.rm-estimate-layout{width:100%;max-width:1480px!important;grid-template-columns:minmax(0,1fr) 304px!important;gap:24px!important;align-items:start}\n.wf-launch .launch-main,.wf-launch .rm-estimate-rail{min-width:0}\n.wf-launch .rm-estimate-rail{position:sticky;top:88px;align-self:start;display:grid;gap:16px}\n.wf-launch>.launch-card{padding:26px;border:1px solid #2f3d50;border-radius:20px;background:linear-gradient(160deg,#19222f 0%,#151d28 100%);box-shadow:0 14px 34px rgba(3,8,16,.18);margin-bottom:22px}\n.wf-launch h5{font-size:19px;letter-spacing:-.02em;margin-bottom:24px}\n.wf-launch .row{gap:22px 20px}\n.wf-launch label{font-size:12px!important;color:#c1cede!important;margin-bottom:8px!important}\n.wf-launch .form-control:not(.rm-meta-visual-source):not(.rm-module-source):not(.wf-profile-native):not([type=hidden]):not([hidden]){min-height:46px!important;border-radius:11px!important;border-color:#3a4b61!important;background:#111923!important;color:#eef3fb!important;padding:11px 13px!important;transition:border-color .16s ease,box-shadow .16s ease}\n.wf-launch .form-control:focus{border-color:#6e9eea!important;box-shadow:0 0 0 3px rgba(83,137,218,.18)!important}\n.wf-launch textarea.form-control{min-height:112px!important}\n.wf-launch .wf-step-nav{top:70px;gap:8px;padding:9px;border-color:#33445a;border-radius:17px;background:rgba(17,24,34,.88);box-shadow:0 10px 28px rgba(3,8,16,.2)}\n.wf-step-nav a{padding:10px 11px;border-radius:12px}\n.wf-step-index{width:28px;height:28px;flex-basis:28px}\n.wf-launch .wf-section-heading{border:0;padding:0;margin:30px 0 2px;color:#9db7da;font-size:12px;font-weight:750;letter-spacing:.08em;text-transform:uppercase}\n .wf-launch .wf-profile-grid{gap:10px}\n.wf-launch .wf-profile-grid label{flex:1 1 230px;min-width:0}\n.wf-launch .wf-profile-grid label{min-height:44px;padding:10px 14px;border-radius:12px;background:#151e2a}\n.wf-launch .wf-profile-grid label:has(input:checked){background:linear-gradient(135deg,#203c60,#202c40);border-color:#6592cc}\n.wf-target-groups{margin:30px 0 4px}\n.wf-target-head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin:0 0 14px}\n.wf-target-head h6{margin:0;color:#e7eef9;font-size:15px;font-weight:750}\n.wf-target-head p{margin:5px 0 0;color:#9cabc0;font-size:12px;line-height:1.55}\n.wf-target-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}\n.wf-target-panel{min-width:0;border:1px solid #35465b;border-radius:16px;background:linear-gradient(145deg,rgba(31,43,58,.9),rgba(23,32,44,.9));overflow:hidden}\n.wf-target-panel>summary{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 17px;cursor:pointer;list-style:none}\n.wf-target-panel>summary::-webkit-details-marker{display:none}\n.wf-target-panel>summary::after,.wf-live-summary>summary::after{content:'';flex:0 0 8px;width:8px;height:8px;border-right:1.5px solid #91a8c6;border-bottom:1.5px solid #91a8c6;transform:rotate(45deg);transition:transform .16s ease}\n.wf-target-panel[open]>summary::after,.wf-live-summary[open]>summary::after{transform:rotate(225deg)}\n.wf-target-panel>summary:focus-visible,.wf-live-summary>summary:focus-visible{outline:2px solid #75a8ee;outline-offset:-3px}\n.wf-target-panel[open]>summary{border-bottom:1px solid #344357}\n.wf-target-name{color:#eef3fc;font-size:13px;font-weight:700}\n.wf-target-count{flex:0 0 auto;color:#9eb2cd;font-size:11px}\n.wf-target-note{margin:0;padding:13px 17px 0;color:#a5b4c8;font-size:11px;line-height:1.55}\n.wf-target-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;padding:14px 15px 16px}\n.wf-target-field{min-width:0;padding:13px;border:1px solid rgba(104,126,153,.24);border-radius:13px;background:rgba(12,19,28,.38)}\n.wf-target-field>label{display:block!important;margin:0 0 8px!important;color:#d4dfed!important;font-size:12px!important;font-weight:650}\n.wf-target-field .rm-module-control{min-width:0}\n.wf-target-field .rm-module-results{max-height:210px;overflow:auto;background:#111a25}\n.wf-target-empty{margin-top:12px;padding:12px 14px;border:1px dashed #43536a;border-radius:12px;color:#a9b7ca;font-size:12px;line-height:1.55}\n.wf-target-source{display:none!important}\n.wf-live-summary{border:1px solid #35465a;border-radius:18px;background:linear-gradient(165deg,#1c2735,#171f2b);box-shadow:0 12px 30px rgba(3,8,16,.18);overflow:hidden}\n.wf-live-summary>summary{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:17px 18px;cursor:pointer;list-style:none}\n.wf-live-summary>summary::-webkit-details-marker{display:none}\n.wf-live-summary-title{display:block;color:#edf3fc;font-size:14px;font-weight:750}\n.wf-live-summary-caption{display:block;margin-top:4px;color:#95a6bc;font-size:11px}\n.wf-live-status{flex:0 0 auto;border:1px solid rgba(92,166,128,.4);border-radius:999px;padding:6px 9px;background:rgba(37,105,76,.2);color:#9fe0bd;font-size:10px;font-weight:700}\n.wf-live-summary-body{display:grid;gap:0;padding:0 18px 8px}\n.wf-live-row{padding:12px 0;border-top:1px solid rgba(114,134,159,.18)}\n.wf-live-row-label{display:block;margin-bottom:5px;color:#91a4bd;font-size:10px;font-weight:750;letter-spacing:.07em;text-transform:uppercase}\n.wf-live-row-value{display:block;color:#e0e8f4;font-size:12px;line-height:1.5;overflow-wrap:anywhere}\n.wf-live-summary-foot{padding:10px 18px 16px;color:#95a6bc;font-size:11px;line-height:1.5}\n.wf-mobile-actions{display:none}\n#launchMetaAllFields.wf-advanced{margin:8px 0 24px;padding:24px;border:1px solid #33445a;border-radius:18px;background:linear-gradient(160deg,#19222f,#151c27);box-shadow:0 12px 28px rgba(3,8,16,.14)}\n#launchMetaAllFields h3{font-size:18px;letter-spacing:-.02em}\n#launchMetaAllFields .rm-meta-note{max-width:760px;color:#a2b2c8;font-size:12px;line-height:1.65}\n#launchMetaAllFields .rm-meta-groups{gap:12px}\n#launchMetaAllFields details{border-color:#34455b;border-radius:14px;background:rgba(12,19,28,.32)}\n#launchMetaAllFields summary{padding:15px 16px}\n#launchMetaAllFields .rm-meta-grid{gap:14px;padding:2px 15px 16px}\n@media(max-width:1120px){.wf-launch.rm-estimate-layout{grid-template-columns:minmax(0,1fr)!important;gap:18px!important}.wf-launch .rm-estimate-rail{position:static;grid-template-columns:repeat(2,minmax(0,1fr));align-items:start}.wf-launch .wf-step-nav{top:62px}}\n@media(max-width:900px){.wf-launch .wf-step-nav{grid-template-columns:repeat(5,minmax(96px,1fr));overflow:auto}.wf-launch .wf-step-nav a{scroll-snap-align:start}.wf-launch .rm-estimate-rail{grid-template-columns:minmax(0,1fr)}}\n@media(max-width:720px){\n.wf-launch .wf-step-nav{display:none!important}\n.wf-launch .wf-step-card:not(.is-current-step){display:none!important}\nbody.wf-autoupload-open{padding-bottom:calc(84px + env(safe-area-inset-bottom))}\n.wf-launch.rm-estimate-layout{display:grid;grid-template-columns:minmax(0,1fr)!important;gap:16px!important}\n.wf-launch>.launch-card{padding:19px 17px;border-radius:17px;margin-bottom:16px}\n.wf-launch h5{font-size:17px;margin-bottom:19px}\n.wf-launch .row{grid-template-columns:minmax(0,1fr);gap:17px}\n.wf-launch .row>*{grid-column:1/-1!important}\n.wf-launch .wf-profile-grid label{flex-basis:100%}\n.wf-launch .wf-step-nav{position:sticky;top:56px;display:flex;gap:7px;margin:12px 0 16px;padding:7px;border-radius:14px;overflow-x:auto;overscroll-behavior-x:contain;scroll-snap-type:x mandatory}\n.wf-launch .wf-step-nav a{flex:0 0 auto;min-width:106px;padding:9px 10px;scroll-snap-align:start}\n.wf-step-index{width:25px;height:25px;flex-basis:25px}\n.wf-target-list,.wf-target-fields{grid-template-columns:minmax(0,1fr)}\n.wf-target-panel>summary{padding:14px}\n.wf-target-fields{padding:12px}\n.wf-target-head{align-items:flex-start;flex-direction:column;gap:4px}\n.wf-launch .rm-estimate-rail{display:grid;grid-template-columns:minmax(0,1fr);gap:12px}\n.wf-live-summary{border-radius:15px}\n.wf-live-summary>summary{padding:15px}\n.wf-live-summary:not([open]) .wf-live-summary-body,.wf-live-summary:not([open]) .wf-live-summary-foot{display:none}\n.wf-mobile-actions{position:fixed;z-index:500;left:0;right:0;bottom:0;display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;align-items:center;gap:8px;padding:10px 12px calc(10px + env(safe-area-inset-bottom));border-top:1px solid #34445a;background:rgba(15,22,32,.94);box-shadow:0 -12px 30px rgba(0,0,0,.24);backdrop-filter:blur(18px)}\n.wf-mobile-actions button{min-height:42px;border:1px solid #3a4b61;border-radius:12px;padding:9px 12px;background:#1b2634;color:#e8eef8;font:inherit;font-size:12px;font-weight:600;line-height:1.1;white-space:nowrap}\n.wf-mobile-actions button:disabled{opacity:.45;cursor:not-allowed}\n.wf-mobile-actions .wf-mobile-next{border-color:#6795d2;background:linear-gradient(135deg,#315f98,#28456c);color:#fff}\n.wf-mobile-step{min-width:0;color:#b9c7d9;font-size:11px;line-height:1.3;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}\n.wf-mobile-step strong{display:block;color:#eef4fc;font-size:12px;margin-bottom:3px}\n#launchMetaAllFields.wf-advanced{padding:18px 15px;border-radius:16px}\n#launchMetaAllFields .rm-meta-search{min-width:0;width:100%;max-width:none}\n#launchMetaAllFields .rm-meta-grid{grid-template-columns:minmax(0,1fr);padding:0 10px 12px}\n#creativeModal .cr-modal{width:calc(100vw - 10px);max-height:calc(100dvh - 10px)}\n#creativeForm{display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:auto 145px minmax(0,1fr) auto}\n#creativeForm>.cr-tabs{grid-column:1;grid-row:1;flex-direction:row;overflow:auto;border-right:0;border-bottom:1px solid var(--wf-line);padding:8px}\n#creativeForm>.wf-summary{grid-column:1;grid-row:2;border-left:0;border-bottom:1px solid var(--wf-line);padding:11px 15px;min-height:0}\n#creativeForm>.wf-summary>:not(.rm-ad-estimate){display:none}\n#creativeForm>.cr-editor{grid-column:1;grid-row:3;padding:16px}\n#creativeForm>.cr-modal-foot{grid-column:1;grid-row:4;flex-wrap:wrap;padding:12px}\n.cr-tab{white-space:nowrap!important}\n.wf-fields{grid-template-columns:minmax(0,1fr)}\n.wf-fields>.wf-wide{grid-column:auto}\n.cr-form-grid>.cr-field,.cr-form-grid>.cr-target-box{grid-column:span 12}\n.cr-carousel-row{grid-template-columns:48px minmax(0,1fr)}\n}";
+    style.textContent += '\n'+".wf-launch{display:grid!important;grid-template-columns:minmax(0,1fr) minmax(280px,320px);column-gap:20px;row-gap:0;align-items:start;max-width:1480px!important}\n.wf-launch>.app-page-head,.wf-launch>.wf-step-nav{grid-column:1/-1;min-width:0}\n.wf-launch>.wf-step-nav{grid-template-columns:repeat(5,minmax(0,1fr))}\n.wf-launch>.wf-live-summary{grid-column:2;grid-row:3;position:sticky;top:82px;align-self:start;max-height:calc(100vh - 100px);overflow:auto;margin:0 0 16px}\n.wf-launch>.launch-card,.wf-launch>#launchMetaAllFields{grid-column:1;min-width:0}\n.wf-launch .wf-step-card:not(.is-current-step){display:none!important}\n.wf-launch .wf-step-card.is-current-step{display:block}\n.wf-live-summary>summary{position:sticky;top:0;z-index:2;align-items:flex-start;flex-direction:column;padding:16px;background:linear-gradient(165deg,#1c2735,#171f2b)}\n.wf-live-summary-heading{min-width:0}\n.wf-live-summary-body{padding:0 15px 8px}\n.wf-live-row{padding:10px 0}\n.wf-live-row-label{font-size:9px;margin-bottom:4px}\n.wf-live-row-value{font-size:12px;line-height:1.45}\n.wf-live-summary-foot{padding:10px 15px 14px}\n.wf-card-disclosure{border:1px solid #35465b;border-radius:14px;background:linear-gradient(145deg,rgba(31,43,58,.7),rgba(23,32,44,.7));overflow:hidden}\n.wf-card-disclosure>summary{display:flex;align-items:center;min-height:52px;padding:12px 16px;cursor:pointer;list-style:none}\n.wf-card-disclosure>summary::-webkit-details-marker{display:none}\n.wf-card-disclosure>summary::after,.wf-audience-group>summary::after,.wf-audience-subgroup>summary::after{content:'';margin-left:auto;flex:0 0 8px;width:8px;height:8px;border-right:1.5px solid #91a8c6;border-bottom:1.5px solid #91a8c6;transform:rotate(45deg);transition:transform .16s ease}\n.wf-card-disclosure[open]>summary::after,.wf-audience-group[open]>summary::after,.wf-audience-subgroup[open]>summary::after{transform:rotate(225deg)}\n.wf-card-disclosure>summary h5{margin:0!important;font-size:14px!important}\n.wf-card-disclosure-body{padding:0 16px 16px}\n.wf-audience-group{margin:14px 0;border:1px solid #35465b;border-radius:15px;background:linear-gradient(145deg,rgba(31,43,58,.7),rgba(23,32,44,.7));overflow:hidden}\n.wf-audience-group>summary,.wf-audience-subgroup>summary{display:flex;align-items:center;min-height:50px;padding:12px 16px;color:#e7eef9;font-size:13px;font-weight:700;cursor:pointer;list-style:none}\n.wf-audience-group>summary::-webkit-details-marker,.wf-audience-subgroup>summary::-webkit-details-marker{display:none}\n.wf-audience-group[open]>summary,.wf-audience-subgroup[open]>summary{border-bottom:1px solid #344357}\n.wf-audience-group-body{padding:0 15px 14px}\n.wf-audience-subgroup{margin:14px 0 0;border:1px solid #35465b;border-radius:14px;background:rgba(12,19,28,.3);overflow:hidden}\n.wf-audience-subgroup-body{padding:12px 14px}\n#launchMetaAllFields.wf-advanced{padding:0;border:0;background:transparent;box-shadow:none;margin:14px 0 22px}\n#launchMetaAllFields.wf-advanced>details{border:1px solid #35465b;border-radius:15px;background:linear-gradient(145deg,rgba(31,43,58,.7),rgba(23,32,44,.7));overflow:hidden}\n#launchMetaAllFields.wf-advanced>details>summary{padding:14px 16px;color:#e7eef9;font-weight:700;cursor:pointer}\n#launchMetaAllFields.wf-advanced>details>.wf-meta-disclosure-body{padding:0 16px 16px}\n.wf-mobile-actions{position:fixed;z-index:500;left:0;right:0;bottom:0;display:grid!important;grid-template-columns:auto auto minmax(0,1fr) auto auto auto;align-items:center;gap:9px;padding:10px max(20px,calc((100vw - 1480px)/2)) calc(10px + env(safe-area-inset-bottom));border-top:1px solid #34445a;background:rgba(15,22,32,.96);box-shadow:0 -12px 30px rgba(0,0,0,.24);backdrop-filter:blur(18px)}\n.wf-mobile-actions button{min-height:44px;border:1px solid #3a4b61;border-radius:12px;padding:9px 13px;background:#1b2634;color:#e8eef8;font:inherit;font-size:12px;font-weight:650;line-height:1.1;white-space:nowrap}\n.wf-mobile-actions button:disabled{opacity:.45;cursor:not-allowed}\n.wf-workflow-status{border:1px solid #3f76b6;border-radius:10px;padding:9px 12px;background:#1b3c64;color:#d7e9ff;font-size:12px;font-weight:700;white-space:nowrap}\n.wf-workflow-step{min-width:0;color:#b9c7d9;font-size:12px;line-height:1.3;text-align:center}\n.wf-workflow-step strong{display:inline;color:#eef4fc;font-size:12px;margin-right:8px}\n.wf-mobile-back{display:none}\n.wf-mobile-summary{background:#151e2a!important}\n#wfSaveTemplateButton{border-color:#61748e;background:transparent;color:#e3ebf5}\n.wf-mobile-actions .wf-mobile-next,.wf-mobile-actions #reviewLaunch,.wf-mobile-actions #launchButton{border-color:#6795d2;background:linear-gradient(135deg,#2879ee,#1264d8);color:#fff;font-weight:750;box-shadow:0 5px 15px rgba(20,100,216,.18)}\n.wf-mobile-actions #reviewLaunch,.wf-mobile-actions #launchButton{margin:0}\n.wf-mobile-actions [hidden]{display:none!important}\nbody.wf-autoupload-open{padding-bottom:calc(82px + env(safe-area-inset-bottom))}\n@media(max-width:1120px){.wf-launch{grid-template-columns:minmax(0,1fr);column-gap:0}.wf-launch>.wf-live-summary{grid-column:1;grid-row:auto;position:static;max-height:none;margin:0 0 12px}.wf-launch>.wf-live-summary[open]{max-height:44vh}.wf-launch>.wf-step-nav{grid-template-columns:repeat(5,minmax(96px,1fr));overflow:auto}}\n@media(max-width:900px){.wf-launch>.wf-step-nav{display:flex;gap:7px;overflow-x:auto;scroll-snap-type:x mandatory}.wf-launch>.wf-step-nav a{flex:0 0 auto;min-width:124px;scroll-snap-align:start}}\n@media(min-width:721px){.wf-mobile-actions .wf-mobile-back{display:none}}\n@media(max-width:720px){.wf-launch{grid-template-columns:minmax(0,1fr);column-gap:0}.wf-launch>.wf-live-summary{grid-column:1;grid-row:auto;max-height:none;margin:0 0 8px}.wf-launch>.wf-live-summary[open]{max-height:45vh}.wf-launch>.wf-step-nav{display:none!important}.wf-mobile-actions{grid-template-columns:auto minmax(0,1fr) auto auto auto;gap:6px;padding:9px 10px calc(9px + env(safe-area-inset-bottom))}.wf-workflow-status{display:none}.wf-mobile-actions .wf-mobile-back{display:block;padding:8px 10px;font-size:11px}.wf-mobile-actions button{min-height:42px;padding:8px 9px;font-size:10px}.wf-workflow-step{font-size:10px}.wf-workflow-step strong{display:block;margin:0 0 2px;font-size:11px}.wf-card-disclosure>summary{min-height:48px}.wf-audience-group{margin:11px 0}.wf-audience-group-body{padding:0 10px 12px}.wf-target-list,.wf-target-fields{grid-template-columns:minmax(0,1fr)}}\n@media(max-width:380px){.wf-mobile-actions{grid-template-columns:auto minmax(0,1fr) auto auto}.wf-mobile-summary{display:none!important}}";
     document.head.appendChild(style);
 
     function setText(el, text) { if (el && el.textContent !== text) el.textContent = text; }
@@ -403,20 +404,20 @@
             const node=panel.querySelector('[data-wf-summary-value="'+key+'"]');if(node)setText(node,value);
         }
         const foot=panel.querySelector('[data-wf-summary-foot]');
-        if(foot)setText(foot,'Черновик сохранится на паузе. В форме доступны параметры аудитории, плейсменты, устройства, креатив и остальные поля Meta из каталога.');
+        if(foot)setText(foot,'Создание сохранит объекты как PAUSED. Публикация не выполняется.');
     }
     function setupLiveSummary(root) {
         let panel=$('wfLiveSummary');if(panel)return panel;
         const layout=root.matches('.rm-estimate-layout')?root:root.closest('.rm-estimate-layout');
         const rail=layout?.querySelector('.rm-estimate-rail')||root.querySelector('.rm-estimate-rail');
-        panel=document.createElement('details');panel.id='wfLiveSummary';panel.className='wf-live-summary';
-        panel.open=!(window.matchMedia&&window.matchMedia('(max-width: 720px)').matches);
+        panel=document.createElement('details');panel.id='wfLiveSummary';panel.className='wf-live-summary';panel.setAttribute('aria-label','Сводка параметров запуска');
+        panel.open=!!(window.matchMedia&&window.matchMedia('(min-width: 1121px)').matches);
         const summary=document.createElement('summary'),heading=document.createElement('span'),title=document.createElement('span'),caption=document.createElement('span'),status=document.createElement('span');
-        heading.className='wf-live-summary-heading';title.className='wf-live-summary-title';title.textContent='Сводка автозалива';
-        caption.className='wf-live-summary-caption';caption.textContent='Обновляется при изменении параметров';
-        heading.append(title,caption);status.className='wf-live-status';status.textContent='Черновик · на паузе';summary.append(heading,status);
+        heading.className='wf-live-summary-heading';title.className='wf-live-summary-title';title.textContent='Сводка запуска';
+        caption.className='wf-live-summary-caption';caption.textContent='Выбранные параметры и готовность';
+        heading.append(title,caption);status.className='wf-live-status';status.textContent='Черновик · PAUSED';summary.append(heading,status);
         const body=document.createElement('div');body.className='wf-live-summary-body';
-        const rows=[['resources','Ресурсы'],['campaign','Кампания'],['budget','Бюджет'],['schedule','График'],['audience','Аудитория'],['optimization','Оптимизация'],['delivery','Показ'],['creative','Страница и медиа'],['copy','Текст и переход']];
+        const rows=[['audience','Аудитория'],['budget','Бюджет'],['resources','Ресурсы'],['campaign','Кампания'],['schedule','График'],['delivery','Места показа и устройства'],['optimization','Оптимизация'],['creative','Страница и медиа'],['copy','Текст и переход']];
         for(const [key,label] of rows){
             const row=document.createElement('div');row.className='wf-live-row';
             const name=document.createElement('span'),value=document.createElement('span');
@@ -428,58 +429,143 @@
         if(rail)rail.prepend(panel);else root.querySelector('.wf-step-nav')?.after(panel);
         updateLiveSummary();return panel;
     }
+    function setupAudienceSections() {
+        const card=$('adsetName')?.closest('.launch-card');if(!card)return;
+        const configs=[
+            {start:'места показа',stop:'возраст и пол',title:'Места показа и график',open:false},
+            {start:'возраст и пол',stop:'география',title:'Возраст, пол и конверсии',open:true},
+            {start:'география',stop:null,title:'География и детальный таргетинг',open:true}
+        ];
+        for(const config of configs){
+            const heading=[...card.querySelectorAll(':scope > .wf-section-heading')].find(node=>node.textContent.trim().toLowerCase().includes(config.start));
+            if(!heading)continue;
+            const details=document.createElement('details');details.className='wf-audience-group';details.open=config.open;
+            const summary=document.createElement('summary');summary.textContent=config.title;
+            const body=document.createElement('div');body.className='wf-audience-group-body';
+            details.append(summary,body);heading.before(details);
+            let node=heading.nextSibling;
+            while(node){
+                if(config.stop&&node.nodeType===1&&node.matches('.wf-section-heading')&&node.textContent.trim().toLowerCase().includes(config.stop))break;
+                const next=node.nextSibling;body.appendChild(node);node=next;
+            }
+            heading.remove();
+        }
+        const box=$('singleAudienceBox');
+        if(box&&box.dataset.wfDisclosure!=='1'){
+            const heading=box.querySelector(':scope > h6')||box.querySelector('h6');
+            const details=document.createElement('details');details.className='wf-audience-subgroup';details.open=false;
+            const summary=document.createElement('summary');summary.textContent='Свои аудитории и исключения';
+            const body=document.createElement('div');body.className='wf-audience-subgroup-body';
+            for(const child of Array.from(box.childNodes))if(child!==heading)body.appendChild(child);
+            details.append(summary,body);box.replaceChildren(details);box.dataset.wfDisclosure='1';
+        }
+    }
     function setupLaunch() {
         const root=document.querySelector('.launch-wrap');if(!root||root.dataset.wfReady)return;
         root.dataset.wfReady='1';root.classList.add('wf-launch');document.body.classList.add('wf-autoupload-open');
-        const entries=[['profile','Ресурсы','Профили и рекламные кабинеты'],['campaignName','Кампания','Кампания'],['adsetName','Аудитория','Бюджет и аудитория'],['creativeName','Объявление','Объявление'],['reviewLaunch','Черновик','Сохранение черновика']];
+        const compactCard=(id,label)=>{
+            const node=$(id),card=node?(node.classList.contains('launch-card')?node:node.closest('.launch-card')):null;
+            if(!card||card.dataset.wfDisclosure==='1')return;
+            const heading=card.querySelector(':scope > h5');
+            const details=document.createElement('details');details.className='wf-card-disclosure';
+            const summary=document.createElement('summary');summary.className='wf-card-disclosure-summary';
+            if(heading){heading.classList.add('wf-disclosure-heading');summary.appendChild(heading);}else summary.textContent=label;
+            const body=document.createElement('div');body.className='wf-card-disclosure-body';
+            for(const child of Array.from(card.childNodes))if(child!==heading)body.appendChild(child);
+            details.append(summary,body);card.replaceChildren(details);card.dataset.wfDisclosure='1';
+        };
+        compactCard('targetBindingsCard','Привязки для каждого РК');
+        compactCard('bundleSelect','Сохранённые настройки');
+        compactCard('loadFunding','Состояние оплаты');
+        compactCard('jobsCard','Задачи и результаты');
+        const entries=[
+            {key:'resources',title:'Ресурсы',ids:['profile','targetBindingsCard','bundleSelect','loadFunding'],cardTitle:'Профили и рекламные кабинеты'},
+            {key:'campaign',title:'Кампания',ids:['campaignName'],cardTitle:'Кампания'},
+            {key:'audience',title:'Аудитория',ids:['adsetName','launchMetaAllFields'],cardTitle:'Бюджет и аудитория'},
+            {key:'ad',title:'Объявление',ids:['creativeName'],cardTitle:'Объявление'},
+            {key:'review',title:'Проверка',ids:['reviewLaunch','launchButton','jobsCard'],cardTitle:'Проверка черновика'}
+        ];
+        const cardFor=id=>{
+            const node=$(id);if(!node)return null;
+            if(id==='launchMetaAllFields')return node;
+            return node.classList.contains('launch-card')?node:node.closest('.launch-card');
+        };
         const nav=document.createElement('nav');nav.className='wf-step-nav';nav.setAttribute('aria-label','Этапы автозалива');
         const stepCards=[];
-        entries.forEach(([id,title,cardTitle])=>{
-            const card=$(id)?.closest('.launch-card');if(!card)return;
-            card.classList.add('wf-step-card');
-            if(!card.id)card.id='wf-launch-'+id;
-            setText(card.querySelector('h5'),cardTitle||title);
-            const a=document.createElement('a');a.href='#'+card.id;a.setAttribute('aria-label',(stepCards.length+1)+'. '+title);
+        entries.forEach(entry=>{
+            const cards=[...new Set(entry.ids.map(cardFor).filter(Boolean))];
+            if(!cards.length)return;
+            cards.forEach((card,i)=>{
+                card.classList.add('wf-step-card');
+                if(!card.id)card.id='wf-launch-'+entry.key+(i?'-'+i:'');
+                card.setAttribute('aria-hidden','true');
+            });
+            if(entry.cardTitle)setText(cards[0].querySelector('h5'),entry.cardTitle);
+            const link=document.createElement('a');link.href='#'+cards[0].id;link.setAttribute('aria-label',(stepCards.length+1)+'. '+entry.title);
             const number=document.createElement('span');number.className='wf-step-index';number.textContent=String(stepCards.length+1);
-            const label=document.createElement('span');label.className='wf-step-label';label.textContent=title;
-            a.append(number,label);nav.appendChild(a);stepCards.push({link:a,card});
+            const label=document.createElement('span');label.className='wf-step-label';label.textContent=entry.title;
+            link.append(number,label);nav.appendChild(link);stepCards.push({...entry,link,cards,card:cards[0]});
         });
         root.querySelector('.launch-card')?.before(nav);
         let activeStep=0;
+        const reviewIndex=stepCards.findIndex(item=>item.key==='review');
         let mobileBar=document.getElementById('wfMobileActions');
         if(!mobileBar){
-            mobileBar=document.createElement('div');mobileBar.id='wfMobileActions';mobileBar.className='wf-mobile-actions';mobileBar.setAttribute('aria-label','Навигация по этапам автозалива');
+            mobileBar=document.createElement('div');mobileBar.id='wfMobileActions';mobileBar.className='wf-mobile-actions';mobileBar.setAttribute('aria-label','Действия автозалива');
+            const state=document.createElement('span');state.className='wf-workflow-status';state.textContent='Черновик · PAUSED';
             const back=document.createElement('button');back.type='button';back.className='wf-mobile-back';back.textContent='Назад';back.setAttribute('aria-label','Предыдущий этап');
-            const status=document.createElement('div');status.className='wf-mobile-step';status.setAttribute('aria-live','polite');
+            const status=document.createElement('div');status.className='wf-mobile-step wf-workflow-step';status.setAttribute('aria-live','polite');
             const summaryButton=document.createElement('button');summaryButton.type='button';summaryButton.className='wf-mobile-summary';summaryButton.textContent='Сводка';
+            const saveButton=document.createElement('button');saveButton.type='button';saveButton.id='wfSaveTemplateButton';saveButton.textContent='Сохранить шаблон';
             const next=document.createElement('button');next.type='button';next.className='wf-mobile-next';next.textContent='Далее';next.setAttribute('aria-label','Следующий этап');
-            mobileBar.append(back,status,summaryButton,next);document.body.appendChild(mobileBar);
+            mobileBar.append(state,back,status,summaryButton,saveButton,next);document.body.appendChild(mobileBar);
             back.addEventListener('click',()=>{if(activeStep>0)stepTo(activeStep-1);});
-            next.addEventListener('click',()=>{if(activeStep<stepCards.length-1)stepTo(activeStep+1);else stepTo(0);});
+            next.addEventListener('click',()=>{if(activeStep<reviewIndex-1)stepTo(activeStep+1);else if(reviewIndex>=0)stepTo(reviewIndex);});
             summaryButton.addEventListener('click',()=>{
                 const panel=$('wfLiveSummary');if(!panel)return;
                 panel.open=true;panel.scrollIntoView({behavior:window.matchMedia?.('(prefers-reduced-motion: reduce)').matches?'auto':'smooth',block:'center'});
             });
+            saveButton.addEventListener('click',()=>{
+                const name=$('bundleName');
+                if(!String(name?.value||'').trim()){
+                    stepTo(0);const disclosure=name?.closest('details');if(disclosure)disclosure.open=true;
+                    name?.scrollIntoView({behavior:'smooth',block:'center'});name?.focus({preventScroll:true});return;
+                }
+                $('bundleSave')?.click();
+            });
         }
-        const mobileStatus=mobileBar.querySelector('.wf-mobile-step'),backButton=mobileBar.querySelector('.wf-mobile-back'),nextButton=mobileBar.querySelector('.wf-mobile-next');
+        const mobileStatus=mobileBar.querySelector('.wf-workflow-step'),backButton=mobileBar.querySelector('.wf-mobile-back'),nextButton=mobileBar.querySelector('.wf-mobile-next');
+        const reviewButton=$('reviewLaunch'),createButton=$('launchButton');
+        if(reviewButton){reviewButton.classList.add('wf-toolbar-action');mobileBar.appendChild(reviewButton);}
+        if(createButton){createButton.classList.add('wf-toolbar-action');mobileBar.appendChild(createButton);}
+        function syncToolbarActions(){
+            const isReview=activeStep===reviewIndex,createReady=!!(createButton&&!createButton.disabled);
+            if(nextButton){
+                nextButton.hidden=isReview;
+                nextButton.textContent=activeStep===reviewIndex-1?'Проверить черновик':'Далее';
+                nextButton.setAttribute('aria-label',nextButton.textContent);
+            }
+            if(reviewButton)reviewButton.hidden=!isReview||createReady;
+            if(createButton)createButton.hidden=!isReview||!createReady;
+        }
         function setCurrentStep(index){
             if(!stepCards.length)return;
             activeStep=Math.max(0,Math.min(index,stepCards.length-1));
-            const compact=window.matchMedia?.('(max-width:720px)').matches===true;
             stepCards.forEach((item,i)=>{
                 const active=i===activeStep;item.link.classList.toggle('is-current',active);
-                item.card.classList.toggle('is-mobile-current',!compact||active);
-                item.card.setAttribute('aria-hidden',compact&&!active?'true':'false');
-                if(active)item.link.setAttribute('aria-current','location');else item.link.removeAttribute('aria-current');
+                item.cards.forEach(card=>{
+                    card.classList.toggle('is-current-step',active);
+                    card.setAttribute('aria-hidden',active?'false':'true');
+                });
+                if(active)item.link.setAttribute('aria-current','step');else item.link.removeAttribute('aria-current');
             });
             if(mobileStatus){
-                const label=stepCards[activeStep].link.querySelector('.wf-step-label')?.textContent||'Этап';
-                mobileStatus.replaceChildren();
-                const title=document.createElement('strong');title.textContent=label;
+                const item=stepCards[activeStep];mobileStatus.replaceChildren();
+                const title=document.createElement('strong');title.textContent=item.title;
                 mobileStatus.append(title,document.createTextNode('Этап '+(activeStep+1)+' из '+stepCards.length));
             }
             if(backButton)backButton.disabled=activeStep===0;
-            if(nextButton)nextButton.textContent=activeStep===stepCards.length-1?'К началу':'Далее';
+            syncToolbarActions();
         }
         function stepTo(index){
             const item=stepCards[index];if(!item)return;
@@ -489,16 +575,10 @@
         }
         stepCards.forEach((item,index)=>item.link.addEventListener('click',event=>{event.preventDefault();stepTo(index);}));
         setCurrentStep(0);
-        const mobileMedia=window.matchMedia?.('(max-width:720px)');
-        if(mobileMedia?.addEventListener)mobileMedia.addEventListener('change',()=>setCurrentStep(activeStep));
-        else mobileMedia?.addListener?.(()=>setCurrentStep(activeStep));
-        if('IntersectionObserver'in window){
-            const observer=new IntersectionObserver(rows=>{
-                const current=rows.filter(row=>row.isIntersecting).sort((a,b)=>b.intersectionRatio-a.intersectionRatio)[0];
-                if(!current)return;
-                const index=stepCards.findIndex(item=>item.card===current.target);if(index>=0)setCurrentStep(index);
-            },{rootMargin:'-20% 0px -65% 0px',threshold:[0.05,0.2,0.45]});
-            stepCards.forEach(item=>observer.observe(item.card));
+        root._wfSyncToolbar=syncToolbarActions;
+        if(createButton&&'MutationObserver'in window){
+            const actionObserver=new MutationObserver(syncToolbarActions);
+            actionObserver.observe(createButton,{attributes:true,attributeFilter:['disabled']});
         }
         [['bundleSelect','Сохранённые настройки'],['loadFunding','Состояние оплаты'],['recentJobSelect','Задачи и результаты']].forEach(([id,title])=>setText($(id)?.closest('.launch-card')?.querySelector('h5'),title));
         const adset=$('adsetName')?.closest('.launch-card');
@@ -510,10 +590,17 @@
         const extra=$('launchMetaAllFields');
         if(extra){
             extra.classList.add('wf-advanced');root.querySelector('#wf-launch-reviewLaunch')?.before(extra);if(!root.contains(extra))root.appendChild(extra);
-            setText(extra.querySelector('h3'),'Дополнительные настройки рекламы');
-            setText(extra.querySelector('.rm-meta-note'),'Поля, доступные в текущей схеме Meta, сгруппированы по объектам. Поиск понимает название и API-код; значения сохраняются в Review и Job.');
+            const extraHeading=extra.querySelector('h3');setText(extraHeading,'Все дополнительные поля Meta');
+            setText(extra.querySelector('.rm-meta-note'),'Поля сгруппированы по объектам Meta. Поиск работает по названию и API-коду; значения сохраняются в настройках черновика.');
+            if(extra.dataset.wfDisclosure!=='1'){
+                const details=document.createElement('details');details.className='wf-meta-disclosure';
+                const summary=document.createElement('summary');if(extraHeading)summary.appendChild(extraHeading);else summary.textContent='Все дополнительные поля Meta';
+                const body=document.createElement('div');body.className='wf-meta-disclosure-body';
+                for(const child of Array.from(extra.childNodes))if(child!==extraHeading)body.appendChild(child);
+                details.append(summary,body);extra.replaceChildren(details);extra.dataset.wfDisclosure='1';
+            }
         }
-        const buttons={rkSelectAll:'Выбрать все',rkClear:'Снять выбор',bundleLoad:'Загрузить',bundleSave:'Сохранить',bundleDelete:'Удалить',dryRunPlan:'Предварительный план',launchButton:'Создать рекламу',loadTargetBindings:'Обновить привязки',loadTargetAudiences:'Загрузить аудитории',loadTargetMedia:'Загрузить медиа',refreshInsights:'Обновить статистику',activateJobAds:'Активировать объявления',pauseJobAds:'Приостановить объявления',continueJob:'Продолжить очередь',retryFailed:'Повторить неудачные',forceRetryReview:'Разобрать неизвестный результат',openRecentJob:'Открыть задачу'};
+        const buttons={rkSelectAll:'Выбрать все',rkClear:'Снять выбор',bundleLoad:'Загрузить',bundleSave:'Сохранить',bundleDelete:'Удалить',dryRunPlan:'Предварительный план',reviewLaunch:'Проверить черновик',launchButton:'Создать PAUSED черновик',loadTargetBindings:'Обновить привязки',loadTargetAudiences:'Загрузить аудитории',loadTargetMedia:'Загрузить медиа',refreshInsights:'Обновить статистику',activateJobAds:'Активировать объявления',pauseJobAds:'Приостановить объявления',continueJob:'Продолжить очередь',retryFailed:'Повторить неудачные',forceRetryReview:'Разобрать неизвестный результат',openRecentJob:'Открыть задачу'};
         for(const [id,text] of Object.entries(buttons)){
             const button=$(id);if(!button)continue;
             if(id==='launchButton'){for(const node of Array.from(button.childNodes)){if(node.nodeType===3)node.textContent=' '+text;}button.setAttribute('aria-label',text);}
@@ -565,6 +652,7 @@
         for(const [id,placeholder] of [['geoQuery','Страна, регион или город'],['interestQuery','Выберите интерес или найдите по названию'],['behaviorQuery','Выберите поведение или найдите по названию']])if($(id))$(id).placeholder=placeholder;
         setupProfilePicker();
         setupAudienceTargeting();
+        setupAudienceSections();
         updateAudienceTargetingSummary();
         updateLiveSummary();
         updateCreativeSummary();
