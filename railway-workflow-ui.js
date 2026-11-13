@@ -215,12 +215,12 @@
         {key:'demographics',title:'Демография',note:'Пол, образование, семейный статус и другие социальные параметры.',fields:new Set(['genders','education_statuses','education_schools','education_majors','college_years','relationship_statuses','family_statuses','household_composition','ethnic_affinity','generation','interested_in','income','net_worth','politics'])},
         {key:'devices',title:'Устройства и подключение',note:'Платформы, модели устройств, операционные системы и тип подключения.',fields:new Set(['device_platforms','user_device','excluded_user_device','user_os','wireless_carrier','app_install_state'])},
         {key:'placements',title:'Платформы и места показа',note:'Поверхности размещения и доступные ограничения для выбранной цели.',fields:new Set(['publisher_platforms','facebook_positions','instagram_positions','messenger_positions','audience_network_positions','threads_positions','whatsapp_positions','oculus_positions','streaming_services_positions','brand_safety_content_filter_levels','contextual_bundling_spec'])},
-        {key:'exclusions',title:'Исключения',note:'Исключайте выбранные интересы и категории поведения. Остальные правила остаются доступны в редакторе структуры.',fields:new Set(['exclusions'])},
+        {key:'exclusions',title:'Исключения',note:'География, интересы и поведение. Для сложных правил доступен редактор структуры.',fields:new Set(['excluded_geo_locations','exclusions'])},
         {key:'detailed',title:'Детальные категории Meta',note:'Работа, события жизни, жильё и другие доступные категории аудитории.',fields:new Set(['purchase_intent','user_adclusters','hashtag_interactions','work_employers','work_positions','industries','office_type','life_events','moms','home_ownership','home_type','home_value','location_categories'])}
     ];
     function wfTargetValues(source) {
         const raw=String(source?.value||'').trim();if(!raw)return [];
-        try{const parsed=JSON.parse(raw);if(Array.isArray(parsed))return parsed;if(parsed&&typeof parsed==='object'){if(source?.dataset?.launchMetaField==='exclusions')return Object.values(parsed).flatMap(value=>Array.isArray(value)?value:[]);return Object.values(parsed);}if(parsed!==null&&parsed!==undefined)return [parsed];}
+        try{const parsed=JSON.parse(raw);if(Array.isArray(parsed))return parsed;if(parsed&&typeof parsed==='object'){if(['exclusions','excluded_geo_locations'].includes(source?.dataset?.launchMetaField))return Object.values(parsed).flatMap(value=>Array.isArray(value)?value:[]);return Object.values(parsed);}if(parsed!==null&&parsed!==undefined)return [parsed];}
         catch{return raw.split(',').map(value=>value.trim()).filter(Boolean);}
         return [];
     }
@@ -283,7 +283,7 @@
             const picker=wrapper?.querySelector('.rm-module-control');
             const structure=wrapper?.querySelector('.rm-module-structure');
             const nativeSelect=!picker&&source instanceof HTMLSelectElement?source:null;
-            const control=picker||nativeSelect;
+            const control=picker||nativeSelect||structure;
             if(!control||!fields)continue;
             let row=[...fields.querySelectorAll('[data-wf-target-field]')].find(item=>item.dataset.wfTargetField===field);
             if(!row){
@@ -361,12 +361,14 @@
         const destination=String($('destinationUrl')?.value||'').trim()||'Ссылка не задана';
         const copyPreview=message?(message.length>72?message.slice(0,72)+'…':message):'Текст объявления не задан';
         const budgetText=budget?[budgetLevel,budget+(budgetPeriod?' · '+budgetPeriod.toLowerCase():'')].filter(Boolean).join(': '):'Бюджет не задан';
-        const exclusionsSource=document.querySelector('[data-launch-meta-group="targeting"][data-launch-meta-field="exclusions"]');
+        const exclusionSources=['excluded_geo_locations','exclusions'].map(field=>document.querySelector('[data-launch-meta-group="targeting"][data-launch-meta-field="'+field+'"]'));
         let exclusionCount=0;
-        try{
-            const rules=JSON.parse(String(exclusionsSource?.value||'{}'));
-            if(rules&&typeof rules==='object'&&!Array.isArray(rules))exclusionCount=Object.values(rules).reduce((count,value)=>count+(Array.isArray(value)?value.length:0),0);
-        }catch{}
+        for(const exclusionsSource of exclusionSources){
+            try{
+                const rules=JSON.parse(String(exclusionsSource?.value||'{}'));
+                if(rules&&typeof rules==='object'&&!Array.isArray(rules))exclusionCount+=Object.values(rules).reduce((count,value)=>count+(Array.isArray(value)?value.length:0),0);
+            }catch{}
+        }
         const audienceParts=[
             ageMin||ageMax?((ageMin||'—')+'–'+(ageMax||'—')+' лет'):'Возраст по умолчанию',
             gender.length?gender.join(', '):'Любой пол',
