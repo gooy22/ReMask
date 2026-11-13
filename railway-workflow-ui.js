@@ -1081,13 +1081,17 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
             const empty=document.createElement('div');empty.className='wf-target-empty';empty.dataset.wfTargetEmpty='1';
             empty.textContent='Каталог прямого выбора Meta сейчас недоступен. Другие доступные параметры остаются в разделе «Дополнительные настройки рекламы».';
             root.append(head,list,empty);
-            const anchors=['ageMin','geoQuery','interestQuery','behaviorQuery','languageQuery','customAudiences','excludedCustomAudiences']
-                .map(id=>$(id)?.closest('.row')||$(id)?.closest('[data-remaskLanguageTargeting]'))
-                .filter(row=>row&&adsetCard.contains(row));
-            anchors.sort((a,b)=>a===b?0:(a.compareDocumentPosition(b)&Node.DOCUMENT_POSITION_FOLLOWING?-1:1));
-            const anchor=anchors[anchors.length-1];
-            if(anchor)anchor.after(root);else adsetCard.appendChild(root);
         }
+        const anchors=['ageMin','geoQuery','interestQuery','behaviorQuery','languageQuery']
+            .map(id=>$(id)?.closest('.row')||$(id)?.closest('[data-remaskLanguageTargeting]'))
+            .filter(row=>row&&adsetCard.contains(row));
+        const audienceBox=$('singleAudienceBox');
+        const audienceAnchor=audienceBox?.closest('.row')||audienceBox;
+        if(audienceAnchor&&adsetCard.contains(audienceAnchor))anchors.push(audienceAnchor);
+        anchors.sort((a,b)=>a===b?0:(a.compareDocumentPosition(b)&Node.DOCUMENT_POSITION_FOLLOWING?-1:1));
+        const anchor=anchors[anchors.length-1];
+        if(anchor){if(anchor.nextElementSibling!==root)anchor.after(root);}
+        else if(root.parentElement!==adsetCard)adsetCard.appendChild(root);
         const rowsByGroup=new Map(wfTargetGroups.map(group=>[group.key,root.querySelector('[data-wf-target-group="'+group.key+'"] .wf-target-fields')]));
         let available=0,sourceCount=0;
         for(const source of document.querySelectorAll('[data-launch-meta-group="targeting"][data-launch-meta-field]')){
