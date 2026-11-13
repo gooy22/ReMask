@@ -313,6 +313,16 @@ try {
             $controls[$group][$field]=$control;
         }
     }
+    if (isset($schema['targeting']['fields']['genders']) && !isset($controls['targeting']['genders'])) {
+        $controls['targeting']['genders']=[
+            'kind'=>'choices',
+            'representation'=>'numbers',
+            'options'=>[
+                ['id'=>'1','name'=>'Мужчины','value'=>1],
+                ['id'=>'2','name'=>'Женщины','value'=>2],
+            ],
+        ];
+    }
     MetaEndpoint::ok([
         'source' => 'facebook/facebook-python-business-sdk',
         'captured_at' => '2026-09-19',
