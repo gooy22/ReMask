@@ -1049,8 +1049,8 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
     }
     function ensureMetaChoicePrompts() {
         for (const [id, message] of [
-            ['optimizationGoal','Сначала загрузите рекламный кабинет на шаге «Ресурсы»'],
-            ['billingEvent','Сначала загрузите рекламный кабинет на шаге «Ресурсы»']
+            ['optimizationGoal','Выберите рекламный кабинет'],
+            ['billingEvent','Выберите рекламный кабинет']
         ]) {
             const select=$(id);
             if (!(select instanceof HTMLSelectElement)) continue;
