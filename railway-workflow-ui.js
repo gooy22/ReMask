@@ -1758,6 +1758,12 @@ function setupVisualChoices() {
         if(!$('creativeForm')&&!document.querySelector('.launch-wrap'))return;
         safeEnhance('creative setup',setupCreative);
         safeEnhance('workflow setup',setupLaunch);
+        safeEnhance('Meta module controls',()=>window.remaskModuleControls?.scan?.());
+        safeEnhance('direct audience controls',setupAudienceTargeting);
+        safeEnhance('audience sections',setupAudienceSections);
+        safeEnhance('audience workspace',setupAudienceWorkspace);
+        safeEnhance('targeting tabs',setupStudioTargetTabs);
+        safeEnhance('Meta object tabs',setupMetaGroupTabs);
         safeEnhance('studio layout',applyStudioV3);
         safeEnhance('dynamic controls',enhanceDynamic);
         let queued=false;
