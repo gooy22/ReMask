@@ -1898,6 +1898,18 @@ body.wf-autoupload-open main:has(.wf-launch){background:#f4f6f9!important;color:
   .wf-launch.wf-studio-v3 .wf-target-fields{grid-template-columns:minmax(0,1fr)!important;gap:10px!important}
 }
 `;
+    studioV3Style.textContent += `
+/* AutoUpload Studio V13: quiet resource feedback. */
+.wf-launch.wf-studio-v3 .wf-legacy-resource-guidance{
+  margin:8px 0!important;padding:8px 10px!important;border:1px solid #dce3ec!important;border-radius:8px!important;
+  background:#f8fafc!important;color:#5d6b7e!important;box-shadow:none!important;font-size:11px!important;line-height:1.45!important;
+}
+.wf-launch.wf-studio-v3:has(#wfProfilePicker .wf-profile-empty) .wf-legacy-resource-guidance{display:none!important}
+.wf-launch.wf-studio-v3 .wf-empty-api-status{
+  margin:4px 0 0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;
+  color:#8591a2!important;box-shadow:none!important;font-size:10px!important;line-height:1.4!important;
+}
+`;
     function safeEnhance(name, task) {
         try { return task(); }
         catch (error) { console.error('[AutoUpload] '+name+' failed', error); return null; }
