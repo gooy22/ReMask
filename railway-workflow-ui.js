@@ -815,7 +815,9 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
                     tab.tabIndex=active?0:-1;
                 });
                 workspace.querySelectorAll("[data-wf-audience-panel]").forEach(panel=>{
-                    panel.hidden=panel.dataset.wfAudiencePanel!==key;
+                    const active=panel.dataset.wfAudiencePanel===key;
+                    panel.hidden=!active;
+                    panel.querySelectorAll(":scope > details.wf-audience-group").forEach(section=>{section.open=active;});
                 });
             }
             workspace._wfSelectAudienceTab=selectAudienceTab;
@@ -842,7 +844,7 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
             tabs.setAttribute("aria-label","Категории Meta");
             root.insertBefore(tabs,list);
         }
-        const panels=Array.from(list.querySelectorAll(":scope > [data-wf-target-group]")).filter(panel=>!panel.hidden);
+        const panels=Array.from(list.querySelectorAll(":scope > [data-wf-target-group]")).filter(panel=>panel.dataset.wfStudioPromoted!=="1"&&panel.querySelectorAll("[data-wf-target-field]").length>0);
         const signature=panels.map(panel=>panel.dataset.wfTargetGroup).join("|");
         if(tabs.dataset.wfSignature!==signature){
             tabs.replaceChildren();
