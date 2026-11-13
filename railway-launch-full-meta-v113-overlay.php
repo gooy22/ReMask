@@ -261,7 +261,7 @@ function remaskFilterLaunchMetaFields() {
 async function remaskLoadLaunchMetaSdkSchema() {
     const data=await apiJson('ajax/metaSdkSchema.php');
     remaskLaunchMetaSchema=data?.schema||{};
-    if(typeof remaskModuleControls!=="undefined")remaskModuleControls.configure(data);
+    window.remaskModuleControls?.configure(data);
     remaskRenderLaunchMetaFields();
 }
 function remaskReplaceRetainedLaunchField(event) {
