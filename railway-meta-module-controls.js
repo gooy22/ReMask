@@ -338,7 +338,16 @@ const remaskModuleControls = (() => {
                         :rows.length?'':'Ничего не найдено.';
                 }catch(error){
                     if(error.name==='AbortError'||run!==generation)return;
-                    status.textContent=error.message||'Не удалось загрузить географию.';
+                    const failure=String(error?.meta?.code||error?.code||error?.payload?.error?.code||error?.message||'').toUpperCase();
+                    const message=/CHECKPOINT/.test(failure)?'Meta ответила checkpoint; поиск остановлен.'
+                        :/TWO_FACTOR_REQUIRED/.test(failure)?'Meta запросила дополнительное подтверждение; поиск остановлен.'
+                        :/BUSINESS_LOGIN_GATE|LOGIN_REQUIRED|SESSION_EXPIRED/.test(failure)?'Meta остановила поиск на проверке доступа; запрос дальше не отправлялся.'
+                        :/TARGETING_META_ACCESS_STOPPED|PROFILE_META_BLOCKED/.test(failure)?'ReMask остановил поиск по сохранённому статусу профиля.'
+                        :/TARGETING_SELECTION_CHANGED/.test(failure)?'Профиль или РК изменился во время поиска. Выберите параметры заново.'
+                        :/TARGETING_PROFILE_SCOPE_REQUIRED|TARGETING_SOURCE_SCOPE_UNVERIFIED/.test(failure)?'Для поиска выберите один профиль и один рекламный кабинет.'
+                        :/TEMPLATE_LOOKUP_ACCOUNT_SCOPE_MISMATCH/.test(failure)?'Не удалось подтвердить связь выбранного РК с профилем; поиск остановлен.'
+                        :error.message||'Не удалось загрузить географию.';
+                    status.textContent=message;
                 }
             }
             search.addEventListener('focus',()=>{clearTimeout(timer);timer=setTimeout(browse,180);});
