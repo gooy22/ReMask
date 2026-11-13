@@ -215,13 +215,13 @@
         {key:'demographics',title:'Демография',note:'Возраст, пол, образование, семейный статус и социальные параметры.',fields:new Set(['age_min','age_max','genders','education_statuses','education_schools','education_majors','college_years','relationship_statuses','family_statuses','household_composition','ethnic_affinity','generation','interested_in','income','net_worth','politics'])},
         {key:'devices',title:'Устройства и подключение',note:'Платформы, модели устройств, операционные системы и тип подключения.',fields:new Set(['device_platforms','user_device','excluded_user_device','user_os','wireless_carrier','app_install_state'])},
         {key:'placements',title:'Платформы и места показа',note:'Поверхности размещения и доступные ограничения для выбранной цели.',fields:new Set(['publisher_platforms','facebook_positions','instagram_positions','messenger_positions','audience_network_positions','threads_positions','whatsapp_positions','oculus_positions','streaming_services_positions','brand_safety_content_filter_levels','contextual_bundling_spec'])},
-        {key:'geography',title:'География и язык',note:'Страны и регионы — поиск по каталогу; города, радиусы и другие гео-типы — в редакторе структуры.',fields:new Set(['geo_locations','locales'])},
+        {key:'geography',title:'География и язык',note:'Страны и регионы — быстрый каталог; города ищутся в выбранном РК, радиус задаётся для каждого города. Другие гео-типы доступны в редакторе структуры.',fields:new Set(['geo_locations','locales'])},
         {key:'exclusions',title:'Исключения',note:'Исключённые страны, регионы и аудитории; интересы и поведение — поиском.',fields:new Set(['excluded_geo_locations','excluded_custom_audiences','exclusions'])},
         {key:'detailed',title:'Интересы и категории Meta',note:'Интересы, поведение, свои аудитории, работа, события жизни, жильё и другие категории.',fields:new Set(['interests','behaviors','custom_audiences','flexible_spec','purchase_intent','user_adclusters','hashtag_interactions','work_employers','work_positions','industries','office_type','life_events','moms','home_ownership','home_type','home_value','location_categories'])}
     ];
     function wfTargetValues(source) {
         const raw=String(source?.value||'').trim();if(!raw)return [];
-        try{const parsed=JSON.parse(raw);if(Array.isArray(parsed))return parsed;if(parsed&&typeof parsed==='object'){if(['exclusions','excluded_geo_locations'].includes(source?.dataset?.launchMetaField))return Object.values(parsed).flatMap(value=>Array.isArray(value)?value:[]);return Object.values(parsed);}if(parsed!==null&&parsed!==undefined)return [parsed];}
+        try{const parsed=JSON.parse(raw);if(Array.isArray(parsed))return parsed;if(parsed&&typeof parsed==='object'){if(['exclusions','excluded_geo_locations','geo_locations'].includes(source?.dataset?.launchMetaField))return Object.values(parsed).flatMap(value=>Array.isArray(value)?value:[]);return Object.values(parsed);}if(parsed!==null&&parsed!==undefined)return [parsed];}
         catch{return raw.split(',').map(value=>value.trim()).filter(Boolean);}
         return [];
     }
@@ -341,7 +341,11 @@
         const budget=String($('dailyBudget')?.value||'').trim();
         const budgetPeriod=selectedLabels('budgetPeriod')[0]||'';
         const budgetLevel=selectedLabels('budgetLevel')[0]||'';
-        const geo=selectedPillLabels('selectedGeo'),interests=selectedPillLabels('selectedInterests'),behaviors=selectedPillLabels('selectedBehaviors'),languages=selectedPillLabels('selectedLanguages');
+        const geo=selectedPillLabels('selectedGeo');
+        const geoSource=document.querySelector('[data-launch-meta-group="targeting"][data-launch-meta-field="geo_locations"]');
+        const moduleGeoCount=wfTargetValues(geoSource).length;
+        const geoSummary=[geo.length?geo.length+' быстрых гео':'',moduleGeoCount?moduleGeoCount+' гео Meta':''].filter(Boolean).join(' + ')||'География не выбрана';
+        const interests=selectedPillLabels('selectedInterests'),behaviors=selectedPillLabels('selectedBehaviors'),languages=selectedPillLabels('selectedLanguages');
         const ageMin=String($('ageMin')?.value||'').trim(),ageMax=String($('ageMax')?.value||'').trim();
         const gender=moduleFieldLabels('targeting','genders');
         const platformCount=document.querySelectorAll('.publisher-platform:checked').length;
@@ -378,7 +382,7 @@
         const audienceParts=[
             ageMin||ageMax?((ageMin||'—')+'–'+(ageMax||'—')+' лет'):'Возраст по умолчанию',
             gender.length?gender.join(', '):'Любой пол',
-            geo.length?geo.length+' гео':'География не выбрана',
+            geoSummary,
             interests.length?interests.length+' интересов':'без выбранных интересов',
             behaviors.length?behaviors.length+' поведенческих категорий':'',
             exclusionCount?exclusionCount+' исключений':''
