@@ -7,6 +7,7 @@ const remaskModuleControls = (() => {
     style.textContent = '.rm-module-source,.cr-editor .form-control.rm-module-source,.wf-launch .form-control.rm-module-source{display:none!important}.rm-module-field .rm-meta-visual-actions{display:none!important}.rm-module-pills{display:flex;gap:6px;flex-wrap:wrap;margin:7px 0}.rm-module-choice{display:block;width:100%;text-align:left;padding:8px;border:0;background:transparent;color:inherit;cursor:pointer}.rm-module-results{max-height:240px;overflow:auto;border-radius:8px}.rm-module-results:not(:empty){border:1px solid #384455;padding:4px}.rm-module-pill{border:1px solid #465366;border-radius:14px;background:#263346;color:inherit;padding:5px 10px;cursor:pointer}.rm-module-hint{font-size:12px;opacity:.72;padding:6px}';
     style.textContent += '.rm-module-exclusion-control{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;width:100%}.rm-module-exclusion-group{min-width:0;padding:12px;border:1px solid #34445a;border-radius:12px;background:rgba(15,23,42,.24)}.rm-module-exclusion-label{display:block;margin:0 0 8px;font-size:12px;font-weight:700;color:#d7e2f1}.rm-module-exclusion-group .form-control{width:100%;min-width:0}.rm-module-exclusion-settings{grid-column:1/-1;display:flex;align-items:center;gap:10px;flex-wrap:wrap}.rm-module-structure{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.rm-module-structure>.rm-module-hint{flex-basis:100%}@media(max-width:640px){.rm-module-exclusion-control{grid-template-columns:minmax(0,1fr)}.rm-module-exclusion-group{padding:10px}}';
     style.textContent += '.rm-module-geo-exclusion-control{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;width:100%}.rm-module-geo-exclusion-group{min-width:0;padding:12px;border:1px solid #34445a;border-radius:12px;background:rgba(15,23,42,.24)}.rm-module-geo-exclusion-label{display:block;margin:0 0 8px;font-size:12px;font-weight:700;color:#d7e2f1}.rm-module-geo-exclusion-group .form-control{width:100%;min-width:0}@media(max-width:640px){.rm-module-geo-exclusion-control{grid-template-columns:minmax(0,1fr)}.rm-module-geo-exclusion-group{padding:10px}}';
+    style.textContent += '.rm-module-geo-inclusion-control{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;width:100%}.rm-module-geo-inclusion-group{min-width:0;padding:12px;border:1px solid #34445a;border-radius:12px;background:rgba(15,23,42,.24)}.rm-module-geo-inclusion-label{display:block;margin:0 0 8px;font-size:12px;font-weight:700;color:#d7e2f1}.rm-module-geo-inclusion-group .form-control{width:100%;min-width:0}@media(max-width:640px){.rm-module-geo-inclusion-control{grid-template-columns:minmax(0,1fr)}.rm-module-geo-inclusion-group{padding:10px}}';
     document.head.appendChild(style);
     const key = row => String(typeof row === 'object' ? row?.id ?? row?.key : row);
     const fieldLabels=source=>[...new Set([...Array.from(source.labels||[]),source.closest('.cr-field,.cr-sdk-field,.rm-meta-field')?.querySelector('label')].filter(Boolean))];
@@ -137,16 +138,18 @@ const remaskModuleControls = (() => {
         }
         source.addEventListener('change',paint);source.after(root);paint();
     }
-    function attachTargetingGeoExclusions(source) {
-        if(source.dataset.remaskTargetingGeoExclusions==='1')return;
-        source.dataset.remaskTargetingGeoExclusions='1';
-        attachStructure(source,'excluded_geo_locations','Object');
+    function attachTargetingGeo(source, field, excluded) {
+        const modeKey=excluded?'remaskTargetingGeoExclusions':'remaskTargetingGeoLocations';
+        if(source.dataset[modeKey]==='1')return;
+        source.dataset[modeKey]='1';
+        attachStructure(source,field,'Object');
         source.classList.add('rm-module-source');
         source.closest('.rm-meta-field,.cr-sdk-field')?.classList.add('rm-module-field');
-        const root=document.createElement('div');root.className='rm-module-control rm-module-geo-exclusion-control';
+        const mode=excluded?'exclusion':'inclusion';
+        const root=document.createElement('div');root.className='rm-module-control rm-module-geo-'+mode+'-control';
         const sections=[
-            {key:'countries',kind:'country',label:'Исключить страны',placeholder:'Найти страну'},
-            {key:'regions',kind:'region',label:'Исключить регионы',placeholder:'Найти регион'}
+            {key:'countries',kind:'country',label:excluded?'Исключить страны':'Страны',placeholder:'Найти страну'},
+            {key:'regions',kind:'region',label:excluded?'Исключить регионы':'Регионы',placeholder:'Найти регион'}
         ];
         const descriptor=Object.getOwnPropertyDescriptor(source,'value')||
             Object.getOwnPropertyDescriptor(source instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,'value');
@@ -155,7 +158,7 @@ const remaskModuleControls = (() => {
             const raw=String(descriptor.get.call(source)||'').trim();
             if(!raw)return {};
             const parsed=JSON.parse(raw);
-            if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))throw new Error('Структура гео-исключений должна быть объектом.');
+            if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))throw new Error(excluded?'Структура гео-исключений должна быть объектом.':'Структура географии должна быть объектом.');
             return parsed;
         };
         const identifier=(section,value)=>section.key==='countries'
@@ -177,7 +180,7 @@ const remaskModuleControls = (() => {
                 for(const value of rowsFor(section)){
                     const label=labelFor(section,value);
                     const pill=button(label+' ×','rm-module-pill',()=>commit(section,rowsFor(section).filter(row=>identifier(section,row)!==identifier(section,value))));
-                    pill.setAttribute('aria-label','Убрать географию из исключений: '+label);
+                    pill.setAttribute('aria-label',(excluded?'Убрать географию из исключений: ':'Убрать географию: ')+label);
                     section.pills.appendChild(pill);
                 }
             }
@@ -228,10 +231,10 @@ const remaskModuleControls = (() => {
             }catch{}
         }
         for(const section of sections){
-            const card=document.createElement('div');card.className='rm-module-geo-exclusion-group';
-            const label=document.createElement('label');label.className='rm-module-geo-exclusion-label';label.textContent=section.label;
+            const card=document.createElement('div');card.className='rm-module-geo-'+mode+'-group';
+            const label=document.createElement('label');label.className='rm-module-geo-'+mode+'-label';label.textContent=section.label;
             const search=document.createElement('input');search.type='search';search.className='form-control';
-            search.id=source.id+'_exclude_geo_'+section.key;search.placeholder=section.placeholder;search.autocomplete='off';
+            search.id=source.id+(excluded?'_exclude_geo_':'_include_geo_')+section.key;search.placeholder=section.placeholder;search.autocomplete='off';
             search.setAttribute('role','combobox');search.setAttribute('aria-autocomplete','list');search.setAttribute('aria-expanded','false');
             search.setAttribute('aria-controls',search.id+'_results');label.htmlFor=search.id;
             const pills=document.createElement('div');pills.className='rm-module-pills';
@@ -292,8 +295,12 @@ const remaskModuleControls = (() => {
         }
         source.addEventListener('change',paint);source.after(root);paint();void hydrateNames();
     }
+    function attachTargetingGeoExclusions(source){attachTargetingGeo(source,'excluded_geo_locations',true);}
+    function attachTargetingGeoLocations(source){attachTargetingGeo(source,'geo_locations',false);}
+
     function attach(source, spec, csv=false) {
         if(spec?.kind==='targeting_exclusions'){attachTargetingExclusions(source);return;}
+        if(spec?.kind==='targeting_geo_locations'){attachTargetingGeoLocations(source);return;}
         if(spec?.kind==='targeting_geo_exclusions'){attachTargetingGeoExclusions(source);return;}
         if(source.dataset.remaskModuleControl==='1')return;
         source.dataset.remaskModuleControl='1';source.classList.add('rm-module-source');
