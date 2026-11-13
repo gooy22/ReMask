@@ -885,6 +885,7 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
 }
 .wf-launch.wf-studio-v3 .wf-audience-flow .wf-audience-group[open]>summary:after{transform:rotate(225deg)}
 .wf-launch.wf-studio-v3 .wf-audience-flow .wf-audience-group>.wf-audience-group-body{padding:0 0 9px!important}
+.wf-launch.wf-studio-v3 .wf-audience-inline{margin:13px 0 3px!important;padding:12px 0 4px!important;border-top:1px solid #29323e!important}
 .wf-launch.wf-studio-v3 .wf-target-head{margin:6px 0 8px!important}
 .wf-launch.wf-studio-v3 .wf-target-head h6{color:#e8edf4!important;font-size:13px!important}
 .wf-launch.wf-studio-v3 .wf-target-head p{color:#9eabb9!important;font-size:10px!important}
@@ -1005,21 +1006,30 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
         const card=$("adsetName")?.closest(".launch-card");
         if(!card)return;
         card.classList.add("wf-audience-flow");
-        const sections=Array.from(card.querySelectorAll(":scope > details.wf-audience-group"));
-        const rank=section=>{
-            const title=String(section.querySelector(":scope > summary")?.textContent||"").toLowerCase();
-            if(title.includes("возраст"))return 0;
-            if(title.includes("география"))return 1;
-            if(title.includes("места показа"))return 2;
-            return 3;
-        };
-        sections.sort((a,b)=>rank(a)-rank(b)).forEach(section=>{
-            card.appendChild(section);
-            if(section.dataset.wfFlowReady==="1")return;
-            const title=String(section.querySelector(":scope > summary")?.textContent||"").toLowerCase();
-            section.open=title.includes("возраст")||title.includes("география");
-            section.dataset.wfFlowReady="1";
-        });
+        let sections=Array.from(card.querySelectorAll(":scope > details.wf-audience-group"));
+        const find=part=>sections.find(section=>String(section.querySelector(":scope > summary")?.textContent||"").toLowerCase().includes(part));
+        const age=find("возраст");
+        const geo=find("география");
+        const placements=find("места показа");
+        let inline=card.querySelector(":scope > .wf-audience-inline");
+        if(geo&&!inline){
+            inline=document.createElement("section");
+            inline.className="wf-audience-inline";
+            inline.setAttribute("aria-label","География и детальный таргетинг");
+            const body=geo.querySelector(":scope > .wf-audience-group-body");
+            for(const node of Array.from(body?.childNodes||[]))inline.appendChild(node);
+            geo.before(inline);
+            geo.remove();
+        }
+        for(const section of [age,placements]){
+            if(!section)continue;
+            if(section.dataset.wfFlowReady!=="1"){
+                const title=String(section.querySelector(":scope > summary")?.textContent||"").toLowerCase();
+                section.open=title.includes("возраст");
+                section.dataset.wfFlowReady="1";
+            }
+        }
+        for(const section of [age,inline,placements])if(section)card.appendChild(section);
     }
 
     function setupStudioTargetTabs(){
