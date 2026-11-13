@@ -282,16 +282,19 @@
             const wrapper=source.closest('.rm-meta-field,.cr-sdk-field');
             const picker=wrapper?.querySelector('.rm-module-control');
             const structure=wrapper?.querySelector('.rm-module-structure');
-            if(!picker||!fields)continue;
+            const nativeSelect=!picker&&source instanceof HTMLSelectElement?source:null;
+            const control=picker||nativeSelect;
+            if(!control||!fields)continue;
             let row=[...fields.querySelectorAll('[data-wf-target-field]')].find(item=>item.dataset.wfTargetField===field);
             if(!row){
                 row=document.createElement('div');row.className='wf-target-field';row.dataset.wfTargetField=field;
-                const caption=document.createElement('label'),search=picker.querySelector('input');
+                const caption=document.createElement('label'),search=picker?.querySelector('input')||nativeSelect;
                 caption.textContent=fieldNames[field]||field.replaceAll('_',' ');
                 if(search){caption.htmlFor=search.id;search.setAttribute('aria-label',caption.textContent);}
                 row.appendChild(caption);fields.appendChild(row);
             }
-            if(picker.parentElement!==row)row.appendChild(picker);
+            if(picker&&picker.parentElement!==row)row.appendChild(picker);
+            if(nativeSelect){nativeSelect.classList.add('wf-target-native-control');if(nativeSelect.parentElement!==row)row.appendChild(nativeSelect);}
             if(structure&&structure.parentElement!==row)row.appendChild(structure);
             wrapper.classList.add('wf-target-source');available++;
         }
@@ -336,7 +339,7 @@
         const ageMin=String($('ageMin')?.value||'').trim(),ageMax=String($('ageMax')?.value||'').trim();
         const gender=moduleFieldLabels('targeting','genders');
         const platformCount=document.querySelectorAll('.publisher-platform:checked').length;
-        const targetCounts={device_platforms:0,user_device:0,user_os:0,excluded_user_device:0};
+        const targetCounts={device_platforms:0,user_device:0,user_os:0,excluded_user_device:0,app_install_state:0};
         for(const field of Object.keys(targetCounts)){
             const source=document.querySelector('[data-launch-meta-group="targeting"][data-launch-meta-field="'+field+'"]');
             targetCounts[field]=wfTargetValues(source).length;
