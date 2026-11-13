@@ -659,6 +659,63 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
     }
     @media(prefers-reduced-motion:reduce){.wf-launch.wf-studio-v2 *{scroll-behavior:auto!important;transition:none!important}}
     `;
+    studioStyle.textContent+=`
+    /* Live layout corrections: one stage column, contextual reach estimate, no placeholder inventory. */
+    .rm-estimate-layout.wf-studio-estimate-layout{
+      display:grid!important;grid-template-columns:minmax(0,1fr)!important;gap:0!important;
+      width:100%!important;max-width:1540px!important;margin-inline:auto!important;align-items:start!important
+    }
+    .rm-estimate-layout.wf-studio-estimate-layout .rm-estimate-rail{display:none!important}
+    .wf-launch.wf-studio-v2{
+      display:grid!important;grid-template-columns:minmax(0,1fr)!important;
+      width:100%!important;max-width:1240px!important;margin-inline:auto!important;
+      column-gap:0!important;row-gap:14px!important
+    }
+    .wf-launch.wf-studio-v2>.app-page-head,
+    .wf-launch.wf-studio-v2>.wf-step-nav,
+    .wf-launch.wf-studio-v2>.wf-step-progress,
+    .wf-launch.wf-studio-v2>.wf-live-summary,
+    .wf-launch.wf-studio-v2>.launch-card,
+    .wf-launch.wf-studio-v2>#launchMetaAllFields{grid-column:1/-1!important}
+    .wf-launch.wf-studio-v2>.wf-live-summary{
+      position:static!important;top:auto!important;grid-row:auto!important;
+      max-height:none!important;overflow:visible!important;margin:0 0 4px!important
+    }
+    .wf-launch.wf-studio-v2 .wf-profile-grid>.wf-profile-empty,
+    .wf-launch.wf-studio-v2 .wf-account-grid>.wf-account-empty{grid-column:1/-1;width:100%;min-width:0}
+    .wf-launch.wf-studio-v2 .form-control.wf-account-native,
+    .wf-launch.wf-studio-v2 #adAccount{display:none!important}
+    .wf-launch.wf-studio-v2 #wf-launch-resources .table-responsive.wf-empty-inventory{display:none!important}
+    .wf-launch.wf-studio-v2 .wf-audience-estimate{
+      margin:18px 0 12px;border:1px solid var(--studio-line);
+      border-radius:15px;background:rgba(7,14,24,.32);overflow:hidden
+    }
+    .wf-launch.wf-studio-v2 .wf-audience-estimate>summary{
+      display:flex;align-items:center;min-height:50px;padding:13px 15px;
+      color:#dce7f5;font-size:12px;font-weight:700;cursor:pointer;list-style:none
+    }
+    .wf-launch.wf-studio-v2 .wf-audience-estimate>summary::-webkit-details-marker{display:none}
+    .wf-launch.wf-studio-v2 .wf-audience-estimate>summary::after{
+      content:'';margin-left:auto;width:8px;height:8px;border-right:1.5px solid #91a8c6;
+      border-bottom:1.5px solid #91a8c6;transform:rotate(45deg);transition:transform .16s ease
+    }
+    .wf-launch.wf-studio-v2 .wf-audience-estimate[open]>summary::after{transform:rotate(225deg)}
+    .wf-launch.wf-studio-v2 .wf-audience-estimate-body{padding:0 14px 14px}
+    .wf-launch.wf-studio-v2 #remaskAdvertisingEstimate{
+      display:block!important;position:static!important;inset:auto!important;float:none!important;
+      transform:none!important;width:100%!important;max-width:none!important;min-width:0!important;
+      margin:0!important;grid-column:auto!important;z-index:auto!important;overflow:visible!important
+    }
+    .wf-launch.wf-studio-v2 #remaskAdvertisingEstimate>*{max-width:100%;min-width:0}
+    @media(max-width:720px){
+      .rm-estimate-layout.wf-studio-estimate-layout{display:block!important;width:100%!important}
+      .wf-launch.wf-studio-v2{grid-template-columns:minmax(0,1fr)!important;row-gap:12px!important}
+      .wf-launch.wf-studio-v2>.app-page-head{min-width:0}
+      .wf-launch.wf-studio-v2 .wf-profile-grid>.wf-profile-empty,
+      .wf-launch.wf-studio-v2 .wf-account-grid>.wf-account-empty{align-items:flex-start;flex-wrap:wrap}
+      .wf-launch.wf-studio-v2 .wf-audience-estimate-body{padding:0 10px 12px}
+    }
+    `;
     document.head.appendChild(studioStyle);
 
 
@@ -1064,6 +1121,29 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
             details.append(summary,body);box.replaceChildren(details);box.dataset.wfDisclosure='1';
         }
     }
+    function mountAudienceEstimate(root) {
+        const estimate=$('remaskAdvertisingEstimate');
+        const audienceCard=$('adsetName')?.closest('.launch-card');
+        if(!estimate||!audienceCard||estimate.dataset.wfStudioMounted==='1')return;
+        const disclosure=document.createElement('details');
+        disclosure.className='wf-audience-estimate';
+        disclosure.dataset.wfEstimateDisclosure='1';
+        const summary=document.createElement('summary');
+        summary.textContent='Прогноз охвата Meta';
+        const body=document.createElement('div');
+        body.className='wf-audience-estimate-body';
+        body.appendChild(estimate);
+        disclosure.append(summary,body);
+        estimate.classList.add('wf-audience-estimate-content');
+        estimate.dataset.wfStudioMounted='1';
+        const targeting=$('wfTargetingOptions');
+        const advanced=$('launchMetaAllFields');
+        if(targeting&&audienceCard.contains(targeting))targeting.after(disclosure);
+        else if(advanced&&audienceCard.contains(advanced))advanced.before(disclosure);
+        else audienceCard.appendChild(disclosure);
+        const layout=root?.matches('.rm-estimate-layout')?root:root?.closest('.rm-estimate-layout');
+        layout?.classList.add('wf-studio-estimate-layout');
+    }
     function setupLaunch() {
         const root=document.querySelector('.launch-wrap');if(!root||root.dataset.wfReady)return;
         root.dataset.wfReady='1';root.classList.add('wf-launch','wf-studio-v2');document.body.classList.add('wf-autoupload-open');
@@ -1265,7 +1345,11 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
             for(const row of formerRows){if(!row.querySelector('button,input,select,textarea,a'))row.remove();}
         }
         $('adAccount')?.closest('[class*="col-"]')?.classList.add('wf-account-selector');
-        setupLiveSummary(root);
+        const liveSummary=setupLiveSummary(root);
+        const progressTrackNode=root.querySelector('.wf-step-progress');
+        if(liveSummary&&progressTrackNode?.parentElement===root)progressTrackNode.after(liveSummary);
+        const estimateLayout=root.matches('.rm-estimate-layout')?root:root.closest('.rm-estimate-layout');
+        estimateLayout?.classList.add('wf-studio-estimate-layout');
         if(root.dataset.wfSummaryBound!=='1'){
             root.dataset.wfSummaryBound='1';
             ['input','change'].forEach(type=>root.addEventListener(type,()=>{updateLiveSummary();updateAudienceTargetingSummary();},true));
@@ -1353,7 +1437,7 @@ function setupVisualChoices() {
         setupVisualChoices();
         const captions={
             'MASS META LAUNCH':'ЗАПУСК РЕКЛАМЫ', 'Run preflight first.':'Выберите профили и загрузите РК.', 'Run preflight first':'Сначала загрузите РК',
-            'Choose one or more Facebook profiles and run preflight.':'Отметьте профили выше и нажмите «Загрузить сохранённые РК».',
+            'Choose one or more Facebook profiles and run preflight.':'Выберите профиль и нажмите «Обновить данные Meta», чтобы загрузить сохранённые РК.',
             'API usage: no data yet.':'Данных об использовании API пока нет.', 'FB profile':'Профиль FB', 'Currency':'Валюта',
             'Funding source':'Способ оплаты', 'Type':'Тип', 'Account':'Аккаунт', 'Spend cap':'Лимит расходов', 'Status':'Статус',
             'Select RK and check funding.':'Выберите РК для проверки оплаты.', 'No review yet.':'План ещё не подготовлен.', 'No launch yet.':'Реклама ещё не создана.',
@@ -1369,6 +1453,7 @@ function setupVisualChoices() {
         setupProfilePicker();
         setupAudienceTargeting();
         setupAudienceSections();
+        mountAudienceEstimate(launch);
         updateAudienceTargetingSummary();
         updateLiveSummary();
         updateCreativeSummary();
