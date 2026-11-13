@@ -26,6 +26,17 @@ apiJson = async function(url, options = {}) {
         const resource={location:'locations',locations:'locations',interest:'interests',interests:'interests',
             behavior:'behaviors',behaviors:'behaviors',language:'locales',languages:'locales',locale:'locales',locales:'locales'}[type]
             || (typeof remaskModuleControls!=='undefined' && remaskModuleControls.isTargetingType(type) ? type : null);
+        if(templateTargetingRequest && input.get('module_only')==='1'){
+            if(!['locations','locales'].includes(resource))throw new Error('INVALID_TARGETING_MODE');
+            const moduleBody=new URLSearchParams();
+            for(const key of ['type','q','limit','offset']) {
+                const value=input.get(key);if(value!==null)moduleBody.set(key,value);
+            }
+            moduleBody.set('type',resource);
+            moduleBody.set('module_only','1');
+            return remaskPrivateOriginalTargetingApiJson(
+                'ajax/metaTemplateTargetingSearch.php',{...options,body:moduleBody.toString()});
+        }
         const scope=resource ? remaskPrivateTargetingScope() : null;
         if(scope){
             // One cache-only request checks static GEO/language references
