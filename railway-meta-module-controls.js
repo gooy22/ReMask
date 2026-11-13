@@ -1,5 +1,7 @@
 /* REMASK_META_MODULE_CONTROLS_V1: shared source-backed choices in both editors. */
-const remaskModuleControls = (() => {
+if(!window.__REMASK_META_MODULE_CONTROLS_V1__){
+    window.__REMASK_META_MODULE_CONTROLS_V1__=true;
+window.remaskModuleControls = (() => {
     let metadata = {}, scheduled = false;
     const primary = {mbUserDevice:['targeting','user_device','csv'],mbUserOs:['targeting','user_os','csv']};
     const primaryEnums = {mbBuyingType:['campaign','buying_type']};
