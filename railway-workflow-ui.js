@@ -978,7 +978,7 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
         const resourceCard=$("wf-launch-resources");
         const table=resourceCard?.querySelector("table");
         if(table&&/выберите профили|choose profiles|сначала загрузите/i.test(table.textContent||"")){
-            (table.closest(".table-responsive,.table-wrapper")||table).classList.add("wf-empty-inventory");
+            (table.closest(".rk-picker-wrap,.table-responsive,.table-wrapper")||table).classList.add("wf-empty-inventory");
         }
         setupAudienceWorkspace();
         setupStudioTargetTabs();
@@ -1750,7 +1750,7 @@ function setupVisualChoices() {
         updateCreativeSummary();
         applyStudioV3();
     }
-    function safeEnhance(name, task) {
+    style.textContent += '\n@media(max-width:720px){body.wf-autoupload-open{padding-bottom:calc(132px + env(safe-area-inset-bottom))}.wf-mobile-actions{grid-template-columns:minmax(0,1fr) auto auto!important;grid-template-areas:"state summary save" "step back next";row-gap:8px}.wf-workflow-status{grid-area:state;min-width:0}.wf-mobile-step{grid-area:step;text-align:left}.wf-mobile-summary{grid-area:summary}.wf-mobile-back{grid-area:back}.wf-mobile-next,#reviewLaunch,#launchButton{grid-area:next}#wfSaveTemplateButton{grid-area:save}}';\n    function safeEnhance(name, task) {
         try { return task(); }
         catch (error) { console.error('[AutoUpload] '+name+' failed', error); return null; }
     }
