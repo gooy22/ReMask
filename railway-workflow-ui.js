@@ -371,6 +371,55 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
   .wf-step-nav a,.wf-step-index,.wf-launch .form-control{transition:none!important}
 }
 `;
+
+    style.textContent += `
+/* Direct choice controls for high-impact campaign settings */
+.wf-choice-source{position:absolute!important;width:1px!important;height:1px!important;min-height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;clip-path:inset(50%)!important;white-space:nowrap!important;opacity:0!important;pointer-events:none!important}
+.wf-choice-control{display:grid;gap:9px;margin-top:9px}
+.wf-choice-cards{grid-template-columns:repeat(2,minmax(0,1fr))}
+.wf-choice-pills{display:flex;flex-wrap:wrap;gap:8px}
+.wf-choice-segments{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));padding:4px;border:1px solid var(--wf-border-strong);border-radius:13px;background:rgba(7,13,22,.58)}
+.wf-choice-option{
+  position:relative;display:flex;align-items:flex-start;gap:12px;min-width:0;min-height:56px;
+  padding:13px 14px;border:1px solid rgba(146,171,201,.17)!important;border-radius:13px!important;
+  background:rgba(12,20,31,.68)!important;color:#dbe6f4!important;text-align:left;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.025);cursor:pointer
+}
+.wf-choice-option:hover{border-color:rgba(94,159,239,.48)!important;background:rgba(31,52,77,.75)!important}
+.wf-choice-option.is-selected{border-color:rgba(77,159,255,.86)!important;background:linear-gradient(135deg,rgba(45,112,199,.33),rgba(77,83,176,.22))!important;color:#f5f9ff!important;box-shadow:inset 0 0 0 1px rgba(85,167,255,.14),0 5px 16px rgba(25,96,175,.12)}
+.wf-choice-icon{display:grid;place-items:center;width:31px;height:31px;flex:0 0 31px;border:1px solid rgba(144,171,205,.2);border-radius:10px;background:rgba(255,255,255,.035);color:#99b6d9;font-size:16px;font-weight:750}
+.wf-choice-option.is-selected .wf-choice-icon{border-color:rgba(108,180,255,.4);background:rgba(69,139,221,.2);color:#b8dcff}
+.wf-choice-copy{display:grid;gap:4px;min-width:0}
+.wf-choice-copy strong{font-size:12px;font-weight:700;line-height:1.35}
+.wf-choice-copy small{color:#93a6be;font-size:10px;font-weight:450;line-height:1.4}
+.wf-choice-check{display:none;position:absolute;top:9px;right:10px;width:17px;height:17px;border-radius:50%;background:linear-gradient(135deg,#48aaff,#5872ff);color:#fff}
+.wf-choice-option.is-selected .wf-choice-check{display:grid;place-items:center}
+.wf-choice-option.is-selected .wf-choice-check::after{content:"✓";font-size:10px;font-weight:800}
+.wf-choice-pills .wf-choice-option{min-height:38px;padding:9px 13px;align-items:center;border-radius:999px!important}
+.wf-choice-pills .wf-choice-icon,.wf-choice-pills .wf-choice-check{display:none}
+.wf-choice-pills .wf-choice-copy strong{font-size:11px}
+.wf-choice-segments .wf-choice-option{min-height:48px;align-items:center;justify-content:center;padding:10px;border:1px solid transparent!important;background:transparent!important;text-align:center}
+.wf-choice-segments .wf-choice-option.is-selected{border-color:rgba(88,158,245,.4)!important;border-radius:10px!important;background:rgba(48,107,177,.25)!important}
+.wf-choice-segments .wf-choice-icon{display:none}
+.wf-choice-segments .wf-choice-check{display:none!important}
+.wf-campaign-builder{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:20px 18px!important}
+.wf-campaign-builder>.wf-campaign-name-field,.wf-campaign-builder>.wf-campaign-objective-field,.wf-campaign-builder>.wf-campaign-category-field{grid-column:1/-1!important}
+.wf-campaign-objective-field .wf-choice-cards{grid-template-columns:repeat(3,minmax(0,1fr))}
+.wf-campaign-category-field .wf-choice-pills{gap:7px}
+.wf-campaign-builder .wf-choice-option{min-height:86px}
+.wf-campaign-category-field .wf-choice-option{min-height:38px}
+.wf-choice-option:focus-visible{outline:3px solid rgba(79,160,255,.4)!important;outline-offset:2px}
+@media(max-width:720px){
+ .wf-choice-cards{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .wf-campaign-builder{grid-template-columns:minmax(0,1fr)!important}
+ .wf-campaign-objective-field .wf-choice-cards{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .wf-choice-copy small{font-size:9px}
+}
+@media(max-width:390px){
+ .wf-campaign-objective-field .wf-choice-cards{grid-template-columns:minmax(0,1fr)}
+ .wf-choice-option{padding:11px}
+}
+`;
     document.head.appendChild(style);
 
     function setText(el, text) { if (el && el.textContent !== text) el.textContent = text; }
@@ -865,7 +914,67 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
         }
         updateLiveSummary();
     }
-    function enhanceDynamic() {
+function setupVisualChoices() {
+        const configs={
+            objective:{kind:'cards',icon:{OUTCOME_TRAFFIC:'↗',OUTCOME_SALES:'◆',OUTCOME_LEADS:'◎',OUTCOME_ENGAGEMENT:'♡',OUTCOME_AWARENESS:'◌',OUTCOME_APP_PROMOTION:'▣'},description:{
+                OUTCOME_TRAFFIC:'Переходы и просмотры',OUTCOME_SALES:'Покупки и конверсии',OUTCOME_LEADS:'Заявки и контакты',
+                OUTCOME_ENGAGEMENT:'Сообщения и реакции',OUTCOME_AWARENESS:'Охват и запоминаемость',OUTCOME_APP_PROMOTION:'Установки и действия в приложении'
+            }},
+            specialCategory:{kind:'pills',description:{CREDIT:'Финансовые продукты',EMPLOYMENT:'Вакансии и работа',HOUSING:'Недвижимость',ISSUES_ELECTIONS_POLITICS:'Политика и общественные вопросы'}},
+            budgetLevel:{kind:'segments',description:{ADSET:'Лимит задаётся для этой группы',CAMPAIGN:'Общий лимит для кампании'}},
+            placementMode:{kind:'cards',icon:{AUTO:'✦',MANUAL:'☷'},description:{AUTO:'Meta подбирает доступные места автоматически',MANUAL:'Выбрать платформы и места вручную'}}
+        };
+        for(const [id,config] of Object.entries(configs)){
+            const source=$(id);if(!source||source.tagName!=='SELECT')continue;
+            source.classList.add('wf-choice-source');source.setAttribute('aria-hidden','true');source.tabIndex=-1;
+            let control=source.previousElementSibling;
+            if(!control?.classList.contains('wf-choice-control')||control.dataset.wfChoiceFor!==id){
+                control=document.createElement('div');control.className='wf-choice-control wf-choice-'+config.kind;control.dataset.wfChoiceFor=id;
+                source.before(control);
+            }
+            if(!source.dataset.wfChoiceBound){
+                source.dataset.wfChoiceBound='1';
+                source.addEventListener('change',()=>control.querySelectorAll('[data-wf-choice-value]').forEach(button=>{
+                    const selected=button.dataset.wfChoiceValue===source.value;button.classList.toggle('is-selected',selected);
+                    button.setAttribute('aria-checked',String(selected));button.setAttribute('aria-pressed',String(selected));
+                }));
+            }
+            const signature=[...source.options].map(option=>[option.value,option.textContent.trim(),option.disabled?'1':'0'].join('~')).join('|');
+            if(control.dataset.wfChoiceSignature!==signature){
+                control.replaceChildren();control.dataset.wfChoiceSignature=signature;
+                [...source.options].forEach((option,index)=>{
+                    const button=document.createElement('button');button.type='button';button.className='wf-choice-option';
+                    button.dataset.wfChoiceValue=option.value;button.disabled=option.disabled;button.setAttribute('role','radio');
+                    const icon=document.createElement('span');icon.className='wf-choice-icon';icon.setAttribute('aria-hidden','true');
+                    icon.textContent=config.icon?.[option.value]||(config.kind==='cards'?String(index+1).padStart(2,'0'):'');
+                    const copy=document.createElement('span');copy.className='wf-choice-copy';
+                    const title=document.createElement('strong');title.textContent=option.textContent.trim();copy.appendChild(title);
+                    const detail=config.description?.[option.value];
+                    if(detail){const hint=document.createElement('small');hint.textContent=detail;copy.appendChild(hint);}
+                    const check=document.createElement('span');check.className='wf-choice-check';check.setAttribute('aria-hidden','true');
+                    button.append(icon,copy,check);
+                    button.addEventListener('click',()=>{
+                        if(option.disabled)return;
+                        source.value=option.value;
+                        source.dispatchEvent(new Event('input',{bubbles:true}));
+                        source.dispatchEvent(new Event('change',{bubbles:true}));
+                    });
+                    control.appendChild(button);
+                });
+                control.setAttribute('role','radiogroup');
+                const field=source.closest('[class*="col-"]');
+                if(id==='campaignName')field?.classList.add('wf-campaign-name-field');
+                if(id==='objective')field?.classList.add('wf-campaign-objective-field');
+                if(id==='specialCategory')field?.classList.add('wf-campaign-category-field');
+                if(id==='objective'||id==='specialCategory')field?.closest('.row')?.classList.add('wf-campaign-builder');
+            }
+            control.querySelectorAll('[data-wf-choice-value]').forEach(button=>{
+                const selected=button.dataset.wfChoiceValue===source.value;button.classList.toggle('is-selected',selected);
+                button.setAttribute('aria-checked',String(selected));button.setAttribute('aria-pressed',String(selected));
+            });
+        }
+    }
+        function enhanceDynamic() {
         Object.entries(labels).forEach(([id,label])=>{
             const el=$(id);
             if(el)translate(el,id==='dailyBudget' && $('budgetPeriod')?.value==='LIFETIME'
@@ -883,6 +992,7 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
         });
         document.querySelectorAll('[data-launch-meta-group] > summary > span:first-child,.cr-sdk-group > summary > span:first-child').forEach(span=>{const key=span.parentElement.parentElement.dataset.launchMetaGroup||span.parentElement.parentElement.dataset.sdkGroup;if(groups[key])setText(span,groups[key]);});
         translateOptions(document);
+        setupVisualChoices();
         const captions={
             'MASS META LAUNCH':'ЗАПУСК РЕКЛАМЫ', 'Run preflight first.':'Выберите профили и загрузите РК.', 'Run preflight first':'Сначала загрузите РК',
             'Choose one or more Facebook profiles and run preflight.':'Отметьте профили выше и нажмите «Загрузить сохранённые РК».',
