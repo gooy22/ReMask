@@ -293,6 +293,11 @@
                 if(search){caption.htmlFor=search.id;search.setAttribute('aria-label',caption.textContent);}
                 row.appendChild(caption);fields.appendChild(row);
             }
+            if(structure){
+                const fieldTitle=fieldNames[field]||field.replaceAll('_',' '),controls=structure.querySelectorAll('button');
+                controls[0]?.setAttribute('aria-label','Настроить '+fieldTitle);
+                controls[1]?.setAttribute('aria-label','Очистить '+fieldTitle);
+            }
             if(picker&&picker.parentElement!==row)row.appendChild(picker);
             if(nativeSelect){nativeSelect.classList.add('wf-target-native-control');if(nativeSelect.parentElement!==row)row.appendChild(nativeSelect);}
             if(structure&&structure.parentElement!==row)row.appendChild(structure);
