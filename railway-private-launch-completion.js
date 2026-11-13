@@ -25,7 +25,7 @@ apiJson = async function(url, options = {}) {
         const type=String(input.get('type')||'').toLowerCase();
         const resource={location:'locations',locations:'locations',interest:'interests',interests:'interests',
             behavior:'behaviors',behaviors:'behaviors',language:'locales',languages:'locales',locale:'locales',locales:'locales'}[type]
-            || (typeof remaskModuleControls!=='undefined' && remaskModuleControls.isTargetingType(type) ? type : null);
+            || (window.remaskModuleControls && window.remaskModuleControls.isTargetingType(type) ? type : null);
         if(templateTargetingRequest && input.get('module_only')==='1'){
             if(!['locations','locales'].includes(resource))throw new Error('INVALID_TARGETING_MODE');
             const moduleBody=new URLSearchParams();
