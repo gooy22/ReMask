@@ -323,6 +323,9 @@ try {
             ],
         ];
     }
+    if (isset($schema['targeting']['fields']['exclusions'])) {
+        $controls['targeting']['exclusions']=['kind'=>'targeting_exclusions'];
+    }
     MetaEndpoint::ok([
         'source' => 'facebook/facebook-python-business-sdk',
         'captured_at' => '2026-09-19',

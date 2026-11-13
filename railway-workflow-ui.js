@@ -9,7 +9,7 @@
         optimization_goal:'Оптимизация показа', billing_event:'За что начисляется оплата', bid_amount:'Предел ставки / цены', destination_type:'Место назначения',
         attribution_spec:'Окна атрибуции', promoted_object:'Объект конверсии', is_dynamic_creative:'Динамические креативы', is_incremental_attribution_enabled:'Инкрементальная атрибуция',
         age_min:'Возраст от', age_max:'Возраст до', genders:'Пол', geo_locations:'География', excluded_geo_locations:'Исключённая география', interests:'Интересы', behaviors:'Поведение',
-        locales:'Языки', custom_audiences:'Включить свои аудитории', excluded_custom_audiences:'Исключить свои аудитории', flexible_spec:'Комбинации условий', exclusions:'Исключения',
+        locales:'Языки', custom_audiences:'Включить свои аудитории', excluded_custom_audiences:'Исключить свои аудитории', flexible_spec:'Комбинации условий', exclusions:'Исключить интересы и поведение',
         education_schools:'Учебные заведения', education_majors:'Специальности', education_statuses:'Уровень образования', college_years:'Годы обучения', work_employers:'Работодатели', work_positions:'Должности', relationship_statuses:'Семейное положение', life_events:'События жизни', family_statuses:'Родители', industries:'Отрасли работы', home_ownership:'Владение жильём', home_type:'Тип жилья', home_value:'Стоимость жилья', wireless_carrier:'Сеть и подключение', generation:'Поколение', household_composition:'Состав семьи', office_type:'Тип офиса', location_categories:'Категории мест', excluded_user_device:'Исключённые устройства', app_install_state:'Установка приложения', optimization_sub_event:'Дополнительная оптимизация', applink_treatment:'Открытие ссылки приложения', purchase_intent:'Намерение покупки', user_adclusters:'Категории аудитории Meta', hashtag_interactions:'Взаимодействия с хэштегами', ethnic_affinity:'Этническая принадлежность', interested_in:'Интересы в отношении', income:'Доход домохозяйства', net_worth:'Чистая стоимость активов', politics:'Политическая тематика', moms:'Родители',
         user_os:'Операционные системы', user_device:'Модели устройств', publisher_platforms:'Платформы', device_platforms:'Типы устройств',
         facebook_positions:'Места показа Facebook', instagram_positions:'Места показа Instagram', messenger_positions:'Места показа Messenger', audience_network_positions:'Места показа Audience Network', threads_positions:'Места показа Threads', whatsapp_positions:'Места показа WhatsApp',
@@ -215,11 +215,12 @@
         {key:'demographics',title:'Демография',note:'Пол, образование, семейный статус и другие социальные параметры.',fields:new Set(['genders','education_statuses','education_schools','education_majors','college_years','relationship_statuses','family_statuses','household_composition','ethnic_affinity','generation','interested_in','income','net_worth','politics'])},
         {key:'devices',title:'Устройства и подключение',note:'Платформы, модели устройств, операционные системы и тип подключения.',fields:new Set(['device_platforms','user_device','excluded_user_device','user_os','wireless_carrier','app_install_state'])},
         {key:'placements',title:'Платформы и места показа',note:'Поверхности размещения и доступные ограничения для выбранной цели.',fields:new Set(['publisher_platforms','facebook_positions','instagram_positions','messenger_positions','audience_network_positions','threads_positions','whatsapp_positions','oculus_positions','streaming_services_positions','brand_safety_content_filter_levels','contextual_bundling_spec'])},
+        {key:'exclusions',title:'Исключения',note:'Исключайте выбранные интересы и категории поведения. Остальные правила остаются доступны в редакторе структуры.',fields:new Set(['exclusions'])},
         {key:'detailed',title:'Детальные категории Meta',note:'Работа, события жизни, жильё и другие доступные категории аудитории.',fields:new Set(['purchase_intent','user_adclusters','hashtag_interactions','work_employers','work_positions','industries','office_type','life_events','moms','home_ownership','home_type','home_value','location_categories'])}
     ];
     function wfTargetValues(source) {
         const raw=String(source?.value||'').trim();if(!raw)return [];
-        try{const parsed=JSON.parse(raw);if(Array.isArray(parsed))return parsed;if(parsed&&typeof parsed==='object')return Object.values(parsed);if(parsed!==null&&parsed!==undefined)return [parsed];}
+        try{const parsed=JSON.parse(raw);if(Array.isArray(parsed))return parsed;if(parsed&&typeof parsed==='object'){if(source?.dataset?.launchMetaField==='exclusions')return Object.values(parsed).flatMap(value=>Array.isArray(value)?value:[]);return Object.values(parsed);}if(parsed!==null&&parsed!==undefined)return [parsed];}
         catch{return raw.split(',').map(value=>value.trim()).filter(Boolean);}
         return [];
     }
@@ -280,6 +281,7 @@
             const fields=rowsByGroup.get(group.key);
             const wrapper=source.closest('.rm-meta-field,.cr-sdk-field');
             const picker=wrapper?.querySelector('.rm-module-control');
+            const structure=wrapper?.querySelector('.rm-module-structure');
             if(!picker||!fields)continue;
             let row=[...fields.querySelectorAll('[data-wf-target-field]')].find(item=>item.dataset.wfTargetField===field);
             if(!row){
@@ -290,6 +292,7 @@
                 row.appendChild(caption);fields.appendChild(row);
             }
             if(picker.parentElement!==row)row.appendChild(picker);
+            if(structure&&structure.parentElement!==row)row.appendChild(structure);
             wrapper.classList.add('wf-target-source');available++;
         }
         let visibleGroups=0;
@@ -355,12 +358,19 @@
         const destination=String($('destinationUrl')?.value||'').trim()||'Ссылка не задана';
         const copyPreview=message?(message.length>72?message.slice(0,72)+'…':message):'Текст объявления не задан';
         const budgetText=budget?[budgetLevel,budget+(budgetPeriod?' · '+budgetPeriod.toLowerCase():'')].filter(Boolean).join(': '):'Бюджет не задан';
+        const exclusionsSource=document.querySelector('[data-launch-meta-group="targeting"][data-launch-meta-field="exclusions"]');
+        let exclusionCount=0;
+        try{
+            const rules=JSON.parse(String(exclusionsSource?.value||'{}'));
+            if(rules&&typeof rules==='object'&&!Array.isArray(rules))exclusionCount=Object.values(rules).reduce((count,value)=>count+(Array.isArray(value)?value.length:0),0);
+        }catch{}
         const audienceParts=[
             ageMin||ageMax?((ageMin||'—')+'–'+(ageMax||'—')+' лет'):'Возраст по умолчанию',
             gender.length?gender.join(', '):'Любой пол',
             geo.length?geo.length+' гео':'География не выбрана',
             interests.length?interests.length+' интересов':'без выбранных интересов',
-            behaviors.length?behaviors.length+' поведенческих категорий':''
+            behaviors.length?behaviors.length+' поведенческих категорий':'',
+            exclusionCount?exclusionCount+' исключений':''
         ].filter(Boolean);
         const placement=selectedLabels('placementMode')[0]||'Режим не выбран';
         const rows={

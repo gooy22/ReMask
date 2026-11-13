@@ -5,6 +5,7 @@ const remaskModuleControls = (() => {
     const primaryEnums = {mbBuyingType:['campaign','buying_type']};
     const style = document.createElement('style');
     style.textContent = '.rm-module-source,.cr-editor .form-control.rm-module-source,.wf-launch .form-control.rm-module-source{display:none!important}.rm-module-field .rm-meta-visual-actions{display:none!important}.rm-module-pills{display:flex;gap:6px;flex-wrap:wrap;margin:7px 0}.rm-module-choice{display:block;width:100%;text-align:left;padding:8px;border:0;background:transparent;color:inherit;cursor:pointer}.rm-module-results{max-height:240px;overflow:auto;border-radius:8px}.rm-module-results:not(:empty){border:1px solid #384455;padding:4px}.rm-module-pill{border:1px solid #465366;border-radius:14px;background:#263346;color:inherit;padding:5px 10px;cursor:pointer}.rm-module-hint{font-size:12px;opacity:.72;padding:6px}';
+    style.textContent += '.rm-module-exclusion-control{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;width:100%}.rm-module-exclusion-group{min-width:0;padding:12px;border:1px solid #34445a;border-radius:12px;background:rgba(15,23,42,.24)}.rm-module-exclusion-label{display:block;margin:0 0 8px;font-size:12px;font-weight:700;color:#d7e2f1}.rm-module-exclusion-group .form-control{width:100%;min-width:0}.rm-module-exclusion-settings{grid-column:1/-1;display:flex;align-items:center;gap:10px;flex-wrap:wrap}.rm-module-structure{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.rm-module-structure>.rm-module-hint{flex-basis:100%}@media(max-width:640px){.rm-module-exclusion-control{grid-template-columns:minmax(0,1fr)}.rm-module-exclusion-group{padding:10px}}';
     document.head.appendChild(style);
     const key = row => String(typeof row === 'object' ? row?.id ?? row?.key : row);
     const fieldLabels=source=>[...new Set([...Array.from(source.labels||[]),source.closest('.cr-field,.cr-sdk-field,.rm-meta-field')?.querySelector('label')].filter(Boolean))];
@@ -18,7 +19,125 @@ const remaskModuleControls = (() => {
         const node=document.createElement('button');node.type='button';node.className=className;
         node.dataset.remaskTargetChoice='1';node.textContent=text;node.addEventListener('click',action);return node;
     }
+    function attachTargetingExclusions(source) {
+        if(source.dataset.remaskTargetingExclusions==='1')return;
+        source.dataset.remaskTargetingExclusions='1';
+        attachStructure(source,'exclusions','JSON');
+        source.classList.add('rm-module-source');
+        source.closest('.rm-meta-field,.cr-sdk-field')?.classList.add('rm-module-field');
+        const root=document.createElement('div');root.className='rm-module-control rm-module-exclusion-control';
+        const sections=[
+            {key:'interests',lookup:'interests',label:'Исключить интересы',placeholder:'Найти интерес для исключения'},
+            {key:'behaviors',lookup:'behaviors',label:'Исключить поведение',placeholder:'Найти категорию поведения'}
+        ];
+        const descriptor=Object.getOwnPropertyDescriptor(source,'value')||
+            Object.getOwnPropertyDescriptor(source instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,'value');
+        const readRoot=()=>{
+            const raw=String(descriptor.get.call(source)||'').trim();
+            if(!raw)return {};
+            const parsed=JSON.parse(raw);
+            if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))throw new Error('Структура исключений должна быть объектом.');
+            return parsed;
+        };
+        const rowsFor=section=>{
+            try{const rows=readRoot()[section.key];return Array.isArray(rows)?rows:[];}catch{return [];}
+        };
+        function paint(){
+            for(const section of sections){
+                section.pills.replaceChildren();
+                for(const row of rowsFor(section)){
+                    const label=String(row?.name||row?.id||row?.key||'Выбранный пункт');
+                    const pill=button(label+' ×','rm-module-pill',()=>commit(section,rowsFor(section).filter(value=>key(value)!==key(row))));
+                    pill.setAttribute('aria-label','Убрать из исключений: '+label);
+                    section.pills.appendChild(pill);
+                }
+            }
+        }
+        function commit(section,rows){
+            let current;
+            try{current=readRoot();}catch(error){
+                section.status.textContent=error.message||'Исправьте структуру через «Настроить».';
+                return false;
+            }
+            if(rows.length)current[section.key]=rows;
+            else delete current[section.key];
+            source.value=Object.keys(current).length?JSON.stringify(current):'';
+            edited(source);
+            source.dispatchEvent(new Event('input',{bubbles:true}));
+            source.dispatchEvent(new Event('change',{bubbles:true}));
+            return true;
+        }
+        for(const section of sections){
+            const card=document.createElement('div');card.className='rm-module-exclusion-group';
+            const label=document.createElement('label');label.className='rm-module-exclusion-label';label.textContent=section.label;
+            const search=document.createElement('input');search.type='search';search.className='form-control';
+            search.id=source.id+'_exclude_'+section.key;search.placeholder=section.placeholder;search.autocomplete='off';
+            search.setAttribute('role','combobox');search.setAttribute('aria-autocomplete','list');search.setAttribute('aria-expanded','false');
+            search.setAttribute('aria-controls',search.id+'_results');label.htmlFor=search.id;
+            const pills=document.createElement('div');pills.className='rm-module-pills';
+            const results=document.createElement('div');results.className='rm-module-results';results.id=search.id+'_results';results.setAttribute('role','group');
+            const status=document.createElement('div');status.className='rm-module-hint';status.setAttribute('role','status');
+            card.append(label,search,pills,results,status);root.appendChild(card);
+            section.search=search;section.pills=pills;section.results=results;section.status=status;
+            let controller=null,timer=0,generation=0;
+            function choose(row){
+                if(!row||row.id===undefined||row.id===null)return;
+                const current=rowsFor(section);
+                if(!current.some(value=>key(value)===String(row.id))){
+                    if(!commit(section,[...current,{id:String(row.id),name:String(row.name||row.id)}]))return;
+                }
+                controller?.abort();generation++;search.value='';results.replaceChildren();status.textContent='';search.setAttribute('aria-expanded','false');
+            }
+            async function browse(){
+                clearTimeout(timer);controller?.abort();const run=++generation;controller=new AbortController();
+                const q=search.value.trim();results.replaceChildren();status.textContent='Загружаю варианты Meta…';
+                try{
+                    const body=new URLSearchParams({type:section.lookup,q,limit:'100'}).toString();
+                    const options={method:'POST',headers:{
+                        'Content-Type':'application/x-www-form-urlencoded',
+                        'X-ReMask-CSRF':document.querySelector('meta[name="remask-csrf"]')?.content||''
+                    },body,signal:controller.signal};
+                    let data;
+                    if(typeof remaskPrivateTargetingScope==='function'){
+                        data=await apiJson('ajax/metaTemplateTargetingSearch.php',options);
+                    }else{
+                        const response=await fetch('ajax/metaTemplateTargetingSearch.php',options);
+                        const payload=JSON.parse(await response.text());
+                        if(!response.ok||payload.ok!==true)throw new Error(payload.error?.message||'Справочник Meta временно недоступен.');
+                        data=payload.data||{};
+                    }
+                    if(run!==generation||!source.isConnected)return;
+                    const available=Array.isArray(data?.data)?data.data:[];
+                    const selected=new Set(rowsFor(section).map(key));
+                    const rows=available.filter(row=>!selected.has(String(row.id??row.key)));
+                    for(const row of rows.slice(0,100)){
+                        const detail=Array.isArray(row.path)?row.path.join(' › '):'';
+                        results.appendChild(button(String(row.name||row.id)+(detail?' · '+detail:''),'rm-module-choice',()=>choose(row)));
+                    }
+                    search.setAttribute('aria-expanded',results.children.length?'true':'false');
+                    status.textContent=Boolean(data?.truncated)||rows.length>100?'Уточните поиск, чтобы увидеть остальные совпадения.':rows.length?'':'Нет подходящих вариантов.';
+                }catch(error){
+                    if(error.name==='AbortError'||run!==generation)return;
+                    status.textContent=error.message||'Не удалось загрузить варианты Meta.';
+                }
+            }
+            search.addEventListener('focus',()=>{clearTimeout(timer);timer=setTimeout(browse,180);});
+            search.addEventListener('input',()=>{clearTimeout(timer);controller?.abort();generation++;timer=setTimeout(browse,220);});
+            search.addEventListener('blur',()=>clearTimeout(timer));
+            search.addEventListener('keydown',event=>{
+                if(event.key==='Enter'){event.preventDefault();browse();}
+                if(event.key==='ArrowDown'){const first=results.querySelector('button');if(first){event.preventDefault();first.focus();}}
+                if(event.key==='Escape'){clearTimeout(timer);controller?.abort();generation++;results.replaceChildren();status.textContent='';search.setAttribute('aria-expanded','false');}
+            });
+        }
+        const valueDescriptor=Object.getOwnPropertyDescriptor(source,'value');
+        if(valueDescriptor?.configurable){
+            Object.defineProperty(source,'value',{configurable:true,get(){return valueDescriptor.get.call(this);},set(value){valueDescriptor.set.call(this,value);paint();}});
+        }
+        source.addEventListener('change',paint);source.after(root);paint();
+    }
     function attach(source, spec, csv=false) {
+        if(spec?.kind==='targeting_exclusions'){attachTargetingExclusions(source);return;}
         if(source.dataset.remaskModuleControl==='1')return;
         source.dataset.remaskModuleControl='1';source.classList.add('rm-module-source');
         source.closest('.rm-meta-field,.cr-sdk-field')?.classList.add('rm-module-field');
@@ -224,7 +343,12 @@ const remaskModuleControls = (() => {
             const source=document.getElementById(id),spec=metadata.field_controls?.[group]?.[field];
             if(source&&spec){attach(source,spec,format==='csv');choiceLabels(source);}
         }
-        for(const [id,[group,field]] of Object.entries(primaryComplex)){const source=document.getElementById(id);if(source&&metadata.schema)attachStructure(source,field,String(metadata.schema[group]?.fields?.[field]||'JSON'));}
+        for(const [id,[group,field]] of Object.entries(primaryComplex)){
+            const source=document.getElementById(id);if(!source||!metadata.schema)continue;
+            const spec=metadata.field_controls?.[group]?.[field];
+            if(spec?.kind==='targeting_exclusions'){attach(source,spec);choiceLabels(source);}
+            else attachStructure(source,field,String(metadata.schema[group]?.fields?.[field]||'JSON'));
+        }
         for(const [id,[group,field]] of Object.entries(primaryEnums)){
             const select=document.getElementById(id),options=metadata.schema?.[group]?.enums?.[field];
             if(!select||!options?.length||select.dataset.remaskModuleEnum==='1')continue;
