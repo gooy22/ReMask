@@ -708,7 +708,8 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
             for(const node of Array.from(body?.childNodes||[]))placementsHost.appendChild(node);
             placements.remove();
         }
-        const targeting=card.querySelector("#wfTargetingOptions");
+        const targetingRoot=card.querySelector("#wfTargetingOptions");
+        const targeting=targetingRoot?.closest("details.wf-target-catalog-disclosure")||targetingRoot;
         const estimate=card.querySelector(".wf-audience-estimate");
         const ordered=[age,inline,targeting,estimate,delivery].filter(Boolean);
         for(const section of ordered)card.appendChild(section);
@@ -1164,9 +1165,127 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
         const note=meta.querySelector('.rm-meta-head .rm-meta-note');
         if(note)note.textContent='Параметры, которых нет в основных настройках. Значения участвуют в проверке и сборке черновика.';
         const estimate=card.querySelector(':scope > .wf-audience-estimate');
-        const target=card.querySelector(':scope > #wfTargetingOptions');
+        const target=card.querySelector(':scope > details.wf-target-catalog-disclosure')
+            ||card.querySelector(':scope > #wfTargetingOptions');
         const anchor=estimate||target||card.querySelector(':scope > .wf-audience-inline');
         if(anchor&&anchor.nextElementSibling!==disclosure)anchor.after(disclosure);
+    }
+
+    function ensureTargetingDisclosure(card, root) {
+        let disclosure=root.closest('details.wf-target-catalog-disclosure')
+            ||card.querySelector(':scope > details.wf-target-catalog-disclosure');
+        if(!disclosure){
+            disclosure=document.createElement('details');
+            disclosure.className='wf-target-catalog-disclosure';
+            const summary=document.createElement('summary');summary.className='wf-target-catalog-summary';
+            const title=document.createElement('span');title.textContent='Расширенные настройки Meta';
+            const hint=document.createElement('span');hint.className='wf-target-catalog-hint';
+            summary.append(title,hint);
+            const body=document.createElement('div');body.className='wf-target-catalog-body';
+            disclosure.append(summary,body);
+            if(root.parentElement)root.before(disclosure);else card.appendChild(disclosure);
+            body.appendChild(root);
+        }else{
+            const body=disclosure.querySelector(':scope > .wf-target-catalog-body');
+            if(body&&root.parentElement!==body)body.appendChild(root);
+        }
+        const fields=Array.from(root.querySelectorAll('[data-wf-target-field]')).filter(field=>!field.hidden);
+        const groups=Array.from(root.querySelectorAll('[data-wf-target-group]')).filter(group=>!group.hidden);
+        const hint=disclosure.querySelector('.wf-target-catalog-hint');
+        const hintText=fields.length?fields.length+' полей · '+groups.length+' категорий':'Устройства · размещения · демография';
+        if(hint&&hint.textContent!==hintText)hint.textContent=hintText;
+        return disclosure;
+    }
+
+    function setupAdStagePolish() {
+        const card=$('creativeName')?.closest('.launch-card');if(!card)return;
+        const addSectionLabel=(fieldId,key,label)=>{
+            const row=$(fieldId)?.closest('.row');
+            if(!row||row.dataset.wfAdSection)return;
+            const heading=document.createElement('div');heading.className='wf-ad-section-title';
+            heading.dataset.wfAdSection=key;heading.textContent=label;
+            row.before(heading);row.dataset.wfAdSection=key;
+        };
+        addSectionLabel('page','identity','Идентичность и названия');
+        addSectionLabel('message','content','Текст и действие');
+        addSectionLabel('creativeFormat','media','Формат и медиа');
+        const columns=['description','urlTags'].map(id=>$(id)?.closest('[class*="col-"]')).filter(column=>column&&card.contains(column));
+        if(!columns.length)return;
+        let disclosure=card.querySelector(':scope > details.wf-ad-advanced-disclosure');
+        if(!disclosure){
+            disclosure=document.createElement('details');disclosure.className='wf-ad-advanced-disclosure';
+            const summary=document.createElement('summary');
+            const title=document.createElement('span');title.textContent='Дополнительные параметры';
+            const hint=document.createElement('span');hint.className='wf-ad-advanced-hint';hint.textContent='Описание · UTM';
+            summary.append(title,hint);
+            const body=document.createElement('div');body.className='wf-ad-advanced-body';
+            disclosure.append(summary,body);
+            const anchor=$('creativeFormat')?.closest('.row');
+            if(anchor&&anchor.parentElement===card)anchor.after(disclosure);else card.appendChild(disclosure);
+        }
+        const body=disclosure.querySelector(':scope > .wf-ad-advanced-body');
+        for(const column of columns)if(body&&column.parentElement!==body)body.appendChild(column);
+    }
+
+    function setupPreviewPlacementLabels() {
+        const select=$('remaskPreviewFormat');if(!select)return;
+        const prefixes=[['AUDIENCE NETWORK','Audience Network'],['FACEBOOK','Facebook'],['INSTAGRAM','Instagram'],
+            ['MESSENGER','Messenger'],['WHATSAPP','WhatsApp'],['THREADS','Threads'],['OCULUS','VR'],['BIZ DISCO','Meta'],['GROUPS','Группы']];
+        const platformFor=value=>{
+            const text=String(value||'').toUpperCase().replaceAll('_',' ').trim();
+            return prefixes.find(([key])=>text.startsWith(key))?.[1]||'Meta';
+        };
+        const optionLabel=value=>{
+            const text=String(value||'').toUpperCase().replaceAll('_',' ').trim();if(!text)return '';
+            const words=text.split(/\s+/),has=word=>words.includes(word),platform=platformFor(text);
+            const surface=[[['REELS'],'Reels'],[['STORY','STORIES'],'Истории'],[['FEED'],'Лента'],
+                [['EXPLORE'],'Интересное'],[['SEARCH','SERP'],'Поиск'],[['MARKETPLACE'],'Marketplace'],
+                [['GROUP','GROUPS'],'Группы'],[['PROFILE'],'Профиль'],[['WATCH'],'Watch'],
+                [['INBOX'],'Входящие'],[['CHANNEL'],'Канал'],[['STATUS'],'Статус'],
+                [['INSTANT','ARTICLE'],'Instant Articles'],[['RIGHT','COLUMN'],'Правая колонка']].find(([tokens])=>tokens.some(has))?.[1];
+            const media=[[['INSTREAM'],'In-stream'],[['REWARDED'],'Rewarded video'],[['BANNER'],'Баннер'],
+                [['INTERSTITIAL'],'Полноэкранный формат'],[['NATIVE'],'Нативный формат'],[['VIDEO'],'Видео'],
+                [['MEDIUM','RECTANGLE'],'Прямоугольный формат']].find(([tokens])=>tokens.some(has))?.[1];
+            const device=has('CTV')||has('TV')?'TV':has('DESKTOP')?'Компьютер'
+                :has('MOBILE')||has('MSITE')?'Мобильное':has('IOS')?'iOS':has('ANDROID')?'Android':has('WEB')?'Web':'';
+            const parts=[platform,surface,media,device].filter(Boolean);
+            return [...new Set(parts)].join(' · ')||text.toLowerCase().replace(/\b\w/g,char=>char.toUpperCase());
+        };
+        const selected=select.value,options=Array.from(select.options);
+        if(select.dataset.wfPlacementGrouped!=='1'){
+            const groups=new Map(),loose=[];
+            for(const option of options){
+                if(!option.value){loose.push(option);continue;}
+                const platform=platformFor(option.value),label=optionLabel(option.value);
+                if(option.textContent!==label)option.textContent=label;
+                let group=groups.get(platform);
+                if(!group){group=document.createElement('optgroup');group.label=platform;groups.set(platform,group);}
+                group.appendChild(option);
+            }
+            select.replaceChildren(...loose,...groups.values());
+            select.dataset.wfPlacementGrouped='1';
+        }else{
+            const groups=new Map(Array.from(select.children).filter(child=>child.tagName==='OPTGROUP').map(group=>[group.label,group]));
+            for(const option of options){
+                if(!option.value){if(option.parentElement!==select)select.insertBefore(option,select.firstChild);continue;}
+                const label=optionLabel(option.value);
+                if(option.textContent!==label)option.textContent=label;
+                const platform=platformFor(option.value);
+                let group=groups.get(platform);
+                if(!group){group=document.createElement('optgroup');group.label=platform;groups.set(platform,group);select.appendChild(group);}
+                if(option.parentElement!==group)group.appendChild(option);
+            }
+        }
+        if(selected)select.value=selected;
+        const label=document.querySelector('label[for="remaskPreviewFormat"]')||select.parentElement?.querySelector('label');
+        if(label&&label.textContent.trim()!=='Формат предпросмотра')label.textContent='Формат предпросмотра';
+        const stage=select.closest('.launch-card');let node=select.parentElement,preview=null;
+        while(node&&node!==stage){
+            const match=getComputedStyle(node).backgroundColor.match(/rgba?\((\d+)[, ]+\s*(\d+)[, ]+\s*(\d+)/);
+            if(match){const [r,g,b]=match.slice(1).map(Number);if((r*299+g*587+b*114)/1000<100){preview=node;break;}}
+            node=node.parentElement;
+        }
+        preview?.classList.add('wf-preview-surface');
     }
 
     function setupAudienceTargeting() {
@@ -1195,11 +1314,12 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
             empty.textContent='Каталог прямого выбора Meta сейчас недоступен. Другие доступные параметры остаются в разделе «Дополнительные настройки рекламы».';
             root.append(head,list,empty);
         }
+        let targetView=root.closest('details.wf-target-catalog-disclosure')||root;
         const audienceSurface=adsetCard.querySelector(':scope > .wf-audience-inline');
         if(audienceSurface){
-            if(audienceSurface.nextElementSibling!==root)audienceSurface.after(root);
+            if(audienceSurface.nextElementSibling!==targetView)audienceSurface.after(targetView);
             const estimate=adsetCard.querySelector('.wf-audience-estimate');
-            if(estimate&&root.nextElementSibling!==estimate)root.after(estimate);
+            if(estimate&&targetView.nextElementSibling!==estimate)targetView.after(estimate);
         }else{
             const anchors=['ageMin','geoQuery','interestQuery','behaviorQuery','languageQuery']
                 .map(id=>$(id)?.closest('.row')||$(id)?.closest('[data-remaskLanguageTargeting]'))
@@ -1209,8 +1329,8 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
             if(audienceAnchor&&adsetCard.contains(audienceAnchor))anchors.push(audienceAnchor);
             anchors.sort((a,b)=>a===b?0:(a.compareDocumentPosition(b)&Node.DOCUMENT_POSITION_FOLLOWING?-1:1));
             const anchor=anchors[anchors.length-1];
-            if(anchor){if(anchor.nextElementSibling!==root)anchor.after(root);}
-            else if(root.parentElement!==adsetCard)adsetCard.appendChild(root);
+            if(anchor){if(anchor.nextElementSibling!==targetView)anchor.after(targetView);}
+            else if(targetView.parentElement!==adsetCard)adsetCard.appendChild(targetView);
         }
         const rowsByGroup=new Map(wfTargetGroups.map(group=>[group.key,root.querySelector('[data-wf-target-group="'+group.key+'"] .wf-target-fields')]));
         let available=0,sourceCount=0;
@@ -1253,6 +1373,7 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
             empty.hidden=available>0;
             if(sourceCount===0)setText(empty,'Выберите профиль и рекламный кабинет на шаге «Ресурсы», затем загрузите данные Meta. Здесь появятся прямые настройки географии, интересов, поведения, языков, размещений, устройств и операционных систем.');
         }
+        ensureTargetingDisclosure(adsetCard,root);
         root.hidden=false;
         root.dataset.wfReady=visibleGroups?'1':'0';
         updateAudienceTargetingSummary();
@@ -1431,7 +1552,8 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
         disclosure.append(summary,body);
         estimate.classList.add('wf-audience-estimate-content');
         estimate.dataset.wfStudioMounted='1';
-        const targeting=$('wfTargetingOptions');
+        const targetingRoot=$('wfTargetingOptions');
+        const targeting=targetingRoot?.closest('details.wf-target-catalog-disclosure')||targetingRoot;
         const advanced=$('launchMetaAllFields');
         if(targeting&&audienceCard.contains(targeting))targeting.after(disclosure);
         else if(advanced&&audienceCard.contains(advanced))advanced.before(disclosure);
@@ -1750,6 +1872,11 @@ function setupVisualChoices() {
             'API usage: no data yet.':'Данных об использовании API пока нет.', 'FB profile':'Профиль FB', 'Currency':'Валюта',
             'Funding source':'Способ оплаты', 'Type':'Тип', 'Account':'Аккаунт', 'Spend cap':'Лимит расходов', 'Status':'Статус',
             'Select RK and check funding.':'Выберите РК для проверки оплаты.', 'No review yet.':'План ещё не подготовлен.', 'No launch yet.':'Реклама ещё не создана.',
+            'RK':'РК', 'Infrastructure readiness':'Готовность инфраструктуры', 'Page / IG':'Страница / Instagram',
+            'Pixel':'Пиксель', 'Funding':'Оплата', 'Warnings / Issues':'Предупреждения',
+            'INFRASTRUCTURE READINESS':'Готовность инфраструктуры', 'PAGE / IG':'Страница / Instagram',
+            'PIXEL':'Пиксель', 'FUNDING':'Оплата', 'WARNINGS / ISSUES':'Предупреждения',
+            'First-stage safety:':'Режим PAUSED:', 'Campaign, Ad Set and Ad will be created as':'Кампания, группа и объявление сохранятся со статусом',
             'No active job.':'Нет активной задачи.', 'No job.':'Задач пока нет.', 'Recent jobs':'Недавние задачи', 'Select bundle':'Выберите сохранённые настройки',
             'No pixel':'Без пикселя', 'Not required':'Не требуется', 'Select one RK':'Выберите один РК', 'No connected Instagram':'Нет связанного Instagram',
             'No existing Meta asset selected.':'Существующее медиа Meta не выбрано.',
@@ -1769,6 +1896,8 @@ function setupVisualChoices() {
         setupStudioTargetTabs();
         setupMetaGroupTabs();
         mountAudienceEstimate(launch);
+        setupAdStagePolish();
+        setupPreviewPlacementLabels();
         updateAudienceTargetingSummary();
         updateLiveSummary();
         updateCreativeSummary();
@@ -2044,6 +2173,163 @@ body.wf-autoupload-open section[role="dialog"][aria-modal="true"] [role="alert"]
   .wf-launch.wf-studio-v3 .wf-target-fields{grid-template-columns:minmax(0,1fr)!important}
   .wf-launch.wf-studio-v3 .wf-target-tab{padding:7px 8px!important;font-size:10px!important}
   .wf-launch.wf-studio-v3 .wf-meta-extra-summary{align-items:flex-start!important;flex-direction:column!important;gap:2px!important}
+}
+`;
+        studioV3Style.textContent += `
+/* AutoUpload V15: neutral shell, compact hierarchy, readable review and ad controls. */
+body.app-shell.wf-autoupload-open{
+  --app-bg:#f3f5f6;--app-sidebar:#171d21;--app-topbar:#171d21;
+  --app-panel:#fff;--app-panel-2:#f8fafb;--app-panel-3:#eef2f3;
+  --app-border:#dfe5e7;--app-border-strong:#c8d2d5;
+  --app-text:#1c272e;--app-muted:#68777e;--app-muted-2:#7d8a90;
+  --app-blue:#0c8179;--app-blue-2:#0b6d67;--app-green:#0d806e;--app-green-bg:#e8f4f0;
+  --app-warn:#8c681d;--app-warn-bg:#fff6df;--app-danger:#ad4d56;--app-danger-bg:#faeeee;
+  background:#f3f5f6!important;color:#1c272e!important;
+}
+body.app-shell.wf-autoupload-open .app-sidebar,
+body.app-shell.wf-autoupload-open .app-topbar{background:#171d21!important;border-color:#293337!important}
+body.app-shell.wf-autoupload-open .app-brand-mark{background:#0e837c!important;box-shadow:none!important}
+body.app-shell.wf-autoupload-open .app-nav a.active{position:relative;background:#202b2e!important;color:#e9fbf8!important}
+body.app-shell.wf-autoupload-open .app-nav a.active::before{content:"";position:absolute;inset:7px auto 7px 0;width:2px;border-radius:2px;background:#36b8a8}
+body.app-shell.wf-autoupload-open .app-avatar{background:#25413d!important;color:#ddf8f2!important}
+body.app-shell.wf-autoupload-open .app-connection{background:#20292c!important;border-color:#344145!important;color:#c1d8d4!important}
+body.app-shell.wf-autoupload-open .app-main{background:#f3f5f6!important;color:#1c272e!important}
+body.app-shell.wf-autoupload-open .app-page-head .app-title{color:#1c272e!important}
+body.app-shell.wf-autoupload-open .app-page-head .app-subtitle{color:#68777e!important}
+body.app-shell.wf-autoupload-open .app-page-head .app-eyebrow{color:#637a78!important}
+body.app-shell.wf-autoupload-open .launch-wrap,
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3{color:#1c272e!important;background:transparent!important}
+body.app-shell.wf-autoupload-open .launch-wrap .launch-card,
+body.app-shell.wf-autoupload-open .launch-wrap .launch-card.wf-step-card{
+  background:#fff!important;border:1px solid #dfe5e7!important;border-radius:15px!important;
+  box-shadow:0 7px 24px rgba(27,43,46,.055)!important;
+}
+body.app-shell.wf-autoupload-open .launch-wrap .launch-card h4,
+body.app-shell.wf-autoupload-open .launch-wrap .launch-card h5,
+body.app-shell.wf-autoupload-open .launch-wrap .launch-card h6{color:#1c272e!important}
+body.app-shell.wf-autoupload-open .launch-wrap :is(input:not([type=checkbox]):not([type=radio]),select,textarea,.form-control){
+  background:#fff!important;color:#1c272e!important;border:1px solid #d4dddf!important;border-radius:9px!important;box-shadow:none!important;
+}
+body.app-shell.wf-autoupload-open .launch-wrap :is(input,select,textarea,.form-control):focus{
+  border-color:#15978d!important;box-shadow:0 0 0 3px rgba(21,151,141,.13)!important;
+}
+body.app-shell.wf-autoupload-open .launch-wrap :is(input,select,textarea,.form-control):disabled{
+  background:#f2f5f5!important;color:#7b888d!important;border-color:#e1e6e7!important;
+}
+body.app-shell.wf-autoupload-open .launch-wrap label{color:#435159!important}
+body.app-shell.wf-autoupload-open .launch-wrap option{background:#fff!important;color:#1c272e!important}
+body.app-shell.wf-autoupload-open .launch-wrap .btn-primary,
+body.app-shell.wf-autoupload-open .launch-wrap .btn-info,
+body.app-shell.wf-autoupload-open .launch-wrap .btn-success{background:#0d8179!important;border-color:#0d8179!important;color:#fff!important}
+body.app-shell.wf-autoupload-open .launch-wrap .btn-primary:hover,
+body.app-shell.wf-autoupload-open .launch-wrap .btn-info:hover,
+body.app-shell.wf-autoupload-open .launch-wrap .btn-success:hover{background:#0a7069!important;border-color:#0a7069!important}
+body.app-shell.wf-autoupload-open .launch-wrap .btn-secondary,
+body.app-shell.wf-autoupload-open .launch-wrap .btn-outline-secondary{background:#fff!important;border:1px solid #d4dddf!important;color:#34434a!important}
+body.app-shell.wf-autoupload-open .launch-wrap .btn-dark{background:#2b3438!important;border-color:#2b3438!important;color:#fff!important}
+.wf-launch.wf-studio-v3>.wf-step-nav a[aria-current="step"]{border-bottom-color:#0d8179!important;color:#1c272e!important}
+.wf-launch.wf-studio-v3>.wf-step-nav a[aria-current="step"] .wf-step-index{background:#0d8179!important;border-color:#0d8179!important;color:#fff!important}
+.wf-launch.wf-studio-v3 .wf-step-progress span{background:#1da69a!important}
+.wf-launch.wf-studio-v3 .wf-choice-option{
+  min-height:52px!important;padding:10px 12px!important;border:1px solid #dfe5e7!important;
+  border-radius:10px!important;background:#f8fafb!important;color:#27363d!important;box-shadow:none!important;
+}
+.wf-launch.wf-studio-v3 .wf-choice-option:hover{border-color:#b8cdca!important;background:#f2f8f7!important;color:#1c3e3b!important}
+.wf-launch.wf-studio-v3 .wf-choice-option.is-selected{
+  border-color:#168e85!important;background:#eaf6f3!important;color:#164d49!important;
+  box-shadow:inset 0 0 0 1px rgba(22,142,133,.12)!important;
+}
+.wf-launch.wf-studio-v3 .wf-choice-icon{border-color:#d8e3e2!important;background:#edf3f2!important;color:#52706c!important}
+.wf-launch.wf-studio-v3 .wf-choice-option.is-selected .wf-choice-icon{border-color:#b5ded7!important;background:#d9f0eb!important;color:#08766e!important}
+.wf-launch.wf-studio-v3 .wf-choice-check{background:#0d8179!important}
+.wf-launch.wf-studio-v3 .wf-choice-copy small{color:#68777e!important}
+.wf-launch.wf-studio-v3 .wf-choice-segments{border-color:#dfe5e7!important;background:#f3f6f6!important}
+.wf-launch.wf-studio-v3 .wf-choice-segments .wf-choice-option{background:transparent!important}
+.wf-launch.wf-studio-v3 .wf-choice-segments .wf-choice-option.is-selected{background:#fff!important}
+.wf-launch.wf-studio-v3 .wf-audience-inline .wf-audience-field,
+.wf-launch.wf-studio-v3 .wf-target-field{min-width:0!important}
+.wf-launch.wf-studio-v3 #wf-launch-audience .wf-audience-inline .wf-audience-field :is(input,select,textarea,[role=combobox],.rm-module-search),
+.wf-launch.wf-studio-v3 #wf-launch-audience .wf-target-field .rm-module-control :is(input,select,textarea,[role=combobox]){
+  border:1px solid #d4dddf!important;border-bottom:1px solid #d4dddf!important;border-radius:9px!important;background:#fff!important;color:#1c272e!important;
+}
+.wf-launch.wf-studio-v3 #wf-launch-audience .wf-audience-inline .wf-audience-field::before,
+.wf-launch.wf-studio-v3 #wf-launch-audience .wf-audience-inline .wf-audience-field::after,
+.wf-launch.wf-studio-v3 #wf-launch-audience .wf-audience-inline .wf-audience-field .rm-module-control::before,
+.wf-launch.wf-studio-v3 #wf-launch-audience .wf-audience-inline .wf-audience-field .rm-module-control::after{
+  content:none!important;display:none!important;border:0!important;box-shadow:none!important;
+}
+body.app-shell.wf-autoupload-open .launch-wrap .search-results:empty{
+  display:none!important;min-height:0!important;height:0!important;margin:0!important;padding:0!important;border:0!important;background:transparent!important;box-shadow:none!important;
+}
+body.app-shell.wf-autoupload-open .launch-wrap .search-results:not(:empty){
+  max-height:220px!important;overflow:auto!important;background:#fff!important;border:1px solid #dfe5e7!important;border-radius:9px!important;box-shadow:0 8px 20px rgba(27,43,46,.08)!important;
+}
+.wf-target-catalog-disclosure,.wf-ad-advanced-disclosure{
+  margin:14px 0 0!important;border:1px solid #dfe5e7!important;border-radius:11px!important;background:#f8fafb!important;box-shadow:none!important;overflow:hidden!important;
+}
+.wf-target-catalog-summary,.wf-ad-advanced-disclosure>summary{
+  display:flex!important;align-items:center!important;justify-content:space-between!important;gap:12px!important;
+  min-height:44px!important;padding:11px 13px!important;list-style:none!important;cursor:pointer!important;color:#26363d!important;font-size:12px!important;font-weight:650!important;
+}
+.wf-target-catalog-summary::-webkit-details-marker,.wf-ad-advanced-disclosure>summary::-webkit-details-marker{display:none!important}
+.wf-target-catalog-hint,.wf-ad-advanced-hint{color:#738187!important;font-size:10px!important;font-weight:500!important}
+.wf-target-catalog-body{padding:0 13px 13px!important}
+.wf-launch.wf-studio-v3 #wfTargetingOptions{
+  margin:0!important;padding:13px 0 0!important;border:0!important;border-radius:0!important;background:transparent!important;box-shadow:none!important;
+}
+.wf-launch.wf-studio-v3 #wfTargetingOptions .wf-target-head h6{color:#1c272e!important}
+.wf-launch.wf-studio-v3 #wfTargetingOptions .wf-target-head p{color:#68777e!important}
+.wf-launch.wf-studio-v3 #wfTargetingOptions .wf-target-tabs{border-color:#dfe5e7!important}
+.wf-launch.wf-studio-v3 #wfTargetingOptions .wf-target-tab{color:#64737a!important;background:transparent!important;border-color:transparent!important}
+.wf-launch.wf-studio-v3 #wfTargetingOptions .wf-target-tab[aria-selected="true"]{color:#0b6f68!important;border-bottom-color:#0d8179!important;background:transparent!important}
+.wf-launch.wf-studio-v3 #wfTargetingOptions .wf-target-tab-count{background:#eef3f3!important;color:#56686d!important}
+.wf-launch.wf-studio-v3 #wfTargetingOptions .wf-target-panel{border:1px solid #e1e7e8!important;border-radius:10px!important;background:#fff!important}
+.wf-launch.wf-studio-v3 #wfTargetingOptions .wf-target-panel-heading{color:#2b393f!important}
+.wf-launch.wf-studio-v3 #wfTargetingOptions .wf-target-note{color:#718087!important}
+.wf-launch.wf-studio-v3 #wfTargetingOptions .wf-target-field>label{color:#536168!important}
+.wf-launch.wf-studio-v3 #wfTargetingOptions .wf-target-field input,
+.wf-launch.wf-studio-v3 #wfTargetingOptions .wf-target-field select{background:#fff!important;color:#1c272e!important;border:1px solid #d4dddf!important}
+.wf-launch.wf-studio-v3 #wf-launch-ad .wf-ad-section-title{
+  margin:18px 0 8px!important;padding-top:13px!important;border-top:1px solid #e8edee!important;
+  color:#64737a!important;font-size:10px!important;font-weight:700!important;letter-spacing:.06em!important;text-transform:uppercase!important;
+}
+.wf-launch.wf-studio-v3 #wf-launch-ad .wf-ad-section-title[data-wf-ad-section="identity"]{margin-top:5px!important;border-top:0!important;padding-top:0!important}
+.wf-launch.wf-studio-v3 #wf-launch-ad .row:has(#headline){
+  display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr))!important;gap:12px!important;margin:8px 0 0!important;
+}
+.wf-launch.wf-studio-v3 #wf-launch-ad .row:has(#headline)>[class*="col-"]{width:auto!important;max-width:none!important;flex:none!important;padding:0!important}
+.wf-launch.wf-studio-v3 #wf-launch-ad .row:has(#creativeFormat){
+  display:grid!important;grid-template-columns:minmax(190px,.8fr) minmax(280px,1.2fr)!important;gap:12px!important;margin:8px 0 0!important;
+}
+.wf-launch.wf-studio-v3 #wf-launch-ad .row:has(#creativeFormat)>[class*="col-"]{width:auto!important;max-width:none!important;flex:none!important;padding:0!important}
+.wf-ad-advanced-body{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:12px!important;padding:0 13px 13px!important}
+.wf-ad-advanced-body>[class*="col-"]{width:auto!important;max-width:none!important;flex:none!important;padding:0!important}
+.wf-launch.wf-studio-v3 .wf-preview-surface{
+  margin-top:14px!important;padding:15px!important;border:1px solid #dfe5e7!important;border-radius:12px!important;background:#f8fafb!important;color:#1c272e!important;box-shadow:none!important;
+}
+.wf-launch.wf-studio-v3 .wf-preview-surface :is(h1,h2,h3,h4,h5,label,p,small,span){color:#405159!important}
+.wf-launch.wf-studio-v3 .wf-preview-surface :is(select,input,textarea){background:#fff!important;color:#1c272e!important;border:1px solid #d4dddf!important}
+.wf-launch.wf-studio-v3 #wf-launch-review .job-table{
+  overflow:hidden!important;border:1px solid #dfe5e7!important;border-radius:10px!important;background:#fff!important;color:#35434a!important;border-collapse:separate!important;border-spacing:0!important;
+}
+.wf-launch.wf-studio-v3 #wf-launch-review .job-table thead th,
+.wf-launch.wf-studio-v3 #wf-launch-review .job-table thead td{
+  background:#f0f4f4!important;color:#57686e!important;border-bottom:1px solid #dfe5e7!important;font-size:9px!important;letter-spacing:.04em!important;
+}
+.wf-launch.wf-studio-v3 #wf-launch-review .job-table tbody td{background:#fff!important;color:#3c4a50!important;border-bottom:1px solid #e8edee!important}
+.wf-launch.wf-studio-v3 #wf-launch-review .job-table tbody tr:hover td{background:#f8fbfa!important}
+body.app-shell.wf-autoupload-open .launch-wrap .status-box,
+body.app-shell.wf-autoupload-open .launch-wrap #launchResult,
+body.app-shell.wf-autoupload-open .launch-wrap #reviewStatus{
+  min-height:44px!important;padding:12px 13px!important;border:1px solid #dfe5e7!important;border-radius:10px!important;background:#f8fafb!important;color:#66767c!important;
+}
+.wf-launch.wf-studio-v3 #wf-launch-review .wf-card-disclosure{border:1px solid #dfe5e7!important;border-radius:11px!important;background:#f8fafb!important}
+.wf-launch.wf-studio-v3 #wf-launch-review .wf-card-disclosure>summary{min-height:44px!important;padding:10px 13px!important;background:transparent!important;color:#26363d!important}
+.wf-launch.wf-studio-v3 #wf-launch-review .wf-card-disclosure[open]>.wf-card-disclosure-body{padding:12px 13px!important;border-top:1px solid #e4e9ea!important;background:#fff!important}
+@media(max-width:720px){
+  .wf-launch.wf-studio-v3 #wf-launch-ad .row:has(#headline){grid-template-columns:repeat(2,minmax(0,1fr))!important}
+  .wf-launch.wf-studio-v3 #wf-launch-ad .row:has(#creativeFormat){grid-template-columns:minmax(0,1fr)!important}
+  .wf-ad-advanced-body{grid-template-columns:minmax(0,1fr)!important}
 }
 `;
         function safeEnhance(name, task) {
