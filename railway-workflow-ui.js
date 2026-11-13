@@ -571,6 +571,95 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
 `;
     document.head.appendChild(style);
 
+    const studioStyle=document.createElement('style');
+    studioStyle.textContent=`
+    /* REMASK_AUTUPLOAD_STUDIO_COMPOSITION_V2 */
+    .wf-launch.wf-studio-v2{--studio-surface:#121a26;--studio-surface-2:#182333;--studio-line:rgba(163,185,215,.14);--studio-line-strong:rgba(163,185,215,.24);--studio-text:#eef3fa;--studio-muted:#98a9be;--studio-blue:#59a6ff;--studio-violet:#8c78ff}
+    .wf-launch.wf-studio-v2>.app-page-head{min-height:112px;padding:22px 26px!important;border-radius:18px!important;border-color:var(--studio-line)!important;background:linear-gradient(115deg,#18283c 0%,#151d2c 68%,#211d37 100%)!important;box-shadow:0 16px 42px rgba(2,8,17,.20)!important}
+    .wf-launch.wf-studio-v2>.app-page-head::after{display:none!important}
+    .wf-launch.wf-studio-v2>.app-page-head h1,.wf-launch.wf-studio-v2>.app-page-head h2{font-size:27px!important;letter-spacing:-.04em!important}
+    .wf-launch.wf-studio-v2>.app-page-head p{max-width:680px;font-size:12px!important}
+    .wf-launch.wf-studio-v2>.wf-step-nav{position:relative;display:flex;align-items:center;gap:6px;padding:12px 0 10px!important;border:0!important;background:transparent!important;overflow:visible}
+    .wf-launch.wf-studio-v2>.wf-step-nav a{position:relative;flex:1;min-width:0;min-height:44px;padding:7px 10px;border:1px solid transparent;border-radius:12px;background:transparent;color:#9eafc4}
+    .wf-launch.wf-studio-v2>.wf-step-nav a:not(:last-child)::after{right:-8px;top:50%;width:10px;background:rgba(142,165,193,.2)}
+    .wf-launch.wf-studio-v2>.wf-step-nav a.is-current{border-color:rgba(99,165,255,.22);background:linear-gradient(100deg,rgba(62,139,230,.15),rgba(133,108,236,.08));color:#f1f6fd;box-shadow:none}
+    .wf-launch.wf-studio-v2>.wf-step-nav a.is-complete .wf-step-index{border-color:rgba(91,195,151,.45);background:rgba(52,151,115,.12);color:#9ee4c3}
+    .wf-step-progress{height:2px;margin:-2px 0 12px;overflow:hidden;border-radius:99px;background:rgba(148,173,206,.12)}
+    .wf-step-progress>span{display:block;width:var(--wf-step-progress,20%);height:100%;border-radius:inherit;background:linear-gradient(90deg,var(--studio-blue),var(--studio-violet));transition:width .22s ease}
+    .wf-launch.wf-studio-v2>.launch-card.wf-step-card{margin:0 0 14px!important;padding:24px 26px!important;border:1px solid var(--studio-line)!important;border-radius:18px!important;background:linear-gradient(150deg,rgba(20,30,44,.98),rgba(14,22,34,.98))!important;box-shadow:0 16px 38px rgba(2,8,17,.17)!important}
+    .wf-launch.wf-studio-v2>.launch-card.wf-step-card[hidden],.wf-launch.wf-studio-v2>.wf-step-card[hidden]{display:none!important}
+    .wf-launch.wf-studio-v2 .wf-step-card:not(.is-current-step){display:none!important}
+    .wf-launch.wf-studio-v2 .wf-step-context{margin:-12px 0 21px!important;color:var(--studio-muted)!important;font-size:12px!important;line-height:1.55}
+    .wf-launch.wf-studio-v2 .wf-section-heading{margin:24px 0 12px!important;color:#a8bfdc!important;font-size:10px!important;letter-spacing:.14em}
+    .wf-launch.wf-studio-v2 .wf-resource-utilities{margin:18px 0 0;border:1px solid var(--studio-line);border-radius:14px;background:rgba(6,13,23,.28)}
+    .wf-launch.wf-studio-v2 .wf-resource-utilities>summary{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:52px;padding:12px 15px;cursor:pointer;list-style:none;color:#dce6f3}
+    .wf-launch.wf-studio-v2 .wf-resource-utilities>summary::-webkit-details-marker{display:none}
+    .wf-launch.wf-studio-v2 .wf-resource-utilities>summary strong{font-size:12px}
+    .wf-launch.wf-studio-v2 .wf-resource-utilities>summary span{color:#8fa2ba;font-size:10px}
+    .wf-launch.wf-studio-v2 .wf-resource-utilities-body{display:grid;gap:8px;padding:0 12px 12px}
+    .wf-launch.wf-studio-v2 .wf-resource-utility-card{min-width:0;margin:0!important;padding:0!important;border:0!important;background:transparent!important;box-shadow:none!important}
+    .wf-launch.wf-studio-v2 .wf-resource-utility>summary{padding:12px 14px;border:1px solid rgba(151,177,211,.11);border-radius:10px;background:rgba(20,30,44,.72);color:#cbd7e7;font-size:11px;cursor:pointer}
+    .wf-launch.wf-studio-v2 .wf-resource-utility-content{padding:12px 10px 6px}
+    .wf-launch.wf-studio-v2 .wf-profile-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin:10px 0 14px}
+    .wf-launch.wf-studio-v2 .wf-profile-grid label{min-width:0;min-height:48px;margin:0!important;padding:10px 13px;border:1px solid var(--studio-line);border-radius:12px;background:rgba(7,14,24,.48);color:#dce6f3}
+    .wf-launch.wf-studio-v2 .wf-profile-grid label:has(input:checked){border-color:rgba(89,166,255,.55);background:rgba(50,111,183,.17)}
+    .wf-launch.wf-studio-v2 .wf-profile-name{overflow-wrap:anywhere}
+    .wf-launch.wf-studio-v2 .wf-profile-native,.wf-launch.wf-studio-v2 .wf-account-native{display:none!important}
+    .wf-launch.wf-studio-v2 .wf-account-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin:12px 0}
+    .wf-launch.wf-studio-v2 .wf-account-choice{display:flex!important;align-items:center;gap:11px;min-height:58px;margin:0!important;padding:11px 13px!important;border:1px solid var(--studio-line);border-radius:12px;background:rgba(7,14,24,.48);cursor:pointer;transition:border-color .16s ease,background .16s ease}
+    .wf-launch.wf-studio-v2 .wf-account-choice:has(input:checked){border-color:rgba(89,166,255,.58);background:linear-gradient(115deg,rgba(40,116,190,.19),rgba(105,86,191,.09))}
+    .wf-launch.wf-studio-v2 .wf-account-choice input{flex:0 0 16px;width:16px;height:16px;margin:0;accent-color:#59a6ff}
+    .wf-launch.wf-studio-v2 .wf-account-copy{display:grid;min-width:0;gap:4px}
+    .wf-launch.wf-studio-v2 .wf-account-copy strong{overflow:hidden;color:#e7effa;font-size:12px;text-overflow:ellipsis}
+    .wf-launch.wf-studio-v2 .wf-account-copy small{overflow:hidden;color:#8fa2ba;font-size:10px;text-overflow:ellipsis}
+    .wf-launch.wf-studio-v2 .wf-empty-state{display:flex;align-items:center;gap:12px;min-height:66px;margin:10px 0;padding:12px 14px;border:1px dashed rgba(143,172,210,.25);border-radius:13px;background:rgba(7,14,24,.32)}
+    .wf-launch.wf-studio-v2 .wf-empty-mark{display:grid;place-items:center;flex:0 0 36px;width:36px;height:36px;border:1px solid rgba(99,165,255,.2);border-radius:11px;background:rgba(73,132,211,.12);color:#9ccaff;font-size:10px;font-weight:800;letter-spacing:.04em}
+    .wf-launch.wf-studio-v2 .wf-empty-copy{display:grid;gap:4px;min-width:0}
+    .wf-launch.wf-studio-v2 .wf-empty-copy strong{color:#dce7f5;font-size:12px}
+    .wf-launch.wf-studio-v2 .wf-empty-copy small{color:#90a3bb;font-size:10px;line-height:1.45}
+    .wf-launch.wf-studio-v2 .wf-empty-state>a{margin-left:auto;color:#8fc0ff;font-size:11px;white-space:nowrap;text-decoration:none}
+    .wf-launch.wf-studio-v2 .wf-empty-state>a:hover{text-decoration:underline}
+    .wf-launch.wf-studio-v2 .table-responsive.wf-empty-inventory{display:none!important}
+    .wf-launch.wf-studio-v2 #wfResourceActions{display:flex;justify-content:flex-end;gap:9px;margin:12px 0 0}
+    .wf-launch.wf-studio-v2 #wfResourceActions button{min-height:42px!important;border-radius:11px!important;padding:9px 14px!important}
+    .wf-launch.wf-studio-v2 #wfResourceActions .wf-resource-secondary{border:1px solid var(--studio-line-strong)!important;background:rgba(255,255,255,.025)!important;color:#c4d2e3!important}
+    .wf-launch.wf-studio-v2 #wfResourceActions .wf-resource-primary{border:1px solid rgba(113,171,243,.32)!important;background:linear-gradient(110deg,#3489da,#6e60d7)!important;color:#fff!important}
+    .wf-launch.wf-studio-v2 .wf-meta-embedded{max-width:none!important;margin:24px 0 0!important;padding:16px 0 0!important;border:0!important;border-top:1px solid var(--studio-line)!important;border-radius:0!important;background:transparent!important}
+    .wf-launch.wf-studio-v2 .wf-meta-embedded>.wf-meta-disclosure{border:1px solid var(--studio-line);border-radius:13px;background:rgba(7,14,24,.28)}
+    .wf-launch.wf-studio-v2 .wf-meta-embedded .wf-meta-disclosure>summary{padding:14px 15px;color:#dce7f5}
+    .wf-launch.wf-studio-v2 .wf-meta-embedded .wf-meta-disclosure-body{padding:0 14px 15px}
+    .wf-launch.wf-studio-v2 .wf-live-summary{border-color:var(--studio-line)!important;background:linear-gradient(155deg,#162235,#111a28)!important}
+    .wf-launch.wf-studio-v2 .wf-summary-quickfact{border-color:rgba(163,185,215,.1);background:rgba(6,13,23,.32)}
+    .wf-launch.wf-studio-v2 .wf-mobile-actions{border-top-color:var(--studio-line)!important;background:rgba(10,16,26,.94)!important}
+    @media(max-width:1120px){
+      .wf-launch.wf-studio-v2{grid-template-columns:minmax(0,1fr)!important}
+      .wf-launch.wf-studio-v2>.wf-live-summary{position:relative;grid-column:1;grid-row:auto}
+    }
+    @media(max-width:720px){
+      .wf-launch.wf-studio-v2>.app-page-head{padding:20px 17px!important}
+      .wf-launch.wf-studio-v2>.app-page-head h1,.wf-launch.wf-studio-v2>.app-page-head h2{font-size:24px!important}
+      .wf-launch.wf-studio-v2>.wf-step-nav{display:flex!important;overflow-x:auto;overscroll-behavior-inline:contain;scrollbar-width:none;padding:8px 0!important}
+      .wf-launch.wf-studio-v2>.wf-step-nav::-webkit-scrollbar{display:none}
+      .wf-launch.wf-studio-v2>.wf-step-nav a{flex:0 0 auto;min-width:92px;min-height:40px;padding:6px 8px}
+      .wf-launch.wf-studio-v2>.wf-step-nav a:not(:last-child)::after{display:none}
+      .wf-launch.wf-studio-v2 .wf-step-label{font-size:10px}
+      .wf-launch.wf-studio-v2>.launch-card.wf-step-card{padding:19px 16px!important;border-radius:15px!important}
+      .wf-launch.wf-studio-v2 .wf-profile-grid,.wf-launch.wf-studio-v2 .wf-account-grid{grid-template-columns:minmax(0,1fr)}
+      .wf-launch.wf-studio-v2 #wfResourceActions{display:grid;grid-template-columns:1fr 1fr}
+      .wf-launch.wf-studio-v2 .wf-empty-state{align-items:flex-start;flex-wrap:wrap}
+      .wf-launch.wf-studio-v2 .wf-empty-state>a{margin-left:48px}
+      .wf-launch.wf-studio-v2 .wf-step-context{margin:-8px 0 17px!important}
+      .wf-launch.wf-studio-v2 .wf-mobile-actions{left:0!important;right:0!important;grid-template-columns:auto minmax(0,1fr) auto auto!important;padding:8px 9px calc(8px + env(safe-area-inset-bottom))!important}
+    }
+    @media(max-width:390px){
+      .wf-launch.wf-studio-v2>.wf-step-nav a{min-width:84px}
+      .wf-launch.wf-studio-v2 #wfResourceActions{grid-template-columns:minmax(0,1fr)}
+    }
+    @media(prefers-reduced-motion:reduce){.wf-launch.wf-studio-v2 *{scroll-behavior:auto!important;transition:none!important}}
+    `;
+    document.head.appendChild(studioStyle);
+
+
     function setText(el, text) { if (el && el.textContent !== text) el.textContent = text; }
     function labelFor(el) {
         return document.querySelector('label[for="'+el.id+'"]') || el.closest('label') || el.closest('.cr-field,.cr-target-box')?.querySelector('label') || Array.from(el.parentElement?.children || []).find(n=>n.tagName==='LABEL') || el.closest('[class*="col-"]')?.querySelector('label');
@@ -645,12 +734,74 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
     }
     function setupProfilePicker() {
         const select=$('profile'); if(!select?.multiple) return;
-        let grid=$('wfProfilePicker');if(!grid){grid=document.createElement('div');grid.id='wfProfilePicker';grid.className='wf-profile-grid';grid.setAttribute('role','group');grid.setAttribute('aria-label','Профили Facebook');select.after(grid);}
+        let grid=$('wfProfilePicker');
+        if(!grid){grid=document.createElement('div');grid.id='wfProfilePicker';grid.className='wf-profile-grid';grid.setAttribute('role','group');grid.setAttribute('aria-label','Профили Facebook');select.after(grid);}
+        const options=Array.from(select.options).filter(option=>option.value);
         const signature=Array.from(select.options).map(o=>o.value+'|'+o.textContent+'|'+o.disabled).join(';');
-        if(grid.dataset.signature!==signature){grid.dataset.signature=signature;grid.replaceChildren();for(const option of select.options){if(!option.value)continue;const label=document.createElement('label'),input=document.createElement('input');input.type='checkbox';input.value=option.value;input.disabled=option.disabled;input.addEventListener('change',()=>{option.selected=input.checked;select.dispatchEvent(new Event('change',{bubbles:true}));});label.append(input,document.createTextNode(option.textContent));grid.appendChild(label);}select.classList.add('wf-profile-native');}
+        if(grid.dataset.signature!==signature){
+            grid.dataset.signature=signature;grid.replaceChildren();
+            if(!options.length){
+                const empty=document.createElement('div');empty.className='wf-empty-state wf-profile-empty';
+                const mark=document.createElement('span');mark.className='wf-empty-mark';mark.textContent='01';
+                const copy=document.createElement('span');copy.className='wf-empty-copy';
+                const title=document.createElement('strong');title.textContent='Сохранённых профилей пока нет';
+                const note=document.createElement('small');note.textContent='Добавленные профили появятся здесь для выбора.';
+                copy.append(title,note);
+                const link=document.createElement('a');link.href='accounts.php';link.textContent='Открыть аккаунты';
+                empty.append(mark,copy,link);grid.appendChild(empty);
+            }else{
+                for(const option of options){
+                    const label=document.createElement('label'),input=document.createElement('input');
+                    input.type='checkbox';input.value=option.value;input.disabled=option.disabled;
+                    input.setAttribute('aria-label',option.textContent.trim());
+                    input.addEventListener('change',()=>{option.selected=input.checked;select.dispatchEvent(new Event('change',{bubbles:true}));});
+                    const name=document.createElement('span');name.className='wf-profile-name';name.textContent=option.textContent.trim();
+                    label.append(input,name);grid.appendChild(label);
+                }
+            }
+            select.classList.add('wf-profile-native');
+        }
         grid.querySelectorAll('input').forEach(input=>{const option=Array.from(select.options).find(o=>o.value===input.value);input.checked=Boolean(option?.selected);input.disabled=select.disabled||Boolean(option?.disabled);});
     }
-    const wfTargetGroups = [
+    function setupAccountPicker() {
+        const select=$('adAccount');if(!(select instanceof HTMLSelectElement))return;
+        let grid=$('wfAdAccountPicker');
+        if(!grid){grid=document.createElement('div');grid.id='wfAdAccountPicker';grid.className='wf-account-grid';grid.setAttribute('role','group');grid.setAttribute('aria-label','Рекламные кабинеты');select.after(grid);}
+        const options=Array.from(select.options).filter(option=>option.value);
+        const signature=Array.from(select.options).map(o=>o.value+'|'+o.textContent+'|'+o.disabled+'|'+(o.dataset.currency||'')).join(';');
+        if(grid.dataset.signature!==signature){
+            grid.dataset.signature=signature;grid.replaceChildren();
+            if(!options.length){
+                const empty=document.createElement('div');empty.className='wf-empty-state wf-account-empty';
+                const mark=document.createElement('span');mark.className='wf-empty-mark';mark.textContent='RK';
+                const copy=document.createElement('span');copy.className='wf-empty-copy';
+                const title=document.createElement('strong');title.textContent=selectedLabels('profile').length?'Кабинеты ещё не загружены':'Сначала выберите профиль';
+                const note=document.createElement('small');note.textContent=selectedLabels('profile').length?'Нажмите «Обновить данные Meta», чтобы получить доступный список.':'После выбора профиля здесь появятся сохранённые рекламные кабинеты.';
+                copy.append(title,note);empty.append(mark,copy);grid.appendChild(empty);
+            }else{
+                for(const option of options){
+                    const label=document.createElement('label');label.className='wf-account-choice';label.dataset.search=(option.textContent+' '+option.value+' '+(option.dataset.currency||'')).toLocaleLowerCase();
+                    const input=document.createElement('input');input.type=select.multiple?'checkbox':'radio';input.name=select.multiple?'':'wfAdAccountChoice';input.value=option.value;input.disabled=option.disabled;input.setAttribute('aria-label',option.textContent.trim());
+                    input.addEventListener('change',()=>{if(select.multiple)option.selected=input.checked;else if(input.checked)select.value=option.value;select.dispatchEvent(new Event('change',{bubbles:true}));});
+                    const copy=document.createElement('span');copy.className='wf-account-copy';
+                    const title=document.createElement('strong');title.textContent=option.textContent.trim()||option.value;
+                    const meta=document.createElement('small');meta.textContent=[option.dataset.currency,option.value].filter(Boolean).join(' · ');
+                    copy.append(title,meta);label.append(input,copy);grid.appendChild(label);
+                }
+            }
+            select.classList.add('wf-account-native');
+        }
+        const sync=()=>grid.querySelectorAll('input').forEach(input=>{const option=Array.from(select.options).find(o=>o.value===input.value);input.checked=Boolean(option?.selected);input.disabled=select.disabled||Boolean(option?.disabled);});
+        sync();
+        if(!select.dataset.wfAccountPickerBound){select.dataset.wfAccountPickerBound='1';select.addEventListener('change',sync);}
+        if(!select.dataset.wfAccountPickerObserved){select.dataset.wfAccountPickerObserved='1';new MutationObserver(()=>setupAccountPicker()).observe(select,{childList:true,subtree:true,attributes:true,attributeFilter:['disabled','label','value','data-currency']});}
+        const filter=$('rkFilter');
+        if(filter&&!filter.dataset.wfAccountFilterBound){filter.dataset.wfAccountFilterBound='1';filter.addEventListener('input',()=>{const query=filter.value.trim().toLocaleLowerCase();grid.querySelectorAll('.wf-account-choice').forEach(item=>{item.hidden=!!query&&!item.dataset.search.includes(query);});});}
+        if(filter){const query=filter.value.trim().toLocaleLowerCase();grid.querySelectorAll('.wf-account-choice').forEach(item=>{item.hidden=!!query&&!item.dataset.search.includes(query);});}
+        const table=select.closest('.launch-card')?.querySelector('.table-responsive');
+        if(table){const text=table.textContent.toLocaleLowerCase();table.classList.toggle('wf-empty-inventory',!options.length&&(/выберите профили|сначала загрузите|select profiles/.test(text)));}
+    }
+        const wfTargetGroups = [
         {key:'demographics',title:'Демография',note:'Возраст, пол, образование, семейный статус и социальные параметры.',fields:new Set(['age_min','age_max','genders','education_statuses','education_schools','education_majors','college_years','relationship_statuses','family_statuses','household_composition','ethnic_affinity','generation','interested_in','income','net_worth','politics'])},
         {key:'devices',title:'Устройства и подключение',note:'Платформы, модели устройств, операционные системы и тип подключения.',fields:new Set(['device_platforms','user_device','excluded_user_device','user_os','wireless_carrier','app_install_state'])},
         {key:'placements',title:'Платформы и места показа',note:'Поверхности размещения и доступные ограничения для выбранной цели.',fields:new Set(['publisher_platforms','facebook_positions','instagram_positions','messenger_positions','audience_network_positions','threads_positions','whatsapp_positions','oculus_positions','streaming_services_positions','brand_safety_content_filter_levels','contextual_bundling_spec'])},
@@ -910,7 +1061,11 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
     }
     function setupLaunch() {
         const root=document.querySelector('.launch-wrap');if(!root||root.dataset.wfReady)return;
-        root.dataset.wfReady='1';root.classList.add('wf-launch');document.body.classList.add('wf-autoupload-open');
+        root.dataset.wfReady='1';root.classList.add('wf-launch','wf-studio-v2');document.body.classList.add('wf-autoupload-open');
+        const pageTitle=root.querySelector(':scope > .app-page-head h1,:scope > .app-page-head h2');
+        const pageIntro=root.querySelector(':scope > .app-page-head p');
+        if(pageTitle)setText(pageTitle,'Студия запуска');
+        if(pageIntro)setText(pageIntro,'Соберите черновик по шагам. Объявление сохраняется на паузе; публикация не выполняется.');
         const compactCard=(id,label)=>{
             const node=$(id),card=node?(node.classList.contains('launch-card')?node:node.closest('.launch-card')):null;
             if(!card||card.dataset.wfDisclosure==='1')return;
@@ -922,22 +1077,38 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
             for(const child of Array.from(card.childNodes))if(child!==heading)body.appendChild(child);
             details.append(summary,body);card.replaceChildren(details);card.dataset.wfDisclosure='1';
         };
-        compactCard('targetBindingsCard','Привязки для каждого РК');
-        compactCard('bundleSelect','Сохранённые настройки');
-        compactCard('loadFunding','Состояние оплаты');
         compactCard('jobsCard','Задачи и результаты');
         const entries=[
-            {key:'resources',title:'Ресурсы',ids:['profile','targetBindingsCard','bundleSelect','loadFunding'],cardTitle:'Профили и рекламные кабинеты'},
-            {key:'campaign',title:'Кампания',ids:['campaignName'],cardTitle:'Кампания'},
-            {key:'audience',title:'Аудитория',ids:['adsetName','launchMetaAllFields'],cardTitle:'Бюджет и аудитория'},
-            {key:'ad',title:'Объявление',ids:['creativeName'],cardTitle:'Объявление'},
-            {key:'review',title:'Проверка',ids:['reviewLaunch','launchButton','jobsCard'],cardTitle:'Проверка черновика'}
+            {key:'resources',title:'Ресурсы',ids:['profile'],cardTitle:'Профили и рекламные кабинеты',description:'Выберите профили и кабинеты для черновика.'},
+            {key:'campaign',title:'Кампания',ids:['campaignName'],cardTitle:'Кампания',description:'Задайте цель и бюджет кампании.'},
+            {key:'audience',title:'Аудитория',ids:['adsetName'],cardTitle:'Аудитория',description:'Настройте географию, демографию и доступные параметры Meta.'},
+            {key:'ad',title:'Объявление',ids:['creativeName'],cardTitle:'Объявление',description:'Добавьте медиа, текст, ссылку и оформление объявления.'},
+            {key:'review',title:'Проверка',ids:['reviewLaunch','launchButton','jobsCard'],cardTitle:'Проверка черновика',description:'Проверьте итоговые настройки перед созданием PAUSED-черновика.'}
         ];
         const cardFor=id=>{
             const node=$(id);if(!node)return null;
             if(id==='launchMetaAllFields')return node;
             return node.classList.contains('launch-card')?node:node.closest('.launch-card');
         };
+        const resourceMain=cardFor('profile');
+        if(resourceMain&&!resourceMain.querySelector('.wf-resource-utilities')){
+            const utilityCards=[...new Set(['targetBindingsCard','bundleSelect','loadFunding'].map(cardFor).filter(card=>card&&card!==resourceMain))];
+            if(utilityCards.length){
+                const utilities=document.createElement('details');utilities.className='wf-resource-utilities';
+                const summary=document.createElement('summary'),title=document.createElement('strong'),count=document.createElement('span');
+                title.textContent='Дополнительные инструменты';count.textContent='Связки · привязки · оплата';summary.append(title,count);
+                const body=document.createElement('div');body.className='wf-resource-utilities-body';
+                for(const card of utilityCards){
+                    const heading=card.querySelector(':scope > h5'),label=heading?.textContent.trim()||'Настройки';
+                    const details=document.createElement('details');details.className='wf-resource-utility';
+                    const disclosure=document.createElement('summary');disclosure.textContent=label;
+                    const content=document.createElement('div');content.className='wf-resource-utility-content';
+                    for(const child of Array.from(card.childNodes))if(child!==heading)content.appendChild(child);
+                    details.append(disclosure,content);card.replaceChildren(details);card.classList.add('wf-resource-utility-card');body.appendChild(card);
+                }
+                utilities.append(summary,body);resourceMain.appendChild(utilities);
+            }
+        }
         const nav=document.createElement('nav');nav.className='wf-step-nav';nav.setAttribute('aria-label','Этапы автозалива');
         const stepCards=[];
         entries.forEach(entry=>{
@@ -949,12 +1120,18 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
                 card.setAttribute('aria-hidden','true');
             });
             if(entry.cardTitle)setText(cards[0].querySelector('h5'),entry.cardTitle);
+            if(entry.description&&!cards[0].querySelector(':scope > .wf-step-context')){
+                const context=document.createElement('p');context.className='wf-step-context';context.textContent=entry.description;
+                cards[0].querySelector(':scope > h5')?.after(context);
+            }
             const link=document.createElement('a');link.href='#'+cards[0].id;link.setAttribute('aria-label',(stepCards.length+1)+'. '+entry.title);
             const number=document.createElement('span');number.className='wf-step-index';number.textContent=String(stepCards.length+1);
             const label=document.createElement('span');label.className='wf-step-label';label.textContent=entry.title;
             link.append(number,label);nav.appendChild(link);stepCards.push({...entry,link,cards,card:cards[0]});
         });
         root.querySelector('.launch-card')?.before(nav);
+        const progressTrack=document.createElement('div');progressTrack.className='wf-step-progress';progressTrack.setAttribute('aria-hidden','true');
+        const progressFill=document.createElement('span');progressTrack.appendChild(progressFill);nav.after(progressTrack);
         let activeStep=0;
         const reviewIndex=stepCards.findIndex(item=>item.key==='review');
         let mobileBar=document.getElementById('wfMobileActions');
@@ -1007,10 +1184,13 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
         function setCurrentStep(index){
             if(!stepCards.length)return;
             activeStep=Math.max(0,Math.min(index,stepCards.length-1));
+            root.dataset.wfActiveStep=stepCards[activeStep]?.key||'resources';
+            root.style.setProperty('--wf-step-progress',((activeStep+1)/stepCards.length*100)+'%');
             stepCards.forEach((item,i)=>{
                 const active=i===activeStep;item.link.classList.toggle('is-current',active);item.link.classList.toggle('is-complete',!active&&isStepComplete(i));
                 item.cards.forEach(card=>{
                     card.classList.toggle('is-current-step',active);
+                    card.hidden=!active;
                     card.setAttribute('aria-hidden',active?'false':'true');
                 });
                 if(active)item.link.setAttribute('aria-current','step');else item.link.removeAttribute('aria-current');
@@ -1026,7 +1206,8 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
         function stepTo(index){
             const item=stepCards[index];if(!item)return;
             setCurrentStep(index);
-            item.card.scrollIntoView({behavior:window.matchMedia?.('(prefers-reduced-motion: reduce)').matches?'auto':'smooth',block:'start'});
+            const reduced=window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+            item.card.scrollIntoView({behavior:reduced?'auto':'smooth',block:'start'});
             if(window.matchMedia?.('(max-width:720px)').matches){item.card.tabIndex=-1;item.card.focus({preventScroll:true});}
         }
         stepCards.forEach((item,index)=>item.link.addEventListener('click',event=>{event.preventDefault();stepTo(index);}));
@@ -1046,7 +1227,8 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
         });
         const extra=$('launchMetaAllFields');
         if(extra){
-            extra.classList.add('wf-advanced');root.querySelector('#wf-launch-reviewLaunch')?.before(extra);if(!root.contains(extra))root.appendChild(extra);
+            extra.classList.add('wf-advanced','wf-meta-embedded');
+            if(adset&&!adset.contains(extra))adset.appendChild(extra);else if(!root.contains(extra))root.appendChild(extra);
             const extraHeading=extra.querySelector('h3');setText(extraHeading,'Все дополнительные поля Meta');
             setText(extra.querySelector('.rm-meta-note'),'Поля сгруппированы по объектам Meta. Поиск работает по названию и API-коду; значения сохраняются в настройках черновика.');
             if(extra.dataset.wfDisclosure!=='1'){
@@ -1057,7 +1239,7 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
                 details.append(summary,body);extra.replaceChildren(details);extra.dataset.wfDisclosure='1';
             }
         }
-        const buttons={rkSelectAll:'Выбрать все',rkClear:'Снять выбор',bundleLoad:'Загрузить',bundleSave:'Сохранить',bundleDelete:'Удалить',dryRunPlan:'Предварительный план',reviewLaunch:'Проверить черновик',launchButton:'Создать PAUSED черновик',loadTargetBindings:'Обновить привязки',loadTargetAudiences:'Загрузить аудитории',loadTargetMedia:'Загрузить медиа',refreshInsights:'Обновить статистику',activateJobAds:'Активировать объявления',pauseJobAds:'Приостановить объявления',continueJob:'Продолжить очередь',retryFailed:'Повторить неудачные',forceRetryReview:'Разобрать неизвестный результат',openRecentJob:'Открыть задачу'};
+        const buttons={rkSelectAll:'Выбрать все',rkClear:'Снять выбор',bundleLoad:'Загрузить',bundleSave:'Сохранить',bundleDelete:'Удалить',dryRunPlan:'Предварительный план',preflight:'Проверить профиль',syncMeta:'Обновить данные Meta',reviewLaunch:'Проверить черновик',launchButton:'Создать PAUSED черновик',loadTargetBindings:'Обновить привязки',loadTargetAudiences:'Загрузить аудитории',loadTargetMedia:'Загрузить медиа',refreshInsights:'Обновить статистику',activateJobAds:'Активировать объявления',pauseJobAds:'Приостановить объявления',continueJob:'Продолжить очередь',retryFailed:'Повторить неудачные',forceRetryReview:'Разобрать неизвестный результат',openRecentJob:'Открыть задачу'};
         for(const [id,text] of Object.entries(buttons)){
             const button=$(id);if(!button)continue;
             if(id==='launchButton'){for(const node of Array.from(button.childNodes)){if(node.nodeType===3)node.textContent=' '+text;}button.setAttribute('aria-label',text);}
@@ -1065,7 +1247,17 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
         }
         if($('rkFilter'))$('rkFilter').placeholder='Найти РК, профиль или валюту';
         if($('dailyBudget'))$('dailyBudget').parentElement.querySelector('span.muted')?.remove();
-        setupProfilePicker();$('profile')?.addEventListener('change',setupProfilePicker);
+        setupProfilePicker();setupAccountPicker();
+        if($('profile')&&!$('profile').dataset.wfAccountRefreshBound){$('profile').dataset.wfAccountRefreshBound='1';$('profile').addEventListener('change',()=>{setupProfilePicker();setupAccountPicker();});}
+        const accountActions=document.createElement('div');
+        if($('preflight')&&$('syncMeta')&&!$('wfResourceActions')){
+            accountActions.id='wfResourceActions';accountActions.className='wf-resource-actions';accountActions.setAttribute('aria-label','Действия с ресурсами');
+            for(const button of [$('preflight'),$('syncMeta')]){if(button){button.classList.add(button.id==='syncMeta'?'wf-resource-primary':'wf-resource-secondary');accountActions.appendChild(button);}}
+            const anchor=$('wfAdAccountPicker')||$('adAccount');if(anchor)anchor.insertAdjacentElement('afterend',accountActions);
+            setText($('preflight'),'Проверить профиль');setText($('syncMeta'),'Обновить данные Meta');
+            const formerRows=[...new Set([$('preflight'),$('syncMeta')].map(button=>button?.parentElement?.closest('.row')).filter(Boolean))];
+            for(const row of formerRows){if(!row.querySelector('button,input,select,textarea,a'))row.remove();}
+        }
         $('adAccount')?.closest('[class*="col-"]')?.classList.add('wf-account-selector');
         setupLiveSummary(root);
         if(root.dataset.wfSummaryBound!=='1'){
