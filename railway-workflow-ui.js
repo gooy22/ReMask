@@ -657,7 +657,7 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
                 if(wrapper&&card.contains(wrapper))wrapper.classList.add("wf-audience-field");
             }
         }
-        let delivery=card.querySelector(":scope > details.wf-audience-delivery");
+        let delivery=card.querySelector("details.wf-audience-delivery");
         if(!delivery){
             delivery=document.createElement("details");
             delivery.className="wf-audience-delivery";
