@@ -8,6 +8,7 @@ const remaskModuleControls = (() => {
     style.textContent += '.rm-module-exclusion-control{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;width:100%}.rm-module-exclusion-group{min-width:0;padding:12px;border:1px solid #34445a;border-radius:12px;background:rgba(15,23,42,.24)}.rm-module-exclusion-label{display:block;margin:0 0 8px;font-size:12px;font-weight:700;color:#d7e2f1}.rm-module-exclusion-group .form-control{width:100%;min-width:0}.rm-module-exclusion-settings{grid-column:1/-1;display:flex;align-items:center;gap:10px;flex-wrap:wrap}.rm-module-structure{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.rm-module-structure>.rm-module-hint{flex-basis:100%}@media(max-width:640px){.rm-module-exclusion-control{grid-template-columns:minmax(0,1fr)}.rm-module-exclusion-group{padding:10px}}';
     style.textContent += '.rm-module-geo-exclusion-control{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;width:100%}.rm-module-geo-exclusion-group{min-width:0;padding:12px;border:1px solid #34445a;border-radius:12px;background:rgba(15,23,42,.24)}.rm-module-geo-exclusion-label{display:block;margin:0 0 8px;font-size:12px;font-weight:700;color:#d7e2f1}.rm-module-geo-exclusion-group .form-control{width:100%;min-width:0}@media(max-width:640px){.rm-module-geo-exclusion-control{grid-template-columns:minmax(0,1fr)}.rm-module-geo-exclusion-group{padding:10px}}';
     style.textContent += '.rm-module-geo-inclusion-control{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;width:100%}.rm-module-geo-inclusion-group{min-width:0;padding:12px;border:1px solid #34445a;border-radius:12px;background:rgba(15,23,42,.24)}.rm-module-geo-inclusion-label{display:block;margin:0 0 8px;font-size:12px;font-weight:700;color:#d7e2f1}.rm-module-geo-inclusion-group .form-control{width:100%;min-width:0}@media(max-width:640px){.rm-module-geo-inclusion-control{grid-template-columns:minmax(0,1fr)}.rm-module-geo-inclusion-group{padding:10px}}';
+    style.textContent += '.rm-module-city-target{display:grid;gap:8px;padding:10px 12px;margin:6px 0;border:1px solid #34445a;border-radius:10px;background:rgba(15,23,42,.2)}.rm-module-city-head{display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0}.rm-module-city-name{min-width:0;overflow-wrap:anywhere;font-weight:600}.rm-module-city-remove{white-space:nowrap}.rm-module-city-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.rm-module-city-radius-label{display:flex;align-items:center;gap:8px;font-size:12px;color:#aebbd0}.rm-module-city-radius{width:100px;min-width:86px}.rm-module-city-unit{width:auto;min-width:92px}@media(max-width:640px){.rm-module-city-target{padding:9px}.rm-module-city-controls{gap:7px}.rm-module-city-radius-label{flex:1 1 150px}.rm-module-city-unit{flex:0 0 auto}}';
     document.head.appendChild(style);
     const key = row => String(typeof row === 'object' ? row?.id ?? row?.key : row);
     const fieldLabels=source=>[...new Set([...Array.from(source.labels||[]),source.closest('.cr-field,.cr-sdk-field,.rm-meta-field')?.querySelector('label')].filter(Boolean))];
@@ -149,7 +150,8 @@ const remaskModuleControls = (() => {
         const root=document.createElement('div');root.className='rm-module-control rm-module-geo-'+mode+'-control';
         const sections=[
             {key:'countries',kind:'country',label:excluded?'Исключить страны':'Страны',placeholder:'Найти страну'},
-            {key:'regions',kind:'region',label:excluded?'Исключить регионы':'Регионы',placeholder:'Найти регион'}
+            {key:'regions',kind:'region',label:excluded?'Исключить регионы':'Регионы',placeholder:'Найти регион'},
+            {key:'cities',kind:'city',label:excluded?'Исключить города':'Города',placeholder:'Найти город в выбранном РК'}
         ];
         const descriptor=Object.getOwnPropertyDescriptor(source,'value')||
             Object.getOwnPropertyDescriptor(source instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,'value');
@@ -179,6 +181,51 @@ const remaskModuleControls = (() => {
                 section.pills.replaceChildren();
                 for(const value of rowsFor(section)){
                     const label=labelFor(section,value);
+                    if(section.kind==='city'){
+                        const item=document.createElement('div');item.className='rm-module-city-target';
+                        const head=document.createElement('div');head.className='rm-module-city-head';
+                        const title=document.createElement('span');title.className='rm-module-city-name';title.textContent=label;
+                        const remove=button('Убрать','rm-module-city-remove',()=>commit(section,rowsFor(section).filter(row=>identifier(section,row)!==identifier(section,value))));
+                        remove.setAttribute('aria-label',(excluded?'Убрать город из исключений: ':'Убрать город: ')+label);
+                        head.append(title,remove);item.appendChild(head);
+                        if(!excluded){
+                            const controls=document.createElement('div');controls.className='rm-module-city-controls';
+                            const radiusLabel=document.createElement('label');radiusLabel.className='rm-module-city-radius-label';
+                            const radiusCaption=document.createElement('span');radiusCaption.textContent='Радиус';
+                            const suffix=identifier(section,value).replace(/[^A-Za-z0-9_-]/g,'_');
+                            const radius=document.createElement('input');radius.type='number';radius.min='1';radius.step='1';radius.inputMode='numeric';
+                            radius.className='form-control rm-module-city-radius';radius.id=(source.id||'geo')+'_'+mode+'_city_'+suffix+'_radius';
+                            radius.value=value?.radius===undefined||value?.radius===null?'':String(value.radius);
+                            radius.placeholder='Не задан';radius.setAttribute('aria-label','Радиус для '+label);
+                            radiusLabel.htmlFor=radius.id;radiusLabel.append(radiusCaption,radius);
+                            const unit=document.createElement('select');unit.className='form-control rm-module-city-unit';
+                            unit.setAttribute('aria-label','Единица радиуса для '+label);
+                            for(const [unitValue,unitLabel] of [['kilometer','км'],['mile','мили']]){
+                                const option=document.createElement('option');option.value=unitValue;option.textContent=unitLabel;unit.appendChild(option);
+                            }
+                            unit.value=value?.distance_unit==='mile'?'mile':'kilometer';
+                            const saveRadius=()=>{
+                                const raw=String(radius.value||'').trim();
+                                if(raw===''&&(value?.radius===undefined||value?.radius===null||value?.radius===''))return;
+                                if(raw!==''&&(!/^\d+$/.test(raw)||Number(raw)<1)){
+                                    section.status.textContent='Укажите целый радиус больше нуля.';
+                                    return;
+                                }
+                                const next=rowsFor(section).map(row=>{
+                                    if(identifier(section,row)!==identifier(section,value))return row;
+                                    const updated={...row};
+                                    if(raw===''){delete updated.radius;delete updated.distance_unit;}
+                                    else{updated.radius=Number(raw);updated.distance_unit=unit.value;}
+                                    return updated;
+                                });
+                                if(commit(section,next))section.status.textContent='';
+                            };
+                            radius.addEventListener('change',saveRadius);unit.addEventListener('change',saveRadius);
+                            controls.append(radiusLabel,unit);item.appendChild(controls);
+                        }
+                        section.pills.appendChild(item);
+                        continue;
+                    }
                     const pill=button(label+' ×','rm-module-pill',()=>commit(section,rowsFor(section).filter(row=>identifier(section,row)!==identifier(section,value))));
                     pill.setAttribute('aria-label',(excluded?'Убрать географию из исключений: ':'Убрать географию: ')+label);
                     section.pills.appendChild(pill);
@@ -199,12 +246,15 @@ const remaskModuleControls = (() => {
             source.dispatchEvent(new Event('change',{bubbles:true}));
             return true;
         }
-        async function requestLocations(q,offset,signal){
-            const body=new URLSearchParams({type:'locations',q,limit:'100',module_only:'1',...(offset?{offset:String(offset)}:{})}).toString();
+        async function requestLocations(q,offset,signal,moduleOnly=true,forceLive=false){
+            const params=new URLSearchParams({type:'locations',q,limit:'100'});
+            if(moduleOnly)params.set('module_only','1');
+            if(forceLive)params.set('force','1');
+            if(offset)params.set('offset',String(offset));
             const options={method:'POST',headers:{
                 'Content-Type':'application/x-www-form-urlencoded',
                 'X-ReMask-CSRF':document.querySelector('meta[name="remask-csrf"]')?.content||''
-            },body,signal};
+            },body:params.toString(),signal};
             if(typeof remaskPrivateTargetingScope==='function')return apiJson('ajax/metaTemplateTargetingSearch.php',options);
             const response=await fetch('ajax/metaTemplateTargetingSearch.php',options);
             const payload=JSON.parse(await response.text());
@@ -216,7 +266,7 @@ const remaskModuleControls = (() => {
             try{
                 let offset=0;
                 do{
-                    const data=await requestLocations('',offset);
+                    const data=await requestLocations('',offset,undefined,true);
                     for(const row of Array.isArray(data?.data)?data.data:[]){
                         if(!['country','region'].includes(row.type))continue;
                         const section=sections.find(item=>item.kind===row.type);
@@ -257,24 +307,35 @@ const remaskModuleControls = (() => {
                 controller?.abort();generation++;search.value='';results.replaceChildren();status.textContent='';search.setAttribute('aria-expanded','false');
             }
             async function browse(){
-                clearTimeout(timer);controller?.abort();const run=++generation;controller=new AbortController();
-                const q=search.value.trim();results.replaceChildren();status.textContent='Загружаю страны и регионы…';
+                clearTimeout(timer);controller?.abort();const q=search.value.trim();
+                results.replaceChildren();search.setAttribute('aria-expanded','false');
+                if(section.kind==='city'&&q.length<2){
+                    status.textContent='Введите минимум 2 символа. Поиск городов использует выбранный РК.';
+                    return;
+                }
+                const run=++generation;controller=new AbortController();
+                status.textContent=section.kind==='city'?'Ищу города в выбранном РК…':'Загружаю страны и регионы…';
                 try{
-                    const data=await requestLocations(q,0,controller.signal);
+                    const data=await requestLocations(q,0,controller.signal,section.kind!=='city',section.kind==='city');
                     if(run!==generation||!source.isConnected)return;
                     const available=Array.isArray(data?.data)?data.data:[];
                     const selected=new Set(rowsFor(section).map(value=>identifier(section,value)));
-                    const rows=available.filter(row=>row.type===section.kind)
-                        .filter(row=>!selected.has(section.key==='countries'?String(row.country_code||row.key||row.id):String(row.key||row.id)));
+                    const rowId=row=>section.key==='countries'?String(row?.country_code||row?.key||row?.id||''):String(row?.key||row?.id||'');
+                    const rows=available.filter(row=>row&&String(row.type||'').toLowerCase()===section.kind)
+                        .filter(row=>rowId(row)!==''&&!selected.has(rowId(row)));
                     for(const row of rows.slice(0,100)){
-                        const id=section.key==='countries'?String(row.country_code||row.key||row.id):String(row.key||row.id);
-                        const name=String(row.name||id);
+                        const id=rowId(row);const name=String(row.name||id);
                         locationNames.set(section.key+':'+id,name);
-                        const detail=section.key==='regions'&&row.country_name?' · '+row.country_name:'';
-                        results.appendChild(button(name+detail,'rm-module-choice',()=>choose(row)));
+                        const detail=section.kind==='region'&&row.country_name?' · '+row.country_name
+                            :section.kind==='city'?[row.region_name,row.country_name].filter(Boolean).join(' · '):'';
+                        results.appendChild(button(name+(detail?' · '+detail:''),'rm-module-choice',()=>choose(row)));
                     }
                     search.setAttribute('aria-expanded',results.children.length?'true':'false');
-                    status.textContent=Boolean(data?.truncated)||rows.length>100?'Уточните запрос, чтобы сузить список.':rows.length?'':'Ничего не найдено.';
+                    const needsScope=section.kind==='city'&&data?.availability==='NOT_LOADED';
+                    status.textContent=needsScope
+                        ?'Для поиска городов выберите профиль и один рекламный кабинет.'
+                        :Boolean(data?.truncated)||rows.length>100?'Уточните запрос, чтобы сузить список.'
+                        :rows.length?'':'Ничего не найдено.';
                 }catch(error){
                     if(error.name==='AbortError'||run!==generation)return;
                     status.textContent=error.message||'Не удалось загрузить географию.';
@@ -295,6 +356,7 @@ const remaskModuleControls = (() => {
         }
         source.addEventListener('change',paint);source.after(root);paint();void hydrateNames();
     }
+
     function attachTargetingGeoExclusions(source){attachTargetingGeo(source,'excluded_geo_locations',true);}
     function attachTargetingGeoLocations(source){attachTargetingGeo(source,'geo_locations',false);}
 
