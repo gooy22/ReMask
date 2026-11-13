@@ -597,3 +597,4 @@ window.remaskModuleControls = (() => {
     new MutationObserver(queue).observe(document.body,{childList:true,subtree:true});
     return {configure(data){metadata=data||{};queue();},isTargetingType(type){return Object.hasOwn(metadata.targeting_types||{},type);},scan};
 })();
+}
