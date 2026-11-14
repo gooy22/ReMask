@@ -1702,7 +1702,7 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
         const pageTitle=root.querySelector(':scope > .app-page-head h1,:scope > .app-page-head h2');
         const pageIntro=root.querySelector(':scope > .app-page-head p');
         if(pageTitle)setText(pageTitle,'Автозалив рекламы');
-        if(pageIntro)setText(pageIntro,'Соберите кампанию и объявление. На последнем шаге выберите: сохранить черновик или опубликовать рекламу.');
+        if(pageIntro)setText(pageIntro,'Соберите кампанию и объявление. Сохранение или публикацию выберите в конце.');
         const compactCard=(id,label)=>{
             const node=$(id),card=node?(node.classList.contains('launch-card')?node:node.closest('.launch-card')):null;
             if(!card||card.dataset.wfDisclosure==='1')return;
@@ -1720,7 +1720,7 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
             {key:'campaign',title:'Кампания',ids:['campaignName'],cardTitle:'Кампания',description:'Задайте имя и выберите цель.'},
             {key:'audience',title:'Аудитория',ids:['adsetName'],cardTitle:'Бюджет и аудитория',description:'Настройте бюджет, аудиторию и показы.'},
             {key:'ad',title:'Объявление',ids:['creativeName'],cardTitle:'Объявление',description:'Добавьте текст, ссылку и медиа.'},
-            {key:'review',title:'Проверка',ids:['reviewLaunch','launchButton','jobsCard'],cardTitle:'Проверка',description:'Выберите действие и проверьте настройки.'}
+            {key:'review',title:'Проверка',ids:['launchButton','reviewLaunch','jobsCard'],cardTitle:'Действие с рекламой',description:'Выберите: сохранить черновик или опубликовать.'}
         ];
         const cardFor=id=>{
             const node=$(id);if(!node)return null;
@@ -1761,12 +1761,17 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
                 const context=document.createElement('p');context.className='wf-step-context';context.textContent=entry.description;
                 cards[0].querySelector(':scope > h5')?.after(context);
             }
+            let panel=cards[0];
+            if(cards.length>1){
+                panel=document.createElement('div');panel.className='wf-step-panel wf-step-panel-'+entry.key;panel.id='wf-step-panel-'+entry.key;
+                cards[0].before(panel);cards.forEach(card=>panel.appendChild(card));panel.hidden=true;panel.setAttribute('aria-hidden','true');
+            }
             const link=document.createElement('a');link.href='#'+cards[0].id;link.setAttribute('aria-label',(stepCards.length+1)+'. '+entry.title);
             const number=document.createElement('span');number.className='wf-step-index';number.textContent=String(stepCards.length+1);
             const label=document.createElement('span');label.className='wf-step-label';label.textContent=entry.title;
-            link.append(number,label);nav.appendChild(link);stepCards.push({...entry,link,cards,card:cards[0]});
+            link.append(number,label);nav.appendChild(link);stepCards.push({...entry,link,cards,card:cards[0],panel});
         });
-        root.querySelector('.launch-card')?.before(nav);
+        root.querySelector(':scope > .launch-card')?.before(nav);
         const progressTrack=document.createElement('div');progressTrack.className='wf-step-progress';progressTrack.setAttribute('aria-hidden','true');
         const progressFill=document.createElement('span');progressTrack.appendChild(progressFill);nav.after(progressTrack);
         let activeStep=0;
@@ -1818,6 +1823,23 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
             return false;
         }
         function syncCompletedStates(){stepCards.forEach((item,i)=>item.link.classList.toggle('is-complete',i!==activeStep&&isStepComplete(i)));}
+        function syncReviewPanelVisibility(){
+            const item=stepCards[reviewIndex];if(!item)return;
+            const hasRows=tbody=>[...(tbody?.children||[])].some(row=>!row.querySelector('[colspan]'));
+            const reviewCard=item.cards.find(card=>card.querySelector('#reviewRows'));
+            const reviewStatus=String($('reviewStatus')?.textContent||'').trim();
+            const hasReview=hasRows($('reviewRows'))||hasRows($('dryRunRows'))||!!reviewStatus;
+            if(reviewCard){reviewCard.hidden=!hasReview;reviewCard.setAttribute('aria-hidden',String(!hasReview));}
+            const jobsCard=item.cards.find(card=>card.id==='jobsCard'||card.querySelector('#jobItems'));
+            if(jobsCard){
+                const recentJobs=($('recentJobSelect')?.options?.length||0)>1;
+                const summary=String($('jobSummary')?.textContent||'').trim();
+                const activeSummary=summary&&!/^(нет активной задачи\.?|задач пока нет\.?)$/i.test(summary);
+                const hasJobs=hasRows($('jobItems'))||recentJobs||activeSummary;
+                jobsCard.hidden=!hasJobs;jobsCard.setAttribute('aria-hidden',String(!hasJobs));
+            }
+        }
+        root._wfSyncReviewPanelVisibility=syncReviewPanelVisibility;
         function setCurrentStep(index){
             if(!stepCards.length)return;
             activeStep=Math.max(0,Math.min(index,stepCards.length-1));
@@ -1830,6 +1852,10 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
                     card.hidden=!active;
                     card.setAttribute('aria-hidden',active?'false':'true');
                 });
+                if(item.panel&&item.panel!==item.card){
+                    item.panel.classList.toggle('is-current-step',active);item.panel.hidden=!active;
+                    item.panel.setAttribute('aria-hidden',active?'false':'true');
+                }
                 if(active)item.link.setAttribute('aria-current','step');else item.link.removeAttribute('aria-current');
             });
             if(mobileStatus){
@@ -1838,14 +1864,17 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
                 mobileStatus.append(title,document.createTextNode('Этап '+(activeStep+1)+' из '+stepCards.length));
             }
             if(backButton)backButton.disabled=activeStep===0;
+            syncReviewPanelVisibility();
             syncToolbarActions();
+            syncLaunchModePresentation(root);
         }
         function stepTo(index){
             const item=stepCards[index];if(!item)return;
             setCurrentStep(index);
+            const target=item.panel||item.card;
             const reduced=window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-            item.card.scrollIntoView({behavior:reduced?'auto':'smooth',block:'start'});
-            if(window.matchMedia?.('(max-width:720px)').matches){item.card.tabIndex=-1;item.card.focus({preventScroll:true});}
+            target.scrollIntoView({behavior:reduced?'auto':'smooth',block:'start'});
+            if(window.matchMedia?.('(max-width:720px)').matches){target.tabIndex=-1;target.focus({preventScroll:true});}
         }
         stepCards.forEach((item,index)=>item.link.addEventListener('click',event=>{event.preventDefault();stepTo(index);}));
         setCurrentStep(0);
@@ -1866,8 +1895,9 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
         if(extra){
             extra.classList.add('wf-advanced','wf-meta-embedded');
             if(adset&&!adset.contains(extra))adset.appendChild(extra);else if(!root.contains(extra))root.appendChild(extra);
-            const extraHeading=extra.querySelector('h3');setText(extraHeading,'Все дополнительные поля Meta');
-            setText(extra.querySelector('.rm-meta-note'),'Поля сгруппированы по объектам Meta. Поиск работает по названию и API-коду; значения сохраняются в настройках черновика.');
+            const extraHeading=extra.querySelector('h3');setText(extraHeading,'Дополнительные настройки');
+            setText(extra.querySelector('.rm-meta-note'),'Редкие параметры для отдельных сценариев.');
+            const advancedHint=root.querySelector('.wf-audience-advanced-hint');if(advancedHint)setText(advancedHint,'2 раздела');
             if(extra.dataset.wfDisclosure!=='1'){
                 const details=document.createElement('details');details.className='wf-meta-disclosure';
                 const summary=document.createElement('summary');if(extraHeading)summary.appendChild(extraHeading);else summary.textContent='Все дополнительные поля Meta';
@@ -1992,6 +2022,8 @@ function setupVisualChoices() {
         });
         document.querySelectorAll('[data-launch-meta-group] > summary > span:first-child,.cr-sdk-group > summary > span:first-child').forEach(span=>{const key=span.parentElement.parentElement.dataset.launchMetaGroup||span.parentElement.parentElement.dataset.sdkGroup;if(groups[key])setText(span,groups[key]);});
         translateOptions(document);
+        const budgetHelp=$('dailyBudgetHelp');if(budgetHelp)setText(budgetHelp,'В минимальных единицах валюты рекламного кабинета (500 = 5,00 EUR/USD).');
+        const languageHint=$('languageQuery')?.parentElement?.querySelector('.muted');if(languageHint&&/Meta Audience Languages/i.test(languageHint.textContent||''))setText(languageHint,'Можно выбрать несколько языков.');
         ensureMetaChoicePrompts();
         setupVisualChoices();
         const captions={
@@ -2621,33 +2653,37 @@ body.app-shell.wf-autoupload-open .wf-launch .wf-audience-advanced-summary{backg
         root=root||document.querySelector('.launch-wrap');
         if(!root)return;
         const mode=$('remaskPrivateExecutionMode'),delivery=$('launchDeliverySelect');
+        const reviewing=root.dataset.wfActiveStep==='review';
         const publish=mode?.value==='PUBLISH';
         const modeLabel=publish?'Публикация в Meta':'Черновик в Meta';
         const selectedStatus=delivery?.selectedOptions?.[0]?.textContent?.trim()||'';
+        const badgeLabel=reviewing?'Режим: '+(publish?'Публикация':'Черновик'):'Действие: выберете в конце';
+        const summaryLabel=reviewing?modeLabel:'Действие выберете на шаге «Проверка»';
         const banner=$('remaskLaunchModeBanner');
-        if(banner)setText(banner,'Соберите кампанию и объявление. На последнем шаге выберите: сохранить черновик или опубликовать рекламу.');
+        if(banner)setText(banner,'Соберите кампанию и объявление. Сохранение или публикацию выберите в конце.');
+        const readiness=$('remaskLaunchModeReadinessNotice');
+        if(readiness)setText(readiness,publish?'Публикация использует статус, выбранный ниже.':'Сохранить в Meta без публикации.');
         const badge=root.querySelector('.wf-studio-badge');
         if(badge){
             const dot=badge.querySelector('i')||document.createElement('i');
             dot.setAttribute('aria-hidden','true');
-            badge.replaceChildren(dot,document.createTextNode('Режим: '+(publish?'Публикация':'Черновик')));
+            badge.replaceChildren(dot,document.createTextNode(badgeLabel));
         }
         const mobileStatus=document.querySelector('#wfMobileActions .wf-workflow-status');
-        if(mobileStatus)setText(mobileStatus,'Режим: '+(publish?'Публикация':'Черновик'));
+        if(mobileStatus)setText(mobileStatus,badgeLabel);
         const summary=root.querySelector('#wfLiveSummary');
         const caption=summary?.querySelector('.wf-live-summary-caption');
         if(caption)setText(caption,'Текущие параметры');
         const summaryStatus=summary?.querySelector('.wf-live-status');
-        if(summaryStatus)setText(summaryStatus,modeLabel+(delivery?.value&&selectedStatus?' · '+selectedStatus:''));
+        if(summaryStatus)setText(summaryStatus,summaryLabel+(reviewing&&delivery?.value&&selectedStatus?' · '+selectedStatus:''));
         const modeLabelNode=root.querySelector('label[for="remaskPrivateExecutionMode"]');
         if(modeLabelNode)setText(modeLabelNode,'Что сделать с рекламой');
         const deliveryLabel=root.querySelector('label[for="launchDeliverySelect"]');
         if(deliveryLabel)setText(deliveryLabel,'Статус после создания');
+        const deliveryRow=delivery?.closest('.d-flex');
+        if(deliveryRow)deliveryRow.hidden=!publish;
         const note=$('remaskPrivateExecutionNote');
         if(note)setText(note,publish?'Опубликовать рекламу; статус после создания выберите ниже.':'Сохранить в Meta как черновик без публикации.');
-        const safety=root.querySelector('#wf-launch-review-1 .wf-paused-safety-label');
-        const safetyRow=safety?.parentElement;
-        if(safetyRow&&!safetyRow.contains(delivery))safetyRow.remove();
         const reviewButton=$('reviewLaunch');
         if(reviewButton)setText(reviewButton,'Проверить настройки');
         const createButton=$('launchButton');
@@ -2703,6 +2739,7 @@ body.app-shell.wf-autoupload-open .wf-launch .wf-audience-advanced-summary{backg
             'body.app-shell.wf-autoupload-open #wfResourceActions #preflight[hidden], body.app-shell.wf-autoupload-open #wfResourceActions[hidden], body.app-shell.wf-autoupload-open #apiUsage[hidden]{display:none!important}',
             'body.app-shell.wf-autoupload-open #wf-launch-review-1 #remaskPrivateExecutionMode, body.app-shell.wf-autoupload-open #wf-launch-review-1 #launchDeliverySelect{font-size:14px!important;min-height:44px!important}'
         ].join('\n');
+        clarity.textContent+='\n'+"body.app-shell.wf-autoupload-open{color-scheme:dark!important;background:#151d22!important;color:#edf3f5!important}\nbody.app-shell.wf-autoupload-open .app-sidebar,body.app-shell.wf-autoupload-open .app-topbar{background:#11191e!important;border-color:#303b41!important}\nbody.app-shell.wf-autoupload-open .app-main,body.app-shell.wf-autoupload-open main:has(.wf-launch){background:#151d22!important;color:#edf3f5!important}\nbody.app-shell.wf-autoupload-open .app-sidebar .app-nav a{color:#bdc9ce!important}\nbody.app-shell.wf-autoupload-open .app-sidebar .app-nav a:hover{background:#1d292e!important;color:#f0f6f7!important}\nbody.app-shell.wf-autoupload-open .app-sidebar .app-nav a.active,body.app-shell.wf-autoupload-open .app-sidebar .app-nav a[aria-current=\"page\"]{background:#203033!important;color:#effbf9!important;border-left-color:#43b9aa!important}\nbody.app-shell.wf-autoupload-open .rm-estimate-layout.wf-studio-estimate-layout{background:#151d22!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3{--studio-ink:#f0f5f6;--studio-muted:#b8c5ca;--studio-border:#344249;--studio-border-strong:#46565e;--studio-surface:#1d282e;--studio-surface-2:#222f35;--studio-accent:#39b4a5;--studio-accent-strong:#268f84;--studio-accent-soft:#1b3a36;--studio-positive:#69d1bd;color:#f0f5f6!important;font-size:15px!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3>.app-page-head{border-bottom-color:#344249!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3>.app-page-head h1,body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3>.app-page-head h2{color:#f3f7f8!important;font-size:28px!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3>.app-page-head p{color:#bdc9ce!important;font-size:15px!important;line-height:1.55!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-studio-badge{background:#202c32!important;border-color:#3d4c53!important;color:#ecf4f5!important;font-size:12px!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-studio-badge i{background:#39b4a5!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3>.wf-step-nav{border-bottom-color:#344249!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3>.wf-step-nav a{color:#bfccd1!important;font-size:14px!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3>.wf-step-nav a:hover{background:#222f35!important;color:#f0f5f6!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3>.wf-step-nav a.is-current{border-bottom-color:#39b4a5!important;color:#f3f8f8!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-step-index{background:#222f35!important;border-color:#46565e!important;color:#c5d0d4!important;font-size:12px!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3>.wf-step-nav a.is-current .wf-step-index{background:#258f84!important;border-color:#39b4a5!important;color:#fff!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3>.wf-step-nav a.is-complete .wf-step-index{background:#1b3a36!important;border-color:#287c73!important;color:#9be3d7!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3>.wf-step-progress{background:#303d43!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3>.wf-step-progress span{background:#39b4a5!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3>.launch-card.wf-step-card,body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-step-panel>.launch-card.wf-step-card,body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-live-summary,body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-resource-utilities{background:#1d282e!important;border-color:#39484f!important;color:#edf3f5!important;box-shadow:0 8px 22px rgba(0,0,0,.16)!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3>.wf-step-card.is-current-step{grid-area:content!important;min-width:0!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3>.wf-step-panel.is-current-step{grid-area:content!important;display:flex!important;flex-direction:column!important;gap:12px!important;min-width:0!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-step-panel>.wf-step-card{grid-area:auto!important;width:100%!important;min-width:0!important;margin:0!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-step-panel-review>.launch-card.wf-step-card{padding:20px!important;border-radius:12px!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .launch-card>h5{color:#f0f5f6!important;font-size:20px!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-step-context{color:#becbd0!important;font-size:14.5px!important;line-height:1.5!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-section-heading{color:#c7d3d7!important;border-color:#35434a!important;font-size:13.5px!important;letter-spacing:.035em!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 label,body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-target-field>label{color:#d5dfe2!important;font-size:14.5px!important;font-weight:650!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-help,body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 small,body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .muted{color:#b1bec4!important;font-size:13.5px!important;line-height:1.45!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-empty-copy small{color:#bdc9ce!important;font-size:14px!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .form-control:not(.rm-meta-visual-source):not(.rm-module-source):not(.wf-profile-native):not([type=hidden]):not([hidden]){min-height:46px!important;background:#151e23!important;border-color:#42515a!important;color:#f0f5f6!important;font-size:15px!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .form-control::placeholder,body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 input::placeholder,body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 textarea::placeholder{color:#9eacb2!important;opacity:1!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 select option{background:#1d282e!important;color:#f0f5f6!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .form-control:hover:not(:disabled){background:#192329!important;border-color:#61727a!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .form-control:focus,body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 :is(input,select,textarea):focus-visible{background:#151e23!important;border-color:#39b4a5!important;box-shadow:0 0 0 3px rgba(57,180,165,.22)!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .form-control:disabled{background:#202b31!important;color:#9eacb2!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-choice-option,body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-profile-grid label,body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-account-choice{background:#222f35!important;border-color:#3e4e55!important;color:#edf3f5!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-choice-option:hover,body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-profile-grid label:hover,body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-account-choice:hover{background:#29373d!important;border-color:#5a6d73!important;color:#f4f8f9!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-choice-option.is-selected,body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-profile-grid label:has(input:checked),body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-account-choice:has(input:checked),body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .rk-picker-table .rk-picker-row.is-selected{background:#1b3a36!important;border-color:#39b4a5!important;color:#e8faf6!important;box-shadow:inset 0 0 0 1px rgba(57,180,165,.12)!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-choice-option{min-height:58px!important;padding:10px 12px!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-choice-icon{background:#1a252a!important;border-color:#3a4a50!important;color:#bdc9ce!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-choice-copy strong{color:inherit!important;font-size:14px!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-choice-copy small{color:#bbc8cd!important;font-size:13px!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-choice-check{background:#268f84!important;color:#fff!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-empty-state,body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-empty-state *{color:#d0dadd!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-empty-state{background:#222f35!important;border-color:#3c4b52!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-live-summary>summary{background:#1d282e!important;border-color:#344249!important;color:#f0f5f6!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-live-summary-title{color:#f0f5f6!important;font-size:15px!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-live-summary-caption{color:#b7c3c8!important;font-size:13px!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-live-status{background:#1a3a35!important;border-color:#2f6f65!important;color:#9ce1d5!important;font-size:12px!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-summary-quickfact{background:#222f35!important;border-color:#3a494f!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-summary-quickfact>span{color:#bdc9ce!important;font-size:12px!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-summary-quickfact>strong{color:#f0f5f6!important;font-size:14px!important;line-height:1.35!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-live-row{border-color:#344249!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-live-row-label{color:#bdc9ce!important;font-size:12.5px!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-live-row-value{color:#edf3f5!important;font-size:14px!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-live-summary-foot{border-color:#344249!important;color:#b5c1c6!important;font-size:12px!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-audience-group,body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-audience-subgroup,body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-audience-delivery,body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-audience-estimate,body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-target-catalog-disclosure,body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-meta-extra-disclosure{border-top-color:#35434a!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-audience-group>summary,body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-audience-subgroup>summary,body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-audience-delivery>summary,body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-audience-estimate>summary,body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-target-catalog-summary,body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-meta-extra-summary,body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-card-disclosure>summary{color:#e8eff1!important;font-size:14px!important;min-height:46px!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-audience-group>summary:after,body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-audience-subgroup>summary:after,body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-audience-delivery>summary:after,body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-audience-estimate>summary:after,body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-target-catalog-summary:after,body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-meta-extra-summary:after{border-color:#afbdc2!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-audience-advanced-tools{background:#1d282e!important;border-color:#39484f!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-audience-advanced-summary{background:#1d282e!important;color:#e8eff1!important;font-size:14px!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-audience-advanced-body{background:#1d282e!important;border-color:#344249!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-target-note,body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-target-search-status{color:#b8c5ca!important;font-size:13px!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-target-field,body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-target-result,body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-target-choice,body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .rm-module-results{background:#1d282e!important;border-color:#39484f!important;color:#edf3f5!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-target-search,body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions .wf-target-search{min-height:46px!important;background:#151e23!important;color:#f0f5f6!important;font-size:15px!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-meta-extra-disclosure{display:none!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-meta-note,body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .rm-meta-note{display:none!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .job-table{color:#edf3f5!important;border-color:#39484f!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .job-table th,body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .job-table td{background:#1d282e!important;border-color:#39484f!important;color:#d8e2e5!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .status-box{background:#202e32!important;border-color:#3a4c50!important;color:#d7e6e6!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .btn-secondary,body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .btn-outline-secondary{background:#26343a!important;border-color:#48575e!important;color:#e9f0f2!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .btn-secondary:hover,body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .btn-outline-secondary:hover{background:#304047!important;border-color:#64767e!important;color:#fff!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 :is(.btn-primary,.btn-info,.btn-success),body.app-shell.wf-autoupload-open #wfMobileActions :is(.wf-mobile-next,#reviewLaunch,#launchButton){background:#238f83!important;border-color:#238f83!important;color:#fff!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 :is(.btn-primary,.btn-info,.btn-success):hover,body.app-shell.wf-autoupload-open #wfMobileActions :is(.wf-mobile-next,#reviewLaunch,#launchButton):hover{background:#2da497!important;border-color:#2da497!important}\nbody.app-shell.wf-autoupload-open #wfMobileActions{background:#151e23!important;border-color:#344249!important;color:#eaf1f3!important;box-shadow:0 -8px 20px rgba(0,0,0,.24)!important}\nbody.app-shell.wf-autoupload-open #wfMobileActions button{min-height:46px!important;font-size:14px!important}\nbody.app-shell.wf-autoupload-open #wfMobileActions .wf-workflow-status{color:#c5d0d4!important;font-size:13px!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 :is(input,select,textarea):focus-visible{outline:3px solid rgba(57,180,165,.24)!important;outline-offset:1px!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 input[type=checkbox],body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 input[type=radio]{accent-color:#39b4a5!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 [hidden]{display:none!important}";
         if(clarity.parentElement)clarity.remove();
         (document.head||document.documentElement).appendChild(clarity);
     }
@@ -2731,6 +2768,7 @@ body.app-shell.wf-autoupload-open .wf-launch .wf-audience-advanced-summary{backg
                 queued=false;
                 observer.disconnect();
                 safeEnhance('dynamic refresh',enhanceDynamic);
+                const launch=document.querySelector('.launch-wrap');launch?._wfSyncReviewPanelVisibility?.();
                 observer.observe(document.body,{childList:true,subtree:true});
             });
         });
