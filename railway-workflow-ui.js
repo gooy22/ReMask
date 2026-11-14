@@ -1806,13 +1806,14 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
         if(reviewButton){reviewButton.classList.add('wf-toolbar-action');mobileBar.appendChild(reviewButton);}
         if(createButton){createButton.classList.add('wf-toolbar-action');mobileBar.appendChild(createButton);}
         function syncToolbarActions(){
-            const isReview=activeStep===reviewIndex,createReady=!!(createButton&&!createButton.disabled);
+            const actionChosen=['DRAFT','PUBLISH'].includes($('remaskPrivateExecutionMode')?.value);
+            const isReview=activeStep===reviewIndex,createReady=actionChosen&&!!(createButton&&!createButton.disabled);
             if(nextButton){
                 nextButton.hidden=isReview;
                 nextButton.textContent='Далее';
                 nextButton.setAttribute('aria-label',nextButton.textContent);
             }
-            if(reviewButton)reviewButton.hidden=!isReview||createReady;
+            if(reviewButton)reviewButton.hidden=true;
             if(createButton)createButton.hidden=!isReview||!createReady;
         }
         function isStepComplete(index){
@@ -1934,7 +1935,7 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
         estimateLayout?.classList.add('wf-studio-estimate-layout');
         if(root.dataset.wfSummaryBound!=='1'){
             root.dataset.wfSummaryBound='1';
-            ['input','change'].forEach(type=>root.addEventListener(type,()=>{updateLiveSummary();updateAudienceTargetingSummary();syncLaunchModePresentation(root);syncResourceActions(root);},true));
+            ['input','change'].forEach(type=>root.addEventListener(type,()=>{updateLiveSummary();updateAudienceTargetingSummary();syncLaunchModePresentation(root);syncResourceActions(root);root._wfSyncToolbar?.();},true));
         }
         updateLiveSummary();
     }
@@ -2652,16 +2653,23 @@ body.app-shell.wf-autoupload-open .wf-launch .wf-audience-advanced-summary{backg
         root=root||document.querySelector('.launch-wrap');
         if(!root)return;
         const mode=$('remaskPrivateExecutionMode'),delivery=$('launchDeliverySelect');
+        if(mode&&!mode.dataset.wfExplicitChoiceReady){
+            if(![...mode.options].some(option=>option.value==='')){
+                const prompt=document.createElement('option');prompt.value='';prompt.textContent='Выберите действие';mode.insertBefore(prompt,mode.firstChild);
+            }
+            mode.value='';mode.dataset.wfExplicitChoiceReady='1';
+        }
         const reviewing=root.dataset.wfActiveStep==='review';
-        const publish=mode?.value==='PUBLISH';
-        const modeLabel=publish?'Публикация в Meta':'Черновик в Meta';
+        const publish=mode?.value==='PUBLISH',draft=mode?.value==='DRAFT';
+        const selected=publish||draft;
+        const modeLabel=publish?'Публикация в Meta':draft?'Черновик в Meta':'Действие не выбрано';
         const selectedStatus=delivery?.selectedOptions?.[0]?.textContent?.trim()||'';
-        const badgeLabel=reviewing?'Режим: '+(publish?'Публикация':'Черновик'):'Действие: выберете в конце';
+        const badgeLabel=reviewing?(selected?'Режим: '+(publish?'Публикация':'Черновик'):'Выберите действие'):'Действие: выберете в конце';
         const summaryLabel=reviewing?modeLabel:'Действие выберете на шаге «Проверка»';
         const banner=$('remaskLaunchModeBanner');
         if(banner)setText(banner,'Соберите кампанию и объявление. Сохранение или публикацию выберите в конце.');
         const readiness=$('remaskLaunchModeReadinessNotice');
-        if(readiness)setText(readiness,publish?'Публикация использует статус, выбранный ниже.':'Сохранить в Meta без публикации.');
+        if(readiness)setText(readiness,!selected?'Выберите, сохранить черновик или опубликовать.':publish?'Публикация использует статус, выбранный ниже.':'Сохранить в Meta без публикации.');
         const badge=root.querySelector('.wf-studio-badge');
         if(badge){
             const dot=badge.querySelector('i')||document.createElement('i');
@@ -2674,7 +2682,7 @@ body.app-shell.wf-autoupload-open .wf-launch .wf-audience-advanced-summary{backg
         const caption=summary?.querySelector('.wf-live-summary-caption');
         if(caption)setText(caption,'Текущие параметры');
         const summaryStatus=summary?.querySelector('.wf-live-status');
-        if(summaryStatus)setText(summaryStatus,summaryLabel+(reviewing&&delivery?.value&&selectedStatus?' · '+selectedStatus:''));
+        if(summaryStatus)setText(summaryStatus,summaryLabel+(reviewing&&publish&&delivery?.value&&selectedStatus?' · '+selectedStatus:''));
         const modeLabelNode=root.querySelector('label[for="remaskPrivateExecutionMode"]');
         if(modeLabelNode)setText(modeLabelNode,'Что сделать с рекламой');
         const deliveryLabel=root.querySelector('label[for="launchDeliverySelect"]');
@@ -2682,12 +2690,10 @@ body.app-shell.wf-autoupload-open .wf-launch .wf-audience-advanced-summary{backg
         const deliveryRow=delivery?.closest('.d-flex');
         if(deliveryRow)deliveryRow.hidden=!publish;
         const note=$('remaskPrivateExecutionNote');
-        if(note)setText(note,publish?'Опубликовать рекламу; статус после создания выберите ниже.':'Сохранить в Meta как черновик без публикации.');
-        const reviewButton=$('reviewLaunch');
-        if(reviewButton)setText(reviewButton,'Проверить настройки');
+        if(note)setText(note,!selected?'Выберите действие перед завершением.':publish?'Опубликовать рекламу; статус после создания выберите ниже.':'Сохранить в Meta как черновик без публикации.');
         const createButton=$('launchButton');
         if(createButton){
-            const label=publish?'Опубликовать рекламу':'Сохранить черновик';
+            const label=publish?'Опубликовать рекламу':draft?'Сохранить черновик':'Выберите действие';
             setText(createButton,label);
             createButton.setAttribute('aria-label',label);
         }
