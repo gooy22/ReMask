@@ -2673,32 +2673,40 @@ body.app-shell.wf-autoupload-open .wf-launch .wf-audience-advanced-summary{backg
         if(usage)usage.hidden=/no data|нет данных|пока нет/i.test(usage.textContent||'');
     }
 
-    style.textContent += [
-        'body.app-shell.wf-autoupload-open .wf-launch .app-page-actions, body.app-shell.wf-autoupload-open .wf-launch .app-eyebrow, body.app-shell.wf-autoupload-open .wf-launch .wf-studio-kicker{display:none!important}',
-        'body.app-shell.wf-autoupload-open .wf-launch .app-subtitle{font-size:14px!important;line-height:1.55!important;color:#4b5965!important}',
-        'body.app-shell.wf-autoupload-open .wf-launch .wf-step-context, body.app-shell.wf-autoupload-open .wf-launch .wf-empty-copy small, body.app-shell.wf-autoupload-open .wf-launch #remaskPrivateExecutionNote{font-size:13.5px!important;line-height:1.5!important;color:#4b5965!important}',
-        'body.app-shell.wf-autoupload-open .wf-launch label{font-size:13.5px!important;color:#293741!important;font-weight:650!important}',
-        'body.app-shell.wf-autoupload-open .wf-launch .form-control:not(.rm-meta-visual-source):not(.rm-module-source):not(.wf-profile-native):not([type=hidden]):not([hidden]){font-size:14px!important;min-height:44px!important;color:#202a33!important}',
-        'body.app-shell.wf-autoupload-open .wf-launch .wf-section-heading{font-size:12.5px!important;letter-spacing:.04em!important;color:#4b5965!important}',
-        'body.app-shell.wf-autoupload-open .wf-launch .wf-step-nav a{font-size:13px!important;color:#34414b!important}',
-        'body.app-shell.wf-autoupload-open .wf-launch .wf-choice-copy small{font-size:12px!important;line-height:1.4!important;color:#53616c!important}',
-        'body.app-shell.wf-autoupload-open .wf-launch .wf-audience-group>summary, body.app-shell.wf-autoupload-open .wf-launch .wf-audience-subgroup>summary, body.app-shell.wf-autoupload-open .wf-launch .wf-card-disclosure>summary{font-size:13px!important;color:#303b46!important}',
-        'body.app-shell.wf-autoupload-open .wf-launch .wf-target-field>label{font-size:13px!important;color:#36444e!important}',
-        'body.app-shell.wf-autoupload-open .wf-launch .wf-target-note, body.app-shell.wf-autoupload-open .wf-launch .wf-target-search-status{font-size:12px!important;color:#56636f!important}',
-        'body.app-shell.wf-autoupload-open .wf-launch #wfTargetingOptions .wf-target-search{font-size:14px!important;min-height:44px!important}',
-        'body.app-shell.wf-autoupload-open .wf-launch .wf-live-summary-caption{font-size:12px!important;color:#596570!important}',
-        'body.app-shell.wf-autoupload-open .wf-launch .wf-live-status{font-size:11px!important;color:#24564f!important}',
-        'body.app-shell.wf-autoupload-open .wf-launch .wf-summary-quickfact>span{font-size:10.5px!important;color:#56636f!important}',
-        'body.app-shell.wf-autoupload-open .wf-launch .wf-summary-quickfact>strong{font-size:13px!important;color:#202a33!important;line-height:1.4!important}',
-        'body.app-shell.wf-autoupload-open .wf-launch .wf-live-row-label{font-size:11.5px!important;color:#56636f!important}',
-        'body.app-shell.wf-autoupload-open .wf-launch .wf-live-row-value{font-size:13px!important;color:#293741!important}',
-        'body.app-shell.wf-autoupload-open #wfMobileActions{grid-template-columns:auto minmax(0,1fr) auto auto!important}',
-        'body.app-shell.wf-autoupload-open #wfMobileActions button{min-height:44px!important;font-size:12.5px!important}',
-        'body.app-shell.wf-autoupload-open #wfResourceActions{grid-template-columns:minmax(0,1fr)!important}',
-        'body.app-shell.wf-autoupload-open #wfResourceActions #preflight[hidden], body.app-shell.wf-autoupload-open #wfResourceActions[hidden], body.app-shell.wf-autoupload-open #apiUsage[hidden]{display:none!important}',
-        'body.app-shell.wf-autoupload-open #wf-launch-review-1 #remaskPrivateExecutionMode, body.app-shell.wf-autoupload-open #wf-launch-review-1 #launchDeliverySelect{font-size:14px!important;min-height:44px!important}',
-        'body.app-shell.wf-autoupload-open #wf-launch-review-1 .wf-paused-safety-label{display:none!important}'
-    ].join('\n');
+    function installClarityOverrides() {
+        let clarity=document.getElementById('wfClarityOverrides');
+        if(!clarity){clarity=document.createElement('style');clarity.id='wfClarityOverrides';}
+        clarity.textContent=[
+            'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .app-page-actions, body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .app-eyebrow, body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-studio-kicker{display:none!important}',
+            'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .app-subtitle{font-size:14px!important;line-height:1.55!important;color:#4b5965!important}',
+            'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-step-context{font-size:13.5px!important;line-height:1.5!important;color:#4b5965!important}',
+            'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 label{font-size:13.5px!important;color:#293741!important;font-weight:650!important}',
+            'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-help, body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 small, body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .muted{font-size:12.5px!important;line-height:1.45!important;color:#56636f!important}',
+            'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-empty-copy small{font-size:13.5px!important;line-height:1.5!important;color:#4b5965!important}',
+            'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .form-control:not(.rm-meta-visual-source):not(.rm-module-source):not(.wf-profile-native):not([type=hidden]):not([hidden]){font-size:14px!important;min-height:44px!important;color:#202a33!important}',
+            'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-section-heading{font-size:13px!important;letter-spacing:.03em!important;color:#4b5965!important}',
+            'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-step-nav a{font-size:13px!important;color:#34414b!important}',
+            'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-choice-copy small{font-size:12.5px!important;line-height:1.4!important;color:#53616c!important}',
+            'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-audience-group>summary, body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-audience-subgroup>summary, body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-card-disclosure>summary{font-size:13px!important;color:#303b46!important}',
+            'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-target-field>label{font-size:13px!important;color:#36444e!important}',
+            'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-target-note, body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-target-search-status{font-size:12px!important;color:#56636f!important}',
+            'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions .wf-target-search{font-size:14px!important;min-height:44px!important}',
+            'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-live-summary-caption{font-size:12.5px!important;color:#596570!important}',
+            'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-live-status{font-size:11.5px!important;color:#24564f!important}',
+            'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-summary-quickfact>span{font-size:11.5px!important;color:#56636f!important}',
+            'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-summary-quickfact>strong{font-size:13px!important;color:#202a33!important;line-height:1.4!important}',
+            'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-live-row-label{font-size:12px!important;color:#56636f!important}',
+            'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-live-row-value{font-size:13.5px!important;color:#293741!important}',
+            'body.app-shell.wf-autoupload-open #wfMobileActions{grid-template-columns:auto minmax(0,1fr) auto auto!important}',
+            'body.app-shell.wf-autoupload-open #wfMobileActions button{min-height:44px!important;font-size:12.5px!important}',
+            'body.app-shell.wf-autoupload-open #wfResourceActions{grid-template-columns:minmax(0,1fr)!important}',
+            'body.app-shell.wf-autoupload-open #wfResourceActions #preflight[hidden], body.app-shell.wf-autoupload-open #wfResourceActions[hidden], body.app-shell.wf-autoupload-open #apiUsage[hidden]{display:none!important}',
+            'body.app-shell.wf-autoupload-open #wf-launch-review-1 #remaskPrivateExecutionMode, body.app-shell.wf-autoupload-open #wf-launch-review-1 #launchDeliverySelect{font-size:14px!important;min-height:44px!important}'
+        ].join('\\n');
+        if(clarity.parentElement)clarity.remove();
+        (document.head||document.documentElement).appendChild(clarity);
+    }
+    
             function safeEnhance(name, task) {
         try { return task(); }
         catch (error) { console.error('[AutoUpload] '+name+' failed', error); return null; }
@@ -2727,6 +2735,8 @@ body.app-shell.wf-autoupload-open .wf-launch .wf-audience-advanced-summary{backg
             });
         });
         observer.observe(document.body,{childList:true,subtree:true});
+        installClarityOverrides();
+        requestAnimationFrame(()=>requestAnimationFrame(installClarityOverrides));
     }
     if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init,{once:true});else init();
 })();
