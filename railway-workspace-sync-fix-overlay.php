@@ -674,7 +674,8 @@ function updateSelectionUi(){
   ));
   $('workspaceSelected').textContent=`Выбрано: ${n}${held?' · META-БЛОКИРОВКА':''}`;
   // Keep read-only Sync available, but do not expose mutation actions for held profiles.
-  $('workspaceActions').disabled=n===0||held;
+  $('workspaceActions').disabled=n===0;
+  if(held)$('workspaceActions').disabled=true;
   $('workspaceActions').title=held
     ? 'Создание BM/РК и запуск остановлены: ограничение РК подтверждено в Ads Manager.'
     : '';
