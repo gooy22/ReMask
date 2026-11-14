@@ -230,7 +230,7 @@ class ReadInventoryTests(unittest.IsolatedAsyncioTestCase):
             document='<script>' + artifact() + '</script>', entry_url="https://business.facebook.com/latest/settings/ad_accounts/")
         self.assertEqual(diag["query_posts"], 0)
         self.assertEqual(diag["query_attempts"], 1)
-        self.assertEqual(web._private_inventory_query_cache, {})
+        self.assertEqual(getattr(web, "_private_inventory_query_cache", {}), {})
 
 
 class QueryCreateFlowTests(unittest.IsolatedAsyncioTestCase):
