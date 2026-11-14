@@ -25,6 +25,19 @@ if (is_file($launchJsPath)) {
         exit(30);
     }
 
+    $autoMetaCallCount = 0;
+    $js = preg_replace(
+        '/await\s+applyPendingWorkspaceSelection\(\)\s*;/',
+        '/* REMASK_META_READS_REQUIRE_EXPLICIT_USER_ACTION_V1 */',
+        $js,
+        1,
+        $autoMetaCallCount
+    ) ?? $js;
+    if ($autoMetaCallCount > 1) {
+        throw new RuntimeException('Launch page-load Meta handoff appeared more than once');
+    }
+    fwrite(STDERR, "[launch overlay] removed automatic Meta startup handoff matches={$autoMetaCallCount}\n");
+
     if (strpos($js, 'url_tags') === false) {
         $count = 0;
         $js = preg_replace(

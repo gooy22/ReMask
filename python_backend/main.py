@@ -27,6 +27,7 @@ from app.private_http_metrics import observe_profile_inventory, observe_profile_
 from app.provisioning.models import ProvisioningError, ProvisioningStep
 from app.provisioning.meta_transport import MetaTransportRouter
 from app.provisioning.service import normalize_add_bm_payload
+from app.restriction_hold import profile_restriction_hold, profile_activity_lock
 from app.facebook_docids import (
     list_candidates,
     registry_view,
@@ -60,8 +61,25 @@ async def _resolve_read_profile(
     )
 
 
+async def _serialize_profile_meta_activity(profile_id: str):
+    async with profile_activity_lock(profile_id):
+        yield
+
+
+async def _require_profile_not_restriction_hold(profile_id: str) -> None:
+    hold = profile_restriction_hold(profile_id)
+    if hold is not None:
+        raise HTTPException(status_code=409, detail={
+            'code': hold['code'],
+            'message': hold['message'],
+        })
+
+
 SMOKE_ON_START=str(os.getenv('REMASK_E2E_SMOKE_ON_START','0')).strip().lower() in {'1','true','yes','on'}
 BM_CANARY_ON_START=str(os.getenv('REMASK_BM_CANARY_ON_START','0')).strip().lower() in {'1','true','yes','on'}
+# Startup Meta reads and saved-job repair are opt-in as a group. The legacy
+# per-probe variables alone must not create Meta traffic on every restart.
+STARTUP_META_ACTIVITY_ENABLED=str(os.getenv('REMASK_ENABLE_STARTUP_META_ACTIVITY','0')).strip().lower() in {'1','true','yes','on'}
 
 async def run_bm_browser_canary() -> None:
     """
@@ -1059,32 +1077,36 @@ async def lifespan(app: FastAPI):
         run_bm_browser_canary(),
         name='remask-bm-browser-canary',
     )
-    live_inventory_canary_task=asyncio.create_task(
-        run_live_inventory_readonly_canary(),
-        name='remask-live-inventory-readonly-canary',
-    )
-    act_preflight_task=asyncio.create_task(
-        run_one_shot_act_preflight(),
-        name='remask-act-only-readonly-preflight',
-    )
-    from app.contract_maintenance.launch_http_audit import run as run_launch_http_audit
-    launch_http_audit_task=asyncio.create_task(run_launch_http_audit(pool), name='remask-launch-http-audit')
-    verification_audit_task=asyncio.create_task(
-        run_verification_http_contract_audit(), name='remask-verification-http-contract-audit')
+    startup_meta_tasks=[]
+    if STARTUP_META_ACTIVITY_ENABLED:
+        startup_meta_tasks.append(asyncio.create_task(
+            run_live_inventory_readonly_canary(),
+            name='remask-live-inventory-readonly-canary',
+        ))
+        startup_meta_tasks.append(asyncio.create_task(
+            run_one_shot_act_preflight(),
+            name='remask-act-only-readonly-preflight',
+        ))
+        from app.contract_maintenance.launch_http_audit import run as run_launch_http_audit
+        startup_meta_tasks.append(asyncio.create_task(
+            run_launch_http_audit(pool),
+            name='remask-launch-http-audit',
+        ))
+        startup_meta_tasks.append(asyncio.create_task(
+            run_verification_http_contract_audit(),
+            name='remask-verification-http-contract-audit',
+        ))
+    else:
+        log.info('automatic Meta startup activity disabled; set REMASK_ENABLE_STARTUP_META_ACTIVITY=1 only for an explicit diagnostic run')
     yield
     smoke_task.cancel()
     bm_canary_task.cancel()
-    live_inventory_canary_task.cancel()
-    act_preflight_task.cancel()
-    verification_audit_task.cancel()
-    launch_http_audit_task.cancel()
+    for task in startup_meta_tasks:
+        task.cancel()
     await asyncio.gather(
         smoke_task,
         bm_canary_task,
-        live_inventory_canary_task,
-        act_preflight_task,
-        verification_audit_task,
-        launch_http_audit_task,
+        *startup_meta_tasks,
         return_exceptions=True,
     )
     await pool.stop()
@@ -1156,27 +1178,37 @@ async def _terminal_profile_statuses(profile_ids: list[str]) -> dict[str, dict[s
         return {}
     reader = getattr(store, 'terminal_profile_statuses', None)
     if callable(reader):
-        return await reader(clean)
-    checkpoint_reader = getattr(store, 'terminal_checkpoint_profiles', None)
-    checkpointed = set(await checkpoint_reader(clean)) if callable(checkpoint_reader) else set()
-    status_reader = getattr(store, 'latest_profile_session_statuses', None)
-    rows = await status_reader() if callable(status_reader) else []
-    result = {}
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        profile = str(row.get('profile_id') or '').strip()
-        status = str(row.get('status') or '').strip().upper()
-        if profile not in clean:
-            continue
-        if profile in checkpointed or status in {'CHECKPOINT', 'BUSINESS_LOGIN_GATE'}:
-            result[profile] = {
-                'status': 'CHECKPOINT' if profile in checkpointed else status,
-                'checked_at': row.get('checked_at', 0),
-                'message': str(row.get('message') or ''),
-            }
-    for profile in checkpointed:
-        result.setdefault(str(profile), {'status':'CHECKPOINT','checked_at':0,'message':''})
+        result = dict(await reader(clean) or {})
+    else:
+        checkpoint_reader = getattr(store, 'terminal_checkpoint_profiles', None)
+        checkpointed = set(await checkpoint_reader(clean)) if callable(checkpoint_reader) else set()
+        status_reader = getattr(store, 'latest_profile_session_statuses', None)
+        rows = await status_reader() if callable(status_reader) else []
+        result = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            profile = str(row.get('profile_id') or '').strip()
+            status = str(row.get('status') or '').strip().upper()
+            if profile not in clean:
+                continue
+            if profile in checkpointed or status in {'CHECKPOINT', 'BUSINESS_LOGIN_GATE'}:
+                result[profile] = {
+                    'status': 'CHECKPOINT' if profile in checkpointed else status,
+                    'checked_at': row.get('checked_at', 0),
+                    'message': str(row.get('message') or ''),
+                }
+        for profile in checkpointed:
+            result.setdefault(str(profile), {'status':'CHECKPOINT','checked_at':0,'message':''})
+    for profile in clean:
+        hold = profile_restriction_hold(profile)
+        if hold is not None:
+            result.setdefault(profile, {
+                'status': hold['status'],
+                'checked_at': int(time.time()),
+                'message': hold['message'],
+                'code': hold['code'],
+            })
     return result
 
 
@@ -1192,6 +1224,8 @@ async def _auth_cookie_revocation_profile_statuses(
         return {}
     blocked: dict[str, dict[str, Any]] = {}
     for profile_id in clean:
+        if profile_restriction_hold(profile_id):
+            continue
         try:
             if not await has_marker(profile_id):
                 continue
@@ -1264,6 +1298,7 @@ async def _require_profile_not_checkpoint(profile_id: str) -> None:
     clean = str(profile_id or '').strip()
     if not clean:
         return
+    await _require_profile_not_restriction_hold(clean)
     terminal = (await _terminal_profile_statuses([clean])).get(clean)
     status = str((terminal or {}).get('status') or '').upper()
     if status == 'CHECKPOINT':
@@ -1280,10 +1315,11 @@ async def _require_profile_not_checkpoint(profile_id: str) -> None:
 
 
 async def _require_profile_not_checkpoint_for_revalidation(profile_id: str) -> None:
-    """Let read-only checks revalidate a prior Business Login Gate, but never a checkpoint."""
+    """Allow revalidation only when no local hold or terminal Meta gate exists."""
     clean = str(profile_id or '').strip()
     if not clean:
         return
+    await _require_profile_not_restriction_hold(clean)
     terminal = (await _terminal_profile_statuses([clean])).get(clean)
     status = str((terminal or {}).get('status') or '').upper()
     if status == 'CHECKPOINT':
@@ -1313,12 +1349,13 @@ async def _clear_business_login_gate_after_profile_review(
 
 async def _require_fp_auth_ready(profile_ids: list[str]) -> None:
     async def check(profile_id: str) -> tuple[str, dict[str, Any]]:
-        cached = _cached_fp_auth_gate(profile_id)
-        if cached is not None:
-            return profile_id, cached
-        preflight = await profile_preflight(profile_id, purpose='fan_pages')
-        _remember_fp_auth_gate(profile_id, preflight)
-        return profile_id, preflight
+        async with profile_activity_lock(profile_id):
+            cached = _cached_fp_auth_gate(profile_id)
+            if cached is not None:
+                return profile_id, cached
+            preflight = await profile_preflight(profile_id, purpose='fan_pages')
+            _remember_fp_auth_gate(profile_id, preflight)
+            return profile_id, preflight
 
     if not profile_ids:
         return
@@ -1516,7 +1553,7 @@ async def ready():
         'volume_path':str(os.getenv('RAILWAY_VOLUME_MOUNT_PATH') or ''),
     }
 
-@app.post('/api/v1/profiles/{profile_id}/preflight',dependencies=[Depends(require_key)])
+@app.post('/api/v1/profiles/{profile_id}/preflight',dependencies=[Depends(require_key),Depends(_require_profile_not_checkpoint),Depends(_serialize_profile_meta_activity)])
 async def profile_preflight(profile_id: str, purpose: str = 'business'):
     if purpose not in {'business','fan_pages'}:
         raise HTTPException(status_code=400,detail='INVALID_PREFLIGHT_PURPOSE')
@@ -1790,7 +1827,7 @@ async def profile_preflight(profile_id: str, purpose: str = 'business'):
         _remember_fp_auth_gate(clean_profile, result)
     return result
 
-@app.get('/api/v1/profiles/{profile_id}/page-access',dependencies=[Depends(require_key),Depends(_require_profile_not_checkpoint)])
+@app.get('/api/v1/profiles/{profile_id}/page-access',dependencies=[Depends(require_key),Depends(_require_profile_not_checkpoint),Depends(_serialize_profile_meta_activity)])
 async def profile_page_access(profile_id: str, account_id: str):
     from app.private_launch_read import inspect_profile_pages_http as inspect_profile_pages
     from app.page_access_inspection import unverified_result
@@ -1823,7 +1860,7 @@ async def profile_page_access(profile_id: str, account_id: str):
     return result
 
 
-@app.get('/api/v1/profiles/{profile_id}/payment-methods',dependencies=[Depends(require_key),Depends(_require_profile_not_checkpoint)])
+@app.get('/api/v1/profiles/{profile_id}/payment-methods',dependencies=[Depends(require_key),Depends(_require_profile_not_checkpoint),Depends(_serialize_profile_meta_activity)])
 async def profile_payment_methods(profile_id: str, account_id: str, business_id: str = '',
                                  business_asset_id: str = '', account_name: str = ''):
     from app.payment_inspection import inspect_profile_payment_methods
@@ -1851,7 +1888,7 @@ async def profile_payment_methods(profile_id: str, account_id: str, business_id:
         raise HTTPException(status_code=409,detail=exc.code) from exc
 
 
-@app.get('/api/v1/profiles/{profile_id}/payment-contract-sources',dependencies=[Depends(require_key),Depends(_require_profile_not_checkpoint)])
+@app.get('/api/v1/profiles/{profile_id}/payment-contract-sources',dependencies=[Depends(require_key),Depends(_require_profile_not_checkpoint),Depends(_serialize_profile_meta_activity)])
 async def profile_payment_contract_sources(profile_id: str, account_id: str):
     from app.contract_maintenance.payment_sources import inspect_profile_payment_sources
     profile = str(profile_id or '').strip()
@@ -1869,7 +1906,7 @@ async def profile_payment_contract_sources(profile_id: str, account_id: str):
         raise HTTPException(status_code=502, detail='PAYMENT_CONTRACT_SOURCE_UNAVAILABLE') from None
 
 
-@app.post('/api/v1/profiles/{profile_id}/payment-card',dependencies=[Depends(require_key),Depends(_require_profile_not_checkpoint)])
+@app.post('/api/v1/profiles/{profile_id}/payment-card',dependencies=[Depends(require_key),Depends(_require_profile_not_checkpoint),Depends(_serialize_profile_meta_activity)])
 async def profile_payment_card_action(profile_id: str, payload: dict = Body(...)):
     from app.payment_card_binding import profile_payment_card
     profile=str(profile_id or '').strip()
@@ -2050,7 +2087,7 @@ def _live_inventory_targets_ready(
     })
 
 
-@app.get('/api/v1/profiles/{profile_id}/live-inventory',dependencies=[Depends(require_key),Depends(_require_profile_not_checkpoint_for_revalidation)])
+@app.get('/api/v1/profiles/{profile_id}/live-inventory',dependencies=[Depends(require_key),Depends(_require_profile_not_checkpoint_for_revalidation),Depends(_serialize_profile_meta_activity)])
 @observe_profile_inventory
 async def profile_live_inventory(
     profile_id: str,
@@ -2503,6 +2540,18 @@ async def profile_live_inventory(
             sync_timings['inventory']=int((time.monotonic()-private_started)*1000)
             if isinstance(private_snapshot.get('timings_ms'),dict):
                 sync_timings['meta_reads']=private_snapshot['timings_ms']
+            private_auth_gates = {
+                str(row.get('auth_gate') or '').strip().upper()
+                for row in (private_snapshot.get('diagnostics') or [])
+                if isinstance(row, dict) and row.get('auth_gate')
+            }
+            private_auth_gate = next((code for code in (
+                'CHECKPOINT_REQUIRED', 'TWO_FACTOR_REQUIRED', 'SESSION_EXPIRED', 'BUSINESS_LOGIN_GATE'
+            ) if code in private_auth_gates), '')
+            if private_auth_gate == 'CHECKPOINT_REQUIRED':
+                await store.record_terminal_checkpoint(clean_profile)
+            elif private_auth_gate == 'BUSINESS_LOGIN_GATE':
+                await store.record_terminal_profile_status(clean_profile, 'BUSINESS_LOGIN_GATE')
             if private_snapshot.get('ready'):
                 private_businesses=[
                     row for row in (private_snapshot.get('businesses') or [])
@@ -2645,7 +2694,7 @@ async def profile_live_inventory(
                 )
                 return result
 
-            if meta_transport.policy('INVENTORY').fallback == 'none_private_only':
+            if private_auth_gate or meta_transport.policy('INVENTORY').fallback == 'none_private_only':
                 # REMASK_PRIVATE_ONLY_SYNC_V1
                 # Return partial evidence through the existing PHP outcome
                 # boundary. It preserves the last confirmed inventory and does
@@ -2759,6 +2808,10 @@ async def profile_live_inventory(
                             fast_probe_timeout,
                         )
                     except (asyncio.TimeoutError,BrowserBusinessError) as exc:
+                        if isinstance(exc, BrowserBusinessError) and exc.code in {
+                            'CHECKPOINT_REQUIRED', 'SESSION_EXPIRED', 'TWO_FACTOR_REQUIRED', 'BUSINESS_LOGIN_GATE'
+                        }:
+                            raise
                         if isinstance(exc,asyncio.TimeoutError):
                             log.warning(
                                 'live inventory profile=%s business=%s fast live '
@@ -3027,44 +3080,21 @@ async def profile_live_inventory(
                         )
                         discovery_source='business_suite_discovery_timeout_inconclusive'
                 except BrowserBusinessError as exc:
-                    # A redirect while loading the aggregate Business Suite
-                    # selector must not abort the profile sync before we have
-                    # tried the exact BMs already confirmed for this profile.
-                    # Revalidate those IDs individually below; this also keeps
-                    # an auth redirect scoped to the affected BM instead of
-                    # reporting a profile-wide CHECKPOINT_REQUIRED.
-                    if exc.code not in {
+                    if exc.code in {
                         'CHECKPOINT_REQUIRED',
                         'SESSION_EXPIRED',
                         'TWO_FACTOR_REQUIRED',
                         'BUSINESS_LOGIN_GATE',
-                    } or not known_business_ids:
-                        raise
-                    diagnostic=(
-                        exc.diagnostic
-                        if isinstance(exc.diagnostic,dict)
-                        else {}
-                    )
-                    warnings.append(
-                        'Business portfolio discovery was blocked; '
-                        'revalidating previously confirmed BMs individually'
-                    )
-                    discovery_source=(
-                        'business_suite_auth_redirect_hint_fallback'
-                    )
-                    log.warning(
-                        'live inventory profile=%s business_discovery auth '
-                        'redirect=%s; trying confirmed BM hints individually '
-                        'url=%s',
-                        clean_profile,
-                        exc.code,
-                        str(diagnostic.get('url') or '')[:500],
-                    )
-                    await meta_transport.close_business_browser()
-                    # The browser context still uses the same profile session.
-                    # Reopening drops the redirected renderer; it does not
-                    # alter cookies or attempt to bypass Meta's challenge.
-                    await reopen_inventory_browser()
+                    }:
+                        if exc.code == 'CHECKPOINT_REQUIRED':
+                            await store.record_terminal_checkpoint(clean_profile)
+                        elif exc.code == 'BUSINESS_LOGIN_GATE':
+                            await store.record_terminal_profile_status(clean_profile, 'BUSINESS_LOGIN_GATE')
+                        raise HTTPException(
+                            status_code=409,
+                            detail={'code': exc.code, 'message': 'Meta returned an authentication gate during inventory. ReMask stopped further profile probes.'},
+                        ) from exc
+                    raise
                 finally:
                     log.info(
                         'live inventory profile=%s business_discovery source=%s ms=%d count=%d',
@@ -3199,45 +3229,7 @@ async def profile_live_inventory(
                         )
                         settings_inventory['ads_manager_diagnostic']=ads_probe
                         return settings_inventory
-                    except BrowserBusinessError as exc:
-                        last_error=exc
-                        if (
-                            attempt == 0
-                            and exc.code in {
-                                'CHECKPOINT_REQUIRED',
-                                'SESSION_EXPIRED',
-                                'TWO_FACTOR_REQUIRED',
-                            }
-                        ):
-                            log.warning(
-                                'live inventory profile=%s business=%s auth redirect=%s; reopening profile browser once',
-                                clean_profile,
-                                business_id,
-                                exc.code,
-                            )
-                            await meta_transport.close_business_browser()
-                            # Re-resolve the same profile after an auth failure.
-                            # Reopening Chromium alone repeats the original cookies.
-                            try:
-                                saved_session_changed=await asyncio.wait_for(
-                                    refresh_saved_auth_context(pool.resolver, profile_session.context),
-                                    timeout=budget(5.0),
-                                )
-                                log.info(
-                                    'live inventory profile=%s saved_session_reloaded=%s',
-                                    clean_profile, saved_session_changed,
-                                )
-                            except Exception as refresh_exc:
-                                log.warning(
-                                    'live inventory profile=%s saved_session_reload unavailable=%s',
-                                    clean_profile, type(refresh_exc).__name__,
-                                )
-                            browser_reopen_timeout=budget(18.0)
-                            browser=await asyncio.wait_for(
-                                meta_transport.facebook_business_browser(),
-                                timeout=browser_reopen_timeout,
-                            )
-                            continue
+                    except BrowserBusinessError:
                         raise
                 if last_error is not None:
                     raise last_error
@@ -3339,9 +3331,11 @@ async def profile_live_inventory(
                         'CHECKPOINT_REQUIRED',
                         'SESSION_EXPIRED',
                         'TWO_FACTOR_REQUIRED',
+                        'BUSINESS_LOGIN_GATE',
                     }
                     if row['auth_blocked']:
                         auth_blocked_business_codes[str(business_id)]=exc.code
+                        raise
                     warnings.append(
                         f'BM {business_id}: {exc.code}'
                     )
@@ -3691,6 +3685,10 @@ async def profile_live_inventory(
                                 remaining,
                             )
                         except (asyncio.TimeoutError,BrowserBusinessError) as exc:
+                            if isinstance(exc, BrowserBusinessError) and exc.code in {
+                                'CHECKPOINT_REQUIRED', 'SESSION_EXPIRED', 'TWO_FACTOR_REQUIRED', 'BUSINESS_LOGIN_GATE'
+                            }:
+                                raise
                             fast_page_diagnostics.append({
                                 'business_id':hinted_business_id,
                                 'error':(
@@ -3729,6 +3727,10 @@ async def profile_live_inventory(
                         )[:5000],
                     )
                 except Exception as exc:
+                    if isinstance(exc, BrowserBusinessError) and exc.code in {
+                        'CHECKPOINT_REQUIRED', 'SESSION_EXPIRED', 'TWO_FACTOR_REQUIRED', 'BUSINESS_LOGIN_GATE'
+                    }:
+                        raise
                     log.info(
                         'live inventory profile=%s known Page hint enrichment '
                         'skipped=%s',
@@ -3917,6 +3919,10 @@ async def profile_live_inventory(
             detail=f'LIVE_INVENTORY_TIMEOUT:{stage}',
         ) from exc
     except BrowserBusinessError as exc:
+        if exc.code == 'CHECKPOINT_REQUIRED':
+            await store.record_terminal_checkpoint(clean_profile)
+        elif exc.code == 'BUSINESS_LOGIN_GATE':
+            await store.record_terminal_profile_status(clean_profile, 'BUSINESS_LOGIN_GATE')
         log.warning(
             'live inventory profile=%s browser error=%s message=%s',
             clean_profile,
@@ -3956,7 +3962,7 @@ async def profile_session_statuses():
         'profiles': await store.latest_profile_session_statuses(),
     }
 
-@app.get('/api/v1/profiles/{profile_id}/provisioning-state',dependencies=[Depends(require_key)])
+@app.get('/api/v1/profiles/{profile_id}/provisioning-state',dependencies=[Depends(require_key),Depends(_require_profile_not_restriction_hold),Depends(_serialize_profile_meta_activity)])
 async def profile_provisioning_state(profile_id: str):
     clean_profile=str(profile_id or '').strip()
     if not clean_profile:
@@ -4052,7 +4058,7 @@ async def private_launch_media_prepare(payload: dict = Body(...)):
     except ProvisioningError as exc:
         raise HTTPException(status_code=422, detail={'code':exc.code,'message':str(exc),'retryable':False}) from exc
 
-@app.get('/api/v1/profiles/{profile_id}/advertising-resources',dependencies=[Depends(require_key),Depends(_require_profile_not_checkpoint_for_revalidation)])
+@app.get('/api/v1/profiles/{profile_id}/advertising-resources',dependencies=[Depends(require_key),Depends(_require_profile_not_checkpoint_for_revalidation),Depends(_serialize_profile_meta_activity)])
 @observe_profile_read
 async def private_advertising_resources(profile_id: str, resource: str, account_id: str,
                                         force: bool = False, query: str = '', limit: int = 100,
@@ -4144,7 +4150,7 @@ async def private_advertising_resources(profile_id: str, resource: str, account_
     except asyncio.TimeoutError as exc:
         raise HTTPException(status_code=504,detail='ADVERTISING_RESOURCE_READ_TIMEOUT') from exc
 
-@app.post('/api/v1/profiles/{profile_id}/template-reference/{operation}',dependencies=[Depends(require_key),Depends(_require_profile_not_checkpoint)])
+@app.post('/api/v1/profiles/{profile_id}/template-reference/{operation}',dependencies=[Depends(require_key),Depends(_require_profile_not_checkpoint),Depends(_serialize_profile_meta_activity)])
 @observe_profile_read
 async def private_template_reference(profile_id: str, operation: str, payload: dict = Body(...)):
     from app.private_template_reads import read_template_reference, REFERENCE_TYPES
@@ -4218,7 +4224,7 @@ async def private_template_reference(profile_id: str, operation: str, payload: d
         raise HTTPException(status_code=504, detail={'code':'TEMPLATE_REFERENCE_READ_TIMEOUT'}) from None
 
 
-@app.post('/api/v1/profiles/{profile_id}/advertising-helper/{helper}',dependencies=[Depends(require_key),Depends(_require_profile_not_checkpoint)])
+@app.post('/api/v1/profiles/{profile_id}/advertising-helper/{helper}',dependencies=[Depends(require_key),Depends(_serialize_profile_meta_activity),Depends(_require_profile_not_checkpoint)])
 async def private_advertising_helper(profile_id: str, helper: str, payload: dict = Body(...)):
     from app.private_ads_helpers import read_form_helper
     from app.private_auth import private_auth_error
@@ -4302,7 +4308,7 @@ async def private_launch_contract_register(step_name: str, payload: dict = Body(
         },
     }
 
-@app.post('/api/v1/profiles/{profile_id}/private-session-probe',dependencies=[Depends(require_key),Depends(_require_profile_not_checkpoint)])
+@app.post('/api/v1/profiles/{profile_id}/private-session-probe',dependencies=[Depends(require_key),Depends(_require_profile_not_checkpoint),Depends(_serialize_profile_meta_activity)])
 async def private_session_probe(profile_id: str, payload: dict = Body(...)):
     clean_profile = str(profile_id or '').strip()
     if not clean_profile or len(clean_profile) > 160:
@@ -4319,7 +4325,7 @@ async def private_session_probe(profile_id: str, payload: dict = Body(...)):
             'message':'Saved profile context is unavailable.', 'retryable':False}) from None
 
 
-@app.post('/api/v1/profiles/{profile_id}/private-draft-read',dependencies=[Depends(require_key)])
+@app.post('/api/v1/profiles/{profile_id}/private-draft-read',dependencies=[Depends(require_key),Depends(_require_profile_not_restriction_hold),Depends(_serialize_profile_meta_activity)])
 async def private_draft_read(profile_id: str, payload: dict = Body(...)):
     import re
     job_id = payload.get('job_id')
@@ -4406,7 +4412,7 @@ async def private_draft_read(profile_id: str, payload: dict = Body(...)):
         raise HTTPException(status_code=409, detail='PRIVATE_DRAFT_READ_CONTEXT_UNAVAILABLE') from None
 
 
-@app.post('/api/v1/profiles/{profile_id}/private-launch-review',dependencies=[Depends(require_key),Depends(_require_profile_not_checkpoint_for_revalidation)])
+@app.post('/api/v1/profiles/{profile_id}/private-launch-review',dependencies=[Depends(require_key),Depends(_require_profile_not_checkpoint_for_revalidation),Depends(_serialize_profile_meta_activity)])
 async def private_launch_review(profile_id: str, payload: dict = Body(...)):
     clean_profile=str(profile_id or '').strip()
     if not clean_profile:
@@ -4505,6 +4511,8 @@ async def create_job(request: CreateJobRequest) -> JobAccepted:
             states = {str(value.get('status') or '').upper() for value in terminal_statuses.values()}
             if states == {'CHECKPOINT'}:
                 message = "Чекпоинт Meta: выбранные профили остановлены. Prepare не запущен."
+            elif states == {'META_RESTRICTION_HOLD'}:
+                message = "Для выбранного профиля подтверждено ограничение рекламного аккаунта. ReMask остановил запросы и не создал Prepare."
             elif states == {'AUTH_COOKIE_REVOKED'}:
                 message = "Meta явно удалила auth-cookie сохранённого входа. Тот же набор не отправлен повторно; Prepare не создан."
             elif states == {'AUTH_COOKIE_HISTORY_UNVERIFIED'}:

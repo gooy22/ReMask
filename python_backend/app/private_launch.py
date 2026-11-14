@@ -33,6 +33,7 @@ from .private_auth import private_auth_error
 from .provisioning.models import ProvisioningError
 from .provisioning.meta_transport import MetaTransportRouter
 from .provisioning.state import ProvisioningStateStore
+from .restriction_hold import enforce_profile_restriction_hold
 
 
 class PrivateLaunchStep(str, Enum):
@@ -1808,6 +1809,7 @@ class PrivateLaunchService:
 
     async def run_delivery(self, *, item_id, profile_id, context, session, payload, task_idempotency_key=None):
         """Change delivery of this worker's existing objects; never create new ones."""
+        enforce_profile_restriction_hold(profile_id, "delivery change")
         if self.ads_manager is not None:
             return await self.ads_manager.run_delivery(profile_id=profile_id, context=context, session=session,
                 payload=payload, task_idempotency_key=task_idempotency_key)
@@ -2249,6 +2251,7 @@ class PrivateLaunchService:
         payload: dict[str, Any],
         task_idempotency_key: str | None = None,
     ) -> dict[str, Any]:
+        enforce_profile_restriction_hold(profile_id, "Launch")
         if self.ads_manager is not None:
             saved_command = isinstance(payload, dict) and any(
                 payload.get(name) is True

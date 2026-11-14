@@ -17,6 +17,7 @@ from .registry import get_handler
 from .state import ProvisioningStateStore
 from .transport import ProvisioningTransport, TransportError
 from .meta_transport import MetaTransportRouter
+from ..restriction_hold import enforce_profile_restriction_hold, serialize_profile_activity
 
 
 _MUTATING_BROWSER_STEPS = {
@@ -124,6 +125,7 @@ class ProvisioningService:
         self.transport = transport or ProvisioningTransport()
         self.profile_resolver = profile_resolver
 
+    @serialize_profile_activity
     async def run(
         self,
         *,
@@ -170,6 +172,8 @@ class ProvisioningService:
         ))
 
         for step in steps:
+            if step in {ProvisioningStep.BUSINESS, ProvisioningStep.AD_ACCOUNT}:
+                enforce_profile_restriction_hold(profile_id, f"{step.value} provisioning")
             prior = await self.state.step(item_id, step)
             access_params = parameters.get("PAGE_ACCESS", parameters.get("page_access", {}))
             full_access = (step is ProvisioningStep.PAGE_ACCESS and isinstance(access_params, dict)

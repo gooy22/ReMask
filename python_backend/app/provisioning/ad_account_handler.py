@@ -21,7 +21,7 @@ from ..facebook_business_browser import (
     BrowserBusinessError,
     FacebookBusinessBrowser,
 )
-from .meta_errors import classify_meta_request_error
+from .meta_errors import classify_meta_payload_error
 from .models import ProvisioningError, ProvisioningStep
 
 
@@ -2894,11 +2894,98 @@ async def ad_account_handler(
             ) from exc
 
         except AdAccountMutationError as exc:
+            classified_code, _, classified_message = classify_meta_payload_error(
+                exc.payload,
+                http_status=exc.http_status,
+                entity="AD_ACCOUNT",
+                fallback_message=str(exc),
+            )
+            terminal_meta_codes = {
+                "RATE_LIMITED", "ACCOUNT_RESTRICTED",
+                "AD_ACCOUNT_LIMIT_REACHED", "PERMISSION_DENIED",
+            }
+            if classified_code in terminal_meta_codes:
+                if exc.code == "CREATE_AD_ACCOUNT_RESULT_UNKNOWN":
+                    # Reconcile a possibly submitted CREATE, but never replay
+                    # it after Meta explicitly reported a restriction or limit.
+                    reconciled = await reconcile_after_uncertain(
+                        reason=classified_message
+                    )
+                    if reconciled.get("_remask_reconciled_empty"):
+                        await provisioning_state.checkpoint(
+                            item_id,
+                            profile_id,
+                            scope_key,
+                            ProvisioningStep.AD_ACCOUNT,
+                            {
+                                "phase": "CREATE_REJECTED",
+                                "resume_from": "STOP",
+                                "business_id": business_id,
+                                "request_rejected": True,
+                                "replay_attempt": replay_attempt,
+                                "last_error_code": classified_code,
+                                "last_error": classified_message[:4000],
+                                "mutation_payload": (
+                                    exc.payload
+                                    if isinstance(exc.payload, dict)
+                                    else {}
+                                ),
+                                "transport": "facebook_private_http_contract",
+                            },
+                        )
+                        raise ProvisioningError(
+                            classified_code,
+                            classified_message,
+                            retryable=False,
+                        ) from exc
+                    return reconciled
+
+                exc = AdAccountMutationError(
+                    classified_code,
+                    classified_message,
+                    retryable=False,
+                    payload=exc.payload,
+                    candidate=exc.candidate,
+                    request_may_have_been_sent=exc.request_may_have_been_sent,
+                    request_rejected=exc.request_rejected,
+                    http_status=exc.http_status,
+                )
+
             if exc.code == "CREATE_AD_ACCOUNT_RESULT_UNKNOWN":
                 reconciled = await reconcile_after_uncertain(
                     reason=str(exc)
                 )
                 if reconciled.get("_remask_reconciled_empty"):
+                    payload = exc.payload if isinstance(exc.payload, dict) else {}
+                    explicit_meta_error = bool(
+                        payload.get("errors") or payload.get("error")
+                    )
+                    if explicit_meta_error:
+                        # A returned Meta error is not a transport timeout.
+                        # Do not replay CREATE after inventory confirms no RK.
+                        await provisioning_state.checkpoint(
+                            item_id,
+                            profile_id,
+                            scope_key,
+                            ProvisioningStep.AD_ACCOUNT,
+                            {
+                                "phase": "CREATE_REJECTED",
+                                "resume_from": "STOP",
+                                "business_id": business_id,
+                                "request_rejected": True,
+                                "request_may_have_been_sent": True,
+                                "replay_attempt": replay_attempt,
+                                "last_error_code": "META_REQUEST_REJECTED",
+                                "last_error": classified_message[:4000],
+                                "mutation_payload": payload,
+                                "transport": "facebook_private_http_contract",
+                            },
+                        )
+                        raise ProvisioningError(
+                            "META_REQUEST_REJECTED",
+                            classified_message,
+                            retryable=False,
+                        ) from exc
                     if replay_attempt < replay_attempt_limit:
                         await asyncio.sleep(0.75)
                         continue

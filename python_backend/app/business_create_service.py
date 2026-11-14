@@ -19,6 +19,10 @@ from .facebook_business_create import (
     DocIdMutationError,
     set_business_primary_page,
 )
+from .provisioning.meta_errors import (
+    classify_meta_payload_error,
+    classify_meta_request_error,
+)
 
 
 log = logging.getLogger("remask_worker")
@@ -222,11 +226,26 @@ def _official_terminal_error(exc: GraphApiError) -> BusinessCreateError:
             diagnostics=[diagnostic],
         )
 
-    if exc.code in {4, 17, 32, 613} or exc.http_status == 429:
+    meta_code, _, meta_diagnostic = classify_meta_payload_error(
+        {
+            "code": exc.code,
+            "error_subcode": exc.subcode,
+            "message": str(exc),
+        },
+        http_status=exc.http_status,
+        entity="BUSINESS",
+        fallback_message=str(exc),
+    )
+    if meta_code in {
+        "RATE_LIMITED",
+        "ACCOUNT_RESTRICTED",
+        "BUSINESS_LIMIT_REACHED",
+        "PERMISSION_DENIED",
+    }:
         return BusinessCreateError(
-            "RATE_LIMITED",
-            str(exc),
-            retryable=True,
+            meta_code,
+            meta_diagnostic,
+            retryable=False,
             diagnostics=[diagnostic],
         )
 
@@ -263,7 +282,6 @@ def _official_terminal_error(exc: GraphApiError) -> BusinessCreateError:
         retryable=False,
         diagnostics=[diagnostic],
     )
-
 
 async def _create_business_via_web(
     session: Any,
@@ -421,6 +439,26 @@ async def _create_business_via_web(
     except BusinessMutationError as exc:
         candidate = getattr(exc, "candidate", None)
         payload = getattr(exc, "payload", None)
+        original_code = str(getattr(exc, "code", "") or "BUSINESS_MUTATION_FAILED")
+        original_message = str(exc)
+        original_retryable = bool(getattr(exc, "retryable", False))
+        meta_code, _, meta_message = classify_meta_payload_error(
+            payload,
+            http_status=getattr(exc, "http_status", None),
+            entity="BUSINESS",
+            fallback_message=original_message,
+        )
+        terminal_codes = {
+            "RATE_LIMITED", "ACCOUNT_RESTRICTED",
+            "BUSINESS_LIMIT_REACHED", "PERMISSION_DENIED",
+        }
+        if (
+            meta_code in terminal_codes
+            and original_code != "CREATE_RESULT_UNKNOWN"
+        ):
+            original_code = meta_code
+            original_message = meta_message
+            original_retryable = False
         diagnostics.append(
             {
                 "transport": "facebook_web_graphql",
@@ -442,9 +480,9 @@ async def _create_business_via_web(
             }
         )
         raise BusinessCreateError(
-            str(getattr(exc, "code", "") or "BUSINESS_MUTATION_FAILED"),
-            str(exc),
-            retryable=bool(getattr(exc, "retryable", False)),
+            original_code,
+            original_message,
+            retryable=original_retryable,
             diagnostics=diagnostics,
         ) from exc
 
@@ -475,6 +513,33 @@ async def _create_business_via_web(
                 "payload": exc.meta_payload,
             }
         )
+
+        meta_code, _, meta_message = classify_meta_request_error(
+            exc,
+            entity="BUSINESS",
+        )
+        if meta_code in {
+            "RATE_LIMITED",
+            "ACCOUNT_RESTRICTED",
+            "BUSINESS_LIMIT_REACHED",
+            "PERMISSION_DENIED",
+            "SESSION_EXPIRED",
+        }:
+            diagnostics.append(
+                {
+                    "transport": "facebook_web_graphql",
+                    "stage": "create",
+                    "code": meta_code,
+                    "message": meta_message,
+                    "retryable": False,
+                }
+            )
+            raise BusinessCreateError(
+                meta_code,
+                meta_message,
+                retryable=False,
+                diagnostics=diagnostics,
+            ) from exc
 
         text = _text(exc)
         sent = getattr(exc, "request_may_have_been_sent", None)
