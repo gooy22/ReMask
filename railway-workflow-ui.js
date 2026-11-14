@@ -2833,6 +2833,14 @@ body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-campaign-objective
 }
 #creativeForm .cr-meta-context{padding:12px!important}
 #creativeForm .cr-audience-estimate{padding:12px!important;gap:8px 14px!important}
+#creativeForm #remaskAdvertisingEstimate{
+  display:block!important;min-width:0!important;padding:12px!important;border:1px solid #d9e0e5!important;
+  border-radius:10px!important;background:#f6f8f9!important;color:#202a33!important;box-shadow:none!important
+}
+#creativeForm #remaskAdvertisingEstimate *{color:#202a33!important}
+#creativeForm #remaskAdvertisingEstimate :is(small,.muted,.cr-hint){
+  color:#52616c!important;font-size:13px!important;line-height:1.45!important
+}
 #creativeForm .cr-audience-estimate-title{color:#52616c!important;font-size:12px!important}
 #creativeForm .cr-audience-estimate-value{color:#202a33!important;font-size:21px!important}
 #creativeForm .cr-audience-estimate-state{color:#40515b!important}
