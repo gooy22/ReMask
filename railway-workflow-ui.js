@@ -2867,6 +2867,84 @@ body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-campaign-objective
   #creativeForm .wf-fields{gap:10px!important}
 }
 `;
+        clarity.textContent += `
+/* Keep the full Creative library in the same neutral system as AutoUpload */
+body.app-shell:has(#creativeForm){
+  color-scheme:light!important;background:#f3f5f7!important;color:#202a33!important
+}
+body.app-shell:has(#creativeForm) .app-sidebar,
+body.app-shell:has(#creativeForm) .app-topbar{
+  background:#151b22!important;border-color:#303b43!important;color:#edf2f5!important
+}
+body.app-shell:has(#creativeForm) .app-sidebar .app-nav a{
+  color:#c0cbd1!important;font-size:13px!important
+}
+body.app-shell:has(#creativeForm) .app-sidebar .app-nav a:hover{
+  background:#222e35!important;color:#fff!important
+}
+body.app-shell:has(#creativeForm) .app-sidebar .app-nav a.active,
+body.app-shell:has(#creativeForm) .app-sidebar .app-nav a[aria-current=\"page\"]{
+  background:#26353b!important;color:#f4f8f9!important;border-left-color:#39aa9c!important
+}
+body.app-shell:has(#creativeForm) .app-main,
+body.app-shell:has(#creativeForm) main:has(.cr-page){
+  background:#f3f5f7!important;color:#202a33!important
+}
+body.app-shell:has(#creativeForm) .cr-page{
+  max-width:1460px!important;min-height:calc(100vh - 62px)!important;
+  padding:24px 28px 56px!important;color:#202a33!important
+}
+body.app-shell:has(#creativeForm) .cr-head{margin:2px 0 18px!important}
+body.app-shell:has(#creativeForm) .cr-title{
+  color:#18242d!important;font-size:28px!important;letter-spacing:-.025em!important
+}
+body.app-shell:has(#creativeForm) .cr-toolbar{gap:10px!important;margin-bottom:16px!important}
+body.app-shell:has(#creativeForm) .cr-search{
+  height:40px!important;background:#fff!important;border:1px solid #b9c4cc!important;
+  border-radius:8px!important;color:#202a33!important;font-size:14px!important
+}
+body.app-shell:has(#creativeForm) .cr-search::placeholder{color:#65727d!important;opacity:1!important}
+body.app-shell:has(#creativeForm) .cr-search:focus{
+  border-color:#137e74!important;box-shadow:0 0 0 3px rgba(19,126,116,.16)!important;outline:0!important
+}
+body.app-shell:has(#creativeForm) .cr-count{color:#52616c!important;font-size:13px!important}
+body.app-shell:has(#creativeForm) .cr-grid{gap:14px!important}
+body.app-shell:has(#creativeForm) .cr-card{
+  background:#fff!important;border:1px solid #d9e0e5!important;border-radius:11px!important;
+  color:#202a33!important;box-shadow:0 5px 18px rgba(31,45,55,.045)!important
+}
+body.app-shell:has(#creativeForm) .cr-preview{background:#eef2f3!important}
+body.app-shell:has(#creativeForm) .cr-format{color:#fff!important;background:rgba(21,27,34,.82)!important}
+body.app-shell:has(#creativeForm) .cr-body{color:#202a33!important}
+body.app-shell:has(#creativeForm) .cr-name{color:#202a33!important;font-size:14px!important}
+body.app-shell:has(#creativeForm) .cr-file{color:#52616c!important;font-size:12px!important}
+body.app-shell:has(#creativeForm) .cr-icon,
+body.app-shell:has(#creativeForm) .cr-btn{
+  background:#f1f4f6!important;border:1px solid #c7d0d7!important;border-radius:8px!important;
+  color:#253540!important
+}
+body.app-shell:has(#creativeForm) .cr-icon:hover,
+body.app-shell:has(#creativeForm) .cr-btn:hover{background:#e8eef0!important;border-color:#9eafb8!important}
+body.app-shell:has(#creativeForm) .cr-primary,
+body.app-shell:has(#creativeForm) .cr-launch{
+  background:#0f766e!important;border-color:#0f766e!important;color:#fff!important
+}
+body.app-shell:has(#creativeForm) .cr-primary:hover,
+body.app-shell:has(#creativeForm) .cr-launch:hover{
+  background:#0b635d!important;border-color:#0b635d!important;color:#fff!important
+}
+body.app-shell:has(#creativeForm) .cr-empty{
+  padding:56px 20px!important;color:#52616c!important;font-size:15px!important
+}
+body.app-shell:has(#creativeForm) .cr-page :is(button,a):focus-visible{
+  outline:3px solid rgba(19,126,116,.28)!important;outline-offset:2px!important
+}
+@media(max-width:720px){
+  body.app-shell:has(#creativeForm) .cr-page{padding:18px 16px 40px!important}
+  body.app-shell:has(#creativeForm) .cr-head{align-items:flex-start!important;flex-wrap:wrap!important}
+  body.app-shell:has(#creativeForm) .cr-title{font-size:24px!important}
+}
+`;
         if(clarity.parentElement)clarity.remove();
         (document.head||document.documentElement).appendChild(clarity);
     }
