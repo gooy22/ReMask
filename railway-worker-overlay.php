@@ -4,11 +4,13 @@
  * It processes queued Meta launch jobs from the persistent REMASK_DATA_DIR without relying on an open browser tab.
  */
 $root = '/var/www/html';
+fwrite(STDERR, "[remask worker overlay] build checkpoint root ready\n");
 
 $binDir = $root . '/bin';
 if (!is_dir($binDir)) mkdir($binDir, 0775, true);
 
 $workerPath = $binDir . '/remask-worker.php';
+fwrite(STDERR, "[remask worker overlay] worker content bytes=".strlen($workerPhp)."\n");
 $workerPhp = <<<'PHP'
 <?php
 require_once __DIR__ . '/../settings.php';
@@ -147,7 +149,9 @@ try {
     exit(1);
 }
 PHP;
+fwrite(STDERR, "[remask worker overlay] worker write start\n");
 file_put_contents($workerPath, $workerPhp);
+fwrite(STDERR, "[remask worker overlay] worker write complete\n");
 fwrite(STDERR, "[remask worker overlay] bin/remask-worker.php ready\n");
 
 $statusPath = $root . '/ajax/metaWorkerStatus.php';
