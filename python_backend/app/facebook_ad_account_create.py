@@ -46,6 +46,7 @@ class AdAccountMutationError(RuntimeError):
         candidate: DocIdCandidate | None = None,
         request_may_have_been_sent: bool | None = None,
         request_rejected: bool = False,
+        http_status: int | None = None,
     ) -> None:
         super().__init__(message)
         self.code = str(code or "AD_ACCOUNT_MUTATION_FAILED")
@@ -54,6 +55,7 @@ class AdAccountMutationError(RuntimeError):
         self.candidate = candidate
         self.request_may_have_been_sent = request_may_have_been_sent
         self.request_rejected = request_rejected
+        self.http_status = http_status if isinstance(http_status, int) else None
 
 
 @dataclass(slots=True)
@@ -705,6 +707,7 @@ async def create_ad_account_with_docids(
         payload = getattr(exc, "meta_payload", None)
         if not isinstance(payload, dict):
             payload = {}
+        http_status = getattr(exc, "http_status", None)
         failure_kind = classify_cache_failure(
             exception=exc,
             payload=payload,
@@ -734,6 +737,7 @@ async def create_ad_account_with_docids(
                 retryable=True,
                 payload=payload,
                 candidate=candidate,
+                http_status=http_status,
             ) from exc
 
         if failure_kind == "account" and (
@@ -747,6 +751,7 @@ async def create_ad_account_with_docids(
                 retryable=False,
                 payload=payload,
                 candidate=candidate,
+                http_status=http_status,
                 request_may_have_been_sent=getattr(exc, "request_may_have_been_sent", None),
                 request_rejected=bool(getattr(exc, "request_rejected", False)
                                       or (payload.get("error") and not payload.get("data"))),
@@ -765,6 +770,7 @@ async def create_ad_account_with_docids(
                 retryable=True,
                 payload=payload,
                 candidate=candidate,
+                http_status=http_status,
             ) from exc
 
         raise AdAccountMutationError(
@@ -777,6 +783,7 @@ async def create_ad_account_with_docids(
             retryable=True,
             payload=payload,
             candidate=candidate,
+            http_status=http_status,
         ) from exc
 
     account_id, response_path = _extract_ad_account_id(response)
