@@ -719,8 +719,14 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
                 if(targetingAnchor)targetingAnchor.after(targeting);else card.appendChild(targeting);
             }else if(targetingAnchor&&targetingAnchor.nextElementSibling!==targeting)targetingAnchor.after(targeting);
         }
+        if(delivery){
+            const deliveryAnchor=targeting||targetingAnchor;
+            if(delivery.parentElement!==card){
+                if(deliveryAnchor)deliveryAnchor.after(delivery);else card.appendChild(delivery);
+            }else if(deliveryAnchor&&deliveryAnchor.nextElementSibling!==delivery)deliveryAnchor.after(delivery);
+        }
         const advancedDestination=advancedBody||card;
-        for(const section of [estimate,delivery].filter(Boolean)){if(section.parentElement!==advancedDestination)advancedDestination.appendChild(section);}
+        for(const section of [estimate].filter(Boolean)){if(section.parentElement!==advancedDestination)advancedDestination.appendChild(section);}
     }
 
     function setupStudioTargetTabs(){
@@ -738,7 +744,7 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
             list.before(nav);
         }
         const panels=Array.from(list.querySelectorAll(':scope > [data-wf-target-group]'));
-        const names={demographics:'Демография',devices:'Устройства',placements:'Места показа',geography:'География и языки',exclusions:'Исключения',detailed:'Детальный таргетинг'};
+        const names={demographics:'Демография',devices:'Устройства',placements:'Позиции Meta',geography:'География и языки',exclusions:'Исключения',detailed:'Детальный таргетинг'};
         let search=root.querySelector(':scope > .wf-target-head .wf-target-search');
         if(!search){
             const head=root.querySelector(':scope > .wf-target-head');
@@ -1221,7 +1227,7 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
         const wfTargetGroups = [
         {key:'demographics',title:'Демография',note:'Возраст, пол, образование, семейный статус и социальные параметры.',fields:new Set(['age_min','age_max','genders','education_statuses','education_schools','education_majors','college_years','relationship_statuses','family_statuses','household_composition','ethnic_affinity','generation','interested_in','income','net_worth','politics'])},
         {key:'devices',title:'Устройства и подключение',note:'Платформы, модели устройств, операционные системы и тип подключения.',fields:new Set(['device_platforms','user_device','excluded_user_device','user_os','wireless_carrier','app_install_state'])},
-        {key:'placements',title:'Платформы и места показа',note:'Поверхности размещения и доступные ограничения для выбранной цели.',fields:new Set(['publisher_platforms','facebook_positions','instagram_positions','messenger_positions','audience_network_positions','threads_positions','whatsapp_positions','oculus_positions','streaming_services_positions','brand_safety_content_filter_levels','contextual_bundling_spec'])},
+        {key:'placements',title:'Позиции Meta',note:'Подробные позиции по платформам и ограничения для выбранной цели.',fields:new Set(['publisher_platforms','facebook_positions','instagram_positions','messenger_positions','audience_network_positions','threads_positions','whatsapp_positions','oculus_positions','streaming_services_positions','brand_safety_content_filter_levels','contextual_bundling_spec'])},
         {key:'geography',title:'География и язык',note:'Страны и регионы — быстрый каталог; города ищутся в выбранном РК, радиус задаётся для каждого города. Другие гео-типы доступны в редакторе структуры.',fields:new Set(['geo_locations','locales'])},
         {key:'exclusions',title:'Исключения',note:'Исключённые страны, регионы и аудитории; интересы и поведение — поиском.',fields:new Set(['excluded_geo_locations','excluded_custom_audiences','exclusions'])},
         {key:'detailed',title:'Интересы и категории Meta',note:'Интересы, поведение, свои аудитории, работа, события жизни, жильё и другие категории.',fields:new Set(['interests','behaviors','custom_audiences','flexible_spec','purchase_intent','user_adclusters','hashtag_interactions','work_employers','work_positions','industries','office_type','life_events','moms','home_ownership','home_type','home_value','location_categories'])}
@@ -1320,7 +1326,6 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
         body.querySelector(':scope > .wf-audience-advanced-tabs')?.remove();
         const definitions=[
             {key:'saved',selector:'details.wf-audience-subgroup'},
-            {key:'delivery',selector:'details.wf-audience-delivery'},
             {key:'estimate',selector:'details.wf-audience-estimate'},
             {key:'fields',selector:'details.wf-meta-extra-disclosure'}
         ];
@@ -1346,8 +1351,9 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
         const inline=card.querySelector(':scope > .wf-audience-inline');
         const age=Array.from(card.querySelectorAll(':scope > details.wf-audience-group'))
             .find(item=>String(item.querySelector(':scope > summary')?.textContent||'').toLowerCase().includes('возраст'));
+        const delivery=card.querySelector(':scope > details.wf-audience-delivery');
         const target=card.querySelector(':scope > details.wf-target-catalog-disclosure');
-        const anchor=target||inline||age;
+        const anchor=delivery||target||inline||age;
         if(anchor&&(disclosure.parentElement!==card||anchor.nextElementSibling!==disclosure))anchor.after(disclosure);
         else if(!anchor&&disclosure.parentElement!==card)card.appendChild(disclosure);
     }
