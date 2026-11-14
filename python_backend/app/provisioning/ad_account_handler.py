@@ -2956,6 +2956,36 @@ async def ad_account_handler(
                     reason=str(exc)
                 )
                 if reconciled.get("_remask_reconciled_empty"):
+                    payload = exc.payload if isinstance(exc.payload, dict) else {}
+                    explicit_meta_error = bool(
+                        payload.get("errors") or payload.get("error")
+                    )
+                    if explicit_meta_error:
+                        # A returned Meta error is not a transport timeout.
+                        # Do not replay CREATE after inventory confirms no RK.
+                        await provisioning_state.checkpoint(
+                            item_id,
+                            profile_id,
+                            scope_key,
+                            ProvisioningStep.AD_ACCOUNT,
+                            {
+                                "phase": "CREATE_REJECTED",
+                                "resume_from": "STOP",
+                                "business_id": business_id,
+                                "request_rejected": True,
+                                "request_may_have_been_sent": True,
+                                "replay_attempt": replay_attempt,
+                                "last_error_code": "META_REQUEST_REJECTED",
+                                "last_error": classified_message[:4000],
+                                "mutation_payload": payload,
+                                "transport": "facebook_private_http_contract",
+                            },
+                        )
+                        raise ProvisioningError(
+                            "META_REQUEST_REJECTED",
+                            classified_message,
+                            retryable=False,
+                        ) from exc
                     if replay_attempt < replay_attempt_limit:
                         await asyncio.sleep(0.75)
                         continue
