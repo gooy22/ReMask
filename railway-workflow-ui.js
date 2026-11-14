@@ -752,8 +752,8 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
             wrap.prepend(search);
         }
         if(search){
-            search.placeholder='Найти критерий аудитории…';
-            search.setAttribute('aria-label','Поиск дополнительного критерия аудитории');
+            search.placeholder='Найти другое условие…';
+            search.setAttribute('aria-label','Поиск других условий аудитории');
         }
         const panels=Array.from(list.querySelectorAll(':scope > [data-wf-target-group]'));
         for(const panel of panels){
@@ -1149,6 +1149,8 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
     function updateAudienceTargetingSummary() {
         const root=$('wfTargetingOptions');if(!root)return;
         const filtering=root.dataset.wfFiltering==='1';
+        const manualPlacements=$('placementMode')?.value==='MANUAL';
+        const coreFields=new Set(['device_platforms','user_device','user_os']);
         const panels=Array.from(root.querySelectorAll('[data-wf-target-group]'));
         let selectedFields=0,selectedValues=0,visibleRows=0,totalRows=0;
         for(const panel of panels){
@@ -1163,7 +1165,8 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
                 const hasValue=values.length>0;
                 if(hasValue)selectedFields++;
                 row.dataset.wfTargetSelected=hasValue?'1':'0';
-                if(!filtering)row.hidden=!hasValue;
+                const coreVisible=coreFields.has(field)||(manualPlacements&&field.endsWith('_positions'));
+                if(!filtering)row.hidden=!(hasValue||coreVisible);
                 if(!row.hidden){panelVisible++;visibleRows++;}
             }
             panel.dataset.wfSelectedFieldCount=String(rows.filter(row=>row.dataset.wfTargetSelected==='1').length);
@@ -1172,18 +1175,14 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
         root.dataset.wfSelectedFieldCount=String(selectedFields);
         root.dataset.wfSelectedValueCount=String(selectedValues);
         const hint=root.closest('details.wf-target-catalog-disclosure')?.querySelector('.wf-target-catalog-hint');
-        if(hint)hint.textContent=selectedFields?selectedFields+' выбрано':'';
+        if(hint)hint.textContent='';
         const empty=root.querySelector('[data-wf-target-empty]');
         if(empty&&totalRows>0){
-            if(filtering){
-                empty.hidden=visibleRows>0;
-                empty.textContent='Совпадений нет.';
-            }else{
-                empty.hidden=selectedFields>0;
-                empty.textContent='Введите устройство, ОС или другой критерий.';
-            }
+            empty.hidden=visibleRows>0;
+            empty.textContent=filtering?'Совпадений нет.':'Нет доступных параметров.';
         }
     }
+
     function setupAudienceMetaDisclosure(){
         const card=$('adsetName')?.closest('.launch-card');
         const meta=$('launchMetaAllFields');
@@ -1315,8 +1314,9 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
             const body=disclosure.querySelector(':scope > .wf-target-catalog-body');
             if(body&&root.parentElement!==body)body.appendChild(root);
             const title=disclosure.querySelector(':scope > summary > span:first-child');
-            if(title)title.textContent='Детальный таргетинг';
+            if(title)title.textContent='Устройства и места показа';
         }
+        if(disclosure.dataset.wfDefaultOpen!=='1'){disclosure.open=true;disclosure.dataset.wfDefaultOpen='1';}
         const hint=disclosure.querySelector(':scope > summary .wf-target-catalog-hint');
         const selected=Array.from(root.querySelectorAll('[data-wf-target-field]')).filter(row=>{
             const field=row.dataset.wfTargetField||'';
@@ -1338,15 +1338,21 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
         addSectionLabel('page','identity','Идентичность и названия');
         addSectionLabel('message','content','Текст и действие');
         addSectionLabel('creativeFormat','media','Формат и медиа');
+        const preview=card.querySelector('.wf-preview-surface');
+        if(preview){
+            preview.setAttribute('aria-label','Предпросмотр');
+            const previewTitle=preview.querySelector('h4');if(previewTitle)setText(previewTitle,'Предпросмотр');
+            const previewStatus=preview.querySelector('[data-rm-preview-status]');
+            if(previewStatus&&/Выберите РК|существующее медиа Meta/i.test(previewStatus.textContent||''))setText(previewStatus,'Выберите медиа для предпросмотра.');
+        }
         const columns=['description','urlTags'].map(id=>$(id)?.closest('[class*="col-"]')).filter(column=>column&&card.contains(column));
         if(!columns.length)return;
         let disclosure=card.querySelector(':scope > details.wf-ad-advanced-disclosure');
         if(!disclosure){
             disclosure=document.createElement('details');disclosure.className='wf-ad-advanced-disclosure';
             const summary=document.createElement('summary');
-            const title=document.createElement('span');title.textContent='Дополнительные параметры';
-            const hint=document.createElement('span');hint.className='wf-ad-advanced-hint';hint.textContent='Описание · UTM';
-            summary.append(title,hint);
+            const title=document.createElement('span');title.textContent='UTM и описание';
+            summary.append(title);
             const body=document.createElement('div');body.className='wf-ad-advanced-body';
             disclosure.append(summary,body);
             const anchor=$('creativeFormat')?.closest('.row');
@@ -1499,9 +1505,11 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
         const empty=root.querySelector('[data-wf-target-empty]');
         if(empty){
             empty.hidden=available>0;
-            if(sourceCount===0)setText(empty,'Выберите профиль и рекламный кабинет, чтобы загрузить устройства, ОС, места показа и дополнительные категории аудитории.');
+            if(sourceCount===0)setText(empty,'Каталог параметров не загружен.');
         }
         ensureTargetingDisclosure(adsetCard,root);
+        const placementMode=$('placementMode');
+        if(placementMode&&!placementMode.dataset.wfTargetVisibilityBound){placementMode.dataset.wfTargetVisibilityBound='1';placementMode.addEventListener('change',updateAudienceTargetingSummary);}
         root.hidden=false;
         root.dataset.wfReady=visibleGroups?'1':'0';
         updateAudienceTargetingSummary();
@@ -1592,7 +1600,7 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
         for(const [key,value] of Object.entries(rows)){
             const node=panel.querySelector('[data-wf-summary-value="'+key+'"]');if(node)setText(node,value);
         }
-        const quickValues={campaign:(campaignName==='Название не задано'?'':campaignName+' · ')+objective,budget:budgetText,resources:profiles.length+' профилей · '+accounts.length+' РК',audience:audienceParts[0]+' · '+(geo.length+moduleGeoCount)+' гео · '+(interests.length+behaviors.length)+' интересов/поведения'};
+        const quickValues={campaign:(campaignName==='Название не задано'?'':campaignName+' · ')+objective,budget:budgetText,resources:profiles.length+' профилей · '+accounts.length+' РК',audience:audienceParts[0]+' · гео '+(geo.length+moduleGeoCount)+' · критерии '+(interests.length+behaviors.length)};
         for(const [key,value] of Object.entries(quickValues)){const node=panel.querySelector('[data-wf-summary-quick="'+key+'"]');if(node)setText(node,value);}
         const foot=panel.querySelector('[data-wf-summary-foot]');
         if(foot)setText(foot,'Действие и статус выбираются на этапе проверки.');
@@ -2660,35 +2668,33 @@ body.app-shell.wf-autoupload-open .wf-launch .wf-audience-advanced-summary{backg
         const reviewing=root.dataset.wfActiveStep==='review';
         const publish=mode?.value==='PUBLISH',draft=mode?.value==='DRAFT';
         const selected=publish||draft;
-        const modeLabel=publish?'Публикация в Meta':draft?'Черновик в Meta':'Действие не выбрано';
+        const modeLabel=publish?'Публикация':draft?'Черновик':'Не выбрано';
         const selectedStatus=delivery?.selectedOptions?.[0]?.textContent?.trim()||'';
-        const badgeLabel=reviewing?(selected?'Режим: '+(publish?'Публикация':'Черновик'):'Выберите действие'):'Действие: выберите в конце';
-        const summaryLabel=reviewing?modeLabel:'Выбор действия перед завершением';
         const banner=$('remaskLaunchModeBanner');
-        if(banner)setText(banner,'Соберите кампанию и объявление. Сохранение или публикацию выберите в конце.');
+        if(banner){setText(banner,'');banner.hidden=true;}
         const readiness=$('remaskLaunchModeReadinessNotice');
-        if(readiness)setText(readiness,!selected?'Выберите: сохранить черновик или опубликовать.':publish?'Публикация использует статус, выбранный ниже.':'Сохранить в Meta без публикации.');
+        if(readiness){setText(readiness,'');readiness.hidden=true;}
         const badge=root.querySelector('.wf-studio-badge');
-        if(badge){
-            const dot=badge.querySelector('i')||document.createElement('i');
-            dot.setAttribute('aria-hidden','true');
-            badge.replaceChildren(dot,document.createTextNode(badgeLabel));
-        }
+        if(badge)badge.hidden=true;
         const mobileStatus=document.querySelector('#wfMobileActions .wf-workflow-status');
-        if(mobileStatus)setText(mobileStatus,badgeLabel);
+        if(mobileStatus){setText(mobileStatus,'');mobileStatus.hidden=true;}
         const summary=root.querySelector('#wfLiveSummary');
         const caption=summary?.querySelector('.wf-live-summary-caption');
-        if(caption)setText(caption,'Текущие параметры');
+        if(caption){setText(caption,'');caption.hidden=true;}
         const summaryStatus=summary?.querySelector('.wf-live-status');
-        if(summaryStatus)setText(summaryStatus,summaryLabel+(reviewing&&publish&&delivery?.value&&selectedStatus?' · '+selectedStatus:''));
+        if(summaryStatus){
+            const statusLabel=reviewing?(publish&&delivery?.value&&selectedStatus?modeLabel+' · '+selectedStatus:modeLabel):'';
+            setText(summaryStatus,statusLabel);
+            summaryStatus.hidden=!reviewing;
+        }
         const modeLabelNode=root.querySelector('label[for="remaskPrivateExecutionMode"]');
-        if(modeLabelNode)setText(modeLabelNode,'Что сделать с рекламой');
+        if(modeLabelNode)setText(modeLabelNode,'Что сделать');
         const deliveryLabel=root.querySelector('label[for="launchDeliverySelect"]');
-        if(deliveryLabel)setText(deliveryLabel,'Статус после создания');
+        if(deliveryLabel)setText(deliveryLabel,'Статус публикации');
         const deliveryRow=delivery?.closest('.d-flex');
         if(deliveryRow)deliveryRow.hidden=!publish;
         const note=$('remaskPrivateExecutionNote');
-        if(note)setText(note,!selected?'Выберите действие перед завершением.':publish?'Опубликовать рекламу; статус после создания выберите ниже.':'Сохранить в Meta как черновик без публикации.');
+        if(note){setText(note,'');note.hidden=true;}
         const createButton=$('launchButton');
         if(createButton){
             const label=publish?'Опубликовать рекламу':draft?'Сохранить черновик':'Выберите действие';
@@ -2700,6 +2706,10 @@ body.app-shell.wf-autoupload-open .wf-launch .wf-audience-advanced-summary{backg
         root=root||document.querySelector('.launch-wrap');
         if(!root)return;
         const profiles=selectedLabels('profile').length;
+        const profileCount=root.querySelector('#wf-launch-resources .wf-profile-selector .selected-count');
+        if(profileCount)profileCount.hidden=profiles===0;
+        const accountCount=root.querySelector('#wf-launch-resources .wf-account-selector .selected-count');
+        if(accountCount)accountCount.hidden=selectedLabels('adAccount').length===0;
         const resourceRow=$('wfProfilePicker')?.closest('.row');if(resourceRow)resourceRow.classList.toggle('wf-no-profile',profiles===0);
         const accountColumn=$('wfAdAccountPicker')?.closest('.wf-account-selector');if(accountColumn)accountColumn.hidden=profiles===0;
         const utilities=root.querySelector('#wf-launch-resources .wf-resource-utilities');if(utilities)utilities.hidden=profiles===0;
@@ -2755,6 +2765,63 @@ body.app-shell.wf-autoupload-open .wf-launch .wf-audience-advanced-summary{backg
         clarity.textContent+='\n'+"body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3>.wf-step-nav{position:sticky!important;top:60px!important;z-index:12!important;background:#151d22!important;box-shadow:0 6px 12px rgba(0,0,0,.16)!important}\n@media(max-width:720px){body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3>.wf-step-nav{top:54px!important}}";
         clarity.textContent+='\\n'+"body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch>.launch-card.wf-step-card>h5{color:#f4f8f9!important;font-size:20px!important;line-height:1.3!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch>.launch-card.wf-step-card label{color:#e3ecef!important;font-size:15px!important;font-weight:650!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch>.launch-card.wf-step-card .wf-section-heading{color:#e5edef!important;font-size:14.5px!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch>.launch-card.wf-step-card .wf-empty-state strong{color:#f0f5f6!important;font-size:15px!important;line-height:1.4!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch>.launch-card.wf-step-card .wf-empty-state small{color:#cbd7dc!important;font-size:14.5px!important;line-height:1.45!important}\nbody.app-shell.wf-autoupload-open #wfMobileActions .wf-workflow-status{background:#202c32!important;border:1px solid #39484f!important;border-radius:10px!important;color:#edf3f5!important;font-size:13.5px!important;line-height:1.35!important;white-space:normal!important;max-width:36vw!important}\nbody.app-shell.wf-autoupload-open #wfLiveSummary{min-width:0!important;overflow-x:hidden!important;box-sizing:border-box!important}\nbody.app-shell.wf-autoupload-open #wfLiveSummary>summary{display:flex!important;flex-direction:column!important;align-items:stretch!important;gap:10px!important;position:relative!important;min-width:0!important;width:100%!important;box-sizing:border-box!important;padding:16px 42px 14px 16px!important}\nbody.app-shell.wf-autoupload-open #wfLiveSummary>summary:after{position:absolute!important;right:17px!important;top:22px!important}\nbody.app-shell.wf-autoupload-open #wfLiveSummary>summary .wf-live-summary-heading{display:block!important;flex:1 1 auto!important;min-width:0!important;width:100%!important}\nbody.app-shell.wf-autoupload-open #wfLiveSummary>summary .wf-live-summary-title{color:#f3f7f8!important;font-size:16px!important;line-height:1.3!important}\nbody.app-shell.wf-autoupload-open #wfLiveSummary>summary .wf-live-summary-caption{color:#c5d2d7!important;font-size:14px!important;line-height:1.4!important;margin-top:3px!important}\nbody.app-shell.wf-autoupload-open #wfLiveSummary>summary .wf-live-status{align-self:flex-start!important;flex:0 1 auto!important;min-width:0!important;max-width:100%!important;width:auto!important;white-space:normal!important;overflow-wrap:anywhere!important;font-size:13px!important;line-height:1.35!important;padding:6px 9px!important}\nbody.app-shell.wf-autoupload-open #wfLiveSummary>summary .wf-summary-quickfacts{display:grid!important;grid-template-columns:minmax(0,1fr)!important;gap:0!important;min-width:0!important;width:100%!important;padding:0!important;box-sizing:border-box!important}\nbody.app-shell.wf-autoupload-open #wfLiveSummary>summary .wf-summary-quickfact{display:grid!important;grid-template-columns:minmax(70px,.78fr) minmax(0,1.22fr)!important;align-items:start!important;gap:8px!important;width:100%!important;max-width:100%!important;min-width:0!important;box-sizing:border-box!important;padding:9px 0!important;border:0!important;border-bottom:1px solid #39484f!important;border-radius:0!important;background:transparent!important}\nbody.app-shell.wf-autoupload-open #wfLiveSummary>summary .wf-summary-quickfact:last-child{border-bottom:0!important}\nbody.app-shell.wf-autoupload-open #wfLiveSummary>summary .wf-summary-quickfact>span{min-width:0!important;color:#c5d1d6!important;font-size:13.5px!important;line-height:1.35!important;font-weight:600!important}\nbody.app-shell.wf-autoupload-open #wfLiveSummary>summary .wf-summary-quickfact>strong{min-width:0!important;max-width:100%!important;color:#f2f6f7!important;font-size:14.5px!important;line-height:1.35!important;text-align:right!important;overflow-wrap:anywhere!important}\nbody.app-shell.wf-autoupload-open #wfLiveSummary:not([open])>:not(summary){display:none!important}\nbody.app-shell.wf-autoupload-open #wfLiveSummary[open]{max-height:460px!important;overflow-y:auto!important;overflow-x:hidden!important}\nbody.app-shell.wf-autoupload-open #wfLiveSummary[open] .wf-live-summary-body{display:grid!important;grid-template-columns:minmax(0,1fr)!important;gap:0!important;min-width:0!important;width:100%!important;max-height:330px!important;overflow-y:auto!important;overflow-x:hidden!important;box-sizing:border-box!important}\nbody.app-shell.wf-autoupload-open #wfLiveSummary[open] .wf-live-summary-body>*{min-width:0!important;max-width:100%!important;overflow-wrap:anywhere!important}\nbody.app-shell.wf-autoupload-open #wfLiveSummary .wf-live-summary-foot{min-width:0!important;width:100%!important;box-sizing:border-box!important;color:#c3cfd4!important;font-size:13px!important}";
         clarity.textContent+='\n'+"body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch #wf-launch-audience{padding:18px!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch #wf-launch-audience .wf-audience-inline .wf-audience-field :is(input:not([type=hidden]),select,textarea,[role=combobox],.rm-module-search),body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch #wf-launch-audience .wf-audience-inline .wf-audience-field .rm-module-control :is(input,select,textarea,[role=combobox]),body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch #wf-launch-audience .wf-target-field .rm-module-control :is(input,select,textarea,[role=combobox]){min-height:44px!important;height:auto!important;background:#151e23!important;border:1px solid #52636b!important;border-radius:10px!important;color:#f2f6f7!important;font-size:15px!important;box-shadow:none!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch #wf-launch-audience #wfTargetingOptions.wf-target-search-mode .wf-target-search{min-height:44px!important;height:44px!important;background:#151e23!important;border:1px solid #52636b!important;border-radius:10px!important;color:#f2f6f7!important;font-size:15px!important;box-shadow:none!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch #wf-launch-audience .wf-audience-inline .wf-audience-field :is(input,select,textarea,.rm-module-search)::placeholder,body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch #wf-launch-audience #wfTargetingOptions .wf-target-search::placeholder{color:#b7c4c9!important;opacity:1!important;font-size:14px!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch #wf-launch-audience .wf-audience-inline .wf-audience-field{position:relative!important;min-width:0!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch #wf-launch-audience .wf-audience-inline .wf-audience-field .search-results{position:absolute!important;z-index:30!important;top:calc(100% + 3px)!important;left:0!important;right:0!important;max-height:240px!important;overflow:auto!important;background:#202c32!important;border:1px solid #46565e!important;border-radius:10px!important;color:#edf3f5!important;box-shadow:0 12px 26px rgba(0,0,0,.3)!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch #wf-launch-audience .wf-audience-inline .wf-audience-field .search-results:empty{display:none!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch #wf-launch-audience .wf-audience-inline .wf-audience-field .search-results>*{background:#202c32!important;color:#edf3f5!important;border-color:#39484f!important;font-size:14px!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch #wf-launch-audience .wf-choice-control.wf-choice-segments{background:#151e23!important;border:1px solid #39484f!important;padding:4px!important;gap:6px!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch #wf-launch-audience .wf-choice-control.wf-choice-segments .wf-choice-option{min-height:48px!important;height:48px!important;padding:8px 10px!important;background:#222f35!important;border:1px solid #3e4e55!important;color:#edf3f5!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch #wf-launch-audience .wf-choice-control.wf-choice-segments .wf-choice-copy small{display:none!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch #wf-launch-audience .wf-choice-control.wf-choice-segments .wf-choice-option.is-selected{background:#1b3a36!important;border-color:#39b4a5!important;color:#f0faf8!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch #wf-launch-audience .wf-choice-control.wf-choice-segments .wf-choice-icon{background:#1a252a!important;border-color:#3a4a50!important;color:#d5e3e6!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch #wf-launch-audience .wf-section-heading{color:#e5edef!important;font-size:14px!important;margin-bottom:12px!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch #wf-launch-audience .wf-compact-field-grid{gap:10px 12px!important;grid-template-columns:repeat(2,minmax(0,1fr))!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch #wf-launch-audience .wf-audience-delivery{margin-top:8px!important;border-top:1px solid #39484f!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch #wf-launch-audience .wf-audience-delivery>summary{font-size:15px!important;color:#edf3f5!important;min-height:42px!important;padding:10px 0!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch #wf-launch-audience .wf-audience-delivery-body{padding-top:8px!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch #wf-launch-audience .wf-target-catalog-disclosure:not([open])>.wf-target-catalog-body{display:none!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch #wf-launch-audience .wf-audience-delivery:not([open])>.wf-audience-delivery-body{display:none!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch #wf-launch-audience .wf-audience-group:not([open])>.wf-audience-group-body{display:none!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch #wf-launch-audience .wf-audience-advanced-tools:not([open])>.wf-audience-advanced-body{display:none!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch #wf-launch-audience .wf-audience-subgroup:not([open])>.wf-audience-subgroup-body,body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch #wf-launch-audience .wf-audience-estimate:not([open])>:not(summary){display:none!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch #wfTargetingOptions .wf-target-field[data-wf-target-field=age_min],body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch #wfTargetingOptions .wf-target-field[data-wf-target-field=age_max],body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch #wfTargetingOptions .wf-target-field[data-wf-target-field=geo_locations],body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch #wfTargetingOptions .wf-target-field[data-wf-target-field=locales],body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch #wfTargetingOptions .wf-target-field[data-wf-target-field=interests],body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch #wfTargetingOptions .wf-target-field[data-wf-target-field=behaviors],body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch #wfTargetingOptions .wf-target-field[data-wf-target-field=custom_audiences],body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch #wfTargetingOptions .wf-target-field[data-wf-target-field=excluded_custom_audiences]{display:none!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch .wf-resource-utilities[hidden]{display:none!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch #wf-launch-resources .wf-no-profile>.wf-profile-selector{flex:0 0 100%!important;max-width:100%!important;width:100%!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch #wf-launch-resources .wf-no-profile>.wf-account-selector,body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch #wf-launch-resources .wf-no-profile>.col-md-2{display:none!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch #wf-launch-resources .wf-profile-empty{min-height:64px!important;padding:12px 14px!important;gap:14px!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch #wf-launch-resources .wf-profile-empty .wf-empty-mark{display:none!important}\nbody.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3.wf-launch #wf-launch-resources .wf-profile-empty .wf-empty-copy strong{font-size:15px!important;color:#f0f5f6!important}";
+
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .app-page-head .app-subtitle,
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-step-context,
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-studio-badge,
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfMobileActions .wf-workflow-status,
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-live-summary-caption{display:none!important}
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-launch-mode-readiness,
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #remaskLaunchModeReadinessNotice,
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #remaskPrivateExecutionNote{display:none!important}
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfLiveSummary .wf-live-status{background:#223238!important;border:1px solid #46636c!important;color:#d5e7ea!important;font-size:12px!important;line-height:1.25!important;white-space:normal!important}
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfLiveSummary .wf-live-status[hidden],
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfMobileActions .wf-workflow-status[hidden],
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .selected-count[hidden]{display:none!important}
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-step-card:is(#wf-launch-campaign,#wf-launch-audience,#wf-launch-ad) :is(input:not([type=hidden]):not([type=checkbox]):not([type=radio]):not([type=file]),select,textarea){min-height:40px!important;height:auto!important;padding:8px 11px!important;border:1px solid #52636b!important;border-radius:9px!important;background:#151e23!important;color:#f2f6f7!important;font-size:14px!important;box-shadow:none!important}
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-step-card:is(#wf-launch-campaign,#wf-launch-audience,#wf-launch-ad) :is(input,textarea)::placeholder{color:#b7c4c9!important;opacity:1!important}
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-step-card:is(#wf-launch-campaign,#wf-launch-audience,#wf-launch-ad) label{color:#e7eef0!important;font-size:14px!important;line-height:1.35!important}
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wf-launch-campaign .wf-choice-control{gap:7px!important}
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wf-launch-campaign .wf-choice-control .wf-choice-option{min-height:42px!important;height:auto!important;padding:8px 9px!important}
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wf-launch-campaign .wf-choice-control .wf-choice-copy{min-width:0!important}
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wf-launch-campaign .wf-choice-control .wf-choice-copy strong{white-space:normal!important;overflow:visible!important;text-overflow:clip!important;font-size:14px!important;line-height:1.2!important}
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wf-launch-campaign .wf-choice-control .wf-choice-copy small{display:none!important}
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wf-launch-audience .wf-audience-inline .wf-audience-field :is(input:not([type=hidden]),select,textarea,[role=combobox],.rm-module-search),
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wf-launch-audience .wf-target-field .rm-module-control :is(input,select,textarea,[role=combobox]),
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-search-mode .wf-target-search{min-height:40px!important;height:auto!important;padding:8px 10px!important;border:1px solid #52636b!important;border-radius:9px!important;background:#151e23!important;color:#f2f6f7!important;font-size:14px!important;box-shadow:none!important}
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wf-launch-audience .wf-audience-inline :is(input,select,textarea,.rm-module-search)::placeholder,
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-search-mode .wf-target-search::placeholder{color:#b7c4c9!important;opacity:1!important}
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-search-mode .wf-target-field{grid-template-columns:minmax(135px,.45fr) minmax(0,1fr)!important;gap:7px 12px!important;padding:7px 0!important;border-color:#39484f!important}
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-search-mode .wf-target-field>label{color:#e3ecef!important;font-size:13px!important;font-weight:650!important}
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 details.wf-target-catalog-disclosure{border-top:1px solid #39484f!important}
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 details.wf-target-catalog-disclosure>.wf-target-catalog-summary{min-height:40px!important;padding:8px 0!important;background:transparent!important;color:#edf3f5!important;font-size:14px!important;font-weight:650!important}
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 details.wf-target-catalog-disclosure>.wf-target-catalog-summary .wf-target-catalog-hint{display:none!important}
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-search-mode .wf-target-empty{color:#b7c4c9!important;font-size:13px!important;line-height:1.4!important}
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wf-launch-audience .wf-audience-delivery>summary,
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wf-launch-audience .wf-audience-group>summary,
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wf-launch-audience .wf-audience-advanced-tools>summary,
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wf-launch-audience .wf-audience-subgroup>summary{color:#edf3f5!important;font-size:14px!important}
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wf-launch-audience .wf-audience-delivery{border-top-color:#39484f!important}
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wf-launch-audience .wf-audience-delivery-body{padding-top:6px!important}
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wf-launch-audience .wf-audience-inline,
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wf-launch-audience .wf-compact-field-grid{gap:8px 10px!important}
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wf-launch-ad .wf-ad-section-title{margin:13px 0 6px!important;padding-top:9px!important;border-top:1px solid #39484f!important;color:#b8c8ce!important;font-size:12px!important;letter-spacing:.05em!important}
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wf-launch-ad details.wf-ad-advanced-disclosure{border:1px solid #39484f!important;border-radius:10px!important;background:#1b262b!important;color:#edf3f5!important;overflow:hidden!important}
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wf-launch-ad details.wf-ad-advanced-disclosure>summary{min-height:40px!important;padding:8px 12px!important;background:#1b262b!important;color:#edf3f5!important;font-size:14px!important;font-weight:650!important}
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wf-launch-ad .wf-ad-advanced-disclosure .wf-ad-advanced-hint{display:none!important}
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wf-launch-ad .wf-ad-advanced-body{padding:8px 12px 10px!important}
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wf-launch-ad .wf-preview-surface{min-height:0!important;margin-top:12px!important;padding:12px 14px!important;border:1px solid #39484f!important;border-radius:12px!important;background:#1b262b!important;color:#edf3f5!important;box-shadow:none!important}
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wf-launch-ad .wf-preview-surface h4{margin:0 0 8px!important;color:#edf3f5!important;font-size:15px!important}
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wf-launch-ad .wf-preview-surface>label[for="remaskPreviewFormat"],
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wf-launch-ad .wf-preview-surface>#remaskPreviewFormat{display:none!important}
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wf-launch-ad .wf-preview-surface p[data-rm-preview-status]{margin:6px 0 0!important;color:#b7c4c9!important;font-size:13px!important;line-height:1.4!important}
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wf-launch-ad .wf-preview-surface .btn-secondary{min-height:38px!important;padding:7px 11px!important;border:1px solid #52636b!important;border-radius:9px!important;background:#26353b!important;color:#edf3f5!important;font-size:14px!important}
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wf-launch-ad input[type=file]::file-selector-button{margin-right:8px!important;padding:6px 10px!important;border:1px solid #52636b!important;border-radius:7px!important;background:#26353b!important;color:#edf3f5!important}
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfMobileActions .wf-mobile-summary,
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfMobileActions .wf-mobile-back{min-height:40px!important;padding:8px 12px!important;border:1px solid #3e4e55!important;border-radius:9px!important;background:#222f35!important;color:#edf3f5!important;font-size:14px!important}
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wf-launch-resources .wf-profile-empty{display:flex!important;align-items:center!important;justify-content:space-between!important;gap:14px!important}
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wf-launch-resources .wf-profile-empty .wf-empty-copy{min-width:0!important;flex:1 1 auto!important}
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wf-launch-resources .wf-profile-empty .wf-empty-copy strong{white-space:nowrap!important}
         if(clarity.parentElement)clarity.remove();
         (document.head||document.documentElement).appendChild(clarity);
     }
