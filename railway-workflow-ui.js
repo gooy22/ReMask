@@ -713,8 +713,14 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
         const estimate=card.querySelector(".wf-audience-estimate");
         const advancedBody=card.querySelector(':scope > details.wf-audience-advanced-tools > .wf-audience-advanced-body');
         for(const section of [age,inline].filter(Boolean)){if(section.parentElement!==card)card.appendChild(section);}
+        const targetingAnchor=inline||age;
+        if(targeting){
+            if(targeting.parentElement!==card){
+                if(targetingAnchor)targetingAnchor.after(targeting);else card.appendChild(targeting);
+            }else if(targetingAnchor&&targetingAnchor.nextElementSibling!==targeting)targetingAnchor.after(targeting);
+        }
         const advancedDestination=advancedBody||card;
-        for(const section of [targeting,estimate,delivery].filter(Boolean)){if(section.parentElement!==advancedDestination)advancedDestination.appendChild(section);}
+        for(const section of [estimate,delivery].filter(Boolean)){if(section.parentElement!==advancedDestination)advancedDestination.appendChild(section);}
     }
 
     function setupStudioTargetTabs(){
@@ -733,6 +739,20 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
         }
         const panels=Array.from(list.querySelectorAll(':scope > [data-wf-target-group]'));
         const names={demographics:'Демография',devices:'Устройства',placements:'Места показа',geography:'География и языки',exclusions:'Исключения',detailed:'Детальный таргетинг'};
+        let search=root.querySelector(':scope > .wf-target-head .wf-target-search');
+        if(!search){
+            const head=root.querySelector(':scope > .wf-target-head');
+            if(head){
+                const wrap=document.createElement('div');wrap.className='wf-target-search-wrap';
+                search=document.createElement('input');search.type='search';search.className='form-control wf-target-search';
+                search.id='wfTargetFieldSearch';search.autocomplete='off';search.spellcheck=false;
+                search.placeholder='Найти настройку: телефон, iOS, география';
+                search.setAttribute('aria-label','Поиск по настройкам Meta');
+                const status=document.createElement('span');status.className='wf-target-search-status';status.hidden=true;status.setAttribute('role','status');status.setAttribute('aria-live','polite');
+                wrap.append(search,status);head.appendChild(wrap);
+            }
+        }
+        const searchStatus=root.querySelector('.wf-target-search-status');
         const styleId='wfTargetTabsStyle';
         if(!document.getElementById(styleId)){
             const style=document.createElement('style');style.id=styleId;
@@ -762,8 +782,6 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
             ].join('');
             document.head.appendChild(style);
         }
-        const search=root.querySelector(':scope > .wf-target-head .wf-target-search');
-        const searchStatus=root.querySelector('.wf-target-search-status');
         let available=0;
         for(const panel of panels){
             const key=panel.dataset.wfTargetGroup||'options';
@@ -1301,7 +1319,6 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
         const body=disclosure.querySelector(':scope > .wf-audience-advanced-body');if(!body)return;
         body.querySelector(':scope > .wf-audience-advanced-tabs')?.remove();
         const definitions=[
-            {key:'targeting',selector:'details.wf-target-catalog-disclosure'},
             {key:'saved',selector:'details.wf-audience-subgroup'},
             {key:'delivery',selector:'details.wf-audience-delivery'},
             {key:'estimate',selector:'details.wf-audience-estimate'},
@@ -1329,7 +1346,8 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
         const inline=card.querySelector(':scope > .wf-audience-inline');
         const age=Array.from(card.querySelectorAll(':scope > details.wf-audience-group'))
             .find(item=>String(item.querySelector(':scope > summary')?.textContent||'').toLowerCase().includes('возраст'));
-        const anchor=inline||age;
+        const target=card.querySelector(':scope > details.wf-target-catalog-disclosure');
+        const anchor=target||inline||age;
         if(anchor&&(disclosure.parentElement!==card||anchor.nextElementSibling!==disclosure))anchor.after(disclosure);
         else if(!anchor&&disclosure.parentElement!==card)card.appendChild(disclosure);
     }
@@ -1382,8 +1400,8 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
             const body=disclosure.querySelector(':scope > .wf-target-catalog-body');
             if(body&&root.parentElement!==body)body.appendChild(root);
         }
-        const fields=Array.from(root.querySelectorAll('[data-wf-target-field]')).filter(field=>!field.hidden);
-        const groups=Array.from(root.querySelectorAll('[data-wf-target-group]')).filter(group=>!group.hidden);
+        const fields=Array.from(root.querySelectorAll('[data-wf-target-field]'));
+        const groups=Array.from(root.querySelectorAll('[data-wf-target-group]')).filter(group=>group.querySelectorAll('[data-wf-target-field]').length>0);
         const hint=disclosure.querySelector('.wf-target-catalog-hint');
         const countText=(n,one,few,many)=>{const n10=n%10,n100=n%100;return n+' '+(n10===1&&n100!==11?one:n10>=2&&n10<=4&&(n100<12||n100>14)?few:many)};
         const hintText=fields.length?countText(fields.length,'поле','поля','полей')+' · '+countText(groups.length,'категория','категории','категорий'):'Устройства · размещения · демография';
