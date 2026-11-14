@@ -733,189 +733,127 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
         const root=$('wfTargetingOptions');
         const list=root?.querySelector(':scope > .wf-target-list');
         if(!root||!list)return;
-        root.classList.add('wf-target-tabs-mode');
-        root.classList.remove('wf-target-accordion-mode','wf-target-accordion');
-        let nav=root.querySelector(':scope > .wf-target-tabs');
-        if(!nav){
-            nav=document.createElement('div');
-            nav.className='wf-target-tabs';
-            nav.setAttribute('role','tablist');
-            nav.setAttribute('aria-label','Категории таргетинга Meta');
-            list.before(nav);
+        root.classList.remove('wf-target-tabs-mode','wf-target-accordion-mode','wf-target-accordion');
+        root.classList.add('wf-target-search-mode');
+        root.querySelector(':scope > .wf-target-tabs')?.remove();
+        const head=root.querySelector(':scope > .wf-target-head');
+        if(head){
+            head.querySelector('h6')?.remove();
+            head.querySelector('p')?.remove();
+            const emptyCopy=head.querySelector(':scope > div:not(.wf-target-search-wrap)');
+            if(emptyCopy&&!emptyCopy.children.length&&!String(emptyCopy.textContent||'').trim())emptyCopy.remove();
+        }
+        let search=root.querySelector(':scope > .wf-target-head .wf-target-search');
+        if(!search&&head){
+            let wrap=head.querySelector(':scope > .wf-target-search-wrap');
+            if(!wrap){wrap=document.createElement('div');wrap.className='wf-target-search-wrap';head.appendChild(wrap);}
+            search=document.createElement('input');search.type='search';search.className='form-control wf-target-search';
+            search.id='wfTargetFieldSearch';search.autocomplete='off';search.spellcheck=false;
+            wrap.prepend(search);
+        }
+        if(search){
+            search.placeholder='Устройство, iOS, образование…';
+            search.setAttribute('aria-label','Поиск дополнительного критерия аудитории');
         }
         const panels=Array.from(list.querySelectorAll(':scope > [data-wf-target-group]'));
-        const names={demographics:'Демография',devices:'Устройства',placements:'Позиции Meta',geography:'География и языки',exclusions:'Исключения',detailed:'Детальный таргетинг'};
-        let search=root.querySelector(':scope > .wf-target-head .wf-target-search');
-        if(!search){
-            const head=root.querySelector(':scope > .wf-target-head');
-            if(head){
-                const wrap=document.createElement('div');wrap.className='wf-target-search-wrap';
-                search=document.createElement('input');search.type='search';search.className='form-control wf-target-search';
-                search.id='wfTargetFieldSearch';search.autocomplete='off';search.spellcheck=false;
-                search.placeholder='Найти настройку: телефон, iOS, география';
-                search.setAttribute('aria-label','Поиск по настройкам Meta');
-                const status=document.createElement('span');status.className='wf-target-search-status';status.hidden=true;status.setAttribute('role','status');status.setAttribute('aria-live','polite');
-                wrap.append(search,status);head.appendChild(wrap);
-            }
+        for(const panel of panels){
+            panel.removeAttribute('role');panel.removeAttribute('aria-labelledby');
+            panel.hidden=false;
+            const heading=panel.querySelector(':scope > .wf-target-panel-heading');
+            const note=panel.querySelector(':scope > .wf-target-note');
+            const fields=panel.querySelector(':scope > .wf-target-fields')||panel.querySelector(':scope > .wf-target-panel-body > .wf-target-fields');
+            if(!fields)continue;
+            let body=panel.querySelector(':scope > .wf-target-panel-body');
+            if(!body){body=document.createElement('div');body.className='wf-target-panel-body';panel.appendChild(body);}
+            if(fields.parentElement!==body)body.appendChild(fields);
+            heading?.remove();note?.remove();
+            body.querySelectorAll('.wf-target-selection-empty,.wf-target-reveal-all').forEach(node=>node.remove());
+            panel.dataset.wfShowAll='0';
+            panel.dataset.wfBaseFieldCount=String(panel.querySelectorAll('[data-wf-target-field]').length);
+            panel.dataset.wfSearchMatches=panel.dataset.wfBaseFieldCount;
         }
-        const searchStatus=root.querySelector('.wf-target-search-status');
-        const styleId='wfTargetTabsStyle';
+        let empty=root.querySelector(':scope > .wf-target-empty');
+        if(!empty){
+            empty=document.createElement('p');empty.className='wf-target-empty';empty.dataset.wfTargetEmpty='1';
+            list.after(empty);
+        }
+        empty.dataset.wfTargetEmpty='1';
+        const styleId='wfTargetSearchStyle';
         if(!document.getElementById(styleId)){
             const style=document.createElement('style');style.id=styleId;
             style.textContent=[
-                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode>.wf-target-tabs{display:flex!important;align-items:stretch!important;gap:2px!important;max-width:100%!important;margin:2px 0 12px!important;padding:0 0 1px!important;border:0!important;border-bottom:1px solid #e5e9ed!important;border-radius:0!important;background:transparent!important;overflow-x:auto!important;overscroll-behavior-x:contain!important;scrollbar-width:thin!important}',
-                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode>.wf-target-tabs .wf-target-tab-button{display:flex!important;align-items:center!important;gap:6px!important;flex:0 0 auto!important;min-height:35px!important;margin:0!important;padding:7px 9px!important;border:0!important;border-bottom:2px solid transparent!important;border-radius:0!important;background:transparent!important;color:#66737f!important;font-size:10px!important;font-weight:600!important;white-space:nowrap!important;box-shadow:none!important;cursor:pointer!important}',
-                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode>.wf-target-tabs .wf-target-tab-button:hover{background:#f5f8f8!important;color:#303b46!important}',
-                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode>.wf-target-tabs .wf-target-tab-button[hidden]{display:none!important}',
-                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode>.wf-target-tabs .wf-target-tab-button[aria-selected=true]{border-bottom-color:#0b7a73!important;background:transparent!important;color:#08645e!important;font-weight:700!important}',
-                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode>.wf-target-tabs .wf-target-tab-button:focus-visible{outline:2px solid rgba(11,122,115,.35)!important;outline-offset:-2px!important}',
-                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode>.wf-target-tabs .wf-target-tab-count{display:inline-grid!important;place-items:center!important;min-width:16px!important;height:16px!important;padding:0 4px!important;border:1px solid #dce5e4!important;border-radius:999px!important;background:#f4f7f7!important;color:#52616c!important;font-size:9px!important;font-weight:650!important}',
-                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode>.wf-target-tabs .wf-target-tab-count[hidden]{display:none!important}',
-                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode .wf-target-list{display:block!important;margin:0!important;border:0!important;background:transparent!important}',
-                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode .wf-target-panel{display:block!important;margin:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;box-shadow:none!important;overflow:visible!important}',
-                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode .wf-target-panel[hidden]{display:none!important}',
-                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode .wf-target-panel-heading{display:none!important}',
-                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode .wf-target-panel-body{display:block!important;padding:0 0 8px!important}',
-                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode .wf-target-panel-body[hidden]{display:none!important}',
-                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode .wf-target-note{margin:0 0 9px!important;color:#74808b!important;font-size:10px!important;line-height:1.45!important}',
-                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode .wf-target-fields{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:10px 13px!important}',
-                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode .wf-target-selection-empty{margin:2px 0 5px!important;padding:0!important;color:#74808b!important;font-size:10px!important;line-height:1.45!important}',
-                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode .wf-target-reveal-all{display:inline-flex!important;align-items:center!important;min-height:27px!important;margin:0 0 7px!important;padding:3px 1px!important;border:0!important;border-radius:0!important;background:transparent!important;color:#0b7a73!important;font-size:10px!important;font-weight:650!important;box-shadow:none!important;cursor:pointer!important}',
-                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode .wf-target-reveal-all:hover{background:transparent!important;color:#08645e!important;text-decoration:underline!important}',
-                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode .wf-target-reveal-all[hidden]{display:none!important}',
-                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode .wf-target-field[hidden]{display:none!important}',
-                '@media(max-width:720px){body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode .wf-target-fields{grid-template-columns:minmax(0,1fr)!important}body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode>.wf-target-tabs .wf-target-tab-button{min-height:39px!important;padding-inline:8px!important}}'
+                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-search-mode{margin:0!important;padding:0!important;border:0!important;background:transparent!important}',
+                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-search-mode>.wf-target-head{display:block!important;margin:0 0 8px!important;padding:0!important;border:0!important;background:transparent!important}',
+                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-search-mode>.wf-target-head h6,body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-search-mode>.wf-target-head p{display:none!important}',
+                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-search-mode .wf-target-search-wrap{position:relative!important;width:100%!important;max-width:100%!important;margin:0!important}',
+                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-search-mode .wf-target-search{width:100%!important;min-height:40px!important;margin:0!important;border:1px solid #d9e0e5!important;border-radius:8px!important;background:#fff!important;color:#25313b!important;font-size:13px!important;box-shadow:none!important}',
+                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-search-mode>.wf-target-list{display:grid!important;grid-template-columns:minmax(0,1fr)!important;gap:0!important;margin:0!important;padding:0!important;border:0!important;background:transparent!important}',
+                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-search-mode .wf-target-panel:not([hidden]){display:contents!important;margin:0!important;padding:0!important;border:0!important;background:transparent!important;box-shadow:none!important}',
+                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-search-mode .wf-target-panel[hidden]{display:none!important}',
+                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-search-mode .wf-target-panel-body,body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-search-mode .wf-target-fields{display:contents!important}',
+                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-search-mode .wf-target-field{display:grid!important;grid-template-columns:minmax(145px,.55fr) minmax(0,1fr)!important;align-items:center!important;gap:8px 12px!important;margin:0!important;padding:9px 0!important;border:0!important;border-bottom:1px solid #edf0f2!important;border-radius:0!important;background:transparent!important;box-shadow:none!important}',
+                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-search-mode .wf-target-field[hidden]{display:none!important}',
+                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-search-mode .wf-target-field>label{margin:0!important;color:#44515c!important;font-size:11px!important;font-weight:600!important}',
+                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-search-mode .wf-target-empty{margin:4px 0 0!important;padding:8px 0!important;color:#75818b!important;font-size:11px!important;line-height:1.45!important}',
+                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-search-mode .wf-target-empty[hidden]{display:none!important}',
+                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 details.wf-target-catalog-disclosure{margin:10px 0 0!important;border:0!important;border-top:1px solid #e7ebee!important;border-radius:0!important;background:transparent!important;box-shadow:none!important}',
+                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 details.wf-target-catalog-disclosure>.wf-target-catalog-summary{display:flex!important;align-items:center!important;gap:10px!important;min-height:42px!important;padding:9px 0!important;border:0!important;background:transparent!important;color:#29353f!important;font-size:12px!important;font-weight:650!important;cursor:pointer!important}',
+                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 details.wf-target-catalog-disclosure>.wf-target-catalog-summary .wf-target-catalog-hint{margin-left:auto!important;color:#74818b!important;font-size:10px!important;font-weight:500!important}',
+                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 details.wf-target-catalog-disclosure>.wf-target-catalog-body{padding:0 0 8px!important;border:0!important;background:transparent!important}',
+                '@media(max-width:720px){body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-search-mode .wf-target-field{grid-template-columns:minmax(0,1fr)!important;gap:5px!important;padding:8px 0!important}body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 details.wf-target-catalog-disclosure>.wf-target-catalog-summary{min-height:42px!important}}'
             ].join('');
             document.head.appendChild(style);
         }
-        let available=0;
-        for(const panel of panels){
-            const key=panel.dataset.wfTargetGroup||'options';
-            const heading=panel.querySelector(':scope > .wf-target-panel-heading');
-            const fields=panel.querySelector(':scope > .wf-target-fields')||panel.querySelector(':scope > .wf-target-panel-body > .wf-target-fields');
-            const note=panel.querySelector(':scope > .wf-target-note')||panel.querySelector(':scope > .wf-target-panel-body > .wf-target-note');
-            if(!heading||!fields)continue;
-            let body=panel.querySelector(':scope > .wf-target-panel-body');
-            if(!body){
-                body=document.createElement('div');body.className='wf-target-panel-body';body.id='wfTargetFields-'+key;
-                if(note)body.appendChild(note);
-                body.appendChild(fields);panel.appendChild(body);
-            }else{
-                if(note&&note.parentElement!==body)body.prepend(note);
-                if(fields.parentElement!==body)body.appendChild(fields);
-            }
-            body.hidden=false;
-            const fieldGrid=panel.querySelector(':scope > .wf-target-fields')||body.querySelector(':scope > .wf-target-fields');
-            if(fieldGrid&&!fieldGrid.id)fieldGrid.id='wfTargetFieldGrid-'+key;
-            let emptyState=body.querySelector(':scope > .wf-target-selection-empty');
-            if(!emptyState){emptyState=document.createElement('p');emptyState.className='wf-target-selection-empty';emptyState.textContent='Пока ничего не выбрано. Найдите нужный параметр выше или откройте полный список категории.';}
-            let revealAll=body.querySelector(':scope > .wf-target-reveal-all');
-            if(!revealAll){
-                revealAll=document.createElement('button');revealAll.type='button';revealAll.className='wf-target-reveal-all';
-                revealAll.dataset.wfTargetShowAll=key;
-            }
-            if(fieldGrid){body.insertBefore(emptyState,fieldGrid);body.insertBefore(revealAll,fieldGrid);}
-            panel.dataset.wfShowAll=panel.dataset.wfShowAll==='1'?'1':'0';
-            const count=panel.querySelectorAll('[data-wf-target-field]').length;
-            panel.id='wfTargetPanel-'+key;
-            panel.setAttribute('role','tabpanel');
-            panel.dataset.wfBaseFieldCount=String(count);
-            panel.hidden=count===0;
-            if(count)available++;
-            let button=nav.querySelector('[data-wf-target-nav-key="'+key+'"]');
-            if(!button){
-                button=document.createElement('button');button.type='button';
-                button.className='wf-target-tab-button';button.dataset.wfTargetNavKey=key;
-                button.setAttribute('role','tab');
-                const label=document.createElement('span');label.className='wf-target-tab-label';
-                const badge=document.createElement('span');badge.className='wf-target-tab-count';badge.dataset.wfTargetTabCount=key;badge.hidden=true;
-                button.append(label,badge);
-            }
-            const label=button.querySelector('.wf-target-tab-label');
-            if(label)label.textContent=names[key]||heading.querySelector('[data-wf-target-name]')?.textContent?.trim()||key;
-            button.setAttribute('aria-controls',panel.id);
-            panel.setAttribute('aria-labelledby',button.id||('wfTargetTab-'+key));
-            if(!button.id)button.id='wfTargetTab-'+key;
-            if(button.parentElement!==nav)nav.appendChild(button);
-        }
-        for(const button of Array.from(nav.querySelectorAll('[data-wf-target-nav-key]'))){
-            if(!panels.some(panel=>panel.dataset.wfTargetGroup===button.dataset.wfTargetNavKey))button.remove();
-        }
-        const initial=panels.find(panel=>panel.dataset.wfTargetGroup===root.dataset.wfActiveTargetGroup)
-            ||panels.find(panel=>panel.classList.contains('is-active'))
-            ||panels.find(panel=>panel.classList.contains('is-open'))
-            ||panels.find(panel=>Number(panel.dataset.wfBaseFieldCount)>0);
-        if(!root.dataset.wfActiveTargetGroup&&initial)root.dataset.wfActiveTargetGroup=initial.dataset.wfTargetGroup;
         const normalize=value=>String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase();
         const aliases={
-            user_device:'телефон телефона телефоны смартфон смартфоны айфон айфоны iphone ipad galaxy устройство устройства модель модели моделей',
-            user_os:'операционная операционные система системы ос ios android андроид айфон iphone',
-            device_platforms:'тип типы устройства устройств мобильный мобильные компьютер компьютеры desktop mobile',
-            wireless_carrier:'сеть подключение оператор операторы связь carrier wifi wi-fi',
-            geo_locations:'география страна страны регион регионы город города местоположение location',
+            user_device:'телефон телефона телефоны смартфон смартфоны айфон айфоны iphone ipad galaxy мобильный мобильные модель модели',
+            user_os:'операционная операционные система системы ос ios android андроид',
+            device_platforms:'тип типы устройства устройств mobile desktop мобильный компьютер',
+            wireless_carrier:'сеть подключение оператор операторы связь',
+            geo_locations:'география страна страны регион регионы город города местоположение',
             excluded_geo_locations:'исключенная исключенные исключить география страны регионы города',
-            publisher_platforms:'платформы facebook instagram messenger threads whatsapp audience network',
-            facebook_positions:'позиции facebook лента истории reels',
-            instagram_positions:'позиции instagram лента истории reels',
-            locales:'язык языки язык интерфейса locale language',
-            interests:'интерес интересы интересов detailed targeting',
-            behaviors:'поведение поведения привычки действия'
-        };
-        const render=()=>{
-            const query=normalize(search?.value||'').trim();
-            const active=root.dataset.wfActiveTargetGroup||'';
-            for(const panel of panels){
-                const key=panel.dataset.wfTargetGroup||'';
-                const button=nav.querySelector('[data-wf-target-nav-key="'+key+'"]');
-                const matches=Number(panel.dataset.wfSearchMatches||panel.dataset.wfBaseFieldCount||0);
-                const visible=Number(panel.dataset.wfBaseFieldCount)>0&&(!query||matches>0);
-                if(button){
-                    button.hidden=!visible;
-                    button.setAttribute('aria-selected',String(query?key===active:key===active));
-                    button.tabIndex=key===active?0:-1;
-                }
-                panel.hidden=!(visible&&key===active);
-                panel.classList.toggle('is-active',visible&&key===active);
-            }
+            publisher_platforms:'платформа платформы место места показа размещение размещения facebook instagram messenger threads whatsapp',
+            facebook_positions:'место места показа размещение размещения facebook лента истории reels',
+            instagram_positions:'место места показа размещение размещения instagram лента истории reels',
+            messenger_positions:'место места показа размещение размещения messenger',
+            audience_network_positions:'место места показа размещение размещения audience network',
+            threads_positions:'место места показа размещение размещения threads',
+            locales:'язык языки language locale',
+            interests:'интерес интересы интересов',
+            behaviors:'поведение привычки действия'
         };
         const applySearch=()=>{
             const query=normalize(search?.value||'').trim();
-            root.dataset.wfFiltering=query?'1':'0';
             const tokens=query.split(/\s+/).filter(Boolean);
-            if(query&&!root.dataset.wfSearchPreviousKey)root.dataset.wfSearchPreviousKey=root.dataset.wfActiveTargetGroup||'';
-            let matchedFields=0,matchedGroups=0;
-            const matchedKeys=[];
+            root.dataset.wfFiltering=query?'1':'0';
+            let matched=0;
             for(const panel of panels){
-                const key=panel.dataset.wfTargetGroup||'';
-                const groupName=normalize(panel.querySelector('[data-wf-target-name]')?.textContent||names[key]||'');
-                const groupMatch=Boolean(query)&&tokens.every(token=>groupName.includes(token));
-                let panelMatches=0;
-                const fields=Array.from(panel.querySelectorAll('[data-wf-target-field]'));
-                for(const field of fields){
-                    const fieldKey=field.dataset.wfTargetField||'';
-                    const label=normalize(field.querySelector(':scope > label')?.textContent||'');
-                    const haystack=label+' '+normalize(fieldKey.replaceAll('_',' '))+' '+normalize(aliases[fieldKey]||'');
-                    const match=!query||groupMatch||tokens.every(token=>haystack.includes(token));
-                    field.hidden=Boolean(query)&&!match;
-                    if(match){panelMatches++;matchedFields++;}
+                const rows=Array.from(panel.querySelectorAll('[data-wf-target-field]'));
+                for(const row of rows){
+                    const key=row.dataset.wfTargetField||'';
+                    const label=normalize(row.querySelector(':scope > label')?.textContent||'');
+                    const haystack=label+' '+normalize(key.replaceAll('_',' '))+' '+normalize(aliases[key]||'');
+                    if(query){
+                        const match=tokens.every(token=>haystack.includes(token));
+                        row.hidden=!match;
+                        if(match)matched++;
+                    }else{
+                        const source=document.querySelector('[data-launch-meta-group="targeting"][data-launch-meta-field="'+key+'"]');
+                        row.hidden=wfTargetValues(source).length===0;
+                    }
                 }
-                panel.dataset.wfSearchMatches=String(query?panelMatches:fields.length);
-                if(query&&panelMatches){matchedGroups++;matchedKeys.push(key);}
+                panel.hidden=rows.length===0||!rows.some(row=>!row.hidden);
+                panel.dataset.wfSearchMatches=String(rows.filter(row=>!row.hidden).length);
             }
-            if(query){
-                if(!matchedKeys.includes(root.dataset.wfActiveTargetGroup))root.dataset.wfActiveTargetGroup=matchedKeys[0]||'';
-                if(searchStatus){
-                    searchStatus.hidden=false;
-                    searchStatus.textContent=matchedFields?'Найдено полей: '+matchedFields+' · разделов: '+matchedGroups:'Ничего не найдено';
+            if(empty){
+                if(Number(root.dataset.wfReady||0)===0){
+                    empty.hidden=false;
+                }else{
+                    empty.hidden=query?matched>0:Number(root.dataset.wfSelectedFieldCount||0)>0;
+                    empty.textContent=query?'Совпадений нет.':'Введите устройство, ОС или другой критерий.';
                 }
-            }else{
-                const previous=root.dataset.wfSearchPreviousKey;
-                if(previous&&panels.some(panel=>panel.dataset.wfTargetGroup===previous&&Number(panel.dataset.wfBaseFieldCount)>0))root.dataset.wfActiveTargetGroup=previous;
-                panels.forEach(panel=>{panel.querySelectorAll('[data-wf-target-field]').forEach(field=>{field.hidden=false;});panel.dataset.wfSearchMatches=panel.dataset.wfBaseFieldCount||'0';});
-                delete root.dataset.wfSearchPreviousKey;
-                if(searchStatus){searchStatus.hidden=true;searchStatus.textContent='';}
             }
-            render();
+            root.dataset.wfFiltering=query?'1':'0';
             updateAudienceTargetingSummary();
         };
         if(search&&search.dataset.wfTargetSearchBound!=='1'){
@@ -923,54 +861,20 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
             search.addEventListener('input',applySearch);
             search.addEventListener('search',applySearch);
         }
-        if(list.dataset.wfTargetShowAllBound!=='1'){
-            list.dataset.wfTargetShowAllBound='1';
-            list.addEventListener('click',event=>{
-                const button=event.target.closest('[data-wf-target-show-all]');
-                const panel=button?.closest('[data-wf-target-group]');
-                if(!button||!panel)return;
-                panel.dataset.wfShowAll=panel.dataset.wfShowAll==='1'?'0':'1';
-                updateAudienceTargetingSummary();
-            });
-        }
         if(root.dataset.wfTargetSelectionVisibilityBound!=='1'){
             root.dataset.wfTargetSelectionVisibilityBound='1';
-            ['input','change'].forEach(type=>root.addEventListener(type,()=>{
-                if(root.dataset.wfFiltering!=='1')updateAudienceTargetingSummary();
+            ['input','change'].forEach(type=>root.addEventListener(type,event=>{
+                if(event.target===search)return;
+                if(root.dataset.wfFiltering==='1')return;
+                updateAudienceTargetingSummary();
             }));
         }
-        if(nav.dataset.wfTargetTabsBound!=='1'){
-            nav.dataset.wfTargetTabsBound='1';
-            nav.addEventListener('click',event=>{
-                const button=event.target.closest('[data-wf-target-nav-key]');
-                if(!button||button.hidden)return;
-                root.dataset.wfActiveTargetGroup=button.dataset.wfTargetNavKey;
-                render();
-            });
-            nav.addEventListener('keydown',event=>{
-                if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;
-                const buttons=Array.from(nav.querySelectorAll('[data-wf-target-nav-key]:not([hidden])'));
-                const current=buttons.indexOf(document.activeElement);
-                if(!buttons.length)return;
-                event.preventDefault();
-                const next=event.key==='Home'?0:event.key==='End'?buttons.length-1:(current+(event.key==='ArrowRight'?1:-1)+buttons.length)%buttons.length;
-                buttons[next].focus();buttons[next].click();
-            });
-        }
-        for(const panel of panels){
-            const fields=Array.from(panel.querySelectorAll('[data-wf-target-field]'));
-            if(!panel.dataset.wfSearchMatches)panel.dataset.wfSearchMatches=String(fields.length);
-        }
-        if(search)applySearch();else render();
-        const empty=root.querySelector('.wf-target-empty');
-        if(empty){
-            empty.hidden=available>0;
-            if(!String(empty.textContent||'').trim())empty.textContent='Каталог Meta появится после выбора профиля и рекламного кабинета.';
-        }
-        root.dataset.wfReady=available?'1':'0';
-        updateAudienceTargetingSummary();
+        panels.forEach(panel=>{
+            panel.querySelectorAll('.wf-target-reveal-all,.wf-target-selection-empty').forEach(node=>node.remove());
+        });
+        if(search)applySearch();
+        else updateAudienceTargetingSummary();
     }
-
     function setupMetaGroupTabs(){
         const root=$('launchMetaSdkFields');
         if(!root)return;
@@ -1244,35 +1148,39 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
     function updateAudienceTargetingSummary() {
         const root=$('wfTargetingOptions');if(!root)return;
         const filtering=root.dataset.wfFiltering==='1';
-        for(const panel of root.querySelectorAll('[data-wf-target-group]')){
-            const fields=[...panel.querySelectorAll('[data-wf-target-field]')];
-            let selectedValues=0,selectedFields=0;
-            for(const row of fields){
-                const field=row.dataset.wfTargetField;
+        const panels=Array.from(root.querySelectorAll('[data-wf-target-group]'));
+        let selectedFields=0,selectedValues=0,visibleRows=0,totalRows=0;
+        for(const panel of panels){
+            const rows=Array.from(panel.querySelectorAll('[data-wf-target-field]'));
+            let panelVisible=0;
+            for(const row of rows){
+                totalRows++;
+                const field=row.dataset.wfTargetField||'';
                 const source=document.querySelector('[data-launch-meta-group="targeting"][data-launch-meta-field="'+field+'"]');
                 const values=wfTargetValues(source);
                 selectedValues+=values.length;
                 const hasValue=values.length>0;
                 if(hasValue)selectedFields++;
                 row.dataset.wfTargetSelected=hasValue?'1':'0';
-                if(!filtering)row.hidden=!hasValue&&panel.dataset.wfShowAll!=='1';
+                if(!filtering)row.hidden=!hasValue;
+                if(!row.hidden){panelVisible++;visibleRows++;}
             }
-            panel.dataset.wfSelectedFieldCount=String(selectedFields);
-            const count=panel.querySelector('[data-wf-target-count]');
-            if(count)setText(count,fields.length?(selectedFields?selectedFields+' выбрано · '+selectedValues+' знач.':fields.length+' доступно'):'Нет параметров для этого аккаунта');
-            const tabCount=root.querySelector('[data-wf-target-tab-count="'+panel.dataset.wfTargetGroup+'"]');
-            if(tabCount){tabCount.textContent=selectedFields?String(selectedFields):'';tabCount.hidden=selectedFields===0;}
-            const reveal=panel.querySelector('.wf-target-reveal-all');
-            if(reveal){
-                const showAll=panel.dataset.wfShowAll==='1';
-                reveal.hidden=filtering||(!showAll&&selectedFields>=fields.length);
-                reveal.textContent=showAll?'Скрыть пустые поля':'Показать все поля · '+fields.length;
-                reveal.setAttribute('aria-expanded',String(showAll));
-                const fieldGrid=panel.querySelector('.wf-target-fields');
-                if(fieldGrid)reveal.setAttribute('aria-controls',fieldGrid.id||'');
+            panel.dataset.wfSelectedFieldCount=String(rows.filter(row=>row.dataset.wfTargetSelected==='1').length);
+            panel.hidden=rows.length===0||panelVisible===0;
+        }
+        root.dataset.wfSelectedFieldCount=String(selectedFields);
+        root.dataset.wfSelectedValueCount=String(selectedValues);
+        const hint=root.closest('details.wf-target-catalog-disclosure')?.querySelector('.wf-target-catalog-hint');
+        if(hint)hint.textContent=selectedFields?selectedFields+' выбрано':'';
+        const empty=root.querySelector('[data-wf-target-empty]');
+        if(empty&&totalRows>0){
+            if(filtering){
+                empty.hidden=visibleRows>0;
+                empty.textContent='Совпадений нет.';
+            }else{
+                empty.hidden=selectedFields>0;
+                empty.textContent='Введите устройство, ОС или другой критерий.';
             }
-            const empty=panel.querySelector('.wf-target-selection-empty');
-            if(empty)empty.hidden=filtering||selectedFields>0||panel.dataset.wfShowAll==='1';
         }
     }
     function setupAudienceMetaDisclosure(){
@@ -1395,7 +1303,7 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
             disclosure=document.createElement('details');
             disclosure.className='wf-target-catalog-disclosure';
             const summary=document.createElement('summary');summary.className='wf-target-catalog-summary';
-            const title=document.createElement('span');title.textContent='Расширенные настройки Meta';
+            const title=document.createElement('span');title.textContent='Детальный таргетинг';
             const hint=document.createElement('span');hint.className='wf-target-catalog-hint';
             summary.append(title,hint);
             const body=document.createElement('div');body.className='wf-target-catalog-body';
@@ -1405,16 +1313,18 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
         }else{
             const body=disclosure.querySelector(':scope > .wf-target-catalog-body');
             if(body&&root.parentElement!==body)body.appendChild(root);
+            const title=disclosure.querySelector(':scope > summary > span:first-child');
+            if(title)title.textContent='Детальный таргетинг';
         }
-        const fields=Array.from(root.querySelectorAll('[data-wf-target-field]'));
-        const groups=Array.from(root.querySelectorAll('[data-wf-target-group]')).filter(group=>group.querySelectorAll('[data-wf-target-field]').length>0);
-        const hint=disclosure.querySelector('.wf-target-catalog-hint');
-        const countText=(n,one,few,many)=>{const n10=n%10,n100=n%100;return n+' '+(n10===1&&n100!==11?one:n10>=2&&n10<=4&&(n100<12||n100>14)?few:many)};
-        const hintText=fields.length?countText(fields.length,'поле','поля','полей')+' · '+countText(groups.length,'категория','категории','категорий'):'Устройства · размещения · демография';
-        if(hint&&hint.textContent!==hintText)hint.textContent=hintText;
+        const hint=disclosure.querySelector(':scope > summary .wf-target-catalog-hint');
+        const selected=Array.from(root.querySelectorAll('[data-wf-target-field]')).filter(row=>{
+            const field=row.dataset.wfTargetField||'';
+            const source=document.querySelector('[data-launch-meta-group="targeting"][data-launch-meta-field="'+field+'"]');
+            return wfTargetValues(source).length>0;
+        }).length;
+        if(hint)hint.textContent=selected?selected+' выбрано':'';
         return disclosure;
     }
-
     function setupAdStagePolish() {
         const card=$('creativeName')?.closest('.launch-card');if(!card)return;
         const addSectionLabel=(fieldId,key,label)=>{
@@ -1535,26 +1445,19 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
         let targetView=root.closest('details.wf-target-catalog-disclosure')||root;
         const advancedBody=adsetCard.querySelector(':scope > details.wf-audience-advanced-tools > .wf-audience-advanced-body');
         const audienceSurface=adsetCard.querySelector(':scope > .wf-audience-inline');
-        if(advancedBody){
-            if(targetView.parentElement!==advancedBody)advancedBody.appendChild(targetView);
-            const estimate=adsetCard.querySelector('.wf-audience-estimate');
-            if(estimate&&estimate.parentElement!==advancedBody)advancedBody.appendChild(estimate);
-        }else if(audienceSurface){
+        const estimate=adsetCard.querySelector('.wf-audience-estimate');
+        if(audienceSurface){
             if(targetView.parentElement!==adsetCard||audienceSurface.nextElementSibling!==targetView)audienceSurface.after(targetView);
-            const estimate=adsetCard.querySelector('.wf-audience-estimate');
-            if(estimate&&(estimate.parentElement!==adsetCard||targetView.nextElementSibling!==estimate))targetView.after(estimate);
         }else{
-            const anchors=['ageMin','geoQuery','interestQuery','behaviorQuery','languageQuery']
+            const anchors=['ageMin','ageMax','geoQuery','interestQuery','behaviorQuery','languageQuery']
                 .map(id=>$(id)?.closest('.row')||$(id)?.closest('[data-remaskLanguageTargeting]'))
                 .filter(row=>row&&adsetCard.contains(row));
-            const audienceBox=$('singleAudienceBox');
-            const audienceAnchor=audienceBox?.closest('.row')||audienceBox;
-            if(audienceAnchor&&adsetCard.contains(audienceAnchor))anchors.push(audienceAnchor);
             anchors.sort((a,b)=>a===b?0:(a.compareDocumentPosition(b)&Node.DOCUMENT_POSITION_FOLLOWING?-1:1));
             const anchor=anchors[anchors.length-1];
-            if(anchor){if(anchor.nextElementSibling!==targetView)anchor.after(targetView);}
-            else if(targetView.parentElement!==adsetCard)adsetCard.appendChild(targetView);
+            if(anchor&&targetView.parentElement!==adsetCard)anchor.after(targetView);
+            else if(!anchor&&targetView.parentElement!==adsetCard)adsetCard.appendChild(targetView);
         }
+        if(advancedBody&&estimate&&estimate.parentElement!==advancedBody)advancedBody.appendChild(estimate);
         const rowsByGroup=new Map(wfTargetGroups.map(group=>[group.key,root.querySelector('[data-wf-target-group="'+group.key+'"] .wf-target-fields')]));
         let available=0,sourceCount=0;
         for(const source of document.querySelectorAll('[data-launch-meta-group="targeting"][data-launch-meta-field]')){
