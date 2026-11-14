@@ -2835,6 +2835,11 @@ body.app-shell.wf-autoupload-open .launch-wrap.wf-launch.wf-studio-v3 #launchRes
 body.app-shell.wf-autoupload-open .launch-wrap.wf-launch.wf-studio-v3 .wf-step-nav a.is-current .wf-step-index{background:#39b4a5!important;border-color:#39b4a5!important;color:#082b27!important}
 body.app-shell.wf-autoupload-open .launch-wrap :is(.btn-primary,.btn-info,.btn-success),body.app-shell.wf-autoupload-open #wfResourceActions .wf-resource-primary,body.app-shell.wf-autoupload-open #wfMobileActions :is(.wf-mobile-next,#reviewLaunch,#launchButton){background:#17766d!important;border-color:#17766d!important;color:#fff!important}
 body.app-shell.wf-autoupload-open .launch-wrap :is(.btn-primary,.btn-info,.btn-success):hover,body.app-shell.wf-autoupload-open #wfResourceActions .wf-resource-primary:hover,body.app-shell.wf-autoupload-open #wfMobileActions :is(.wf-mobile-next,#reviewLaunch,#launchButton):hover{background:#12645c!important;border-color:#12645c!important;color:#fff!important}
+body.app-shell.wf-autoupload-open #wfMobileActions{display:flex!important;align-items:center!important;justify-content:flex-end!important;gap:9px!important;grid-template-columns:none!important}
+body.app-shell.wf-autoupload-open #wfMobileActions .wf-mobile-step{flex:0 1 auto!important;min-width:0!important;margin:0 auto 0 0!important;color:#c5d0d4!important;font-size:13px!important;line-height:1.3!important;white-space:nowrap!important}
+body.app-shell.wf-autoupload-open #wfMobileActions .wf-mobile-summary,body.app-shell.wf-autoupload-open #wfMobileActions .wf-mobile-back{flex:0 0 auto!important;width:auto!important;min-width:0!important;max-width:max-content!important;min-height:40px!important;padding:8px 12px!important;border:1px solid #3e4e55!important;border-radius:9px!important;background:#222f35!important;color:#edf3f5!important;font-size:14px!important;line-height:1.2!important;white-space:nowrap!important}
+body.app-shell.wf-autoupload-open #wfMobileActions .wf-mobile-next{flex:0 0 auto!important;width:auto!important;min-width:72px!important;min-height:40px!important;padding:8px 12px!important;font-size:14px!important;white-space:nowrap!important}
+
 `;
 
         if(clarity.parentElement)clarity.remove();
