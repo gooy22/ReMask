@@ -2632,7 +2632,7 @@ body.app-shell.wf-autoupload-open .wf-launch .wf-audience-advanced-summary{backg
             dot.setAttribute('aria-hidden','true');
             badge.replaceChildren(dot,document.createTextNode('Режим: '+(publish?'Публикация':'Черновик')));
         }
-        const mobileStatus=root.querySelector('#wfMobileActions .wf-workflow-status');
+        const mobileStatus=document.querySelector('#wfMobileActions .wf-workflow-status');
         if(mobileStatus)setText(mobileStatus,'Режим: '+(publish?'Публикация':'Черновик'));
         const summary=root.querySelector('#wfLiveSummary');
         const caption=summary?.querySelector('.wf-live-summary-caption');
