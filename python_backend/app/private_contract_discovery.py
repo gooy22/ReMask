@@ -438,53 +438,54 @@ async def discover_private_ad_account_contract(web, *, business_id, account_name
 
 async def _discover_web_modules(web, *, entry, observed, label, prepare_document=None):
     # All operations here are GET. Mutation authorization is elsewhere.
+    from .facebook_query_discovery import (
+        _fetch_discovery_response,
+        _trusted_discovery_host,
+        _validate_discovery_response,
+    )
+
     async with asyncio.timeout(55):
-        status, body, final = await web.fetch_text(entry, max_bytes=3_000_000)
-        from .private_inventory import _auth_gate
-        gate = _auth_gate(final, body)
-        if gate:
-            from .provisioning.models import ProvisioningError
-            raise ProvisioningError(gate, 'Meta contract discovery requires the profile session to be restored.', retryable=True)
-        final_parts = urlsplit(final)
-        if (status != 200 or final_parts.hostname not in {urlsplit(entry).hostname, "facebook.com"}
-                or any(word in final_parts.path.lower() for word in ("/login", "/checkpoint"))):
+        status, body, final, _headers = await _fetch_discovery_response(
+            web, entry, max_bytes=3_000_000,
+        )
+        if not _validate_discovery_response(status, body, final):
             return None
         if prepare_document is not None:
             prepare_document(body)
         for script in re.findall(r"<script[^>]*>(.*?)</script>", body, flags=re.I | re.S):
             observed.observe(script)
-        urls = _script_urls(body, final)
+
+        # Contract discovery is a bounded fallback, not a parallel bundle crawler.
+        # Reuse short-lived session responses and read at most four scripts sequentially.
+        urls = _script_urls(body, final, limit=4)
         total_bytes = len(body.encode())
         count = 0
-        offset = 0
         contract = observed.result()
-        while contract is None and offset < len(urls):
-            remaining_slots = (40_000_000 - total_bytes) // 8_000_000
-            if remaining_slots <= 0:
+        while contract is None and count < min(4, len(urls)) and total_bytes < 15_000_000:
+            url = urls[count]
+            if not _trusted_discovery_host(url):
+                from .provisioning.models import ProvisioningError
+                raise ProvisioningError(
+                    "PRIVATE_CONTRACT_DISCOVERY_UNTRUSTED_SCRIPT",
+                    "Contract discovery stopped before fetching an untrusted script URL.",
+                    retryable=False,
+                )
+            count += 1
+            status, script, script_final, _script_headers = await _fetch_discovery_response(
+                web, url, max_bytes=3_000_000, referer=final,
+            )
+            if not _validate_discovery_response(status, script, script_final):
+                continue
+            if len(script.encode()) > 3_000_000:
                 break
-            async def read_script(url):
-                try:
-                    response = await web.fetch_text(url, max_bytes=8_000_001, referer=final)
-                    parts = urlsplit(response[2])
-                    host = parts.hostname or ""
-                    if response[0] == 200 and (host in {"www.facebook.com", "business.facebook.com"} or host.endswith(".fbcdn.net")):
-                        if len(response[1].encode()) <= 8_000_000:
-                            return response[1]
-                except Exception:
-                    pass
-                return ""
-            batch = await asyncio.gather(*(read_script(url) for url in urls[offset:offset + min(4, remaining_slots)]))
-            offset += len(batch)
-            for script in batch:
-                count += 1
-                total_bytes += len(script.encode())
-                observed.observe(script)
+            total_bytes += len(script.encode())
+            observed.observe(script)
             contract = observed.result()
+
         log.info("[%s] %s private_discovery scripts=%d bytes=%d artifacts=%d schemas=%d resolved=%s",
             getattr(getattr(web, "profile", None), "name", ""), label, count, total_bytes,
             sum(len(x) for x in observed.ids.values()), sum(len(x) for x in observed.payloads.values()), bool(contract))
     return contract
-
 
 async def discover_private_fan_page_contract(web, *, name, category, bio, actor_id):
     from .fan_page_contracts import valid_page_create

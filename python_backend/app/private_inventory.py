@@ -20,6 +20,10 @@ _JSON_SCRIPT_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 _REQUEST_KEYS = {"variables", "params", "request", "input", "query", "preloadparams"}
+_TERMINAL_INVENTORY_CODES = {
+    "SESSION_EXPIRED", "RATE_LIMITED", "ACCOUNT_RESTRICTED",
+    "PERMISSION_DENIED", "REMOTE_TIMEOUT",
+}
 
 
 def _response_only(value: Any, depth: int = 0, decode_string: bool = False) -> Any:
@@ -111,7 +115,7 @@ def inventory_diagnostic_summary(snapshot: dict[str, Any]) -> list[dict[str, Any
     for business in snapshot.get("businesses", []):
         diagnostics.extend(business.get("diagnostics", []))
     return [{key: row[key] for key in ("requested_url", "final_url", "http_status",
-        "auth_gate", "bytes", "usable", "payload_count", "inventory_shape", "error_type",
+        "auth_gate", "stop_gate", "bytes", "usable", "payload_count", "inventory_shape", "error_type",
         "phase", "operation_kind", "contracts", "query_posts", "query_attempts", "query_names", "modules", "modules_scanned", "scripts") if key in row}
         for row in diagnostics if isinstance(row, dict)][-12:]
 
@@ -273,15 +277,71 @@ def _has_complete_scoped_inventory(payload: Any) -> bool:
     return bool(observations) and all(observations)
 
 
+def _payload_has_meta_error(value: Any) -> bool:
+    if isinstance(value, dict):
+        if value.get("errors") or value.get("error"):
+            return True
+        return any(_payload_has_meta_error(child) for child in value.values())
+    if isinstance(value, list):
+        return any(_payload_has_meta_error(child) for child in value)
+    return False
+
+
+def _inventory_response_stop_gate(status: int, payloads: list[Any], body: str = "") -> str:
+    from .provisioning.meta_errors import classify_meta_payload_error
+
+    try:
+        status = int(status)
+    except (TypeError, ValueError):
+        return "INVALID_HTTP_STATUS"
+    if not 200 <= status < 300:
+        code, _, _ = classify_meta_payload_error(
+            {}, entity="BUSINESS", http_status=status,
+            fallback_message=f"HTTP {status}",
+        )
+        return code or f"HTTP_{status}"
+    for payload in payloads:
+        if not _payload_has_meta_error(payload):
+            continue
+        code, _, _ = classify_meta_payload_error(payload, entity="BUSINESS", http_status=status)
+        return code if code in _TERMINAL_INVENTORY_CODES else "META_READ_ERROR"
+    return ""
+
+def _inventory_exception_gates(exc: Exception) -> tuple[str, str]:
+    from .private_auth import private_auth_error
+    from .private_transport_error import private_transport_error
+    from .provisioning.meta_errors import classify_meta_payload_error
+
+    auth = private_auth_error(exc)
+    if auth is not None:
+        return auth.code, auth.code
+    payload = getattr(exc, "meta_payload", {})
+    status = getattr(exc, "http_status", None)
+    if isinstance(payload, dict) and (payload.get("error") or payload.get("errors") or status):
+        code, _, _ = classify_meta_payload_error(
+            payload, entity="BUSINESS", http_status=status,
+        )
+        if code in _TERMINAL_INVENTORY_CODES:
+            return "", code
+    explicit = str(getattr(exc, "code", "") or "").strip()
+    if explicit:
+        return "", explicit
+    _, failure = private_transport_error(exc)
+    return "", str(failure.get("code") or "INVENTORY_READ_ABORTED")
+
+
 async def _fetch_payloads(web, url: str, *, refresh_modules: bool = True) -> tuple[list[Any], dict[str, Any]]:
     started = time.monotonic()
     status, body, final_url = await web.fetch_text(url, max_bytes=5_000_000)
     gate = _auth_gate(final_url, body)
     payloads = _json_payloads(body)
+    stop_gate = _inventory_response_stop_gate(status, payloads, body)
     target, final = urlsplit(url), urlsplit(final_url)
     trusted = final.scheme == "https" and final.hostname in {"facebook.com", "www.facebook.com",
         "business.facebook.com", "adsmanager.facebook.com"}
-    if refresh_modules and status == 200 and not gate and trusted:
+    if not trusted and not gate:
+        stop_gate = stop_gate or "UNTRUSTED_RESPONSE"
+    if refresh_modules and status == 200 and not gate and not stop_gate and trusted:
         from .contract_maintenance.module_refresh import refresh_due
         refresh = getattr(web, 'refresh_reviewed_modules', None)
         if callable(refresh) and (not hasattr(web, '_module_collection_progress') or refresh_due(web)):
@@ -291,12 +351,13 @@ async def _fetch_payloads(web, url: str, *, refresh_modules: bool = True) -> tup
         "final_url": final.scheme + "://" + (final.hostname or "") + final.path,
         "http_status": int(status),
         "auth_gate": gate,
+        "stop_gate": stop_gate,
         "bytes": len(body.encode("utf-8")),
-        "usable": 200 <= int(status) < 300 and not gate and trusted,
+        "usable": 200 <= int(status) < 300 and not gate and not stop_gate and trusted,
         "payload_count": len(payloads),
         "elapsed_ms": int((time.monotonic() - started) * 1000),
-        "inventory_shape": _inventory_shape(payloads) if trusted and not gate else [],
-        "_document": body if trusted and not gate and 200 <= int(status) < 300 else "",
+        "inventory_shape": _inventory_shape(payloads) if trusted and not gate and not stop_gate else [],
+        "_document": body if trusted and not gate and not stop_gate and 200 <= int(status) < 300 else "",
     }
 
 
@@ -334,7 +395,7 @@ async def private_inventory_snapshot(
     diagnostics: list[dict[str, Any]] = []
     businesses: dict[str, str] = {}
     discovery_complete = False
-    discovery_auth_blocked = False
+    discovery_stopped = False
 
     # Business Suite HTML can be only a logged-in shell with business_id=null.
     # Reuse the reviewed selector read already used by BM provisioning instead
@@ -359,50 +420,47 @@ async def private_inventory_snapshot(
             proof = await read_business_inventory(
                 web, bootstrap_account_id=bootstrap_account_hint,
             )
-            businesses.update({str(key): str(name) for key, name in proof.get('rows', {}).items()
-                if _clean_id(key) and str(key) != personal_scope_id})
-            discovery_complete = proof.get('complete') is True
+            proof_stop_gate = str(proof.get('stop_gate') or "")
+            if not proof_stop_gate:
+                businesses.update({str(key): str(name) for key, name in proof.get('rows', {}).items()
+                    if _clean_id(key) and str(key) != personal_scope_id})
+            discovery_complete = proof.get('complete') is True and not proof_stop_gate
+            discovery_stopped = bool(proof_stop_gate)
             diagnostics.append({'phase': 'business_discovery_query', 'operation_kind': 'query',
-                'usable': True, 'complete': discovery_complete, 'business_count': len(businesses),
-                'code': '' if discovery_complete else 'PRIVATE_BM_INVENTORY_INCOMPLETE',
-                'source': proof.get('source', ''), 'queries': proof.get('diagnostics', [])})
+                'usable': not bool(proof_stop_gate), 'complete': discovery_complete,
+                'business_count': len(businesses),
+                'code': proof_stop_gate or ('' if discovery_complete else 'PRIVATE_BM_INVENTORY_INCOMPLETE'),
+                'stop_gate': proof_stop_gate, 'source': proof.get('source', ''),
+                'queries': proof.get('diagnostics', [])})
         except Exception as exc:
-            from .private_auth import private_auth_error
-            from .private_transport_error import private_transport_error
-            auth = private_auth_error(exc)
-            _, failure = private_transport_error(exc)
-            discovery_auth_blocked = auth is not None
+            auth_gate, stop_gate = _inventory_exception_gates(exc)
+            discovery_stopped = True
             diagnostics.append({'phase': 'business_discovery_query', 'operation_kind': 'query',
-                'code': auth.code if auth else failure['code'],
-                'auth_gate': auth.code if auth else '', 'error_type': type(exc).__name__})
+                'code': auth_gate or stop_gate, 'auth_gate': auth_gate, 'stop_gate': stop_gate,
+                'error_type': type(exc).__name__})
 
     discovery_urls = (
         "https://business.facebook.com/latest/home",
         "https://business.facebook.com/latest/overview",
-    ) if discover_businesses and not fast_sync and not discovery_complete and not discovery_auth_blocked else ()
+    ) if discover_businesses and not fast_sync and not discovery_complete and not discovery_stopped else ()
     for url in discovery_urls:
         try:
             await restore_invalid_profile_auth_snapshot()
             payloads, diag = await _fetch_payloads(web, url, refresh_modules=not fast_sync)
         except Exception as exc:
-            from .private_auth import private_auth_error
-            from .private_transport_error import private_transport_error
-            auth = private_auth_error(exc)
-            _, failure = private_transport_error(exc)
+            auth_gate, stop_gate = _inventory_exception_gates(exc)
             diagnostics.append({
                 "phase": "business_discovery",
-                "code": auth.code if auth else failure['code'],
-                "auth_gate": auth.code if auth else "",
+                "code": auth_gate or stop_gate,
+                "auth_gate": auth_gate, "stop_gate": stop_gate,
                 "error_type": exc.__class__.__name__,
             })
-            if auth:
-                discovery_auth_blocked = True
-                break
-            continue
+            discovery_stopped = True
+            break
         diag.pop("_document", None)
         diagnostics.append({"phase": "business_discovery", **diag})
-        if diag.get("auth_gate"):
-            discovery_auth_blocked = True
+        if diag.get("auth_gate") or diag.get("stop_gate"):
+            discovery_stopped = True
             break
         if not diag.get("usable"):
             continue
@@ -418,7 +476,7 @@ async def private_inventory_snapshot(
     targets.discard(str(personal_scope_id or ""))
     discovery_ms = int((time.monotonic() - started) * 1000)
     timings = {'business_discovery': discovery_ms, 'account_inventory': []}
-    if discovery_auth_blocked:
+    if discovery_stopped:
         return {'ready': False, 'businesses': [], 'confirmed_business_ids': [],
             'inconclusive_business_ids': sorted(targets), 'discovered_business_ids': [],
             'discovery_complete': False, 'diagnostics': diagnostics,
@@ -497,25 +555,26 @@ async def private_inventory_snapshot(
                         not expected or expected.issubset(account_rows)
                     )
                 )
+                proof_stop_gate = str(proof.get("stop_gate") or "")
                 business_diags.append({
                     "phase": "static_graphql_inventory",
                     "source": proof.get("source", ""),
-                    "complete": authoritative_container,
+                    "complete": authoritative_container and not proof_stop_gate,
                     "confirmed_expected_account_ids": sorted(expected.intersection(account_rows)),
                     "account_count": len(account_rows),
+                    "stop_gate": proof_stop_gate,
                 })
             except Exception as exc:
-                from .private_auth import private_auth_error
-                from .private_transport_error import private_transport_error
-                auth = private_auth_error(exc)
-                _, failure = private_transport_error(exc)
+                auth_gate, stop_gate = _inventory_exception_gates(exc)
                 business_diags.append({
                     "phase": "static_graphql_inventory",
-                    "code": auth.code if auth else failure["code"],
-                    "auth_gate": auth.code if auth else "",
+                    "code": auth_gate or stop_gate,
+                    "auth_gate": auth_gate, "stop_gate": stop_gate,
                     "error_type": type(exc).__name__,
                 })
-                if auth:
+                if auth_gate or stop_gate:
+                    # A failed static read is the stop signal for this profile.
+                    # Do not immediately fan out into HTML and Ads Manager reads.
                     diagnostics.extend(business_diags)
                     timings['account_inventory'].append({'business_id': business_id,
                         'elapsed_ms': int((time.monotonic() - account_started) * 1000)})
@@ -543,29 +602,24 @@ async def private_inventory_snapshot(
                 "https://adsmanager.facebook.com/adsmanager/manage/campaigns"
                 f"?act={expected_id}&business_id={business_id}",
             ])
-        for url in ([] if static_verified else urls):
+        for url in ([] if static_verified or any(row.get('auth_gate') or row.get('stop_gate') for row in business_diags) else urls):
             try:
                 await restore_invalid_profile_auth_snapshot()
                 payloads, diag = await _fetch_payloads(web, url, refresh_modules=not fast_sync)
             except Exception as exc:
-                from .private_auth import private_auth_error
-                from .private_transport_error import private_transport_error
-                auth = private_auth_error(exc)
-                _, failure = private_transport_error(exc)
+                auth_gate, stop_gate = _inventory_exception_gates(exc)
                 business_diags.append({
-                    "code": auth.code if auth else failure['code'],
-                    "auth_gate": auth.code if auth else "",
+                    "code": auth_gate or stop_gate,
+                    "auth_gate": auth_gate, "stop_gate": stop_gate,
                     "error_type": exc.__class__.__name__,
                 })
-                if auth:
-                    break
-                continue
+                break
 
             document = diag.pop("_document", "")
             if "settings/ad_accounts" in url and diag.get("usable"):
                 settings_document, settings_url = document, url
             business_diags.append(diag)
-            if diag.get("auth_gate"):
+            if diag.get("auth_gate") or diag.get("stop_gate"):
                 break
             if not diag.get("usable"):
                 continue
@@ -579,17 +633,17 @@ async def private_inventory_snapshot(
 
         if (execute_read_queries and not fast_sync and settings_document and not authoritative_container
                 and not (expected and expected.issubset(account_rows))
-                and not any(row.get("auth_gate") for row in business_diags)):
+                and not any(row.get("auth_gate") or row.get("stop_gate") for row in business_diags)):
             from .private_inventory_queries import read_private_inventory_queries
             query_results, query_diagnostic = await read_private_inventory_queries(web,
                 business_id=business_id, document=settings_document, entry_url=settings_url)
             business_diags.append(query_diagnostic)
-            if query_diagnostic.get("auth_gate"):
+            if query_diagnostic.get("auth_gate") or query_diagnostic.get("stop_gate"):
                 query_results = []
             for result in query_results:
                 accept(result["payloads"], request_scoped=True, asset_scope=result["asset_scope"], has_errors=result["has_errors"])
 
-        if any(row.get("auth_gate") for row in business_diags):
+        if any(row.get("auth_gate") or row.get("stop_gate") for row in business_diags):
             diagnostics.extend(business_diags)
             timings['account_inventory'].append({'business_id': business_id,
                 'elapsed_ms': int((time.monotonic() - account_started) * 1000)})

@@ -279,12 +279,22 @@ def _compile_query(doc, friendly, operation, business, observed_variables=None):
 
 
 async def read_private_inventory_queries(web, *, business_id, document, entry_url):
-    """Query POSTs are reads; no CREATE intent or mutation is performed here."""
-    from .private_inventory import _auth_gate, _json_payloads, _inventory_shape, _normalize_connected_inventory
+    """Read only a few observed query artifacts; any remote error ends this pass."""
+    from .private_inventory import (
+        _auth_gate, _json_payloads, _inventory_shape, _normalize_connected_inventory,
+        _inventory_exception_gates,
+    )
+    from .provisioning.meta_errors import classify_meta_payload_error
+    from .facebook_query_discovery import _fetch_discovery_response
     from urllib.parse import urlsplit
+
     diagnostic = {"phase": "private_graphql_inventory", "operation_kind": "query",
         "contracts": 0, "query_posts": 0, "query_attempts": 0, "query_names": [], "error_type": ""}
     payloads = []
+    terminal_codes = {
+        "SESSION_EXPIRED", "RATE_LIMITED", "ACCOUNT_RESTRICTED",
+        "PERMISSION_DENIED", "REMOTE_TIMEOUT",
+    }
     try:
         async with asyncio.timeout(65):
             contracts = getattr(web, "_private_inventory_query_cache", {}).get(str(business_id))
@@ -292,31 +302,53 @@ async def read_private_inventory_queries(web, *, business_id, document, entry_ur
                 observed = QueryArtifacts()
                 for script in re.findall(r"<script\b[^>]*>(.*?)</script\s*>", document, re.I | re.S):
                     observed.observe(script)
-                urls = _script_urls(document, entry_url)
+                # Keep a single inventory pass to two sequential bundle GETs.
+                # A later explicit Sync can retry discovery if neither carries
+                # a current read-only contract.
+                urls = _script_urls(document, entry_url, limit=2)
                 total = len(document.encode())
                 contracts = observed.contracts(business_id)
                 fetched = 0
-                for offset in range(0, len(urls), 4):
-                    if contracts:
+                for url in urls:
+                    if contracts or fetched >= 2 or total >= 24_000_000:
                         break
-                    async def fetch(url):
-                        try:
-                            status, body, final = await web.fetch_text(url, max_bytes=3_000_000, referer=entry_url)
-                            parts = urlsplit(final)
-                            if status == 200 and parts.scheme == "https" and not (parts.port or parts.username or parts.password) and (parts.hostname in {"business.facebook.com", "www.facebook.com"}
-                                    or (parts.hostname or "").endswith(".fbcdn.net")) and not _auth_gate(final, body):
-                                return body
-                        except Exception:
-                            pass
-                        return ""
-                    remaining_slots = (24_000_000 - total) // 3_000_000
-                    if remaining_slots <= 0:
+                    fetched += 1
+                    try:
+                        status, body, final, _headers = await _fetch_discovery_response(
+                            web, url, max_bytes=3_000_000, referer=entry_url,
+                        )
+                    except Exception as exc:
+                        auth_gate, stop_gate = _inventory_exception_gates(exc)
+                        diagnostic.update(auth_gate=auth_gate, stop_gate=stop_gate,
+                            error_type=type(exc).__name__)
                         break
-                    batch = await asyncio.gather(*(fetch(url) for url in urls[offset:offset+min(4, remaining_slots)]))
-                    fetched += len(batch)
-                    for source in batch:
-                        total += len(source.encode())
-                        observed.observe(source)
+                    parts = urlsplit(final)
+                    gate = _auth_gate(final, body)
+                    trusted = (
+                        parts.scheme == "https" and not (parts.port or parts.username or parts.password)
+                        and (parts.hostname in {"business.facebook.com", "www.facebook.com"}
+                             or (parts.hostname or "").endswith(".fbcdn.net"))
+                    )
+                    if gate:
+                        diagnostic.update(auth_gate=gate, stop_gate=gate)
+                        break
+                    if not trusted:
+                        diagnostic["stop_gate"] = "UNTRUSTED_SCRIPT_RESPONSE"
+                        break
+                    if status != 200:
+                        code, _, _ = classify_meta_payload_error(
+                            {}, entity="BUSINESS", http_status=int(status),
+                            fallback_message=f"HTTP {status}",
+                        )
+                        if int(status) in {404, 410}:
+                            continue
+                        diagnostic["stop_gate"] = (
+                            code if code != "META_UNKNOWN_ERROR"
+                            else "PRIVATE_QUERY_DISCOVERY_HTTP_ERROR"
+                        )
+                        break
+                    total += len(body.encode())
+                    observed.observe(body)
                     contracts = observed.contracts(business_id)
                 diagnostic.update(modules=len(observed.modules), modules_scanned=observed.modules_scanned,
                     scripts=fetched, bytes=total)
@@ -325,6 +357,8 @@ async def read_private_inventory_queries(web, *, business_id, document, entry_ur
                     cache[str(business_id)] = contracts
                     web._private_inventory_query_cache = cache
             diagnostic["contracts"] = len(contracts)
+            if diagnostic.get("stop_gate"):
+                contracts = []
             for contract in contracts:
                 if (contract.get("operation_kind") != "query" or contract.get("business_id") != str(business_id)
                         or not re.fullmatch(r"\d{5,40}", str(contract.get("doc_id", "")))):
@@ -341,16 +375,20 @@ async def read_private_inventory_queries(web, *, business_id, document, entry_ur
                 decoded = _json_payloads(json.dumps(result))
                 diagnostic["payload_count"] = diagnostic.get("payload_count", 0) + len(decoded)
                 diagnostic["inventory_shape"] = (diagnostic.get("inventory_shape", []) + _inventory_shape(decoded))[:20]
+                if isinstance(result, dict) and (result.get("errors") or result.get("error")):
+                    code, _, _ = classify_meta_payload_error(result, entity="BUSINESS")
+                    diagnostic["stop_gate"] = code if code in terminal_codes else "META_READ_ERROR"
+                    if code == "SESSION_EXPIRED":
+                        diagnostic["auth_gate"] = code
+                    break
                 if contract.get("response_collection") == "connected_objects":
                     decoded = _normalize_connected_inventory(decoded, str(business_id))
                 payloads.append({"payloads": decoded, "asset_scope": contract["asset_scope"],
-                    "has_errors": bool(result.get("errors") or result.get("error"))})
+                    "has_errors": False})
     except Exception as exc:
-        diagnostic["error_type"] = type(exc).__name__
-        if type(exc).__name__ == "AuthenticationError":
-            diagnostic["auth_gate"] = "CHECKPOINT_REQUIRED" if "checkpoint" in str(exc).lower() else "SESSION_EXPIRED"
-        if str(business_id) in getattr(web, "_private_inventory_query_cache", {}):
-            web._private_inventory_query_cache.pop(str(business_id), None)
+        auth_gate, stop_gate = _inventory_exception_gates(exc)
+        diagnostic.update(error_type=type(exc).__name__,
+            auth_gate=auth_gate, stop_gate=stop_gate)
     log.info("[%s] RK private read_queries business=%s diagnostic=%s",
         getattr(getattr(web, "profile", None), "name", ""), business_id, json.dumps(diagnostic, separators=(",", ":")))
     return payloads, diagnostic

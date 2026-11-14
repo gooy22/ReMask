@@ -2534,20 +2534,57 @@ async def profile_live_inventory(
                 from app.private_transport_error import private_transport_error
                 auth_error=private_auth_error(exc)
                 _,transport_error=private_transport_error(exc)
-                private_snapshot={'diagnostics':[{'auth_gate':auth_error.code if auth_error else '',
-                    'code':auth_error.code if auth_error else transport_error['code']}]}
+                stop_gate = (
+                    auth_error.code if auth_error
+                    else str(transport_error.get('code') or 'PRIVATE_INVENTORY_READ_ABORTED')
+                )
+                private_snapshot={
+                    'stop_gate':stop_gate,
+                    'diagnostics':[{
+                        'auth_gate':auth_error.code if auth_error else '',
+                        'stop_gate':stop_gate,
+                        'code':stop_gate,
+                    }],
+                }
 
             sync_timings['inventory']=int((time.monotonic()-private_started)*1000)
             if isinstance(private_snapshot.get('timings_ms'),dict):
                 sync_timings['meta_reads']=private_snapshot['timings_ms']
+            private_inventory_diagnostics=[]
+            pending_diagnostics=[
+                row for row in (private_snapshot.get('diagnostics') or [])
+                if isinstance(row,dict)
+            ]
+            for business in (private_snapshot.get('businesses') or []):
+                if isinstance(business,dict):
+                    pending_diagnostics.extend(
+                        row for row in (business.get('diagnostics') or [])
+                        if isinstance(row,dict)
+                    )
+            while pending_diagnostics:
+                row=pending_diagnostics.pop(0)
+                private_inventory_diagnostics.append(row)
+                pending_diagnostics.extend(
+                    child for child in (row.get('queries') or [])
+                    if isinstance(child,dict)
+                )
             private_auth_gates = {
                 str(row.get('auth_gate') or '').strip().upper()
-                for row in (private_snapshot.get('diagnostics') or [])
-                if isinstance(row, dict) and row.get('auth_gate')
+                for row in private_inventory_diagnostics
+                if row.get('auth_gate')
             }
             private_auth_gate = next((code for code in (
                 'CHECKPOINT_REQUIRED', 'TWO_FACTOR_REQUIRED', 'SESSION_EXPIRED', 'BUSINESS_LOGIN_GATE'
             ) if code in private_auth_gates), '')
+            private_inventory_stop_gate = str(private_snapshot.get('stop_gate') or '')
+            if not private_inventory_stop_gate:
+                private_inventory_stop_gate = next((
+                    str(row.get('stop_gate') or '')
+                    for row in private_inventory_diagnostics
+                    if row.get('stop_gate')
+                ), '')
+            if not private_inventory_stop_gate and private_auth_gate:
+                private_inventory_stop_gate = private_auth_gate
             if private_auth_gate == 'CHECKPOINT_REQUIRED':
                 await store.record_terminal_checkpoint(clean_profile)
             elif private_auth_gate == 'BUSINESS_LOGIN_GATE':
@@ -2638,6 +2675,20 @@ async def profile_live_inventory(
                         private_page_result.source or 'facebook_web_graphql'
                     )
                 except Exception as exc:
+                    from app.private_auth import private_auth_error
+                    auth_error=private_auth_error(exc)
+                    if auth_error is not None:
+                        if auth_error.code == 'CHECKPOINT_REQUIRED':
+                            await store.record_terminal_checkpoint(clean_profile)
+                        elif auth_error.code == 'BUSINESS_LOGIN_GATE':
+                            await store.record_terminal_profile_status(clean_profile, 'BUSINESS_LOGIN_GATE')
+                        raise HTTPException(
+                            status_code=409,
+                            detail={
+                                'code':auth_error.code,
+                                'message':'Meta returned an authentication gate during Page inventory. ReMask stopped further profile reads.',
+                            },
+                        ) from exc
                     private_page_diag=f'{exc.__class__.__name__}: {exc}'[:900]
                 sync_timings['page_enrichment']=int((time.monotonic()-pages_started)*1000)
                 sync_timings['total']=int((time.monotonic()-started)*1000)
@@ -2694,19 +2745,19 @@ async def profile_live_inventory(
                 )
                 return result
 
-            if private_auth_gate or meta_transport.policy('INVENTORY').fallback == 'none_private_only':
+            if private_auth_gate or private_inventory_stop_gate or meta_transport.policy('INVENTORY').fallback == 'none_private_only':
                 # REMASK_PRIVATE_ONLY_SYNC_V1
                 # Return partial evidence through the existing PHP outcome
                 # boundary. It preserves the last confirmed inventory and does
                 # not label an empty/unreadable result as live or complete.
                 partial_businesses=[row for row in private_snapshot.get('businesses', []) if isinstance(row,dict)]
-                diagnostics=[row for row in private_snapshot.get('diagnostics', []) if isinstance(row,dict)]
-                for row in partial_businesses:
-                    diagnostics.extend(item for item in row.get('diagnostics', []) if isinstance(item,dict))
+                # private_inventory_diagnostics already contains top-level,
+                # nested business, and query diagnostics from this snapshot.
+                diagnostics=list(private_inventory_diagnostics)
                 gates={row.get('auth_gate') for row in diagnostics if row.get('auth_gate')}
                 blocked_code=next((code for code in ('CHECKPOINT_REQUIRED','TWO_FACTOR_REQUIRED','SESSION_EXPIRED','BUSINESS_LOGIN_GATE') if code in gates),'')
                 connection_codes={row.get('code') for row in diagnostics}
-                error_code=blocked_code or next((code for code in ('PRIVATE_HTTP_PROXY_UNAVAILABLE',
+                error_code=blocked_code or private_inventory_stop_gate or next((code for code in ('PRIVATE_HTTP_PROXY_UNAVAILABLE',
                     'PRIVATE_HTTP_READ_TIMEOUT','PRIVATE_HTTP_CONNECTION_UNAVAILABLE','PRIVATE_HTTP_PROTOCOL_ERROR',
                     'PRIVATE_HTTP_READ_UNAVAILABLE','PRIVATE_BM_INVENTORY_INCOMPLETE') if code in connection_codes),'PRIVATE_INCONCLUSIVE')
                 blocked={business:blocked_code for business in known_business_ids} if blocked_code else {}
@@ -2769,18 +2820,9 @@ async def profile_live_inventory(
 
             business_map: dict[str,str] = {}
             discovery_source=''
+            # REMASK_INVENTORY_TIMEOUT_STOPS_FOLLOWUP_V1
+            inventory_stop_gate=''
             prevalidated_inventory: dict[str,dict] = {}
-
-            async def reopen_inventory_browser():
-                nonlocal browser
-                # Drop the timed-out renderer through the transport facade.
-                # The profile cookies/proxy stay the same; only Chromium state
-                # is recycled before the fallback probe.
-                await meta_transport.close_business_browser()
-                reopen_timeout=budget(6.0)
-                browser=await hard_deadline(
-                    meta_transport.facebook_business_browser(),reopen_timeout,
-                )
 
             # REMASK_CONFIRMED_HINT_FAST_REVALIDATION_V1
             # When Workspace has a last-live-confirmed BM->RK pair, validate that
@@ -2812,17 +2854,13 @@ async def profile_live_inventory(
                             'CHECKPOINT_REQUIRED', 'SESSION_EXPIRED', 'TWO_FACTOR_REQUIRED', 'BUSINESS_LOGIN_GATE'
                         }:
                             raise
-                        if isinstance(exc,asyncio.TimeoutError):
-                            log.warning(
-                                'live inventory profile=%s business=%s fast live '
-                                'revalidation hit hard timeout; invalidating browser session',
-                                clean_profile,
-                                hinted_business_id,
-                            )
-                            # A selected-account probe cannot establish an empty
-                            # catalog. Reopen once and let the existing exact BM
-                            # Settings inventory handle this inconclusive hint.
-                            await reopen_inventory_browser()
+                        inventory_stop_gate = (
+                            str(exc.code) if isinstance(exc, BrowserBusinessError) else 'REMOTE_TIMEOUT'
+                        )
+                        log.warning(
+                            'live inventory profile=%s business=%s fast live revalidation stopped code=%s',
+                            clean_profile, hinted_business_id, inventory_stop_gate,
+                        )
                         business_key=str(hinted_business_id)
                         prevalidated_inventory[business_key]={
                             'business_id':business_key,
@@ -2845,7 +2883,7 @@ async def profile_live_inventory(
                             hinted_business_id,
                             f'{exc.__class__.__name__}: {exc}',
                         )
-                        continue
+                        break
 
                     if not ads_probe.get('confirmed'):
                         business_key=str(hinted_business_id)
@@ -2950,7 +2988,7 @@ async def profile_live_inventory(
 
             discovery_revalidation=False
             business_inventory_confirmed_empty=False
-            if requested_business_ids:
+            if requested_business_ids and not inventory_stop_gate:
                 # REMASK_SCOPED_HINTS_ARE_REQUIRED_TARGETS_V1
                 # Scoped Sync asks for exact BMs, so those requested live targets
                 # remain required. Full profile Sync never promotes historical
@@ -2972,7 +3010,7 @@ async def profile_live_inventory(
                     ','.join(sorted(business_map)),
                 )
 
-            if not business_map:
+            if not business_map and not inventory_stop_gate:
                 stage='business_discovery'
                 discovery_started=time.monotonic()
                 try:
@@ -3063,22 +3101,14 @@ async def profile_live_inventory(
                     except Exception:
                         pass
                     # REMASK_DISCOVERY_TIMEOUT_HINT_FALLBACK_V2
-                    # Discovery is read-only. A cold/changed Meta selector must
-                    # not turn the whole profile Sync into HTTP 504. Revalidate
-                    # known BMs when available; otherwise return an inconclusive
-                    # live result and preserve the last confirmed Workspace
-                    # snapshot. Never claim an empty inventory from a timeout.
+                    # A timed-out read is ambiguous: preserve the prior snapshot
+                    # and stop this profile's remaining Meta reads for this Sync.
                     business_inventory_confirmed_empty=False
-                    if known_business_ids:
-                        warnings.append(
-                            'Business discovery timed out; checking known BM hints live'
-                        )
-                        discovery_source='business_suite_discovery_timeout_hint_fallback'
-                    else:
-                        warnings.append(
-                            'Business discovery timed out; live BM/RK state was not changed'
-                        )
-                        discovery_source='business_suite_discovery_timeout_inconclusive'
+                    inventory_stop_gate='REMOTE_TIMEOUT'
+                    warnings.append(
+                        'Business discovery timed out; remaining Meta reads stopped'
+                    )
+                    discovery_source='business_suite_discovery_timeout_inconclusive'
                 except BrowserBusinessError as exc:
                     if exc.code in {
                         'CHECKPOINT_REQUIRED',
@@ -3109,7 +3139,8 @@ async def profile_live_inventory(
             # recovery candidates. They are not current inventory until each one
             # is re-confirmed live, and stale candidates are removed afterwards.
             if (
-                not business_map
+                not inventory_stop_gate
+                and not business_map
                 and not business_inventory_confirmed_empty
                 and known_business_ids
             ):
@@ -3168,17 +3199,9 @@ async def profile_live_inventory(
                                 rk_ads_timeout,
                             )
                         except asyncio.TimeoutError:
-                            log.warning(
-                                'live inventory profile=%s business=%s Ads Manager '
-                                'scope probe timed out; releasing browser lease',
-                                clean_profile,
-                                business_id,
-                            )
-                            await reopen_inventory_browser()
-                            ads_probe={
-                                'confirmed':False,
-                                'diagnostics':[{'phase':'ads_manager_scope_timeout'}],
-                            }
+                            # The request may have reached Meta. Do not reopen
+                            # the same profile and issue the settings read too.
+                            raise
 
                         if ads_probe.get('confirmed'):
                             confirmed_accounts=[
@@ -3293,26 +3316,19 @@ async def profile_live_inventory(
                             )[:9000],
                         )
                 except asyncio.TimeoutError as exc:
+                    inventory_stop_gate='REMOTE_TIMEOUT'
+                    row['browser_error_code']='REMOTE_TIMEOUT'
+                    row['browser_error']='Meta read timed out; no further profile reads were issued'
+                    row['ad_accounts_source']='inventory_stopped_after_timeout'
                     log.warning(
-                        'live inventory profile=%s business=%s RK inventory timed '
-                        'out; invalidating browser session diagnostic=%s',
-                        clean_profile,
-                        business_id,
+                        'live inventory profile=%s business=%s RK read timed out; stopping remaining profile reads diagnostic=%s',
+                        clean_profile, business_id,
                         json.dumps(
-                            getattr(
-                                browser,
-                                '_last_ad_account_section_diagnostic',
-                                {},
-                            ),
-                            ensure_ascii=False,
-                            separators=(',', ':'),
+                            getattr(browser, '_last_ad_account_section_diagnostic', {}),
+                            ensure_ascii=False, separators=(',', ':'),
                         )[:6000],
                     )
                     await meta_transport.close_business_browser()
-                    raise HTTPException(
-                        status_code=504,
-                        detail='LIVE_INVENTORY_TIMEOUT:rk_inventory',
-                    ) from exc
                 except BrowserBusinessError as exc:
                     row['ad_accounts_source']=(
                         'business_auth_blocked'
@@ -3339,6 +3355,7 @@ async def profile_live_inventory(
                     warnings.append(
                         f'BM {business_id}: {exc.code}'
                     )
+                    inventory_stop_gate=str(exc.code or 'INVENTORY_READ_ABORTED')
                 finally:
                     log.info(
                         'live inventory profile=%s business=%s rk_ms=%d ready=%s accounts=%d source=%s error=%s',
@@ -3351,6 +3368,8 @@ async def profile_live_inventory(
                         str(row.get('browser_error_code') or ''),
                     )
                 businesses.append(row)
+                if inventory_stop_gate:
+                    break
 
             if discovery_revalidation and not requested_business_ids:
                 # REMASK_STALE_HINT_ROWS_EXCLUDED_V1
@@ -3543,15 +3562,53 @@ async def profile_live_inventory(
                     len(current_binding_pages),
                 )
 
-            page_live_probe_auth_blocked=bool(
-                auth_blocked_business_codes
-                and not live_business_ids
+            page_live_probe_blocked=bool(
+                inventory_stop_gate
+                or (auth_blocked_business_codes and not live_business_ids)
             )
-            if page_live_probe_auth_blocked:
+            async def raise_if_page_auth_gate(exc: Exception) -> None:
+                if isinstance(exc, HTTPException) and exc.status_code == 409:
+                    raise exc
+                if isinstance(exc, BrowserBusinessError) and exc.code in BROWSER_TERMINAL_ACCESS_CODES:
+                    raise exc
+                from app.private_auth import private_auth_error
+                auth_error=private_auth_error(exc)
+                if auth_error is None:
+                    return
+                if auth_error.code == 'CHECKPOINT_REQUIRED':
+                    await store.record_terminal_checkpoint(clean_profile)
+                elif auth_error.code == 'BUSINESS_LOGIN_GATE':
+                    await store.record_terminal_profile_status(clean_profile, 'BUSINESS_LOGIN_GATE')
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        'code':auth_error.code,
+                        'message':'Meta returned an authentication gate during Page inventory. ReMask stopped further profile probes.',
+                    },
+                ) from exc
+
+            def stop_page_live_probes(exc: Exception) -> None:
+                nonlocal page_live_probe_blocked, page_primary_error
+                page_live_probe_blocked=True
+                if not page_primary_error:
+                    code=(
+                        'REMOTE_TIMEOUT'
+                        if isinstance(exc, asyncio.TimeoutError)
+                        else str(getattr(exc, 'code', '') or exc.__class__.__name__)
+                    )
+                    page_primary_error='PAGE_LIVE_PROBE_STOPPED_AFTER:' + code
+
+            if inventory_stop_gate:
+                page_primary_error='PAGE_LIVE_PROBE_SKIPPED_AFTER_INVENTORY_STOP:' + inventory_stop_gate
+                log.info(
+                    'live inventory profile=%s Page live enrichment skipped after inventory stop code=%s durable_pages=%d',
+                    clean_profile, inventory_stop_gate, len(durable_pages),
+                )
+            elif page_live_probe_blocked:
                 blocked_codes=sorted(set(auth_blocked_business_codes.values()))
                 page_primary_error=(
                     'PAGE_LIVE_PROBE_SKIPPED_AUTH_BLOCKED:'
-                    + ','.join(blocked_codes)
+                    +','.join(blocked_codes)
                 )
                 log.info(
                     'live inventory profile=%s Page live enrichment skipped '
@@ -3583,7 +3640,7 @@ async def profile_live_inventory(
             # optional Page phase still has enough wall-clock budget for its
             # own navigation + Relay hydration.
             isolated_page_probe_attempted=False
-            if not pages_live_verified and not page_live_probe_auth_blocked:
+            if not pages_live_verified and not page_live_probe_blocked:
                 isolated_page_probe_attempted=True
                 try:
                     isolated_pages_timeout=optional_page_budget(
@@ -3631,6 +3688,7 @@ async def profile_live_inventory(
                         )[:5000],
                     )
                 except Exception as exc:
+                    await raise_if_page_auth_gate(exc)
                     detail=(
                         'ISOLATED_YOUR_PAGES_TIMEOUT'
                         if isinstance(exc,asyncio.TimeoutError)
@@ -3641,6 +3699,7 @@ async def profile_live_inventory(
                         )
                     )
                     page_primary_error=detail
+                    stop_page_live_probes(exc)
                     log.info(
                         'live inventory profile=%s isolated Page primary '
                         'unavailable=%s diagnostic=%s',
@@ -3661,7 +3720,7 @@ async def profile_live_inventory(
             # Exact BM->Page history is useful only for Pages that really are
             # attached to that BM. Treat it as optional positive enrichment,
             # never as proof of the complete account-level Page list.
-            if not pages_live_verified and not page_live_probe_auth_blocked and known_pages_by_business:
+            if not pages_live_verified and not page_live_probe_blocked and known_pages_by_business:
                 confirmed_page_rows=[]
                 fast_page_diagnostics=[]
                 try:
@@ -3685,10 +3744,7 @@ async def profile_live_inventory(
                                 remaining,
                             )
                         except (asyncio.TimeoutError,BrowserBusinessError) as exc:
-                            if isinstance(exc, BrowserBusinessError) and exc.code in {
-                                'CHECKPOINT_REQUIRED', 'SESSION_EXPIRED', 'TWO_FACTOR_REQUIRED', 'BUSINESS_LOGIN_GATE'
-                            }:
-                                raise
+                            await raise_if_page_auth_gate(exc)
                             fast_page_diagnostics.append({
                                 'business_id':hinted_business_id,
                                 'error':(
@@ -3702,7 +3758,8 @@ async def profile_live_inventory(
                                     {},
                                 ),
                             })
-                            continue
+                            stop_page_live_probes(exc)
+                            break
                         confirmed_page_rows.extend(
                             row for row in (live_rows or [])
                             if isinstance(row,dict)
@@ -3727,10 +3784,8 @@ async def profile_live_inventory(
                         )[:5000],
                     )
                 except Exception as exc:
-                    if isinstance(exc, BrowserBusinessError) and exc.code in {
-                        'CHECKPOINT_REQUIRED', 'SESSION_EXPIRED', 'TWO_FACTOR_REQUIRED', 'BUSINESS_LOGIN_GATE'
-                    }:
-                        raise
+                    await raise_if_page_auth_gate(exc)
+                    stop_page_live_probes(exc)
                     log.info(
                         'live inventory profile=%s known Page hint enrichment '
                         'skipped=%s',
@@ -3741,7 +3796,7 @@ async def profile_live_inventory(
             # REMASK_ADS_MANAGER_PAGES_FIRST_V1
             # Account-level live Page enumeration is enrichment only. Keep the
             # attempt deliberately short; it must not dominate a BM/RK sync.
-            if not pages_live_verified and not page_live_probe_auth_blocked:
+            if not pages_live_verified and not page_live_probe_blocked:
                 try:
                     ads_pages_timeout=optional_page_budget(4.0)
                     if ads_pages_timeout <= 0.25:
@@ -3768,6 +3823,8 @@ async def profile_live_inventory(
                         len(live_pages),
                     )
                 except Exception as exc:
+                    await raise_if_page_auth_gate(exc)
+                    stop_page_live_probes(exc)
                     page_primary_error=(
                         'ADS_MANAGER_PAGES_TIMEOUT'
                         if isinstance(exc,asyncio.TimeoutError)
@@ -3788,7 +3845,7 @@ async def profile_live_inventory(
             # A persisted private LIST_PAGES query is also a short enrichment
             # path. It is attempted only when Ads Manager did not produce a
             # live account-level list.
-            if not pages_live_verified and not page_live_probe_auth_blocked:
+            if not pages_live_verified and not page_live_probe_blocked:
                 try:
                     private_pages_timeout=optional_page_budget(3.5)
                     if private_pages_timeout <= 0.25:
@@ -3814,6 +3871,8 @@ async def profile_live_inventory(
                         pages_source,
                     )
                 except Exception as exc:
+                    await raise_if_page_auth_gate(exc)
+                    stop_page_live_probes(exc)
                     # Keep diagnostics, but never surface this as a normal Sync
                     # warning when usable durable/last-confirmed Page state exists.
                     detail=(

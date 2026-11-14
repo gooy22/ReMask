@@ -34,34 +34,30 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 
 async def buffered_response(method, open_response, size, *, retry_read=False, retry_timeout=False,
                             validate=None, reader=None):
-    """Finish a bounded read before exposing bytes.
+    """Finish one bounded response read; never replay a request after dispatch.
 
-    Retry interrupted reads when retry_read is set. Timeout retries are a
-    separate opt-in for a read-only GET; POSTs always get one attempt.
+    The retry flags remain accepted for caller compatibility but are ignored.
+    A body-read failure can happen after the server processed the request, so
+    only PrivateHttpClient's trace-proven pre-send connection retry is allowed.
     """
-    attempts = 2 if method == 'GET' and retry_read else 1
-    for attempt in range(attempts):
-        try:
-            async with open_response() as response:
-                if validate is not None:
-                    validate(response)
-                raw = await reader(response) if reader is not None else await response.content.read(size)
-                return response, raw
-        except (httpx.ConnectError, httpx.ReadError, httpx.RemoteProtocolError) as error:
-            kind = next(name for cls, name in (
-                (httpx.ConnectError, 'ConnectError'), (httpx.ReadError, 'ReadError'),
-                (httpx.RemoteProtocolError, 'RemoteProtocolError')) if isinstance(error, cls))
-            log.warning('private_buffered_read interrupted method=%s kind=%s retry=%s',
-                'GET' if method == 'GET' else 'other', kind, attempt + 1 < attempts)
-            if attempt + 1 == attempts:
-                raise
-        except (httpx.TimeoutException, asyncio.TimeoutError) as error:
-            kind = 'HttpxTimeout' if isinstance(error, httpx.TimeoutException) else 'RequestTimeout'
-            retry = method == 'GET' and retry_timeout is True and attempt + 1 < attempts
-            log.warning('private_buffered_read interrupted method=%s kind=%s retry=%s',
-                'GET' if method == 'GET' else 'other', kind, retry)
-            if not retry:
-                raise
+    try:
+        async with open_response() as response:
+            if validate is not None:
+                validate(response)
+            raw = await reader(response) if reader is not None else await response.content.read(size)
+            return response, raw
+    except (httpx.ConnectError, httpx.ReadError, httpx.RemoteProtocolError) as error:
+        kind = next(name for cls, name in (
+            (httpx.ConnectError, 'ConnectError'), (httpx.ReadError, 'ReadError'),
+            (httpx.RemoteProtocolError, 'RemoteProtocolError')) if isinstance(error, cls))
+        log.warning('private_buffered_read interrupted method=%s kind=%s retry=false',
+            'GET' if method == 'GET' else 'other', kind)
+        raise
+    except (httpx.TimeoutException, asyncio.TimeoutError) as error:
+        kind = 'HttpxTimeout' if isinstance(error, httpx.TimeoutException) else 'RequestTimeout'
+        log.warning('private_buffered_read interrupted method=%s kind=%s retry=false',
+            'GET' if method == 'GET' else 'other', kind)
+        raise
 
 
 class _Body:

@@ -163,7 +163,7 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("token", str(logs.output))
         self.assertNotIn("c_user", str(logs.output))
 
-    async def test_buffered_get_discards_partial_body_and_reuses_the_same_cookie_jar(self):
+    async def test_buffered_get_does_not_replay_a_partial_body_failure(self):
         class Interrupted(httpx.AsyncByteStream):
             async def __aiter__(self):
                 yield b'partial SECRET'
@@ -174,20 +174,17 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
             requests.append(request)
             return httpx.Response(200, stream=Interrupted(), headers={
                 'Set-Cookie':'xs=renewed; Domain=.facebook.com; Path=/; Secure'},
-                extensions={'http_version':b'HTTP/2'}) if len(requests) == 1 else httpx.Response(
-                    200, content=b'complete', extensions={'http_version':b'HTTP/2'})
+                extensions={'http_version':b'HTTP/2'})
         await self.mock(client, handler)
         with self.assertLogs('remask_worker', level='WARNING') as logs:
-            response, raw = await buffered_response('GET', lambda: client.get(
-                'https://www.facebook.com/?SECRET', proxy=client.proxy), 100, retry_read=True)
-        self.assertEqual(raw, b'complete')
-        self.assertEqual(response.http_version, 'HTTP/2')
-        self.assertEqual(len(requests), 2)
-        self.assertIn('c_user=123456', requests[1].headers['cookie'])
-        self.assertIn('xs=renewed', requests[1].headers['cookie'])
+            with self.assertRaises(httpx.ReadError):
+                await buffered_response('GET', lambda: client.get(
+                    'https://www.facebook.com/?SECRET', proxy=client.proxy), 100, retry_read=True)
+        self.assertEqual(len(requests), 1)
+        self.assertIn('retry=false', str(logs.output))
         self.assertNotIn('SECRET', str(logs.output))
 
-    async def test_buffered_get_has_only_one_retry(self):
+    async def test_buffered_get_never_retries_an_interrupted_request(self):
         for error in (httpx.ConnectError, httpx.ReadError, httpx.RemoteProtocolError):
             client = self.make()
             requests = []
@@ -198,7 +195,7 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(error):
                 await buffered_response('GET', lambda: client.get('https://www.facebook.com/'),
                     100, retry_read=True)
-            self.assertEqual(len(requests), 2)
+            self.assertEqual(len(requests), 1)
 
     async def test_buffered_post_is_never_replayed_even_with_retry_flag(self):
         client = self.make()
@@ -225,20 +222,18 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
                     100, retry_read=True)
             self.assertEqual(len(calls), 1)
 
-    async def test_buffered_get_retries_timeout_only_with_explicit_flag(self):
+    async def test_buffered_get_does_not_retry_timeout_even_with_compatibility_flag(self):
         client = self.make()
         calls = []
         def handler(request):
             calls.append(request)
-            if len(calls) == 1:
-                raise httpx.ReadTimeout('SECRET', request=request)
-            return httpx.Response(200, content=b'ok')
+            raise httpx.ReadTimeout('SECRET', request=request)
         await self.mock(client, handler)
-        response, raw = await buffered_response('GET',
-            lambda: client.get('https://www.facebook.com/'), 100,
-            retry_read=True, retry_timeout=True)
-        self.assertEqual((response.status, raw, len(calls)), (200, b'ok', 2))
-        self.assertEqual(calls[0].url, calls[1].url)
+        with self.assertRaises(httpx.ReadTimeout):
+            await buffered_response('GET',
+                lambda: client.get('https://www.facebook.com/'), 100,
+                retry_read=True, retry_timeout=True)
+        self.assertEqual(len(calls), 1)
 
     async def test_buffered_get_returns_http_rejections_without_retry(self):
         for status in (302, 400, 401, 403, 429, 500):
@@ -267,7 +262,7 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
                 100, retry_read=True, validate=validate)
         self.assertEqual(len(calls), 1)
 
-    async def test_document_navigation_retries_a_disconnected_get_once(self):
+    async def test_document_navigation_stops_after_a_disconnected_get(self):
         web = FacebookWebSession(WebProfile('fixture', {'c_user':'123456'},
             'http://127.0.0.1:1', 'fixture-UA'))
         self.addAsyncCleanup(web.close)
@@ -275,14 +270,14 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
         calls = []
         def handler(request):
             calls.append(request)
-            if len(calls) == 1:
-                raise httpx.RemoteProtocolError('SECRET reset', request=request)
-            return httpx.Response(200, text='complete')
+            raise httpx.RemoteProtocolError('SECRET reset', request=request)
         await self.mock(client, handler)
-        result = await web.fetch_text('https://adsmanager.facebook.com/', document_navigation=True)
-        self.assertEqual((result[0], result[1], len(calls)), (200, 'complete', 2))
+        from fb_worker import RemoteRequestError
+        with self.assertRaises(RemoteRequestError):
+            await web.fetch_text('https://adsmanager.facebook.com/', document_navigation=True)
+        self.assertEqual(len(calls), 1)
 
-    async def test_ads_manager_bootstrap_document_timeout_retries_once_when_opted_in(self):
+    async def test_ads_manager_bootstrap_timeout_is_not_replayed_by_compatibility_flag(self):
         url = ('https://adsmanager.facebook.com/adsmanager/manage/campaigns'
                '?act=111111&business_id=222222')
         web = FacebookWebSession(WebProfile('fixture', {'c_user':'123456'},
@@ -292,12 +287,12 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
         calls = []
         def handler(request):
             calls.append(request)
-            if len(calls) == 1:
-                raise httpx.ReadTimeout('SECRET timeout', request=request)
-            return httpx.Response(200, text='complete')
+            raise httpx.ReadTimeout('SECRET timeout', request=request)
         await self.mock(client, handler)
-        result = await web.fetch_text(url, document_navigation=True, retry_timeout=True)
-        self.assertEqual((result[0], result[1], len(calls)), (200, 'complete', 2))
+        from fb_worker import RemoteRequestError
+        with self.assertRaises(RemoteRequestError):
+            await web.fetch_text(url, document_navigation=True, retry_timeout=True)
+        self.assertEqual(len(calls), 1)
 
     async def test_timeout_retry_flag_is_ignored_for_other_document_urls(self):
         web = FacebookWebSession(WebProfile('fixture', {'c_user':'123456'},

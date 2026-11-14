@@ -2039,13 +2039,10 @@ async def ad_account_handler(
         from ..private_contract_discovery import discover_private_ad_account_contract
         await browser_checkpoint({"phase": "CREATE_CAPTURE_PREPARING",
             "activity": "AD_ACCOUNT_PRIVATE_CONTRACT_DISCOVERY", "transport": "private_http"})
-        try:
-            captured_request = await discover_private_ad_account_contract(
-                await session.facebook_web(), business_id=business_id, account_name=rk_name,
-                currency=currency, timezone_id=timezone_id, actor_id=actor_id,
-            ) or {}
-        except Exception as discovery_error:
-            log.warning("[%s] RK private_discovery failed error_type=%s", profile_id, type(discovery_error).__name__)
+        captured_request = await discover_private_ad_account_contract(
+            await session.facebook_web(), business_id=business_id, account_name=rk_name,
+            currency=currency, timezone_id=timezone_id, actor_id=actor_id,
+        ) or {}
         if not captured_request:
             await browser_checkpoint({"phase": "CREATE_NOT_SUBMITTED", "transport": "private_http",
                 "activity": "AD_ACCOUNT_PRIVATE_CONTRACT_UNAVAILABLE"})

@@ -915,7 +915,6 @@ class FacebookWebSession:
                                 request_timeout_seconds=probe_timeout_seconds,
                             ),
                             16 * 1024 * 1024 + 1,
-                            retry_read=True,
                             validate=lambda response: self._require_auth_cookies(
                                 session, "business_auth_precheck", response,
                             ),
@@ -1354,7 +1353,6 @@ class FacebookWebSession:
                                     request_timeout_seconds=max(30, self.timeout_seconds),
                                 ),
                                 16 * 1024 * 1024 + 1,
-                                retry_read=True,
                                 validate=restore_cookies_after_redirect_headers,
                                 reader=read_bootstrap_body,
                             )
@@ -1658,9 +1656,12 @@ class FacebookWebSession:
         self._reviewed_module_ids = {}
 
     async def refresh_reviewed_modules(self, document: str, final_url: str) -> None:
-        # Interactive inventory reads use installed reviewed contracts. CDN
-        # maintenance must not consume their auth/bootstrap deadline.
-        if getattr(self, 'defer_module_refresh', False):
+        # CDN source crawling is explicit maintenance, not part of routine
+        # profile reads. It can fetch many bundle URLs, so keep it off unless
+        # an operator deliberately opts in outside the normal inventory path.
+        if (getattr(self, 'defer_module_refresh', False)
+                or os.getenv('REMASK_ENABLE_AUTOMATIC_MODULE_REFRESH', '').strip().casefold()
+                not in {'1', 'true', 'yes'}):
             return
         from app.contract_maintenance.module_refresh import refresh_from_document
         self._module_refresh_attempted_at = asyncio.get_running_loop().time()
@@ -1843,8 +1844,6 @@ class FacebookWebSession:
                             cookie_jar_guard=response_header_cookie_guard,
                         ),
                         max(1, int(max_bytes)) + 1,
-                        retry_read=document_request,
-                        retry_timeout=retry_timeout,
                         validate=(
                             lambda response: self._require_auth_cookies(session, "fetch", response)
                         ) if facebook_host else None,
@@ -2953,28 +2952,10 @@ class FacebookWebSession:
             if observed_auth_cookie_deletions(exc):
                 # Meta explicitly cleared the selected session. End this attempt.
                 raise
-            if ((scoped_probe in {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS",
-                    "READ_FP", "FP_CATEGORY", "FP_PRECHECK"}
-                    and before_submit is None and multipart_files is None)
-                    or (scoped_probe == "PRIVATE_RK_INVENTORY" and callable(before_submit)
-                        and multipart_files is None)) and (
-                    getattr(exc, "request_may_have_been_sent", False) is False):
-                recovered = await self._retry_scoped_read_with_previous_session(
-                    effective_doc_id,
-                    variables,
-                    friendly_name=friendly_name,
-                    endpoint_url=endpoint_url,
-                    request_envelope=request_envelope,
-                    business_context_id=business_context_id,
-                    business_loginpage_probe=business_loginpage_probe,
-                    read_timeout_seconds=read_timeout_seconds,
-                    business_loginpage_account_id=business_loginpage_account_id,
-                    before_submit=before_submit,
-                    private_inventory_query_contract=private_inventory_query_contract,
-                )
-                if recovered is not None:
-                    return recovered
+            # An auth gate is terminal for this read. Do not replay it with an
+            # archived same-actor snapshot or issue another bootstrap request.
             raise
+
         if not scoped_probe:
             from app.contract_maintenance.module_refresh import effective_doc_id as reviewed_doc_id
             effective_doc_id = reviewed_doc_id(self, friendly_name, effective_doc_id)
@@ -3241,31 +3222,8 @@ class FacebookWebSession:
                 exc.request_may_have_been_sent = request_may_have_been_sent
             if not hasattr(exc, "transport_stage"):
                 exc.transport_stage = transport_stage
-            if observed_auth_cookie_deletions(exc):
-                raise
-            if ((scoped_probe in {"READ_BM", "READ_RK", "CONFIG", "PAGE", "RIGHTS",
-                    "READ_FP", "FP_CATEGORY", "FP_PRECHECK"}
-                    and before_submit is None and multipart_files is None)
-                    or (scoped_probe == "PRIVATE_RK_INVENTORY" and callable(before_submit)
-                        and multipart_files is None)) and (
-                    bool(getattr(exc, "request_rejected", False))
-                    and str(getattr(exc, "transport_stage", ""))
-                    in {"graphql_response", "graphql_redirect"}):
-                recovered = await self._retry_scoped_read_with_previous_session(
-                    effective_doc_id,
-                    variables,
-                    friendly_name=friendly_name,
-                    endpoint_url=endpoint_url,
-                    request_envelope=request_envelope,
-                    business_context_id=business_context_id,
-                    business_loginpage_probe=business_loginpage_probe,
-                    read_timeout_seconds=read_timeout_seconds,
-                    business_loginpage_account_id=business_loginpage_account_id,
-                    before_submit=before_submit,
-                    private_inventory_query_contract=private_inventory_query_contract,
-                )
-                if recovered is not None:
-                    return recovered
+            # A returned auth rejection ends the read. Replaying it with an
+            # earlier snapshot would add profile requests after Meta refused it.
             raise
 
         except RemoteRequestError as exc:

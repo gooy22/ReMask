@@ -14,7 +14,12 @@ from .facebook_docids import (
     record_result,
     upsert_candidate,
 )
-from .facebook_query_discovery import discover_persisted_query
+from .facebook_query_discovery import (
+    _fetch_discovery_response,
+    _trusted_discovery_host,
+    _validate_discovery_response,
+    discover_persisted_query,
+)
 
 
 class PageDiscoveryError(RuntimeError):
@@ -477,7 +482,7 @@ async def list_pages_via_private_graphql(
     allow_runtime_discovery: bool = True,
 ) -> PageDiscoveryResult:
     diagnostics: list[str] = []
-    candidates = list_candidates("LIST_PAGES")
+    candidates = list_candidates("LIST_PAGES")[:2]
 
     if not candidates and allow_runtime_discovery:
         # REMASK_LIST_PAGES_SELF_HEAL_V2
@@ -488,15 +493,15 @@ async def list_pages_via_private_graphql(
             discovered = await asyncio.wait_for(
                 discover_current_list_pages_docid_by_marker(
                     session,
-                    max_entries=2,
+                    max_entries=1,
                     per_entry_timeout=2.2,
                 ),
-                timeout=5.0,
+                timeout=3.0,
             )
-        except asyncio.TimeoutError:
-            discovered = None
-            diagnostics.append("runtime LIST_PAGES marker discovery timed out")
-
+        except asyncio.TimeoutError as exc:
+            raise PageDiscoveryError(
+                "LIST_PAGES marker discovery timed out; no further profile reads were issued."
+            ) from exc
         if discovered is not None:
             candidates = [discovered]
             diagnostics.append(
@@ -512,25 +517,13 @@ async def list_pages_via_private_graphql(
         # discovery before declaring the authoritative Page inventory
         # unavailable. A recovered candidate is persisted by upsert_candidate,
         # so subsequent reconciliations take the fast path.
-        try:
-            discovered = await asyncio.wait_for(
-                discover_current_list_pages_docid(
-                    session,
-                    max_scripts=8,
-                ),
-                timeout=8.0,
-            )
-        except asyncio.TimeoutError:
-            discovered = None
-            diagnostics.append(
-                "runtime LIST_PAGES bundle discovery timed out"
-            )
-        except Exception as exc:
-            discovered = None
-            diagnostics.append(
-                "runtime LIST_PAGES bundle discovery failed: "
-                + str(exc)[:300]
-            )
+        discovered = await asyncio.wait_for(
+            discover_current_list_pages_docid(
+                session,
+                max_scripts=2,
+            ),
+            timeout=5.0,
+        )
 
         if discovered is not None:
             candidates = [discovered]
@@ -541,7 +534,7 @@ async def list_pages_via_private_graphql(
 
     if not candidates:
         raise PageDiscoveryError(
-            "No LIST_PAGES doc_id candidates configured after runtime discovery. "
+            "No LIST_PAGES doc_id candidates configured after the bounded runtime discovery pass. "
             + " || ".join(diagnostics[-6:])
         )
 
@@ -604,11 +597,7 @@ async def list_pages_via_private_graphql(
                 )
                 diagnostics.append(reason)
                 continue
-
-            diagnostics.append(
-                f"{candidate.doc_id}: transport error: {exc}"
-            )
-            continue
+            raise
 
         pages = _extract_known_page_lists(response)
         inventory_complete = _private_page_inventory_complete(response, actor_id)
@@ -628,20 +617,31 @@ async def list_pages_via_private_graphql(
                 inventory_complete=inventory_complete,
             )
 
-        if _errors(response) and _looks_stale(response):
-            reason = (
-                f"stale doc_id={candidate.doc_id} "
-                f"friendly={candidate.friendly_name or '-'} "
-                f"message={_diagnostic_text(response)}"
+        if _errors(response):
+            if _looks_stale(response):
+                reason = (
+                    f"stale doc_id={candidate.doc_id} "
+                    f"friendly={candidate.friendly_name or '-'} "
+                    f"message={_diagnostic_text(response)}"
+                )
+                record_result(
+                    "LIST_PAGES",
+                    candidate,
+                    success=False,
+                    reason=reason,
+                )
+                diagnostics.append(reason)
+                continue
+            from .provisioning.meta_errors import classify_meta_payload_error
+            from .provisioning.models import ProvisioningError
+            code, retryable, _diagnostic = classify_meta_payload_error(
+                response, entity="BUSINESS",
             )
-            record_result(
-                "LIST_PAGES",
-                candidate,
-                success=False,
-                reason=reason,
+            raise ProvisioningError(
+                code,
+                "LIST_PAGES discovery stopped after a Meta error; no further query candidates were posted.",
+                retryable=bool(retryable),
             )
-            diagnostics.append(reason)
-            continue
 
         # A generic data object, a null connection or a paginated response is
         # not proof of absence. Preserve it for Sync, but expose completeness
@@ -661,8 +661,8 @@ async def list_pages_via_private_graphql(
                 inventory_complete=inventory_complete,
             )
 
-        diagnostics.append(
-            f"{candidate.doc_id}: unrecognized LIST_PAGES response"
+        raise PageDiscoveryError(
+            f"{candidate.doc_id}: unrecognized LIST_PAGES response; further query candidates stopped."
         )
 
     raise PageDiscoveryError(
@@ -735,17 +735,12 @@ async def discover_current_list_pages_docid_by_marker(
     per_entry_timeout: float | None = None,
 ) -> DocIdCandidate | None:
     """
-    Lightweight v14 LIST_PAGES marker discovery.
-
-    Only the initial Facebook HTML document and its response headers are
-    inspected. JavaScript bundle URLs are never followed or downloaded.
+    Inspect a small set of Facebook HTML documents and response headers.
+    Any auth, transport, or server error ends the current discovery pass.
     """
     del max_scripts
 
     entry_urls = (
-        # Page-specific surfaces first: they are the most likely to contain the
-        # current Page inventory Relay operation and avoid wasting Sync budget
-        # on unrelated Facebook home documents.
         "https://www.facebook.com/pages/?category=your_pages",
         "https://www.facebook.com/pages/?category=your_pages&ref=bookmarks",
         "https://www.facebook.com/accountquality/?landing_page=insights",
@@ -755,34 +750,27 @@ async def discover_current_list_pages_docid_by_marker(
     bounded_urls = (
         entry_urls[:max(1, int(max_entries))]
         if max_entries is not None
-        else entry_urls
+        else entry_urls[:2]
     )
 
     for entry_url in bounded_urls:
-        try:
-            async def fetch_entry():
-                if hasattr(session, "fetch_text_with_headers"):
-                    return await session.fetch_text_with_headers(
-                        entry_url,
-                        max_bytes=3_000_000,
-                    )
-                status, document, final_url = await session.fetch_text(
-                    entry_url,
-                    max_bytes=3_000_000,
-                )
-                return status, document, final_url, {}
+        if not _trusted_discovery_host(entry_url):
+            raise PageDiscoveryError("LIST_PAGES discovery rejected an untrusted entry URL.")
 
-            if per_entry_timeout is not None:
-                status, document, final_url, headers = await asyncio.wait_for(
-                    fetch_entry(),
-                    timeout=max(0.5, float(per_entry_timeout)),
-                )
-            else:
-                status, document, final_url, headers = await fetch_entry()
-        except (asyncio.TimeoutError, Exception):
-            continue
+        async def fetch_entry():
+            return await _fetch_discovery_response(
+                session, entry_url, max_bytes=3_000_000,
+            )
 
-        if status >= 400:
+        if per_entry_timeout is not None:
+            status, document, final_url, headers = await asyncio.wait_for(
+                fetch_entry(),
+                timeout=max(0.5, float(per_entry_timeout)),
+            )
+        else:
+            status, document, final_url, headers = await fetch_entry()
+
+        if not _validate_discovery_response(status, document, final_url):
             continue
 
         doc_id, friendly = _extract_page_query_near_markers(document)
@@ -817,41 +805,34 @@ async def discover_current_list_pages_docid_by_marker(
 
     return None
 
-
 async def discover_current_list_pages_docid(
     session: Any,
     *,
-    max_scripts: int = 18,
+    max_scripts: int = 2,
 ) -> DocIdCandidate | None:
     friendly_name = "AccountQualityUserPagesWrapper_UserPageQuery"
-
+    # This fallback reuses the exact bounded HTML surface checked by the marker
+    # probe. It may fetch at most two sequential scripts from that one response.
     discovered = await discover_persisted_query(
         session,
         friendly_name=friendly_name,
         entry_urls=[
-            "https://www.facebook.com/",
-            "https://business.facebook.com/latest/home",
-            "https://www.facebook.com/accountquality/?landing_page=insights",
             "https://www.facebook.com/pages/?category=your_pages",
         ],
-        max_scripts_per_entry=max_scripts,
+        max_scripts_per_entry=min(2, max(0, int(max_scripts or 0))),
+        script_max_bytes=3_000_000,
     )
-
-    if discovered is not None:
-        return upsert_candidate(
-            "LIST_PAGES",
-            doc_id=discovered.doc_id,
-            friendly_name=friendly_name,
-            endpoint_url="https://www.facebook.com/api/graphql/",
-            variables_mode="account_quality_user_pages_v1",
-            source=f"runtime_{discovered.source_kind}",
-            priority=8_500,
-            observed_at=str(int(time.time())),
-        )
-
-    return await discover_current_list_pages_docid_by_marker(
-        session,
-        max_scripts=max(24, int(max_scripts)),
+    if discovered is None:
+        return None
+    return upsert_candidate(
+        "LIST_PAGES",
+        doc_id=discovered.doc_id,
+        friendly_name=friendly_name,
+        endpoint_url="https://www.facebook.com/api/graphql/",
+        variables_mode="account_quality_user_pages_v1",
+        source=f"runtime_{discovered.source_kind}",
+        priority=8_500,
+        observed_at=str(int(time.time())),
     )
 
 
@@ -966,45 +947,24 @@ def _browser_page_candidate_diagnostic(source: str) -> list[dict[str, Any]]:
 async def discover_pages_from_browser_html(
     session: Any,
 ) -> PageDiscoveryResult:
+    # The first entry is also used by bounded LIST_PAGES contract discovery.
+    # Its response is reused within the same session; only one alternate
+    # authenticated surface may be fetched if the first page has no Page data.
     entry_urls = (
-        "https://www.facebook.com/",
-        "https://business.facebook.com/latest/home",
         "https://www.facebook.com/pages/?category=your_pages",
-        "https://www.facebook.com/pages/?category=your_pages&ref=bookmarks",
-        "https://www.facebook.com/pages/",
-        "https://business.facebook.com/latest/settings/pages",
+        "https://business.facebook.com/latest/home",
     )
-
     diagnostics: list[str] = []
-
     for entry_url in entry_urls:
-        try:
-            status, document, final_url = await session.fetch_text(
-                entry_url,
-                max_bytes=4_000_000,
+        if not _trusted_discovery_host(entry_url):
+            raise PageDiscoveryError(
+                "LIST_PAGES browser discovery rejected an untrusted entry URL."
             )
-        except Exception as exc:
-            diagnostics.append(
-                f"{entry_url}: fetch error {exc.__class__.__name__}"
-            )
-            continue
-
-        lower_url = str(final_url or "").lower()
-        lower_body = str(document or "").lower()
-        if (
-            "/login" in lower_url
-            or "/checkpoint" in lower_url
-            or "login_form" in lower_body
-        ):
-            diagnostics.append(
-                f"{entry_url}: login/checkpoint redirect"
-            )
-            continue
-
-        if status >= 400:
-            diagnostics.append(
-                f"{entry_url}: HTTP {status}"
-            )
+        status, document, final_url, _headers = await _fetch_discovery_response(
+            session, entry_url, max_bytes=3_000_000,
+        )
+        if not _validate_discovery_response(status, document, final_url):
+            diagnostics.append(f"{entry_url}: missing surface HTTP {status}")
             continue
 
         pages = _extract_pages_from_browser_document(document)
@@ -1012,20 +972,18 @@ async def discover_pages_from_browser_html(
             f"{entry_url}: HTTP {status} final={final_url} "
             f"bytes={len(document)} pages={len(pages)}"
         )
-
         if pages:
             return PageDiscoveryResult(
                 pages=pages,
                 source="facebook_browser_pages_html",
                 candidate=None,
-                diagnostics=diagnostics[-8:],
+                diagnostics=diagnostics[-4:],
             )
 
     raise PageDiscoveryError(
         "Authenticated Facebook Pages surfaces returned no parseable Fan Pages. "
-        + " || ".join(diagnostics[-8:])
+        + " || ".join(diagnostics[-4:])
     )
-
 
 async def discover_pages_via_web(
     session: Any,
@@ -1034,52 +992,32 @@ async def discover_pages_via_web(
 ) -> PageDiscoveryResult:
     diagnostics: list[str] = []
     first_result: PageDiscoveryResult | None = None
-
     try:
-        first_result = await list_pages_via_private_graphql(session)
+        first_result = await list_pages_via_private_graphql(
+            session,
+            allow_runtime_discovery=try_runtime_discovery,
+        )
         diagnostics.extend(first_result.diagnostics)
         if first_result.pages:
             return first_result
     except PageDiscoveryError as exc:
         diagnostics.append(str(exc))
 
-    if try_runtime_discovery:
-        try:
-            candidate = await discover_current_list_pages_docid(session)
-        except Exception as exc:
-            candidate = None
-            diagnostics.append(f"LIST_PAGES runtime discovery failed: {exc}")
-
-        if candidate is not None:
-            try:
-                refreshed = await list_pages_via_private_graphql(session)
-                diagnostics.extend(refreshed.diagnostics)
-                if refreshed.pages:
-                    return refreshed
-                first_result = refreshed
-            except PageDiscoveryError as exc:
-                diagnostics.append(str(exc))
-
-    # The 2023 Account Quality persisted query is only one historical route.
-    # A real FB profile can still have Pages even when that query is stale,
-    # renamed, or its Relay response shape changed. Fall back to the actual
-    # authenticated browser Pages surface before concluding "0 Pages".
+    # list_pages_via_private_graphql already owns the single bounded runtime
+    # discovery pass. Do not repeat it here after a stale result or timeout.
     try:
         html_result = await discover_pages_from_browser_html(session)
-        html_result.diagnostics = (
-            diagnostics + html_result.diagnostics
-        )[-12:]
+        html_result.diagnostics = (diagnostics + html_result.diagnostics)[-8:]
         return html_result
     except PageDiscoveryError as exc:
         diagnostics.append(str(exc))
 
     if first_result is not None:
-        first_result.diagnostics = diagnostics[-12:]
+        first_result.diagnostics = diagnostics[-8:]
         return first_result
-
     raise PageDiscoveryError(
         "No browser-session Fan Pages were discoverable. "
-        + " || ".join(diagnostics[-12:])
+        + " || ".join(diagnostics[-8:])
     )
 
 
