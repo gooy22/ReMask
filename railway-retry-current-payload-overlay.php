@@ -16,6 +16,7 @@ $retry=file_get_contents($retryPath);
 $js=file_get_contents($jsPath);
 $php=file_get_contents($phpPath);
 if($retry===false||$js===false||$php===false){fwrite(STDERR,"[retry-current-payload] read failed\n");exit(162);}
+fwrite(STDERR,"[retry-current-payload] inputs bytes retry=".strlen($retry)." js=".strlen($js)." launch=".strlen($php)."\n");
 
 if(strpos($retry,'REMASK_RETRY_CURRENT_PAYLOAD_V1')===false){
     $needle=<<<'PHP'
@@ -64,6 +65,8 @@ PHP;
     if($rn!==1){fwrite(STDERR,"[retry-current-payload] response patch count=$rn\n");exit(166);}
     file_put_contents($retryPath,$retry);
 }
+
+fwrite(STDERR,"[retry-current-payload] retry endpoint patch complete\n");
 
 if(strpos($js,'REMASK_RETRY_WITH_CURRENT_FORM_V1')===false){
     $append=<<<'JS'
@@ -137,6 +140,9 @@ JS;
     file_put_contents($jsPath,$js);
 }
 
+fwrite(STDERR,"[retry-current-payload] launch script patch complete bytes=".strlen($js)."\n");
+$replaceStarted=microtime(true);
+fwrite(STDERR,"[retry-current-payload] launch tag replacement start bytes=".strlen($php)."\n");
 $php=preg_replace(
     '#<script src="scripts/launch\.js(?:\?[^"]*)?" type="module"></script>#',
     '<script src="scripts/launch.js?v=20260918-retry-current-v93" type="module"></script>',
@@ -145,6 +151,8 @@ $php=preg_replace(
     $count
 ) ?? $php;
 if($count!==1){fwrite(STDERR,"[retry-current-payload] launch.js tag missing\n");exit(167);}
+fwrite(STDERR,"[retry-current-payload] launch tag replacement done ms=".round((microtime(true)-$replaceStarted)*1000)."\n");
 file_put_contents($phpPath,$php);
+fwrite(STDERR,"[retry-current-payload] launch.php write complete\n");
 
 fwrite(STDERR,"[retry-current-payload] v93 retry uses current form, preserves successful IDs, and resumes processing\n");
