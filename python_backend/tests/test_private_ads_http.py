@@ -152,7 +152,7 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.web.session.request = request
         with self.assertRaises(ProvisioningError) as caught:
             await self.client.get('/act_111111/campaigns', {'fields':['id']})
-        self.assertEqual(caught.exception.code, 'HTTP_UNAVAILABLE')
+        self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_HTTP_UNAVAILABLE')
         self.assertEqual(len(calls), 1)
         self.assertEqual(self.claims, 0)
 
@@ -193,7 +193,7 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.web.session.request = request
         with self.assertRaises(ProvisioningError) as caught:
             await self.client.get('/act_111111/campaigns', {'fields':['id']})
-        self.assertEqual(caught.exception.code, 'HTTP_UNAVAILABLE')
+        self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_HTTP_UNAVAILABLE')
         self.assertEqual(calls, ['GET'])
 
     def test_literal_serverjs_initialization_with_module_hash(self):
