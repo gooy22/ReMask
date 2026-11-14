@@ -3335,8 +3335,6 @@ async function pythonWorkerStartAdAccounts(options) {
               parameters: {
                 AD_ACCOUNT: {
                   business_id: businessId,
-                  use_common_page: true,
-                  page_policies_accepted: true,
                   name: String(cfg.name || '').trim(),
                   currency: String(cfg.currency || '').trim().toUpperCase(),
                   timezone_id: Number(cfg.timezone_id)
@@ -3445,8 +3443,6 @@ async function pythonWorkerStartBusinessAdAccountTargets(targets, configs) {
               parameters: {
                 AD_ACCOUNT: {
                   business_id: businessId,
-                  use_common_page: true,
-                  page_policies_accepted: true,
                   name: String(cfg.name || '').trim(),
                   currency: String(cfg.currency || '').trim().toUpperCase(),
                   timezone_id: Number(cfg.timezone_id)
