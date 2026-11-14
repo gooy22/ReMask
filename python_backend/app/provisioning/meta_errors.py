@@ -63,17 +63,22 @@ def classify_meta_payload_error(
         return "SESSION_EXPIRED", False, diagnostic
 
     restriction_markers = (
-        "restricted", "disabled", "policy", "not allowed", "cannot perform",
+        "restricted from advertising", "account restricted from advertising",
+        "account is restricted from advertising", "ad account restricted",
+        "ad account is restricted", "ad account has been restricted",
+        "ad account disabled", "ad account is disabled",
+        "advertising account restricted", "advertising account is restricted",
+        "advertising access restricted", "advertising access is restricted",
+        "advertising access disabled", "advertising privileges restricted",
         "can't advertise", "cannot advertise", "unable to advertise",
-        "restricted from advertising", "advertising access", "ad account disabled",
-        "account disabled", "temporarily blocked from advertising",
-        "business creation restricted", "advertising account restricted",
+        "temporarily blocked from advertising",
         "ограничен для рекламы", "ограничена рекламная деятельность",
-        "ограничен доступ к рекламе", "рекламный аккаунт ограничен",
-        "ограничение рекламного аккаунта", "не можете размещать рекламу",
-        "заблокирован доступ к рекламе", "обмежено рекламування",
-        "обмежений доступ до реклами", "рекламний акаунт обмежено",
-        "не можете рекламувати",
+        "ограничен доступ к рекламе", "доступ к рекламе ограничен",
+        "рекламный аккаунт ограничен", "ограничение рекламного аккаунта",
+        "не можете размещать рекламу", "заблокирован доступ к рекламе",
+        "обмежено рекламування", "обмежений доступ до реклами",
+        "доступ до реклами обмежено", "рекламний акаунт обмежено",
+        "обліковий запис обмежено для реклами", "не можете рекламувати",
     )
     if any(token in text for token in restriction_markers):
         return "ACCOUNT_RESTRICTED", False, diagnostic
