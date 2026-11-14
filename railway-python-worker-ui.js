@@ -3335,7 +3335,6 @@ async function pythonWorkerStartAdAccounts(options) {
               parameters: {
                 AD_ACCOUNT: {
                   business_id: businessId,
-                  
                   name: String(cfg.name || '').trim(),
                   currency: String(cfg.currency || '').trim().toUpperCase(),
                   timezone_id: Number(cfg.timezone_id)
@@ -3444,7 +3443,6 @@ async function pythonWorkerStartBusinessAdAccountTargets(targets, configs) {
               parameters: {
                 AD_ACCOUNT: {
                   business_id: businessId,
-                  
                   name: String(cfg.name || '').trim(),
                   currency: String(cfg.currency || '').trim().toUpperCase(),
                   timezone_id: Number(cfg.timezone_id)
