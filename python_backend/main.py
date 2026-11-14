@@ -77,6 +77,9 @@ async def _require_profile_not_restriction_hold(profile_id: str) -> None:
 
 SMOKE_ON_START=str(os.getenv('REMASK_E2E_SMOKE_ON_START','0')).strip().lower() in {'1','true','yes','on'}
 BM_CANARY_ON_START=str(os.getenv('REMASK_BM_CANARY_ON_START','0')).strip().lower() in {'1','true','yes','on'}
+# Startup Meta reads and saved-job repair are opt-in as a group. The legacy
+# per-probe variables alone must not create Meta traffic on every restart.
+STARTUP_META_ACTIVITY_ENABLED=str(os.getenv('REMASK_ENABLE_STARTUP_META_ACTIVITY','0')).strip().lower() in {'1','true','yes','on'}
 
 async def run_bm_browser_canary() -> None:
     """
@@ -1074,32 +1077,36 @@ async def lifespan(app: FastAPI):
         run_bm_browser_canary(),
         name='remask-bm-browser-canary',
     )
-    live_inventory_canary_task=asyncio.create_task(
-        run_live_inventory_readonly_canary(),
-        name='remask-live-inventory-readonly-canary',
-    )
-    act_preflight_task=asyncio.create_task(
-        run_one_shot_act_preflight(),
-        name='remask-act-only-readonly-preflight',
-    )
-    from app.contract_maintenance.launch_http_audit import run as run_launch_http_audit
-    launch_http_audit_task=asyncio.create_task(run_launch_http_audit(pool), name='remask-launch-http-audit')
-    verification_audit_task=asyncio.create_task(
-        run_verification_http_contract_audit(), name='remask-verification-http-contract-audit')
+    startup_meta_tasks=[]
+    if STARTUP_META_ACTIVITY_ENABLED:
+        startup_meta_tasks.append(asyncio.create_task(
+            run_live_inventory_readonly_canary(),
+            name='remask-live-inventory-readonly-canary',
+        ))
+        startup_meta_tasks.append(asyncio.create_task(
+            run_one_shot_act_preflight(),
+            name='remask-act-only-readonly-preflight',
+        ))
+        from app.contract_maintenance.launch_http_audit import run as run_launch_http_audit
+        startup_meta_tasks.append(asyncio.create_task(
+            run_launch_http_audit(pool),
+            name='remask-launch-http-audit',
+        ))
+        startup_meta_tasks.append(asyncio.create_task(
+            run_verification_http_contract_audit(),
+            name='remask-verification-http-contract-audit',
+        ))
+    else:
+        log.info('automatic Meta startup activity disabled; set REMASK_ENABLE_STARTUP_META_ACTIVITY=1 only for an explicit diagnostic run')
     yield
     smoke_task.cancel()
     bm_canary_task.cancel()
-    live_inventory_canary_task.cancel()
-    act_preflight_task.cancel()
-    verification_audit_task.cancel()
-    launch_http_audit_task.cancel()
+    for task in startup_meta_tasks:
+        task.cancel()
     await asyncio.gather(
         smoke_task,
         bm_canary_task,
-        live_inventory_canary_task,
-        act_preflight_task,
-        verification_audit_task,
-        launch_http_audit_task,
+        *startup_meta_tasks,
         return_exceptions=True,
     )
     await pool.stop()
@@ -3089,8 +3096,6 @@ async def profile_live_inventory(
                         ) from exc
                     raise
                 finally:
-                    log.info(
-                        'live inventory profile=%s business_discovery source=%s ms=%d count=%d',                finally:
                     log.info(
                         'live inventory profile=%s business_discovery source=%s ms=%d count=%d',
                         clean_profile,
