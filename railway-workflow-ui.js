@@ -752,6 +752,10 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
                 'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode .wf-target-panel-body[hidden]{display:none!important}',
                 'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode .wf-target-note{margin:0 0 9px!important;color:#74808b!important;font-size:10px!important;line-height:1.45!important}',
                 'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode .wf-target-fields{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:10px 13px!important}',
+                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode .wf-target-selection-empty{margin:2px 0 5px!important;padding:0!important;color:#74808b!important;font-size:10px!important;line-height:1.45!important}',
+                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode .wf-target-reveal-all{display:inline-flex!important;align-items:center!important;min-height:27px!important;margin:0 0 7px!important;padding:3px 1px!important;border:0!important;border-radius:0!important;background:transparent!important;color:#0b7a73!important;font-size:10px!important;font-weight:650!important;box-shadow:none!important;cursor:pointer!important}',
+                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode .wf-target-reveal-all:hover{background:transparent!important;color:#08645e!important;text-decoration:underline!important}',
+                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode .wf-target-reveal-all[hidden]{display:none!important}',
                 'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode .wf-target-field[hidden]{display:none!important}',
                 '@media(max-width:720px){body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode .wf-target-fields{grid-template-columns:minmax(0,1fr)!important}body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode>.wf-target-tabs .wf-target-tab-button{min-height:39px!important;padding-inline:8px!important}}'
             ].join('');
@@ -776,6 +780,17 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
                 if(fields.parentElement!==body)body.appendChild(fields);
             }
             body.hidden=false;
+            const fieldGrid=panel.querySelector(':scope > .wf-target-fields')||body.querySelector(':scope > .wf-target-fields');
+            if(fieldGrid&&!fieldGrid.id)fieldGrid.id='wfTargetFieldGrid-'+key;
+            let emptyState=body.querySelector(':scope > .wf-target-selection-empty');
+            if(!emptyState){emptyState=document.createElement('p');emptyState.className='wf-target-selection-empty';emptyState.textContent='Пока ничего не выбрано. Найдите нужный параметр выше или откройте полный список категории.';}
+            let revealAll=body.querySelector(':scope > .wf-target-reveal-all');
+            if(!revealAll){
+                revealAll=document.createElement('button');revealAll.type='button';revealAll.className='wf-target-reveal-all';
+                revealAll.dataset.wfTargetShowAll=key;
+            }
+            if(fieldGrid){body.insertBefore(emptyState,fieldGrid);body.insertBefore(revealAll,fieldGrid);}
+            panel.dataset.wfShowAll=panel.dataset.wfShowAll==='1'?'1':'0';
             const count=panel.querySelectorAll('[data-wf-target-field]').length;
             panel.id='wfTargetPanel-'+key;
             panel.setAttribute('role','tabpanel');
@@ -840,6 +855,7 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
         };
         const applySearch=()=>{
             const query=normalize(search?.value||'').trim();
+            root.dataset.wfFiltering=query?'1':'0';
             const tokens=query.split(/\s+/).filter(Boolean);
             if(query&&!root.dataset.wfSearchPreviousKey)root.dataset.wfSearchPreviousKey=root.dataset.wfActiveTargetGroup||'';
             let matchedFields=0,matchedGroups=0;
@@ -875,11 +891,28 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
                 if(searchStatus){searchStatus.hidden=true;searchStatus.textContent='';}
             }
             render();
+            updateAudienceTargetingSummary();
         };
         if(search&&search.dataset.wfTargetSearchBound!=='1'){
             search.dataset.wfTargetSearchBound='1';
             search.addEventListener('input',applySearch);
             search.addEventListener('search',applySearch);
+        }
+        if(list.dataset.wfTargetShowAllBound!=='1'){
+            list.dataset.wfTargetShowAllBound='1';
+            list.addEventListener('click',event=>{
+                const button=event.target.closest('[data-wf-target-show-all]');
+                const panel=button?.closest('[data-wf-target-group]');
+                if(!button||!panel)return;
+                panel.dataset.wfShowAll=panel.dataset.wfShowAll==='1'?'0':'1';
+                updateAudienceTargetingSummary();
+            });
+        }
+        if(root.dataset.wfTargetSelectionVisibilityBound!=='1'){
+            root.dataset.wfTargetSelectionVisibilityBound='1';
+            ['input','change'].forEach(type=>root.addEventListener(type,()=>{
+                if(root.dataset.wfFiltering!=='1')updateAudienceTargetingSummary();
+            }));
         }
         if(nav.dataset.wfTargetTabsBound!=='1'){
             nav.dataset.wfTargetTabsBound='1';
@@ -1185,18 +1218,36 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
     }
     function updateAudienceTargetingSummary() {
         const root=$('wfTargetingOptions');if(!root)return;
+        const filtering=root.dataset.wfFiltering==='1';
         for(const panel of root.querySelectorAll('[data-wf-target-group]')){
             const fields=[...panel.querySelectorAll('[data-wf-target-field]')];
-            let selected=0;
+            let selectedValues=0,selectedFields=0;
             for(const row of fields){
                 const field=row.dataset.wfTargetField;
                 const source=document.querySelector('[data-launch-meta-group="targeting"][data-launch-meta-field="'+field+'"]');
-                selected+=wfTargetValues(source).length;
+                const values=wfTargetValues(source);
+                selectedValues+=values.length;
+                const hasValue=values.length>0;
+                if(hasValue)selectedFields++;
+                row.dataset.wfTargetSelected=hasValue?'1':'0';
+                if(!filtering)row.hidden=!hasValue&&panel.dataset.wfShowAll!=='1';
             }
+            panel.dataset.wfSelectedFieldCount=String(selectedFields);
             const count=panel.querySelector('[data-wf-target-count]');
-            if(count)setText(count,fields.length?(selected?fields.length+' полей · '+selected+' значений':'Поля доступны · не выбрано'):'Нет параметров для этого аккаунта');
+            if(count)setText(count,fields.length?(selectedFields?selectedFields+' выбрано · '+selectedValues+' знач.':fields.length+' доступно'):'Нет параметров для этого аккаунта');
             const tabCount=root.querySelector('[data-wf-target-tab-count="'+panel.dataset.wfTargetGroup+'"]');
-            if(tabCount){tabCount.textContent=selected?String(selected):'';tabCount.hidden=selected===0;}
+            if(tabCount){tabCount.textContent=selectedFields?String(selectedFields):'';tabCount.hidden=selectedFields===0;}
+            const reveal=panel.querySelector('.wf-target-reveal-all');
+            if(reveal){
+                const showAll=panel.dataset.wfShowAll==='1';
+                reveal.hidden=filtering||(!showAll&&selectedFields>=fields.length);
+                reveal.textContent=showAll?'Скрыть пустые поля':'Показать все поля · '+fields.length;
+                reveal.setAttribute('aria-expanded',String(showAll));
+                const fieldGrid=panel.querySelector('.wf-target-fields');
+                if(fieldGrid)reveal.setAttribute('aria-controls',fieldGrid.id||'');
+            }
+            const empty=panel.querySelector('.wf-target-selection-empty');
+            if(empty)empty.hidden=filtering||selectedFields>0||panel.dataset.wfShowAll==='1';
         }
     }
     function setupAudienceMetaDisclosure(){
@@ -1438,7 +1489,7 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
             const head=document.createElement('div');head.className='wf-target-head';
             const copy=document.createElement('div'),title=document.createElement('h6'),description=document.createElement('p');
             title.textContent='Настройки Meta';
-            description.textContent='Выберите категорию. Внутри останутся только поля, относящиеся к ней.';
+            description.textContent='Выбранные настройки остаются на виду. Пустые параметры найдите поиском или откройте полный список.';
             copy.append(title,description);head.appendChild(copy);
             const list=document.createElement('div');list.className='wf-target-list';
             for(const group of wfTargetGroups){
