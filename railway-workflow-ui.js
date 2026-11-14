@@ -2849,7 +2849,7 @@ body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-campaign-objective
 #creativeForm .cr-placement-mode-option b,#creativeForm .cr-placement-card-head,
 #creativeForm .cr-placement-all{color:#293741!important}
 #creativeForm .cr-placement-live{color:#167852!important}
-#creativeForm .cr-placement-fallback{color:#8b5a12!important}
+#creativeForm .cr-placement-fallback{color:#52616c!important}
 #creativeForm .cr-placement-demo-ad{
   border-color:#137e74!important;box-shadow:0 0 0 2px rgba(19,126,116,.12)!important;
   background:#e8f4f1!important
