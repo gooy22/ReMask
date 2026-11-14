@@ -77,7 +77,7 @@ class ModuleDiscoveryTests(unittest.IsolatedAsyncioTestCase):
                 observer.observe(changed)
                 self.assertIsNone(observer.result())
 
-    async def test_current_meta_full_large_bundle_is_read_without_skipping_urls(self):
+    async def test_contract_discovery_stops_after_four_scripts(self):
         large = "/*" + "x" * 2_100_000 + "*/" + observed_create_modules()
         urls = ["https://static.xx.fbcdn.net/rsrc.php/v1/y/a%d.js" % i for i in range(12)]
         entry = "https://business.facebook.com/latest/settings/ad_accounts/?business_id=" + BM
@@ -87,14 +87,12 @@ class ModuleDiscoveryTests(unittest.IsolatedAsyncioTestCase):
             if url == entry:
                 return 200, "".join('<script src="' + u + '"></script>' for u in urls), url
             index = urls.index(url)
-            body = large if index == 7 else "/*" + "x" * (2_000_000 if index < 4 else 100) + "*/"
+            body = large if index == 7 else "/*" + "x" * 2_000_000 + "*/"
             return 200, body[:kwargs["max_bytes"]], url
         result = await discover_private_ad_account_contract(SimpleNamespace(fetch_text=fetch),
             business_id=BM, account_name=NAME, currency="USD", timezone_id=137, actor_id=UID)
-        self.assertIsNotNone(result)
-        self.assertIn(urls[7], calls)
-        self.assertEqual(calls[1:], urls[:len(calls)-1])
-        self.assertLess(len(calls), len(urls) + 1)
+        self.assertIsNone(result)
+        self.assertEqual(calls, [entry, *urls[:4]])
 
     def test_relay_hook_sender_binds_exact_artifact_and_typed_variables(self):
         source = modules().replace('return commitMutation(env,{mutation:d("BizKitSettingsCreateAdAccountMutation.graphql"),',
