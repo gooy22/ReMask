@@ -385,16 +385,25 @@ async def private_inventory_snapshot(
             await restore_invalid_profile_auth_snapshot()
             payloads, diag = await _fetch_payloads(web, url, refresh_modules=not fast_sync)
         except Exception as exc:
+            from .private_auth import private_auth_error
             from .private_transport_error import private_transport_error
+            auth = private_auth_error(exc)
             _, failure = private_transport_error(exc)
             diagnostics.append({
                 "phase": "business_discovery",
-                "code": failure['code'],
+                "code": auth.code if auth else failure['code'],
+                "auth_gate": auth.code if auth else "",
                 "error_type": exc.__class__.__name__,
             })
+            if auth:
+                discovery_auth_blocked = True
+                break
             continue
         diag.pop("_document", None)
         diagnostics.append({"phase": "business_discovery", **diag})
+        if diag.get("auth_gate"):
+            discovery_auth_blocked = True
+            break
         if not diag.get("usable"):
             continue
         for payload in payloads:
@@ -539,18 +548,25 @@ async def private_inventory_snapshot(
                 await restore_invalid_profile_auth_snapshot()
                 payloads, diag = await _fetch_payloads(web, url, refresh_modules=not fast_sync)
             except Exception as exc:
+                from .private_auth import private_auth_error
                 from .private_transport_error import private_transport_error
+                auth = private_auth_error(exc)
                 _, failure = private_transport_error(exc)
                 business_diags.append({
-                    "code": failure['code'],
+                    "code": auth.code if auth else failure['code'],
+                    "auth_gate": auth.code if auth else "",
                     "error_type": exc.__class__.__name__,
                 })
+                if auth:
+                    break
                 continue
 
             document = diag.pop("_document", "")
             if "settings/ad_accounts" in url and diag.get("usable"):
                 settings_document, settings_url = document, url
             business_diags.append(diag)
+            if diag.get("auth_gate"):
+                break
             if not diag.get("usable"):
                 continue
 
@@ -568,8 +584,25 @@ async def private_inventory_snapshot(
             query_results, query_diagnostic = await read_private_inventory_queries(web,
                 business_id=business_id, document=settings_document, entry_url=settings_url)
             business_diags.append(query_diagnostic)
+            if query_diagnostic.get("auth_gate"):
+                query_results = []
             for result in query_results:
                 accept(result["payloads"], request_scoped=True, asset_scope=result["asset_scope"], has_errors=result["has_errors"])
+
+        if any(row.get("auth_gate") for row in business_diags):
+            diagnostics.extend(business_diags)
+            timings['account_inventory'].append({'business_id': business_id,
+                'elapsed_ms': int((time.monotonic() - account_started) * 1000)})
+            return {
+                "ready": False,
+                "businesses": rows,
+                "confirmed_business_ids": sorted(confirmed_businesses),
+                "inconclusive_business_ids": sorted(set(targets) - confirmed_businesses),
+                "discovered_business_ids": sorted(businesses),
+                "discovery_complete": discovery_complete,
+                "diagnostics": diagnostics,
+                "timings_ms": {**timings, 'total': int((time.monotonic() - started) * 1000)},
+            }
 
         confirmed_expected = sorted(expected.intersection(account_rows))
         # A partial collection can confirm an expected identity, but must

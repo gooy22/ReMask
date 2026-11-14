@@ -17,7 +17,7 @@ from .registry import get_handler
 from .state import ProvisioningStateStore
 from .transport import ProvisioningTransport, TransportError
 from .meta_transport import MetaTransportRouter
-from ..restriction_hold import enforce_profile_restriction_hold
+from ..restriction_hold import enforce_profile_restriction_hold, serialize_profile_activity
 
 
 _MUTATING_BROWSER_STEPS = {
@@ -125,6 +125,7 @@ class ProvisioningService:
         self.transport = transport or ProvisioningTransport()
         self.profile_resolver = profile_resolver
 
+    @serialize_profile_activity
     async def run(
         self,
         *,

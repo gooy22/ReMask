@@ -1778,6 +1778,22 @@ $syncProfileReplacement = <<<'PHP'
             throw new InvalidArgumentException('invalid business_id');
         }
 
+        $heldProfiles = array_values(array_filter(array_map(
+            'trim',
+            explode(',', (string)(getenv('REMASK_RESTRICTION_HOLD_PROFILE_IDS') ?: ''))
+        ), static fn($value): bool => $value !== ''));
+        if (in_array($profile, $heldProfiles, true)) {
+            $held = [
+                'profile_name' => $profile,
+                'request_id' => $requestId,
+                'sync_complete' => false,
+                'sync_error_kind' => 'META_RESTRICTION_HOLD',
+                'sync_error' => 'Ads Manager restriction confirmed; ReMask stopped before a Meta request.',
+            ];
+            hierarchy_sync_result_put($requestId, $profile, $held);
+            MetaEndpoint::ok($held);
+        }
+
         // Auth/CSRF and input validation are complete. Release only the
         // operator session; the per-profile Sync lock below remains required.
         if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
