@@ -233,7 +233,7 @@ if ($applySnapshotPatchCount !== 1) {
 }
 
 $oldAttention = "function profileAttention(p){ const ps=String(p.proxy_health?.status||'').toUpperCase(); return !p.synced || !p.proxy_configured || (ps!==''&&ps!=='LIVE') || !p.ads_management_granted || p.bm_count===0 || p.rk_count===0; }";
-$newAttention = "function profileAttention(p){ if(p && p.restriction_hold===true)return true; const ps=String(p.proxy_health?.status||'').toUpperCase(); return !p.synced || p.proxy_configured===false || (p.proxy_configured===true && ps!==''&&ps!=='LIVE'); }";
+$newAttention = "function profileAttention(p){ const held=new Set((window.REMASK_RESTRICTION_HOLD_PROFILE_IDS||[]).map(String)); if(p && (p.restriction_hold===true || held.has(String(p.name||p.profile||p.id||''))))return true; const ps=String(p.proxy_health?.status||'').toUpperCase(); return !p.synced || p.proxy_configured===false || (p.proxy_configured===true && ps!==''&&ps!=='LIVE'); }";
 $count = 0;
 $js = str_replace($oldAttention, $newAttention, $js, $count);
 if ($count !== 1) {
@@ -250,7 +250,9 @@ $oldAccountStatus = "function accountStatus(a){ const s=Number(a.account_status|
 $newAccountStatus = <<<'JS'
 function accountStatus(a){
   /* REMASK_STATUS_TRUTH_V1 */
-  if(a && (a._restriction_hold===true || a.restriction_hold===true)){
+  const heldProfiles=new Set((window.REMASK_RESTRICTION_HOLD_PROFILE_IDS||[]).map(String));
+  const profile=String(a && (a.profile||a.profile_id||a.profile_name)||'');
+  if(a && (a._restriction_hold===true || a.restriction_hold===true || heldProfiles.has(profile))){
     return pill('META RESTRICTION · BLOCKED','bad')+'<div class="sub">Ads Manager restriction reported · ReMask blocks creation and Launch for this profile</div>';
   }
   if(a && a._provisioned_only){
@@ -665,9 +667,10 @@ $newSelectionUi = <<<'JS'
 function updateSelectionUi(){
   const n=state.selected[state.activeTab].size;
   const rows=selectedRows(state.activeTab);
-  const heldProfiles=new Set((state.inventory.profiles||[])
-    .filter(p=>p && p.restriction_hold===true)
-    .map(p=>String(p.name||p.profile||'')));
+  const heldProfiles=new Set((window.REMASK_RESTRICTION_HOLD_PROFILE_IDS||[]).map(String));
+  const inventoryProfiles=state.inventory&&Array.isArray(state.inventory.profiles)?state.inventory.profiles:[];
+  inventoryProfiles.filter(p=>p && p.restriction_hold===true)
+    .forEach(p=>heldProfiles.add(String(p.name||p.profile||p.id||'')));
   const held=rows.some(row=>row && (
     row._restriction_hold===true || row.restriction_hold===true ||
     heldProfiles.has(String(row.profile||row.profile_id||row.name||''))
@@ -691,6 +694,34 @@ if ($selectionUiCount !== 1) {
 }
 
 file_put_contents($workspace, $js);
+
+
+// REMASK_RESTRICTION_HOLD_BOOT_V1
+$workspacePagePath = '/var/www/html/workspace.php';
+$workspacePage = file_get_contents($workspacePagePath);
+if ($workspacePage === false) {
+    throw new RuntimeException('workspace.php not found for restriction hold bootstrap');
+}
+if (strpos($workspacePage, 'REMASK_RESTRICTION_HOLD_BOOT_V1') === false) {
+    $boot = <<<'PHP_BOOT'
+<script>
+/* REMASK_RESTRICTION_HOLD_BOOT_V1 */
+window.REMASK_RESTRICTION_HOLD_PROFILE_IDS = <?php
+$ids = array_values(array_filter(array_map(
+    'trim',
+    explode(',', (string)(getenv('REMASK_RESTRICTION_HOLD_PROFILE_IDS') ?: ''))
+), static fn($value): bool => $value !== ''));
+echo json_encode($ids, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+?>;
+</script>
+PHP_BOOT;
+    $headClose = stripos($workspacePage, '</head>');
+    if ($headClose === false) {
+        throw new RuntimeException('workspace.php closing head tag not found');
+    }
+    $workspacePage = substr($workspacePage, 0, $headClose) . $boot . "\n" . substr($workspacePage, $headClose);
+    file_put_contents($workspacePagePath, $workspacePage);
+}
 fwrite(STDERR, "[workspace-sync-fix] workspace.js patched; sync no longer blocks whole Workspace; timeout=35s\n");
 
 $php = file_get_contents($hierarchy);
