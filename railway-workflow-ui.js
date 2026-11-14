@@ -721,24 +721,43 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
         const root=$('wfTargetingOptions');
         const list=root?.querySelector(':scope > .wf-target-list');
         if(!root||!list)return;
-        root.classList.add('wf-target-accordion-mode');
-        root.classList.remove('wf-target-tabs-mode','wf-target-accordion');
-        root.querySelector(':scope > .wf-target-tabs')?.remove();
+        root.classList.add('wf-target-tabs-mode');
+        root.classList.remove('wf-target-accordion-mode','wf-target-accordion');
+        let nav=root.querySelector(':scope > .wf-target-tabs');
+        if(!nav){
+            nav=document.createElement('div');
+            nav.className='wf-target-tabs';
+            nav.setAttribute('role','tablist');
+            nav.setAttribute('aria-label','Категории таргетинга Meta');
+            list.before(nav);
+        }
         const panels=Array.from(list.querySelectorAll(':scope > [data-wf-target-group]'));
         const names={demographics:'Демография',devices:'Устройства',placements:'Места показа',geography:'География и языки',exclusions:'Исключения',detailed:'Детальный таргетинг'};
-        let search=root.querySelector(':scope > .wf-target-head .wf-target-search');
-        if(!search){
-            const head=root.querySelector(':scope > .wf-target-head');
-            if(head){
-                const wrap=document.createElement('div');wrap.className='wf-target-search-wrap';
-                search=document.createElement('input');search.type='search';search.className='form-control wf-target-search';
-                search.id='wfTargetFieldSearch';search.autocomplete='off';search.spellcheck=false;
-                search.placeholder='Найти настройку: телефон, iOS, география';
-                search.setAttribute('aria-label','Поиск по настройкам Meta');
-                const status=document.createElement('span');status.className='wf-target-search-status';status.hidden=true;status.setAttribute('role','status');status.setAttribute('aria-live','polite');
-                wrap.append(search,status);head.appendChild(wrap);
-            }
+        const styleId='wfTargetTabsStyle';
+        if(!document.getElementById(styleId)){
+            const style=document.createElement('style');style.id=styleId;
+            style.textContent=[
+                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode>.wf-target-tabs{display:flex!important;align-items:stretch!important;gap:2px!important;max-width:100%!important;margin:2px 0 12px!important;padding:0 0 1px!important;border:0!important;border-bottom:1px solid #e5e9ed!important;border-radius:0!important;background:transparent!important;overflow-x:auto!important;overscroll-behavior-x:contain!important;scrollbar-width:thin!important}',
+                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode>.wf-target-tabs .wf-target-tab-button{display:flex!important;align-items:center!important;gap:6px!important;flex:0 0 auto!important;min-height:35px!important;margin:0!important;padding:7px 9px!important;border:0!important;border-bottom:2px solid transparent!important;border-radius:0!important;background:transparent!important;color:#66737f!important;font-size:10px!important;font-weight:600!important;white-space:nowrap!important;box-shadow:none!important;cursor:pointer!important}',
+                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode>.wf-target-tabs .wf-target-tab-button:hover{background:#f5f8f8!important;color:#303b46!important}',
+                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode>.wf-target-tabs .wf-target-tab-button[aria-selected=true]{border-bottom-color:#0b7a73!important;background:transparent!important;color:#08645e!important;font-weight:700!important}',
+                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode>.wf-target-tabs .wf-target-tab-button:focus-visible{outline:2px solid rgba(11,122,115,.35)!important;outline-offset:-2px!important}',
+                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode>.wf-target-tabs .wf-target-tab-count{display:inline-grid!important;place-items:center!important;min-width:16px!important;height:16px!important;padding:0 4px!important;border:1px solid #dce5e4!important;border-radius:999px!important;background:#f4f7f7!important;color:#52616c!important;font-size:9px!important;font-weight:650!important}',
+                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode>.wf-target-tabs .wf-target-tab-count[hidden]{display:none!important}',
+                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode .wf-target-list{display:block!important;margin:0!important;border:0!important;background:transparent!important}',
+                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode .wf-target-panel{display:block!important;margin:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;box-shadow:none!important;overflow:visible!important}',
+                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode .wf-target-panel[hidden]{display:none!important}',
+                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode .wf-target-panel-heading{display:none!important}',
+                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode .wf-target-panel-body{display:block!important;padding:0 0 8px!important}',
+                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode .wf-target-panel-body[hidden]{display:none!important}',
+                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode .wf-target-note{margin:0 0 9px!important;color:#74808b!important;font-size:10px!important;line-height:1.45!important}',
+                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode .wf-target-fields{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:10px 13px!important}',
+                'body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode .wf-target-field[hidden]{display:none!important}',
+                '@media(max-width:720px){body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode .wf-target-fields{grid-template-columns:minmax(0,1fr)!important}body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 #wfTargetingOptions.wf-target-tabs-mode>.wf-target-tabs .wf-target-tab-button{min-height:39px!important;padding-inline:8px!important}}'
+            ].join('');
+            document.head.appendChild(style);
         }
+        const search=root.querySelector(':scope > .wf-target-head .wf-target-search');
         const searchStatus=root.querySelector('.wf-target-search-status');
         let available=0;
         for(const panel of panels){
@@ -747,146 +766,151 @@ body.wf-autoupload-open{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
             const fields=panel.querySelector(':scope > .wf-target-fields')||panel.querySelector(':scope > .wf-target-panel-body > .wf-target-fields');
             const note=panel.querySelector(':scope > .wf-target-note')||panel.querySelector(':scope > .wf-target-panel-body > .wf-target-note');
             if(!heading||!fields)continue;
-            let toggle=heading.querySelector(':scope > .wf-target-group-toggle');
-            if(!toggle){
-                const label=heading.querySelector('[data-wf-target-name]');
-                const count=heading.querySelector('[data-wf-target-count]');
-                toggle=document.createElement('button');
-                toggle.type='button';
-                toggle.className='wf-target-group-toggle';
-                toggle.id='wfTargetToggle-'+key;
-                if(label)toggle.appendChild(label);
-                if(count)toggle.appendChild(count);
-                heading.replaceChildren(toggle);
-            }
             let body=panel.querySelector(':scope > .wf-target-panel-body');
             if(!body){
-                body=document.createElement('div');
-                body.className='wf-target-panel-body';
-                body.id='wfTargetFields-'+key;
+                body=document.createElement('div');body.className='wf-target-panel-body';body.id='wfTargetFields-'+key;
                 if(note)body.appendChild(note);
-                body.appendChild(fields);
-                panel.appendChild(body);
+                body.appendChild(fields);panel.appendChild(body);
             }else{
                 if(note&&note.parentElement!==body)body.prepend(note);
                 if(fields.parentElement!==body)body.appendChild(fields);
             }
-            if(!body.id)body.id='wfTargetFields-'+key;
-            toggle.setAttribute('aria-controls',body.id);
-            toggle.setAttribute('aria-label',names[key]||heading.textContent.trim());
+            body.hidden=false;
             const count=panel.querySelectorAll('[data-wf-target-field]').length;
+            panel.id='wfTargetPanel-'+key;
+            panel.setAttribute('role','tabpanel');
+            panel.dataset.wfBaseFieldCount=String(count);
             panel.hidden=count===0;
             if(count)available++;
-            panel.removeAttribute('role');
-            panel.removeAttribute('aria-labelledby');
-            if(panel.dataset.wfTargetAccordionReady!=='1'){
-                panel.dataset.wfTargetAccordionReady='1';
-                panel.classList.remove('is-open');
-                body.hidden=true;
-            }else{
-                body.hidden=!panel.classList.contains('is-open');
+            let button=nav.querySelector('[data-wf-target-nav-key="'+key+'"]');
+            if(!button){
+                button=document.createElement('button');button.type='button';
+                button.className='wf-target-tab-button';button.dataset.wfTargetNavKey=key;
+                button.setAttribute('role','tab');
+                const label=document.createElement('span');label.className='wf-target-tab-label';
+                const badge=document.createElement('span');badge.className='wf-target-tab-count';badge.dataset.wfTargetTabCount=key;badge.hidden=true;
+                button.append(label,badge);
             }
-            toggle.setAttribute('aria-expanded',String(panel.classList.contains('is-open')));
-            if(panel.dataset.wfTargetAccordionBound!=='1'){
-                panel.dataset.wfTargetAccordionBound='1';
-                toggle.addEventListener('click',()=>{
-                    const open=!panel.classList.contains('is-open');
-                    if(open){
-                        for(const other of panels){
-                            if(other===panel)continue;
-                            other.classList.remove('is-open');
-                            const otherBody=other.querySelector(':scope > .wf-target-panel-body');
-                            const otherToggle=other.querySelector('.wf-target-group-toggle');
-                            if(otherBody)otherBody.hidden=true;
-                            otherToggle?.setAttribute('aria-expanded','false');
-                        }
-                    }
-                    panel.classList.toggle('is-open',open);
-                    body.hidden=!open;
-                    toggle.setAttribute('aria-expanded',String(open));
-                });
-            }
+            const label=button.querySelector('.wf-target-tab-label');
+            if(label)label.textContent=names[key]||heading.querySelector('[data-wf-target-name]')?.textContent?.trim()||key;
+            button.setAttribute('aria-controls',panel.id);
+            panel.setAttribute('aria-labelledby',button.id||('wfTargetTab-'+key));
+            if(!button.id)button.id='wfTargetTab-'+key;
+            if(button.parentElement!==nav)nav.appendChild(button);
         }
+        for(const button of Array.from(nav.querySelectorAll('[data-wf-target-nav-key]'))){
+            if(!panels.some(panel=>panel.dataset.wfTargetGroup===button.dataset.wfTargetNavKey))button.remove();
+        }
+        const initial=panels.find(panel=>panel.dataset.wfTargetGroup===root.dataset.wfActiveTargetGroup)
+            ||panels.find(panel=>panel.classList.contains('is-active'))
+            ||panels.find(panel=>panel.classList.contains('is-open'))
+            ||panels.find(panel=>Number(panel.dataset.wfBaseFieldCount)>0);
+        if(!root.dataset.wfActiveTargetGroup&&initial)root.dataset.wfActiveTargetGroup=initial.dataset.wfTargetGroup;
+        const normalize=value=>String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase();
+        const aliases={
+            user_device:'телефон телефона телефоны смартфон смартфоны айфон айфоны iphone ipad galaxy устройство устройства модель модели моделей',
+            user_os:'операционная операционные система системы ос ios android андроид айфон iphone',
+            device_platforms:'тип типы устройства устройств мобильный мобильные компьютер компьютеры desktop mobile',
+            wireless_carrier:'сеть подключение оператор операторы связь carrier wifi wi-fi',
+            geo_locations:'география страна страны регион регионы город города местоположение location',
+            excluded_geo_locations:'исключенная исключенные исключить география страны регионы города',
+            publisher_platforms:'платформы facebook instagram messenger threads whatsapp audience network',
+            facebook_positions:'позиции facebook лента истории reels',
+            instagram_positions:'позиции instagram лента истории reels',
+            locales:'язык языки язык интерфейса locale language',
+            interests:'интерес интересы интересов detailed targeting',
+            behaviors:'поведение поведения привычки действия'
+        };
+        const render=()=>{
+            const query=normalize(search?.value||'').trim();
+            const active=root.dataset.wfActiveTargetGroup||'';
+            for(const panel of panels){
+                const key=panel.dataset.wfTargetGroup||'';
+                const button=nav.querySelector('[data-wf-target-nav-key="'+key+'"]');
+                const matches=Number(panel.dataset.wfSearchMatches||panel.dataset.wfBaseFieldCount||0);
+                const visible=Number(panel.dataset.wfBaseFieldCount)>0&&(!query||matches>0);
+                if(button){
+                    button.hidden=!visible;
+                    button.setAttribute('aria-selected',String(query?key===active:key===active));
+                    button.tabIndex=key===active?0:-1;
+                }
+                panel.hidden=!(visible&&key===active);
+                panel.classList.toggle('is-active',visible&&key===active);
+            }
+        };
+        const applySearch=()=>{
+            const query=normalize(search?.value||'').trim();
+            const tokens=query.split(/\s+/).filter(Boolean);
+            if(query&&!root.dataset.wfSearchPreviousKey)root.dataset.wfSearchPreviousKey=root.dataset.wfActiveTargetGroup||'';
+            let matchedFields=0,matchedGroups=0;
+            const matchedKeys=[];
+            for(const panel of panels){
+                const key=panel.dataset.wfTargetGroup||'';
+                const groupName=normalize(panel.querySelector('[data-wf-target-name]')?.textContent||names[key]||'');
+                const groupMatch=Boolean(query)&&tokens.every(token=>groupName.includes(token));
+                let panelMatches=0;
+                const fields=Array.from(panel.querySelectorAll('[data-wf-target-field]'));
+                for(const field of fields){
+                    const fieldKey=field.dataset.wfTargetField||'';
+                    const label=normalize(field.querySelector(':scope > label')?.textContent||'');
+                    const haystack=label+' '+normalize(fieldKey.replaceAll('_',' '))+' '+normalize(aliases[fieldKey]||'');
+                    const match=!query||groupMatch||tokens.every(token=>haystack.includes(token));
+                    field.hidden=Boolean(query)&&!match;
+                    if(match){panelMatches++;matchedFields++;}
+                }
+                panel.dataset.wfSearchMatches=String(query?panelMatches:fields.length);
+                if(query&&panelMatches){matchedGroups++;matchedKeys.push(key);}
+            }
+            if(query){
+                if(!matchedKeys.includes(root.dataset.wfActiveTargetGroup))root.dataset.wfActiveTargetGroup=matchedKeys[0]||'';
+                if(searchStatus){
+                    searchStatus.hidden=false;
+                    searchStatus.textContent=matchedFields?'Найдено полей: '+matchedFields+' · разделов: '+matchedGroups:'Ничего не найдено';
+                }
+            }else{
+                const previous=root.dataset.wfSearchPreviousKey;
+                if(previous&&panels.some(panel=>panel.dataset.wfTargetGroup===previous&&Number(panel.dataset.wfBaseFieldCount)>0))root.dataset.wfActiveTargetGroup=previous;
+                panels.forEach(panel=>{panel.querySelectorAll('[data-wf-target-field]').forEach(field=>{field.hidden=false;});panel.dataset.wfSearchMatches=panel.dataset.wfBaseFieldCount||'0';});
+                delete root.dataset.wfSearchPreviousKey;
+                if(searchStatus){searchStatus.hidden=true;searchStatus.textContent='';}
+            }
+            render();
+        };
+        if(search&&search.dataset.wfTargetSearchBound!=='1'){
+            search.dataset.wfTargetSearchBound='1';
+            search.addEventListener('input',applySearch);
+            search.addEventListener('search',applySearch);
+        }
+        if(nav.dataset.wfTargetTabsBound!=='1'){
+            nav.dataset.wfTargetTabsBound='1';
+            nav.addEventListener('click',event=>{
+                const button=event.target.closest('[data-wf-target-nav-key]');
+                if(!button||button.hidden)return;
+                root.dataset.wfActiveTargetGroup=button.dataset.wfTargetNavKey;
+                render();
+            });
+            nav.addEventListener('keydown',event=>{
+                if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;
+                const buttons=Array.from(nav.querySelectorAll('[data-wf-target-nav-key]:not([hidden])'));
+                const current=buttons.indexOf(document.activeElement);
+                if(!buttons.length)return;
+                event.preventDefault();
+                const next=event.key==='Home'?0:event.key==='End'?buttons.length-1:(current+(event.key==='ArrowRight'?1:-1)+buttons.length)%buttons.length;
+                buttons[next].focus();buttons[next].click();
+            });
+        }
+        for(const panel of panels){
+            const fields=Array.from(panel.querySelectorAll('[data-wf-target-field]'));
+            if(!panel.dataset.wfSearchMatches)panel.dataset.wfSearchMatches=String(fields.length);
+        }
+        if(search)applySearch();else render();
         const empty=root.querySelector('.wf-target-empty');
         if(empty){
             empty.hidden=available>0;
             if(!String(empty.textContent||'').trim())empty.textContent='Каталог Meta появится после выбора профиля и рекламного кабинета.';
         }
         root.dataset.wfReady=available?'1':'0';
-        if(search&&search.dataset.wfTargetSearchBound!=='1'){
-            search.dataset.wfTargetSearchBound='1';
-            const normalize=value=>String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase();
-            const aliases={
-                user_device:'телефон телефона телефоны смартфон смартфоны айфон айфоны iphone ipad galaxy устройство устройства модель модели моделей',
-                user_os:'операционная операционные система системы ос ios android андроид айфон iphone',
-                device_platforms:'тип типы устройства устройств мобильный мобильные компьютер компьютеры desktop mobile',
-                wireless_carrier:'сеть подключение оператор операторы связь carrier wifi wi-fi',
-                geo_locations:'география страна страны регион регионы город города местоположение location',
-                excluded_geo_locations:'исключенная исключенные исключить география страны регионы города',
-                publisher_platforms:'платформы facebook instagram messenger threads whatsapp audience network',
-                facebook_positions:'позиции позиции facebook лента истории reels',
-                instagram_positions:'позиции instagram лента истории reels',
-                locales:'язык языки язык интерфейса locale language',
-                interests:'интерес интересы интересов detailed targeting',
-                behaviors:'поведение поведения привычки действия'
-            };
-            const applySearch=()=>{
-                const query=normalize(search.value).trim();
-                const tokens=query.split(/\s+/).filter(Boolean);
-                const currentPanels=Array.from(root.querySelectorAll(':scope > .wf-target-list > [data-wf-target-group]'));
-                if(query&&!search.dataset.wfFilterActive){
-                    for(const panel of currentPanels)panel.dataset.wfSearchWasOpen=panel.classList.contains('is-open')?'1':'0';
-                    search.dataset.wfFilterActive='1';
-                }
-                let matchedFields=0,matchedGroups=0;
-                for(const panel of currentPanels){
-                    const groupKey=panel.dataset.wfTargetGroup||'';
-                    const groupName=normalize(panel.querySelector('[data-wf-target-name]')?.textContent||names[groupKey]||'');
-                    const groupMatch=Boolean(query)&&tokens.every(token=>groupName.includes(token));
-                    const fields=Array.from(panel.querySelectorAll('[data-wf-target-field]'));
-                    let panelMatches=0;
-                    for(const field of fields){
-                        const key=field.dataset.wfTargetField||'';
-                        const label=normalize(field.querySelector(':scope > label')?.textContent||'');
-                        const haystack=label+' '+normalize(key.replaceAll('_',' '))+' '+normalize(aliases[key]||'');
-                        const match=!query||groupMatch||tokens.every(token=>haystack.includes(token));
-                        field.hidden=Boolean(query)&&!match;
-                        if(match){panelMatches++;matchedFields++;}
-                    }
-                    panel.hidden=fields.length===0||(Boolean(query)&&panelMatches===0);
-                    if(query&&panelMatches){
-                        matchedGroups++;
-                        panel.classList.add('is-open');
-                        const body=panel.querySelector(':scope > .wf-target-panel-body');
-                        const toggle=panel.querySelector('.wf-target-group-toggle');
-                        if(body)body.hidden=false;
-                        toggle?.setAttribute('aria-expanded','true');
-                    }
-                }
-                if(searchStatus){
-                    searchStatus.hidden=!query;
-                    searchStatus.textContent=!query?'':matchedFields?'Найдено полей: '+matchedFields+' · разделов: '+matchedGroups:'Ничего не найдено';
-                }
-                if(!query&&search.dataset.wfFilterActive){
-                    for(const panel of currentPanels){
-                        const fields=Array.from(panel.querySelectorAll('[data-wf-target-field]'));
-                        fields.forEach(field=>{field.hidden=false;});
-                        panel.hidden=fields.length===0;
-                        const wasOpen=panel.dataset.wfSearchWasOpen==='1';
-                        panel.classList.toggle('is-open',wasOpen);
-                        const body=panel.querySelector(':scope > .wf-target-panel-body');
-                        const toggle=panel.querySelector('.wf-target-group-toggle');
-                        if(body)body.hidden=!wasOpen;
-                        toggle?.setAttribute('aria-expanded',String(wasOpen));
-                        delete panel.dataset.wfSearchWasOpen;
-                    }
-                    delete search.dataset.wfFilterActive;
-                }
-            };
-            search.addEventListener('input',applySearch);
-            search.addEventListener('search',applySearch);
-        }
-        if(search)search.dispatchEvent(new Event('input',{bubbles:false}));
+        updateAudienceTargetingSummary();
     }
 
     function setupMetaGroupTabs(){
