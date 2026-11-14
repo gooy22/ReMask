@@ -375,7 +375,8 @@ function bundleFormState() {
     data.version = 2;
     data.fields.budgetPeriod = $('budgetPeriod')?.value || 'DAILY';
     data.fields.conversionLocation = $('conversionLocation')?.value || '';
-    data.fields.launchDeliverySelect = $('launchDeliverySelect')?.value || 'PAUSED';
+    const deliveryControl = $('launchDeliverySelect');
+    if (deliveryControl) data.fields.launchDeliverySelect = deliveryControl.value;
     data.meta_builder = remaskCurrentMetaBuilderForJob();
     data.media = remaskBundleMediaSnapshot(remaskSelectedCreativePreset) || remaskBundleMedia;
     const selected = state.pendingWorkspaceMedia;
