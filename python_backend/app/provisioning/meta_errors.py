@@ -75,7 +75,7 @@ def classify_meta_payload_error(
         "обмежений доступ до реклами", "рекламний акаунт обмежено",
         "не можете рекламувати",
     )
-    if http_status == 403 or any(token in text for token in restriction_markers):
+    if any(token in text for token in restriction_markers):
         return "ACCOUNT_RESTRICTED", False, diagnostic
 
     rate_limit_markers = (
@@ -97,7 +97,7 @@ def classify_meta_payload_error(
     if any(transient) or http_status in {408, 425, 500, 502, 503, 504}:
         return "REMOTE_TIMEOUT", True, diagnostic
 
-    if 10 in codes or 200 in codes or "permission" in text or "not authorized" in text:
+    if http_status == 403 or 10 in codes or 200 in codes or "permission" in text or "not authorized" in text:
         return "PERMISSION_DENIED", False, diagnostic
 
     if entity_key == "BUSINESS" and any(
