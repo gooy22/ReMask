@@ -224,7 +224,6 @@ class LiveSyncContractTests(unittest.TestCase):
         self.assertIn("REMASK_DISCOVERY_TIMEOUT_HINT_FALLBACK_V2", source)
         # RK timeout recovery and terminal failure are exercised by the async
         # SelectedBusinessInventoryTests, rather than an obsolete comment tag.
-        self.assertIn("invalidating browser session", source)
 
 
     def test_profile_context_page_sources_are_distinguished(self) -> None:
@@ -306,11 +305,11 @@ class LiveSyncContractTests(unittest.TestCase):
         )
         self.assertIn("pages=live_pages",page_phase)
         self.assertIn(
-            "if not pages_live_verified and not page_live_probe_auth_blocked and known_pages_by_business:",
+            "if not pages_live_verified and not page_live_probe_blocked and known_pages_by_business:",
             page_phase,
         )
         self.assertIn(
-            "if not pages_live_verified and not page_live_probe_auth_blocked:\n                try:\n                    ads_pages_timeout",
+            "if not pages_live_verified and not page_live_probe_blocked:\n                try:\n                    ads_pages_timeout",
             page_phase,
         )
 
