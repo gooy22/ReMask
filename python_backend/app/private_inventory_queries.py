@@ -298,6 +298,7 @@ async def read_private_inventory_queries(web, *, business_id, document, entry_ur
     try:
         async with asyncio.timeout(65):
             contracts = getattr(web, "_private_inventory_query_cache", {}).get(str(business_id))
+            cache_discovered_contracts = contracts is None
             if contracts is None:
                 observed = QueryArtifacts()
                 for script in re.findall(r"<script\b[^>]*>(.*?)</script\s*>", document, re.I | re.S):
@@ -352,10 +353,6 @@ async def read_private_inventory_queries(web, *, business_id, document, entry_ur
                     contracts = observed.contracts(business_id)
                 diagnostic.update(modules=len(observed.modules), modules_scanned=observed.modules_scanned,
                     scripts=fetched, bytes=total)
-                if contracts:
-                    cache = getattr(web, "_private_inventory_query_cache", {})
-                    cache[str(business_id)] = contracts
-                    web._private_inventory_query_cache = cache
             diagnostic["contracts"] = len(contracts)
             if diagnostic.get("stop_gate"):
                 contracts = []
@@ -385,6 +382,11 @@ async def read_private_inventory_queries(web, *, business_id, document, entry_ur
                     decoded = _normalize_connected_inventory(decoded, str(business_id))
                 payloads.append({"payloads": decoded, "asset_scope": contract["asset_scope"],
                     "has_errors": False})
+            if (cache_discovered_contracts and contracts and diagnostic["query_posts"]
+                    and payloads and not diagnostic.get("auth_gate") and not diagnostic.get("stop_gate")):
+                cache = getattr(web, "_private_inventory_query_cache", {})
+                cache[str(business_id)] = contracts
+                web._private_inventory_query_cache = cache
     except Exception as exc:
         auth_gate, stop_gate = _inventory_exception_gates(exc)
         diagnostic.update(error_type=type(exc).__name__,

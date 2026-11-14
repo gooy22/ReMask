@@ -476,13 +476,37 @@ async def private_inventory_snapshot(
     targets.discard(str(personal_scope_id or ""))
     discovery_ms = int((time.monotonic() - started) * 1000)
     timings = {'business_discovery': discovery_ms, 'account_inventory': []}
+    rows: list[dict[str, Any]] = []
     if discovery_stopped:
-        return {'ready': False, 'businesses': [], 'confirmed_business_ids': [],
-            'inconclusive_business_ids': sorted(targets), 'discovered_business_ids': [],
+        for business_id in sorted(targets)[:25]:
+            expected_ids = sorted({
+                _clean_id(value)
+                for value in known_accounts_by_business.get(business_id, set())
+                if _clean_id(value)
+            })
+            rows.append({
+                "id": business_id,
+                "name": businesses.get(business_id, business_id),
+                "ad_accounts": [],
+                "ad_accounts_count": 0,
+                "ad_accounts_ready": False,
+                "ad_accounts_partial": False,
+                "ad_accounts_source": "private_http_relay_inconclusive",
+                "confirmed_empty": False,
+                "inventory_complete": False,
+                "expected_account_ids": expected_ids,
+                "confirmed_expected_account_ids": [],
+                "diagnostics": [],
+                "attempts": [],
+                "section_diagnostic": {},
+                "ads_manager_diagnostic": {},
+            })
+        return {'ready': False, 'businesses': rows, 'businesses_count': len(rows),
+            'confirmed_business_ids': [], 'inconclusive_business_ids': sorted(targets),
+            'discovered_business_ids': sorted(businesses),
             'discovery_complete': False, 'diagnostics': diagnostics,
             'timings_ms': {**timings, 'total': int((time.monotonic() - started) * 1000)}}
 
-    rows: list[dict[str, Any]] = []
     confirmed_businesses: set[str] = set()
     inconclusive_businesses: set[str] = set()
 
@@ -645,11 +669,31 @@ async def private_inventory_snapshot(
 
         if any(row.get("auth_gate") or row.get("stop_gate") for row in business_diags):
             diagnostics.extend(business_diags)
+            confirmed_expected = sorted(expected.intersection(account_rows))
+            rows.append({
+                "id": business_id,
+                "name": businesses.get(business_id, business_id),
+                "ad_accounts": [account_rows[key] for key in sorted(account_rows)],
+                "ad_accounts_count": len(account_rows),
+                "ad_accounts_ready": False,
+                "ad_accounts_partial": bool(account_rows and not authoritative_container),
+                "ad_accounts_source": "private_http_relay_inconclusive",
+                "confirmed_empty": False,
+                "inventory_complete": bool(authoritative_container),
+                "expected_account_ids": sorted(expected),
+                "confirmed_expected_account_ids": confirmed_expected,
+                "diagnostics": business_diags,
+                "attempts": [],
+                "section_diagnostic": {},
+                "ads_manager_diagnostic": {},
+            })
+            inconclusive_businesses.add(business_id)
             timings['account_inventory'].append({'business_id': business_id,
                 'elapsed_ms': int((time.monotonic() - account_started) * 1000)})
             return {
                 "ready": False,
                 "businesses": rows,
+                "businesses_count": len(rows),
                 "confirmed_business_ids": sorted(confirmed_businesses),
                 "inconclusive_business_ids": sorted(set(targets) - confirmed_businesses),
                 "discovered_business_ids": sorted(businesses),
