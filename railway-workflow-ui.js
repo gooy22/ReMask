@@ -2774,6 +2774,17 @@ body.app-shell.wf-autoupload-open .wf-launch .wf-audience-advanced-summary{backg
 #creativeForm .rm-meta-type,#creativeForm .cr-sdk-type{color:#65727d!important}
 @media(max-width:700px){#creativeForm>.cr-tabs{background:#f6f8f9!important;border-color:#d9e0e5!important}}
 `;
+        clarity.textContent += `
+/* Respect the hidden state and keep campaign labels fully readable */
+body.app-shell.wf-autoupload-open .wf-launch [hidden]{display:none!important}
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-campaign-objective-field .wf-choice-copy strong,
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-campaign-objective-field .wf-choice-copy small{
+  overflow:visible!important;text-overflow:clip!important;white-space:normal!important;overflow-wrap:anywhere!important
+}
+body.app-shell.wf-autoupload-open .wf-launch.wf-studio-v3 .wf-campaign-objective-field .wf-choice-option{
+  height:auto!important;min-height:76px!important;align-items:flex-start!important
+}
+`;
         if(clarity.parentElement)clarity.remove();
         (document.head||document.documentElement).appendChild(clarity);
     }
