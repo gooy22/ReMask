@@ -2702,7 +2702,7 @@ body.app-shell.wf-autoupload-open .wf-launch .wf-audience-advanced-summary{backg
             'body.app-shell.wf-autoupload-open #wfResourceActions{grid-template-columns:minmax(0,1fr)!important}',
             'body.app-shell.wf-autoupload-open #wfResourceActions #preflight[hidden], body.app-shell.wf-autoupload-open #wfResourceActions[hidden], body.app-shell.wf-autoupload-open #apiUsage[hidden]{display:none!important}',
             'body.app-shell.wf-autoupload-open #wf-launch-review-1 #remaskPrivateExecutionMode, body.app-shell.wf-autoupload-open #wf-launch-review-1 #launchDeliverySelect{font-size:14px!important;min-height:44px!important}'
-        ].join('\\n');
+        ].join('\n');
         if(clarity.parentElement)clarity.remove();
         (document.head||document.documentElement).appendChild(clarity);
     }
