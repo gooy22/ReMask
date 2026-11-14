@@ -2706,6 +2706,11 @@ body.app-shell.wf-autoupload-open .wf-launch .wf-audience-advanced-summary{backg
         if(actions){actions.hidden=profiles===0;actions.setAttribute('aria-hidden',String(profiles===0));}
         const usage=$('apiUsage');
         if(usage)usage.hidden=/no data|нет данных|пока нет/i.test(usage.textContent||'');
+        const creativeLibraryRow=$('creativeLibraryLaunch');
+        const hasCreativeAccount=profiles>0&&selectedLabels('adAccount').length>0;
+        if(creativeLibraryRow){creativeLibraryRow.hidden=!hasCreativeAccount;creativeLibraryRow.setAttribute('aria-hidden',String(!hasCreativeAccount));}
+        const clearCreative=$('clearCreativeLibrary');
+        if(clearCreative)clearCreative.hidden=!String($('creativeLibrarySelect')?.value||'');
     }
 
     function installClarityOverrides() {
