@@ -149,7 +149,7 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
         service=ProvisioningService(self.state)
         session=SimpleNamespace(close_business_browser=AsyncMock())
         request=dict(item_id='one',profile_id='9',context=SimpleNamespace(),session=session,
-            payload={'scope_key':'one','steps':['AD_ACCOUNT'],'parameters':{'AD_ACCOUNT':{'use_common_page':True}}})
+            payload={'scope_key':'one','steps':['AD_ACCOUNT','PAGE_ACCESS'],'parameters':{'AD_ACCOUNT':{'use_common_page':True},'PAGE_ACCESS':{}}})
         with patch('app.provisioning.service.get_handler',side_effect=lambda step:rk if step=='AD_ACCOUNT' else access), \
              patch('app.provisioning.service._await_profile_mutation_cooldown',new=AsyncMock()):
             with self.assertRaises(ProvisioningError): await service.run(**request)
