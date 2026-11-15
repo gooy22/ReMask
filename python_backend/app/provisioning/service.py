@@ -144,15 +144,20 @@ class ProvisioningService:
         parameters = payload.get("parameters") or {}
         if not isinstance(parameters, dict):
             raise ProvisioningError("INVALID_INPUT", "parameters must be an object")
-        rk_params=parameters.get('AD_ACCOUNT',parameters.get('ad_account',{}))
-        if ProvisioningStep.AD_ACCOUNT in steps and isinstance(rk_params,dict) and rk_params.get('use_common_page') is True:
-            # Persisted jobs can contain PAGE_ACCESS before AD_ACCOUNT. Always
-            # enforce the dependency, including when resuming that old payload.
-            if ProvisioningStep.PAGE_ACCESS in steps:
-                steps.remove(ProvisioningStep.PAGE_ACCESS)
-            steps.insert(steps.index(ProvisioningStep.AD_ACCOUNT)+1,ProvisioningStep.PAGE_ACCESS)
-            if rk_params.get('page_policies_accepted') is True:
-                parameters.setdefault('PAGE_ACCESS',{})['policies_accepted']=True
+        rk_params = parameters.get("AD_ACCOUNT", parameters.get("ad_account", {}))
+        if (
+            ProvisioningStep.AD_ACCOUNT in steps
+            and ProvisioningStep.PAGE_ACCESS in steps
+            and isinstance(rk_params, dict)
+            and rk_params.get("use_common_page") is True
+        ):
+            # Legacy payloads may request an explicit PAGE_ACCESS step. Keep its
+            # dependency after RK creation, but never infer PAGE_ACCESS solely
+            # from an AD_ACCOUNT flag.
+            steps.remove(ProvisioningStep.PAGE_ACCESS)
+            steps.insert(steps.index(ProvisioningStep.AD_ACCOUNT) + 1, ProvisioningStep.PAGE_ACCESS)
+            if rk_params.get("page_policies_accepted") is True:
+                parameters.setdefault("PAGE_ACCESS", {})["policies_accepted"] = True
 
         scope_key = str(
             payload.get("scope_key")
