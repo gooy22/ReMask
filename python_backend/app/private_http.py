@@ -49,7 +49,8 @@ def _safe_request_path(url: str) -> str:
         after_dynamic_parent = (index > 0 and raw_segments[index - 1].lower() in _DYNAMIC_PATH_PARENTS
                                 and lowered not in _STATIC_PATH_SEGMENTS)
         if (after_dynamic_parent or len(segment) > 80
-                or re.fullmatch(r"\d{5,30}", segment)
+                or re.fullmatch(r"\d{4,30}", segment)
+                or re.fullmatch(r"[A-Za-z]{2,}_\d{4,30}", segment)
                 or re.fullmatch(r"[0-9a-fA-F]{24,}", segment)):
             safe_segments.append("{id}")
         else:
