@@ -182,6 +182,9 @@ class PreparePlannerTests(unittest.IsolatedAsyncioTestCase):
             action = payload["steps"][0]
             sequence.append(action)
             if action == "BUSINESS":
+                business_params = payload["parameters"][action]
+                self.assertNotIn("user_email", business_params)
+                self.assertNotIn("email", business_params)
                 await self._confirmed_business(item=kwargs["item_id"])
                 return {"state": {"business_id": self.business_id}}
             if action == "AD_ACCOUNT":
