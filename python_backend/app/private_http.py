@@ -31,9 +31,12 @@ log = logging.getLogger("remask_worker")
 # Our request logs use a query-free path template with obvious IDs and tokens redacted.
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
-_DYNAMIC_PATH_PARENTS = {"page", "profile", "user", "actor", "asset", "adaccount", "ad_account"}
+_DYNAMIC_PATH_PARENTS = {"page", "profile", "user", "actor", "asset", "business", "businesses",
+                        "adaccount", "ad_account"}
 _STATIC_PATH_SEGMENTS = {"api", "graphql", "ajax", "latest", "home", "settings", "manage", "adsmanager",
-                         "campaigns", "login", "loginpage", "business", "businesses", "adaccounts", "ad_accounts"}
+                         "campaigns", "login", "loginpage", "business", "businesses", "adaccounts", "ad_accounts",
+                         "create", "update", "delete", "assign", "claim", "access", "edit", "read", "view", "list",
+                         "permissions", "roles", "full_control", "fullcontrol"}
 
 
 def _safe_request_path(url: str) -> str:
