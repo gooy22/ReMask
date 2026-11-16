@@ -471,7 +471,7 @@ class ProvisioningStateStore:
         self, profile_id, business_id, account_name, currency, timezone_id, exclude_item_id
     ):
         profile = str(profile_id or "").strip()
-        business = str(business_id or "").strip()
+        business = str(business_id or "").strip().removeprefix("act_")
         name = str(account_name or "").strip().casefold()
         currency_code = str(currency or "").strip().upper()
         try:
@@ -485,7 +485,7 @@ class ProvisioningStateStore:
             rows = con.execute(
                 "SELECT item_id,result_json FROM provisioning_steps "
                 "WHERE profile_id=? AND step=? AND result_json IS NOT NULL "
-                "ORDER BY updated_at DESC LIMIT 250",
+                "ORDER BY updated_at DESC",
                 (profile, ProvisioningStep.AD_ACCOUNT.value),
             ).fetchall()
         for row in rows:
@@ -498,7 +498,7 @@ class ProvisioningStateStore:
                 continue
             if not isinstance(result, dict):
                 continue
-            if str(result.get("business_id") or "") != business:
+            if str(result.get("business_id") or "").strip().removeprefix("act_") != business:
                 continue
             if str(result.get("phase") or "").upper() != "CREATE_REJECTED":
                 continue
