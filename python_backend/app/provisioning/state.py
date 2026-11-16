@@ -446,6 +446,73 @@ class ProvisioningStateStore:
         return await asyncio.to_thread(self._latest_private_ad_account_resume_sync,
             profile_id, business_id, exclude_item_id, account_name)
 
+    async def latest_private_ad_account_rejection(
+        self,
+        profile_id: str,
+        business_id: str,
+        account_name: str,
+        currency: str,
+        timezone_id: int,
+        *,
+        exclude_item_id: str = "",
+    ) -> dict[str, Any]:
+        """Find an explicit Meta rejection for the exact same RK request."""
+        return await asyncio.to_thread(
+            self._latest_private_ad_account_rejection_sync,
+            profile_id,
+            business_id,
+            account_name,
+            currency,
+            timezone_id,
+            exclude_item_id,
+        )
+
+    def _latest_private_ad_account_rejection_sync(
+        self, profile_id, business_id, account_name, currency, timezone_id, exclude_item_id
+    ):
+        profile = str(profile_id or "").strip()
+        business = str(business_id or "").strip().removeprefix("act_")
+        name = str(account_name or "").strip().casefold()
+        currency_code = str(currency or "").strip().upper()
+        try:
+            timezone = int(timezone_id)
+        except (TypeError, ValueError):
+            return {}
+        if not profile or not business or not name or not currency_code:
+            return {}
+
+        with self._connect() as con:
+            rows = con.execute(
+                "SELECT item_id,result_json FROM provisioning_steps "
+                "WHERE profile_id=? AND step=? AND result_json IS NOT NULL "
+                "ORDER BY updated_at DESC",
+                (profile, ProvisioningStep.AD_ACCOUNT.value),
+            ).fetchall()
+        for row in rows:
+            item_id = str(row["item_id"] or "")
+            if item_id == str(exclude_item_id or ""):
+                continue
+            try:
+                result = json.loads(row["result_json"])
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(result, dict):
+                continue
+            if str(result.get("business_id") or "").strip().removeprefix("act_") != business:
+                continue
+            if str(result.get("phase") or "").upper() != "CREATE_REJECTED":
+                continue
+            saved_name = str(result.get("account_name") or result.get("name") or "").strip()
+            saved_currency = str(result.get("currency") or "").strip().upper()
+            try:
+                saved_timezone = int(result.get("timezone_id"))
+            except (TypeError, ValueError):
+                continue
+            if (saved_name.casefold() == name and saved_currency == currency_code
+                    and saved_timezone == timezone):
+                return {"item_id": item_id, "result": result}
+        return {}
+
     def _latest_private_ad_account_resume_sync(self, profile_id, business_id, exclude_item_id, account_name):
         with self._connect() as con:
             rows = con.execute(

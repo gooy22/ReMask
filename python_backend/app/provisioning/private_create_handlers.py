@@ -45,6 +45,21 @@ def _has_resume(saved):
             "ad_account_id", "create_response_ad_account_id")))
 
 
+def _same_rejected_rk_request(saved, business, name, currency, timezone):
+    if not isinstance(saved, dict) or _clean(saved.get("phase")).upper() != "CREATE_REJECTED":
+        return False
+    try:
+        saved_timezone = int(saved.get("timezone_id"))
+    except (TypeError, ValueError):
+        return False
+    return (
+        _id(saved.get("business_id")) == business
+        and _clean(saved.get("account_name") or saved.get("name")).casefold() == name.casefold()
+        and _clean(saved.get("currency")).upper() == currency
+        and saved_timezone == timezone
+    )
+
+
 class _Action:
     def __init__(self, session, state, params, kwargs, step):
         self.session = kwargs.get("meta_transport") or session
@@ -345,6 +360,44 @@ async def ad_account_handler(session, params, state, *args, **kwargs):
         raise ProvisioningError("AD_ACCOUNT_ALREADY_EXISTS", "Selected BM already contains RK; no additional CREATE was sent.")
     if len(before["named"]) > 1 or not before["complete"]:
         raise ProvisioningError("PRIVATE_RK_INVENTORY_INCONCLUSIVE", "Exact-BM HTTP inventory did not confirm complete absence. No CREATE was sent.", retryable=True)
+
+    if _same_rejected_rk_request(action.saved, business, name, currency, timezone):
+        code = _clean(action.saved.get("last_error_code")).upper() or "META_UNKNOWN_ERROR"
+        detail = _clean(action.saved.get("last_error"))
+        raise ProvisioningError(
+            code,
+            (detail + " " if detail else "Meta explicitly rejected this RK request. ")
+            + "The identical request was stopped before another POST.",
+            retryable=False,
+        )
+    prior_rejection = await action.store.latest_private_ad_account_rejection(
+        action.profile,
+        business,
+        name,
+        currency,
+        timezone,
+        exclude_item_id=action.item,
+    )
+    if prior_rejection:
+        prior_result = prior_rejection["result"]
+        code = _clean(prior_result.get("last_error_code")).upper() or "META_UNKNOWN_ERROR"
+        detail = _clean(prior_result.get("last_error"))
+        await action.checkpoint({
+            "phase": "CREATE_REJECTED",
+            "business_id": business,
+            "account_name": name,
+            "currency": currency,
+            "timezone_id": timezone,
+            "last_error_code": code,
+            "last_error": detail[:4000],
+            "prior_rejected_item_id": prior_rejection["item_id"],
+        })
+        raise ProvisioningError(
+            code,
+            (detail + " " if detail else "Meta explicitly rejected this RK request before. ")
+            + "The identical request was stopped before another POST.",
+            retryable=False,
+        )
     await action.checkpoint({"phase": "CREATE_NOT_SUBMITTED", "business_id": business, "account_name": name,
         "baseline_account_ids": before["ids"], "baseline_complete": True, "currency": currency, "timezone_id": timezone})
     contract = rk_create_contract(business_id=business, account_name=name, currency=currency,
@@ -377,13 +430,14 @@ async def ad_account_handler(session, params, state, *args, **kwargs):
         if not submitted or getattr(exc, "request_may_have_been_sent", None) is False or rejected:
             terminal_meta_rejection = rejected and classified_code in _TERMINAL_META_REJECTION_CODES
             checkpoint = {"phase": "CREATE_REJECTED" if rejected else "CREATE_NOT_SUBMITTED"}
-            if terminal_meta_rejection:
+            if rejected:
                 checkpoint.update({
-                    "resume_from": "STOP",
-                    "last_error_code": classified_code,
-                    "last_error": classified_message[:4000],
+                    "last_error_code": classified_code or "META_UNKNOWN_ERROR",
+                    "last_error": (classified_message or str(exc))[:4000],
                     "meta_error_http_status": getattr(exc, "http_status", None),
                 })
+            if terminal_meta_rejection:
+                checkpoint["resume_from"] = "STOP"
             await action.checkpoint(checkpoint)
             if terminal_meta_rejection:
                 raise ProvisioningError(classified_code, classified_message, retryable=False) from exc
