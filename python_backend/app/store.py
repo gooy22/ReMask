@@ -20,6 +20,13 @@ from .facebook_ad_account_identity import details_candidate
 def _now() -> int:
     return int(time.time())
 
+
+_LEGACY_ADD_RK_PAGE_ACCESS_ERROR_CODE = "RK_CREATED_PAGE_ACCESS_FAILED"
+_LEGACY_ADD_RK_PAGE_ACCESS_ERROR_MESSAGE = (
+    "Ad account creation and verification succeeded. The automatically "
+    "appended Page-access step failed; the ad-account CREATE must not be repeated."
+)
+
 def _interleave_profile_items(rows: list[Any]) -> list[str]:
     """Keep a bulk profile from filling every worker before other profiles."""
     groups: dict[str, deque[str]] = {}
@@ -427,6 +434,128 @@ class JobStore:
             self._recover_owner_page_actor_probe(con)
             self._recover_owner_active_partner_reconciliation(con)
             self._recover_owner_confirmed_operator_assignment(con)
+            self._repair_legacy_add_rk_page_access_partial(con)
+
+    @staticmethod
+    def _legacy_add_rk_page_access_failure_rows(
+        con: sqlite3.Connection,
+        item_id: str | None = None,
+    ) -> list[sqlite3.Row]:
+        """Find legacy Add-RK jobs where a hidden Page step failed after RK verification.
+
+        The payload must prove the old Add-RK shape (only PROXY_CHECK and
+        AD_ACCOUNT requested, with use_common_page=True), and the durable
+        AD_ACCOUNT result must prove exact post-create verification. This keeps
+        unrelated Prepare and explicitly requested Page-access flows unchanged.
+        """
+        if not con.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='provisioning_steps'"
+        ).fetchone():
+            return []
+
+        query = (
+            "SELECT DISTINCT i.id AS item_id,i.job_id,i.status AS item_status,"
+            "t.id AS task_id,t.payload_json,a.result_json AS ad_account_result "
+            "FROM job_items i "
+            "JOIN job_tasks t ON t.item_id=i.id "
+            "JOIN provisioning_steps a ON a.item_id=i.id "
+            " AND a.step='AD_ACCOUNT' AND a.status='SUCCESS' "
+            "JOIN provisioning_steps p ON p.item_id=i.id "
+            " AND p.scope_key=a.scope_key AND p.step='PAGE_ACCESS' AND p.status='FAILED' "
+            "WHERE t.action='provisioning' AND t.status='FAILED'"
+        )
+        params: tuple[str, ...] = ()
+        if item_id is not None:
+            query += " AND i.id=?"
+            params = (str(item_id),)
+
+        rows = con.execute(query, params).fetchall()
+        confirmed = []
+        for row in rows:
+            try:
+                payload = json.loads(row["payload_json"] or "{}")
+                account = json.loads(row["ad_account_result"] or "{}")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            if not isinstance(payload, dict) or not isinstance(account, dict):
+                continue
+
+            steps = payload.get("steps")
+            if not isinstance(steps, list) or [
+                str(step or "").strip().upper() for step in steps
+            ] != ["PROXY_CHECK", "AD_ACCOUNT"]:
+                continue
+            if not str(payload.get("scope_key") or "").strip().lower().startswith("add-rk-bm-"):
+                continue
+
+            parameters = payload.get("parameters")
+            parameters = parameters if isinstance(parameters, dict) else {}
+            rk_params = parameters.get("AD_ACCOUNT", parameters.get("ad_account", {}))
+            if not isinstance(rk_params, dict) or rk_params.get("use_common_page") is not True:
+                continue
+
+            business_id = str(rk_params.get("business_id") or "").strip()
+            verified_business_id = str(account.get("business_id") or "").strip()
+            account_id = str(
+                account.get("ad_account_id") or account.get("account_id") or ""
+            ).strip()
+            if account_id.startswith("act_"):
+                account_id = account_id[4:]
+            if (
+                account.get("post_create_verified") is not True
+                or str(account.get("phase") or "").strip().upper() != "CREATE_CONFIRMED"
+                or not business_id.isdigit()
+                or verified_business_id != business_id
+                or not account_id.isdigit()
+            ):
+                continue
+            confirmed.append(row)
+        return confirmed
+
+    def _repair_legacy_add_rk_page_access_partial(
+        self,
+        con: sqlite3.Connection,
+    ) -> None:
+        """Correct historical aggregate status without changing step evidence or queuing work."""
+        candidates = self._legacy_add_rk_page_access_failure_rows(con)
+        by_item: dict[str, list[sqlite3.Row]] = {}
+        for row in candidates:
+            if str(row["item_status"] or "").upper() == "FAILED":
+                by_item.setdefault(str(row["item_id"]), []).append(row)
+
+        now = _now()
+        changed_jobs: set[str] = set()
+        for item_id, item_rows in by_item.items():
+            if len(item_rows) != 1:
+                continue
+            failed_count = con.execute(
+                "SELECT count(*) FROM job_tasks WHERE item_id=? AND status='FAILED'",
+                (item_id,),
+            ).fetchone()[0]
+            if int(failed_count or 0) != 1:
+                continue
+
+            row = item_rows[0]
+            con.execute(
+                "UPDATE job_tasks SET retryable=0,updated_at=? "
+                "WHERE id=? AND status='FAILED'",
+                (now, row["task_id"]),
+            )
+            updated = con.execute(
+                "UPDATE job_items SET status='PARTIAL',error_code=?,error_message=?,"
+                "retryable=0,updated_at=? WHERE id=? AND status='FAILED'",
+                (
+                    _LEGACY_ADD_RK_PAGE_ACCESS_ERROR_CODE,
+                    _LEGACY_ADD_RK_PAGE_ACCESS_ERROR_MESSAGE,
+                    now,
+                    item_id,
+                ),
+            ).rowcount
+            if updated:
+                changed_jobs.add(str(row["job_id"]))
+
+        for job_id in changed_jobs:
+            self._refresh_job_sync(con, job_id)
 
     @staticmethod
     def _recover_legacy_owner_page_approval_stub(con: sqlite3.Connection) -> None:
@@ -1158,13 +1287,22 @@ class JobStore:
         now=_now()
         with self._connect() as con:
             rows=con.execute(
-                'SELECT status,error_code,error_message,retryable FROM job_tasks WHERE item_id=?',
+                'SELECT id,status,error_code,error_message,retryable FROM job_tasks WHERE item_id=?',
                 (item_id,),
             ).fetchall()
             failed=[r for r in rows if r['status']=='FAILED']
             statuses=[str(r['status']) for r in rows]
+            legacy_page_failures=self._legacy_add_rk_page_access_failure_rows(con,item_id)
+            legacy_page_partial=(
+                len(failed)==1
+                and len(legacy_page_failures)==1
+                and str(legacy_page_failures[0]['task_id'])==str(failed[0]['id'])
+                and all(value in {'FAILED','SUCCESS'} for value in statuses)
+            )
 
-            if failed:
+            if legacy_page_partial:
+                status='PARTIAL'
+            elif failed:
                 status='FAILED'
             elif statuses and all(value=='SUCCESS' for value in statuses):
                 status='SUCCESS'
@@ -1176,9 +1314,19 @@ class JobStore:
                 # exists yet.
                 status='QUEUED'
 
-            code=failed[0]['error_code'] if failed else None
-            msg=failed[0]['error_message'] if failed else None
-            retryable=1 if any(bool(r['retryable']) for r in failed) else 0
+            if legacy_page_partial:
+                code=_LEGACY_ADD_RK_PAGE_ACCESS_ERROR_CODE
+                msg=_LEGACY_ADD_RK_PAGE_ACCESS_ERROR_MESSAGE
+                retryable=0
+                for row in legacy_page_failures:
+                    con.execute(
+                        "UPDATE job_tasks SET retryable=0,updated_at=? WHERE id=? AND status='FAILED'",
+                        (now,row['task_id']),
+                    )
+            else:
+                code=failed[0]['error_code'] if failed else None
+                msg=failed[0]['error_message'] if failed else None
+                retryable=1 if any(bool(r['retryable']) for r in failed) else 0
             con.execute(
                 'UPDATE job_items SET status=?,error_code=?,error_message=?,retryable=?,updated_at=? WHERE id=?',
                 (status,code,msg,retryable,now,item_id),
@@ -1933,6 +2081,7 @@ class JobStore:
             data['items_total']=len(items)
             data['items_succeeded']=sum(1 for x in items if x['status']=='SUCCESS')
             data['items_failed']=sum(1 for x in items if x['status']=='FAILED')
+            data['items_partial']=sum(1 for x in items if x['status']=='PARTIAL')
             return data
 
     async def import_snapshots(self, snapshots: list[dict[str, Any]]) -> int:
@@ -2058,6 +2207,7 @@ class JobStore:
             self._recover_owner_page_actor_probe(con)
             self._recover_owner_active_partner_reconciliation(con)
             self._recover_owner_confirmed_operator_assignment(con)
+            self._repair_legacy_add_rk_page_access_partial(con)
         return imported
 
     async def record_terminal_checkpoint(self, profile_id: str) -> bool:
