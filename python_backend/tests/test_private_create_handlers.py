@@ -312,6 +312,51 @@ class RKActionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.meta.posts, [])
 
 
+    async def test_terminal_meta_rejection_evidence_is_safe_and_blocks_changed_rk_request(self):
+        class MetaRejected(Exception):
+            code = "REMOTE_REJECTED"
+            http_status = 403
+            request_may_have_been_sent = True
+            payload = {"errors": [{
+                "message": "Account is restricted from advertising",
+                "extensions": {
+                    "type": "OAuthException",
+                    "code": 200,
+                    "error_subcode": 1815793,
+                    "fbtrace_id": "trace-fixture-123",
+                    "access_token": "must-not-be-persisted",
+                },
+            }]}
+
+        async def reject_create(*args, **kwargs):
+            await kwargs["before_submit"]()
+            raise MetaRejected("Meta rejected the RK creation")
+
+        with patch.object(actions, "create_ad_account_with_docids", new=AsyncMock(side_effect=reject_create)):
+            with self.assertRaises(ProvisioningError) as first:
+                await self.run_action()
+
+        self.assertEqual(first.exception.code, "ACCOUNT_RESTRICTED")
+        saved = await self.state.step("job-1", ProvisioningStep.AD_ACCOUNT)
+        evidence = saved["result"]["meta_error_evidence"]
+        self.assertEqual(evidence["http_status"], 403)
+        self.assertEqual(evidence["errors"][0]["subcode"], 1815793)
+        self.assertEqual(evidence["errors"][0]["fbtrace_id"], "trace-fixture-123")
+        self.assertNotIn("access_token", json.dumps(evidence))
+
+        await self.state.set_running("job-2", "15", "bundle-1", ProvisioningStep.AD_ACCOUNT)
+        inventory = AsyncMock(wraps=actions._rk_inventory)
+        with patch.object(actions, "_rk_inventory", new=inventory):
+            with self.assertRaises(ProvisioningError) as second:
+                await self.run_action("job-2", name="Different RK", currency="EUR", timezone_id=138)
+
+        self.assertEqual(second.exception.code, "ACCOUNT_RESTRICTED")
+        inventory.assert_not_awaited()
+        blocked = await self.state.step("job-2", ProvisioningStep.AD_ACCOUNT)
+        self.assertEqual(blocked["result"]["phase"], "CREATE_BLOCKED_PRIOR_META_REJECTION")
+        self.assertEqual(blocked["result"]["blocked_by_meta_rejection_item_id"], "job-1")
+
+
 class BMActionTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.temp = tempfile.TemporaryDirectory()
