@@ -39,6 +39,58 @@ def _id(value: Any) -> str:
     return value if re.fullmatch(r"\d{5,30}", value) else ""
 
 
+def _safe_meta_error_evidence(payload: Any, http_status: Any = None) -> dict[str, Any]:
+    """Keep a small allowlisted Meta error record; never persist request secrets."""
+    if not isinstance(payload, dict):
+        return {}
+    evidence: dict[str, Any] = {}
+    try:
+        if http_status is not None:
+            evidence["http_status"] = int(http_status)
+    except (TypeError, ValueError):
+        pass
+
+    raw_errors = []
+    top_error = payload.get("error")
+    if isinstance(top_error, dict):
+        raw_errors.append(top_error)
+    graph_errors = payload.get("errors")
+    if isinstance(graph_errors, list):
+        raw_errors.extend(error for error in graph_errors if isinstance(error, dict))
+    if not raw_errors and any(
+        key in payload for key in ("message", "type", "code", "error_code", "error_subcode", "fbtrace_id")
+    ):
+        raw_errors.append(payload)
+
+    fields = {
+        "message": ("message", "description"),
+        "type": ("type",),
+        "code": ("code", "error_code", "errorCode"),
+        "subcode": ("error_subcode", "errorSubcode", "subcode"),
+        "user_title": ("error_user_title", "errorUserTitle"),
+        "user_message": ("error_user_msg", "errorUserMsg", "user_message"),
+        "is_transient": ("is_transient", "isTransient"),
+        "fbtrace_id": ("fbtrace_id", "fbtraceId"),
+    }
+    safe_errors = []
+    for error in raw_errors[:8]:
+        extensions = error.get("extensions")
+        sources = (extensions, error) if isinstance(extensions, dict) else (error,)
+        safe_error = {}
+        for output_key, input_keys in fields.items():
+            for source in sources:
+                value = next((source[key] for key in input_keys if key in source), None)
+                if value is None or not isinstance(value, (str, int, float, bool)):
+                    continue
+                safe_error[output_key] = value[:1200] if isinstance(value, str) else value
+                break
+        if safe_error:
+            safe_errors.append(safe_error)
+    if safe_errors:
+        evidence["errors"] = safe_errors
+    return evidence
+
+
 def _has_resume(saved):
     return (_clean(saved.get("phase")).upper() in _PENDING
         or any(_id(saved.get(key)) for key in ("business_id", "create_response_business_id",
@@ -462,6 +514,10 @@ async def ad_account_handler(session, params, state, *args, **kwargs):
                     "last_error_code": classified_code or "META_UNKNOWN_ERROR",
                     "last_error": (classified_message or str(exc))[:4000],
                     "meta_error_http_status": getattr(exc, "http_status", None),
+                    "meta_error_evidence": _safe_meta_error_evidence(
+                        payload,
+                        http_status=getattr(exc, "http_status", None),
+                    ),
                 })
             if terminal_meta_rejection:
                 checkpoint["resume_from"] = "STOP"
