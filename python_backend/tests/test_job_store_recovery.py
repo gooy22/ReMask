@@ -172,8 +172,9 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(item_view['error_code'], 'RK_CREATED_PAGE_ACCESS_FAILED')
         self.assertFalse(item_view['retryable'])
         self.assertFalse(item_view['tasks'][0]['retryable'])
-        self.assertEqual(item_view['provisioning_steps'][1]['status'], 'SUCCESS')
-        self.assertEqual(item_view['provisioning_steps'][2]['status'], 'FAILED')
+        step_statuses = {step['step']: step['status'] for step in item_view['provisioning_steps']}
+        self.assertEqual(step_statuses['AD_ACCOUNT'], 'SUCCESS')
+        self.assertEqual(step_statuses['PAGE_ACCESS'], 'FAILED')
         self.assertEqual(await self.store.retry_failed(job), 0)
         self.assertEqual(await self.store.queue_count(), 0)
 
