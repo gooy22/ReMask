@@ -1104,6 +1104,9 @@ function pythonWorkerUserFailureText(item) {
   const code = pythonWorkerItemErrorCode(item);
   const message = pythonWorkerItemErrorMessage(item);
   const combined = (code + ' ' + message).toLowerCase();
+  if (code === 'RK_CREATED_PAGE_ACCESS_FAILED') {
+    return 'РК создана и проверена в инвентаре. После этого отдельный шаг Page Access завершился ошибкой; повторное создание РК не требуется.';
+  }
   if (/(?:^|_)CHECKPOINT_REQUIRED$/.test(code) || /checkpoint_required|checkpoint_redirect|facebook\.com\/checkpoint\//i.test(message)) {
     return 'Чекпоинт Meta: аккаунт остановлен. Повтор и новые задачи запрещены.';
   }
