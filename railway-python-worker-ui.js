@@ -921,13 +921,31 @@ function pythonWorkerAdAccountResult(item) {
   const adAccountId = String(result.ad_account_id || '').trim();
   if (!adAccountId) return null;
 
+  const verification = result.verification && typeof result.verification === 'object'
+    ? result.verification : {};
+  const verificationRows = Array.isArray(verification.account_rows)
+    ? verification.account_rows : [];
+  const accountIdDigits = adAccountId.replace(/^act_/i, '').trim();
+  const accountRow = verificationRows.find(function(row) {
+    const rowId = String(row && (row.account_id || row.id) || '')
+      .replace(/^act_/i, '').trim();
+    return rowId && rowId === accountIdDigits;
+  });
+  const accountStatus = accountRow && accountRow.account_status != null
+    ? String(accountRow.account_status).trim() : '';
+  const disableReason = accountRow && accountRow.disable_reason != null
+    ? String(accountRow.disable_reason).trim() : '';
+
   return {
     ad_account_id: adAccountId,
     business_id: String(result.business_id || '').trim(),
     currency: String(result.currency || '').trim(),
     timezone_id: String(result.timezone_id == null ? '' : result.timezone_id).trim(),
     transport: String(result.transport || '').trim(),
-    response_path: String(result.create_response_path || '').trim()
+    response_path: String(result.create_response_path || '').trim(),
+    restriction_status_available: Boolean(accountStatus || disableReason),
+    account_status: accountStatus,
+    disable_reason: disableReason
   };
 }
 
@@ -1483,6 +1501,13 @@ function pythonWorkerRenderJob(job) {
               if (actual.business_id) resultParts.push('BM ' + actual.business_id);
             }
             resultParts.push('РК ' + accounts.length + '/' + String(desired.ad_accounts || accounts.length));
+            if (accounts.length && accounts.some(function(account) {
+              const accountStatus = String(account && account.account_status != null ? account.account_status : '').trim();
+              const disableReason = String(account && account.disable_reason != null ? account.disable_reason : '').trim();
+              return !accountStatus && !disableReason;
+            })) {
+              resultParts.push('Статус ограничений РК не проверен инвентаризацией');
+            }
             if (prepareResult.reason) resultParts.push(pythonWorkerPrepareReasonLabel(prepareResult.reason) || 'Результат комплекта сохранён.');
             errorTd.className = 'pw-result';
             errorTd.textContent = resultParts.join(' · ');
@@ -1526,6 +1551,14 @@ function pythonWorkerRenderJob(job) {
             }
             if (adAccountResult.response_path) {
               resultParts.push('response ' + adAccountResult.response_path);
+            }
+            if (adAccountResult.restriction_status_available) {
+              const statusParts = [];
+              if (adAccountResult.account_status) statusParts.push('account_status ' + adAccountResult.account_status);
+              if (adAccountResult.disable_reason) statusParts.push('disable_reason ' + adAccountResult.disable_reason);
+              resultParts.push('Поля статуса Meta: ' + statusParts.join(', '));
+            } else {
+              resultParts.push('Статус ограничений не проверен инвентаризацией');
             }
             errorTd.className = 'pw-result';
             errorTd.textContent = resultParts.join(' · ');
@@ -2823,7 +2856,7 @@ async function pythonWorkerPoll() {
       pythonWorkerSetText(
         'pythonPwStatus',
         pythonWorkerAdvertisingSummary(items,status) || (isPrepareJob
-          ? 'Подготовка комплекта завершена. Фактическая готовность и ID показаны в результатах.'
+          ? 'Подготовка комплекта завершена. Фактическая готовность и ID показаны в результатах; статус ограничений РК не проверен инвентаризацией.'
           : isPageAccessJob
           ? 'Доступ PrgssTeam в выбранном BM настроен.'
           : isConfirmationJob
@@ -2840,10 +2873,10 @@ async function pythonWorkerPoll() {
           ? (
               unconfirmed.length
                 ? (
-                    'RK создан. ad_account_id сохранён в Job. Workspace sync не ' +
+                    'RK создан. ad_account_id сохранён в Job. Статус ограничений не проверен. Workspace sync не ' +
                     'подтвердил профили: ' + unconfirmed.join(', ') + '.'
                   )
-                : 'Рекламный кабинет создан и Workspace sync завершён.'
+                : 'Рекламный кабинет создан и Workspace sync завершён. Статус ограничений не проверен.'
             )
           : (
               unconfirmed.length
@@ -4390,7 +4423,7 @@ async function pythonWorkerPollAdAccountBatch() {
       isRkFpBatch
         ? (
             allSuccess
-              ? 'Все запущенные FP Jobs SUCCESS: ' + ids.length + ' RK.'
+              ? 'Все запущенные FP Jobs SUCCESS: ' + ids.length + ' RK. Статус ограничений не проверен инвентаризацией.'
               : onlyAuthBlockedFailures
               ? (
                   'FP batch приостановлен: Facebook-сессия заблокирована у ' +
@@ -4401,7 +4434,7 @@ async function pythonWorkerPollAdAccountBatch() {
           )
         : (
             allSuccess
-              ? 'RK созданы для всех выбранных BM.'
+              ? 'RK созданы для всех выбранных BM. Статус ограничений не проверен инвентаризацией.'
               : onlyAuthBlockedFailures
               ? 'Создание РК остановлено: Facebook требует проверку аккаунта. РК не создан. Повтор недоступен; Jobs сохранены.'
               : 'Add RK batch завершён: есть FAILED/PARTIAL Jobs. Повторный CREATE автоматически не отправляется.'
