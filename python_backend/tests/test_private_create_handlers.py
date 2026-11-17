@@ -11,6 +11,7 @@ from app.provisioning import private_create_handlers as actions
 from app.provisioning.models import ProvisioningError, ProvisioningStep
 from app.provisioning.registry import get_handler
 from app.provisioning.service import ProvisioningService
+from app.provisioning.prepare import PrepareService
 from app.provisioning.state import ProvisioningStateStore
 from tests import test_ad_account_private_contract as fixtures
 from tests.test_ad_account_private_contract import BM, UID, RK, NAME
@@ -355,6 +356,62 @@ class RKActionTests(unittest.IsolatedAsyncioTestCase):
         blocked = await self.state.step("job-2", ProvisioningStep.AD_ACCOUNT)
         self.assertEqual(blocked["result"]["phase"], "CREATE_BLOCKED_PRIOR_META_REJECTION")
         self.assertEqual(blocked["result"]["blocked_by_meta_rejection_item_id"], "job-1")
+
+
+class PrepareBusinessEmailTests(unittest.IsolatedAsyncioTestCase):
+    async def test_prepare_does_not_generate_a_business_email(self):
+        class StopAfterBusiness(Exception):
+            pass
+
+        with tempfile.TemporaryDirectory() as temporary:
+            state = ProvisioningStateStore(str(Path(temporary) / "prepare-email.db"))
+            await state.init()
+            context = SimpleNamespace(
+                profile_id="15",
+                cookies={"c_user": UID},
+                pages=[],
+                businesses=[],
+                ad_accounts=[],
+                inventory_updated_at=0,
+                email="owner@example.com",
+                first_name="Owner",
+                last_name="Example",
+                display_name="Owner Example",
+            )
+            captured = []
+
+            async def capture_business(**kwargs):
+                captured.append(kwargs)
+                raise StopAfterBusiness()
+
+            service = PrepareService(state, SimpleNamespace(run=AsyncMock(side_effect=capture_business)))
+            payload = {
+                "scope_key": "prepare-email-test",
+                "desired": {
+                    "fan_page": False,
+                    "business": True,
+                    "ad_accounts": 1,
+                    "page_access": False,
+                    "payment": False,
+                },
+                "parameters": {"AD_ACCOUNT": {"currency": "USD", "timezone_id": 137}},
+            }
+
+            with self.assertRaises(StopAfterBusiness):
+                await service.run(
+                    item_id="prepare-email-item",
+                    profile_id="15",
+                    context=context,
+                    session=SimpleNamespace(context=context),
+                    payload=payload,
+                )
+
+            self.assertEqual(len(captured), 1)
+            self.assertEqual(captured[0]["payload"]["steps"], ["BUSINESS"])
+            business = captured[0]["payload"]["parameters"]["BUSINESS"]
+            self.assertNotIn("user_email", business)
+            self.assertNotIn("email", business)
+            self.assertEqual(captured[0]["context"].email, "owner@example.com")
 
 
 class BMActionTests(unittest.IsolatedAsyncioTestCase):
