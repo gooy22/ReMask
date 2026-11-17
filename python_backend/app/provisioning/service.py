@@ -144,26 +144,33 @@ class ProvisioningService:
         parameters = payload.get("parameters") or {}
         if not isinstance(parameters, dict):
             raise ProvisioningError("INVALID_INPUT", "parameters must be an object")
-        rk_params = parameters.get("AD_ACCOUNT", parameters.get("ad_account", {}))
-        if (
-            ProvisioningStep.AD_ACCOUNT in steps
-            and ProvisioningStep.PAGE_ACCESS in steps
-            and isinstance(rk_params, dict)
-            and rk_params.get("use_common_page") is True
-        ):
-            # Legacy payloads may request an explicit PAGE_ACCESS step. Keep its
-            # dependency after RK creation, but never infer PAGE_ACCESS solely
-            # from an AD_ACCOUNT flag.
-            steps.remove(ProvisioningStep.PAGE_ACCESS)
-            steps.insert(steps.index(ProvisioningStep.AD_ACCOUNT) + 1, ProvisioningStep.PAGE_ACCESS)
-            if rk_params.get("page_policies_accepted") is True:
-                parameters.setdefault("PAGE_ACCESS", {})["policies_accepted"] = True
-
         scope_key = str(
             payload.get("scope_key")
             or task_idempotency_key
             or "default"
         ).strip() or "default"
+        is_add_rk_scope = scope_key.lower().startswith("add-rk")
+        rk_params = parameters.get("AD_ACCOUNT", parameters.get("ad_account", {}))
+        if is_add_rk_scope and ProvisioningStep.AD_ACCOUNT in steps:
+            # A standalone Add-RK job creates the account only. Ignore legacy
+            # common-page flags so it cannot append a separate PAGE_ACCESS mutation.
+            steps = [step for step in steps if step != ProvisioningStep.PAGE_ACCESS]
+            parameters.pop("PAGE_ACCESS", None)
+            parameters.pop("page_access", None)
+            if isinstance(rk_params, dict):
+                rk_params.pop("use_common_page", None)
+                rk_params.pop("page_policies_accepted", None)
+        elif (
+            ProvisioningStep.AD_ACCOUNT in steps
+            and ProvisioningStep.PAGE_ACCESS in steps
+            and isinstance(rk_params, dict)
+            and rk_params.get("use_common_page") is True
+        ):
+            # Explicit PAGE_ACCESS for other flows remains ordered after RK creation.
+            steps.remove(ProvisioningStep.PAGE_ACCESS)
+            steps.insert(steps.index(ProvisioningStep.AD_ACCOUNT) + 1, ProvisioningStep.PAGE_ACCESS)
+            if rk_params.get("page_policies_accepted") is True:
+                parameters.setdefault("PAGE_ACCESS", {})["policies_accepted"] = True
 
         completed: list[dict[str, Any]] = []
         page_access = parameters.get('PAGE_ACCESS', parameters.get('page_access', {}))
