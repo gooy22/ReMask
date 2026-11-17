@@ -1502,7 +1502,9 @@ function pythonWorkerRenderJob(job) {
             }
             resultParts.push('РК ' + accounts.length + '/' + String(desired.ad_accounts || accounts.length));
             if (accounts.length && accounts.some(function(account) {
-              return !account || (account.account_status == null && account.disable_reason == null);
+              const accountStatus = String(account && account.account_status != null ? account.account_status : '').trim();
+              const disableReason = String(account && account.disable_reason != null ? account.disable_reason : '').trim();
+              return !accountStatus && !disableReason;
             })) {
               resultParts.push('Статус ограничений РК не проверен инвентаризацией');
             }
