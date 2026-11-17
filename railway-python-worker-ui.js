@@ -4957,7 +4957,7 @@ async function pythonWorkerOpenAutoModal() {
 
   const body = document.createElement('div'); body.className = 'pwbm-body';
   const note = document.createElement('div'); note.className = 'pwbm-note';
-  note.textContent = 'Для каждого комплекта — отдельная FP, BM и РК. Prepare сохраняет готовые связки и дополняет недостающие объекты и полные права. Payment проверяется отдельно перед Launch.';
+  note.textContent = 'Для каждого комплекта — отдельная FP, BM и РК. Укажи доступный контактный email для каждого профиля: он передаётся Meta при создании BM. Prepare сохраняет готовые связки и дополняет недостающие объекты и полные права.';
   body.appendChild(note);
 
   function field(label, input) {
@@ -4965,6 +4965,16 @@ async function pythonWorkerOpenAutoModal() {
     const text = document.createElement('span'); text.textContent = label;
     holder.append(text, input); body.appendChild(holder); return input;
   }
+
+  const businessEmails = {};
+  profiles.forEach(function(profileId) {
+    const email = document.createElement('input');
+    email.type = 'email';
+    email.autocomplete = 'email';
+    email.placeholder = 'Доступный email для связи с Business';
+    businessEmails[String(profileId)] = field('Контактный email BM · профиль ' + profileId, email);
+  });
+  let restoredRequestMissingEmail = false;
 
   const count = document.createElement('input');
   count.type = 'number'; count.min = '1'; count.max = '2'; count.value = '1';
@@ -5002,26 +5012,46 @@ async function pythonWorkerOpenAutoModal() {
     category.value = String((params.FAN_PAGES || {}).category || 'Digital creator');
     currency.value = String((params.AD_ACCOUNT || {}).currency || 'USD');
     timezone.value = String((params.AD_ACCOUNT || {}).timezone_id || 137);
+    profiles.forEach(function(profileId) {
+      const row = acceptedRequest.profiles.find(function(item) {
+        return String(item && item.profile_id || '') === String(profileId);
+      });
+      const savedTask = row && Array.isArray(row.tasks) ? row.tasks[0] : null;
+      const savedParameters = savedTask && savedTask.payload && savedTask.payload.parameters || {};
+      const savedEmail = String((savedParameters.BUSINESS || {}).user_email || '').trim();
+      businessEmails[String(profileId)].value = savedEmail;
+      businessEmails[String(profileId)].disabled = true;
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(savedEmail)) restoredRequestMissingEmail = true;
+    });
     [count, category, currency, timezone].forEach(function(input) { input.disabled = true; });
     create.textContent = 'Повторить отправку';
-    note.textContent = 'Восстанавливаем Prepare-запрос для профилей ' + profiles.join(', ') + '. Ключ сохранён; worker ограничивает создание максимум двумя BM + двумя РК на профиль.';
+    note.textContent = 'Восстанавливаем сохранённый Prepare-запрос. Его параметры не изменяются.';
   }
 
   function refresh() {
     const n = Number(count.value);
     const totalRk = profiles.length * n;
+    const missingEmailProfiles = profiles.filter(function(profileId) {
+      return !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(businessEmails[String(profileId)].value || '').trim());
+    });
     const valid = Number.isInteger(n) && n >= 1 && n <= (acceptedRequest ? 20 : 2) && totalRk <= 10000
       && category.value.trim()
       && /^[A-Z]{3}$/.test(currency.value.trim().toUpperCase())
       && Number.isInteger(Number(timezone.value)) && Number(timezone.value) >= 0
-      && timezone.value.trim();
+      && timezone.value.trim()
+      && missingEmailProfiles.length === 0
+      && !restoredRequestMissingEmail;
     create.disabled = pythonWorkerUiState.busy || !valid;
-    status.textContent = valid
-      ? 'Цель: ' + profiles.length + ' проф., ' + Math.min(n, 2) + ' FP + ' + Math.min(n, 2) + ' BM + ' + Math.min(n, 2) + ' РК на профиль (1 BM = 1 РК). Всего комплектов: ' + (profiles.length * Math.min(n, 2)) + '. Дополняются недостающие объекты и права.' + (n > 2 ? ' Прежний запрос ограничен двумя комплектами на профиль.' : '')
-      : 'Нужны категория, 1–2 РК на профиль, валюта и часовой пояс.';
+    status.textContent = restoredRequestMissingEmail
+      ? 'Сохранённый запрос не содержит email BM. Повтор не отправляю, чтобы не изменить уже сохранённое задание.'
+      : missingEmailProfiles.length
+      ? 'Укажи доступный email для BM у профилей: ' + missingEmailProfiles.join(', ') + '.'
+      : valid
+        ? 'Цель: ' + profiles.length + ' проф., ' + Math.min(n, 2) + ' FP + ' + Math.min(n, 2) + ' BM + ' + Math.min(n, 2) + ' РК на профиль (1 BM = 1 РК). Всего комплектов: ' + (profiles.length * Math.min(n, 2)) + '. Дополняются недостающие объекты и права.' + (n > 2 ? ' Прежний запрос ограничен двумя комплектами на профиль.' : '')
+        : 'Нужны категория, 1–2 РК на профиль, валюта и часовой пояс.';
   }
 
-  [count, category, currency, timezone].forEach(function(input) {
+  [count, category, currency, timezone].concat(Object.values(businessEmails)).forEach(function(input) {
     input.addEventListener('input', refresh);
     input.addEventListener('change', refresh);
   });
@@ -5059,6 +5089,9 @@ async function pythonWorkerOpenAutoModal() {
                     payment: true
                   },
                   parameters: {
+                    BUSINESS: {
+                      user_email: String(businessEmails[profile].value || '').trim()
+                    },
                     FAN_PAGES: {
                       category: category.value.trim(),
                       page_name: 'PrgssTeam',
@@ -5079,7 +5112,7 @@ async function pythonWorkerOpenAutoModal() {
         };
       }
 
-      [count, category, currency, timezone].forEach(function(input) { input.disabled = true; });
+      [count, category, currency, timezone].concat(Object.values(businessEmails)).forEach(function(input) { input.disabled = true; });
       localStorage.setItem(pendingKey, JSON.stringify(acceptedRequest));
       pythonWorkerUiState.jobNotice = '';
       const data = await pythonWorkerBridge(acceptedRequest);
@@ -5174,7 +5207,7 @@ async function pythonWorkerOpenAutoModal() {
         localStorage.removeItem(pendingKey);
         acceptedRequest = null;
         nonce = newPrepareNonce();
-        [count, category, currency, timezone].forEach(function(input) { input.disabled = false; });
+        [count, category, currency, timezone].concat(Object.values(businessEmails)).forEach(function(input) { input.disabled = false; });
         create.textContent = 'Prepare';
         refresh();
         status.textContent = 'Запрос отклонён: ' + errorMessage +
