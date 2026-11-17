@@ -513,6 +513,60 @@ class ProvisioningStateStore:
                 return {"item_id": item_id, "result": result}
         return {}
 
+    async def latest_private_ad_account_terminal_rejection(
+        self,
+        profile_id: str,
+        business_id: str,
+        terminal_codes: tuple[str, ...],
+    ) -> dict[str, Any]:
+        """Find any prior terminal Meta rejection for this profile and Business.
+
+        The rejection is a stop condition for subsequent CREATE attempts on the
+        same profile+Business, regardless of RK name, currency, or timezone.
+        """
+        return await asyncio.to_thread(
+            self._latest_private_ad_account_terminal_rejection_sync,
+            profile_id,
+            business_id,
+            terminal_codes,
+        )
+
+    def _latest_private_ad_account_terminal_rejection_sync(
+        self, profile_id, business_id, terminal_codes
+    ):
+        profile = str(profile_id or "").strip()
+        business = str(business_id or "").strip().removeprefix("act_")
+        codes = {
+            str(code or "").strip().upper()
+            for code in (terminal_codes or ())
+            if str(code or "").strip()
+        }
+        if not profile or not business or not codes:
+            return {}
+
+        with self._connect() as con:
+            rows = con.execute(
+                "SELECT item_id,result_json FROM provisioning_steps "
+                "WHERE profile_id=? AND step=? AND result_json IS NOT NULL "
+                "ORDER BY updated_at DESC",
+                (profile, ProvisioningStep.AD_ACCOUNT.value),
+            ).fetchall()
+        for row in rows:
+            try:
+                result = json.loads(row["result_json"])
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(result, dict):
+                continue
+            if str(result.get("business_id") or "").strip().removeprefix("act_") != business:
+                continue
+            if str(result.get("phase") or "").upper() != "CREATE_REJECTED":
+                continue
+            code = str(result.get("last_error_code") or "").strip().upper()
+            if code in codes:
+                return {"item_id": str(row["item_id"] or ""), "result": result}
+        return {}
+
     def _latest_private_ad_account_resume_sync(self, profile_id, business_id, exclude_item_id, account_name):
         with self._connect() as con:
             rows = con.execute(
