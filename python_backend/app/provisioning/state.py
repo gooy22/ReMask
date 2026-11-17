@@ -560,7 +560,12 @@ class ProvisioningStateStore:
                 continue
             if str(result.get("business_id") or "").strip().removeprefix("act_") != business:
                 continue
-            if str(result.get("phase") or "").upper() != "CREATE_REJECTED":
+            phase = str(result.get("phase") or "").upper()
+            if phase == "CREATE_CONFIRMED" and str(
+                result.get("ad_account_id") or result.get("create_response_ad_account_id") or ""
+            ).strip():
+                return {}
+            if phase != "CREATE_REJECTED":
                 continue
             code = str(result.get("last_error_code") or "").strip().upper()
             if code in codes:
