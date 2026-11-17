@@ -266,18 +266,45 @@ async def ad_account_handler(session, params, state, *args, **kwargs):
     actor = _clean((getattr(action.context, "cookies", {}) or {}).get("c_user"))
     if not actor.isdigit():
         raise ProvisioningError("SESSION_EXPIRED", "Current profile actor is unavailable.", retryable=True)
+    if business == actor:
+        raise ProvisioningError("CREATED_BUSINESS_REQUIRED", "RK creation requires a Business Portfolio, not the personal profile scope.")
     saved_phase = _clean(action.saved.get("phase")).upper()
     saved_error_code = _clean(action.saved.get("last_error_code")).upper()
-    if saved_phase == "CREATE_REJECTED" and saved_error_code in _TERMINAL_META_REJECTION_CODES:
+    saved_business = _id(action.saved.get("business_id"))
+    if (saved_phase == "CREATE_REJECTED" and saved_business == business
+            and saved_error_code in _TERMINAL_META_REJECTION_CODES):
         detail = _clean(action.saved.get("last_error"))
         raise ProvisioningError(
             saved_error_code,
             (detail + " " if detail else "")
-            + "Meta explicitly rejected the prior CREATE; this retry stopped before inventory or another POST.",
+            + "Meta explicitly rejected the prior CREATE for this profile and BM; this retry stopped before inventory or another POST.",
             retryable=False,
         )
-    if business == actor:
-        raise ProvisioningError("CREATED_BUSINESS_REQUIRED", "RK creation requires a Business Portfolio, not the personal profile scope.")
+    prior_terminal_rejection = await action.store.latest_private_ad_account_terminal_rejection(
+        action.profile,
+        business,
+        tuple(_TERMINAL_META_REJECTION_CODES),
+    )
+    if prior_terminal_rejection:
+        prior_result = prior_terminal_rejection["result"]
+        code = _clean(prior_result.get("last_error_code")).upper() or "META_UNKNOWN_ERROR"
+        detail = _clean(prior_result.get("last_error"))
+        await action.checkpoint({
+            "phase": "CREATE_BLOCKED_PRIOR_META_REJECTION",
+            "business_id": business,
+            "account_name": name,
+            "currency": currency,
+            "timezone_id": timezone,
+            "blocked_by_meta_rejection_item_id": prior_terminal_rejection["item_id"],
+            "blocking_meta_error_code": code,
+            "blocking_meta_error": detail[:4000],
+        })
+        raise ProvisioningError(
+            code,
+            (detail + " " if detail else "A prior terminal Meta rejection exists. ")
+            + "CREATE stopped for this profile and BM before inventory or another POST.",
+            retryable=False,
+        )
     if not (_clean(action.saved.get("phase")).upper() in _PENDING
             or _id(action.saved.get("ad_account_id") or action.saved.get("create_response_ad_account_id"))):
         # All names matter: a different RK name must not evade a pending POST
