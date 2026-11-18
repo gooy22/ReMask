@@ -561,6 +561,7 @@ class PrepareService:
                 )
                 business_params = {
                     "name": f"ReMask {profile_id} BM {slot} {token[:4]}",
+                    "user_email": f"{token}@gmail.com",
                     "use_created_page": False,
                     "attach_page": False,
                     **parameters["BUSINESS"],
