@@ -18,6 +18,17 @@ def identity(value):
     return text if re.fullmatch(r'\d{5,30}', text) else ''
 
 
+def _inventory_stop_gate(payload, operation):
+    if not isinstance(payload, dict) or not (payload.get("errors") or payload.get("error")):
+        return ""
+    from .provisioning.meta_errors import classify_meta_payload_error
+    code, _, _ = classify_meta_payload_error(payload, entity="BUSINESS")
+    if code in {"SESSION_EXPIRED", "RATE_LIMITED", "ACCOUNT_RESTRICTED",
+                "PERMISSION_DENIED", "REMOTE_TIMEOUT"}:
+        return code
+    return "META_READ_ERROR"
+
+
 def diagnostic(operation, payload):
     """Paths/types/counts only, with a finite budget. No response scalar values."""
     paths = []
@@ -33,7 +44,10 @@ def diagnostic(operation, payload):
         elif isinstance(value, list):
             paths.append({'path': path, 'count': len(value)})
             pending.extend((path+'[]', child) for child in value[:1] if isinstance(child, (dict, list)))
-    return {'operation': operation, **contract_metadata(operation), 'has_errors': bool(isinstance(payload, dict) and (payload.get('errors') or payload.get('error'))), 'response_shape': paths}
+    stop_gate = _inventory_stop_gate(payload, operation)
+    return {'operation': operation, **contract_metadata(operation),
+        'has_errors': bool(isinstance(payload, dict) and (payload.get('errors') or payload.get('error'))),
+        'stop_gate': stop_gate, 'response_shape': paths}
 
 
 def _bm_scopes(payload):
@@ -84,6 +98,10 @@ async def read_business_inventory(web, expected='', *, bootstrap_account_id=''):
         payload = await execute(web, 'CONFIG', business=expected)
         diag = diagnostic('CONFIG', payload)
         diagnostics.append(diag)
+        if diag.get("stop_gate"):
+            return {"rows": {}, "complete": False,
+                "source": "static_http_exact_business_config",
+                "diagnostics": diagnostics, "stop_gate": diag["stop_gate"]}
         data = payload.get('data') if isinstance(payload, dict) else None
         node = data.get('business') if isinstance(data, dict) else None
         if (not diag['has_errors'] and isinstance(node, dict) and identity(node.get('id')) == expected
@@ -94,26 +112,31 @@ async def read_business_inventory(web, expected='', *, bootstrap_account_id=''):
     if callable(begin):
         begin('READ_BM')
     variables = command('READ_BM')['variables']
-    for count in (200, 400, 800):
-        variables['fetchNumberForBusinessScopes'] = count
-        payload = await execute(
-            web, 'READ_BM', variables=variables,
-            bootstrap_account_id=bootstrap_account_id,
-        )
-        found, complete, more = _bm_scopes(payload)
-        # Each request is a fresh full prefix, not a cursor page. Do not merge
-        # identities that disappeared between responses into a complete result.
-        rows = found
-        diag = diagnostic('READ_BM', payload)
-        diag.update(business_ids=sorted(found), complete=complete, requested_count=count)
-        diagnostics.append(diag)
-        log.info('BM static inventory expected=%s verification=%s', expected, json.dumps(diag, separators=(',', ':')))
-        if complete or not more or expected in rows:
-            break
+    # This operation accepts a full-prefix size, not a cursor. Reissuing it
+    # with 200/400/800 after an incomplete response sent the same read up to
+    # three times during one Sync. Request the existing maximum once and
+    # report partial evidence if Meta does not confirm the complete prefix.
+    count = 800
+    variables['fetchNumberForBusinessScopes'] = count
+    payload = await execute(
+        web, 'READ_BM', variables=variables,
+        bootstrap_account_id=bootstrap_account_id,
+    )
+    found, complete, more = _bm_scopes(payload)
+    rows = found
+    diag = diagnostic('READ_BM', payload)
+    stop_gate = str(diag.get("stop_gate") or "")
+    diag.update(business_ids=sorted(found), complete=complete and not stop_gate,
+        requested_count=count, has_more=bool(more))
+    diagnostics.append(diag)
+    log.info('BM static inventory expected=%s verification=%s', expected, json.dumps(diag, separators=(',', ':')))
     mark = getattr(web, 'mark_business_read_verified', None)
     if callable(mark):
         mark('READ_BM', complete=complete)
-    return {'rows': rows, 'complete': complete, 'source': 'static_http_business_scopes', 'diagnostics': diagnostics}
+    stop_gate = next((str(row.get("stop_gate") or "") for row in diagnostics if row.get("stop_gate")), "")
+    return {'rows': rows, 'complete': complete and not stop_gate,
+        'source': 'static_http_business_scopes', 'diagnostics': diagnostics,
+        'stop_gate': stop_gate}
 
 
 async def read_ad_account_inventory(web, business, name, expected=''):
@@ -125,6 +148,7 @@ async def read_ad_account_inventory(web, business, name, expected=''):
         bootstrap_account_id=identity(expected),
     )
     diag = diagnostic('READ_RK', payload)
+    stop_gate = str(diag.get("stop_gate") or "")
     normalized = _normalize_connected_inventory([payload], business)
     observations, accounts, conflicting_aliases = [], {}, set()
     if not isinstance(payload, dict) or payload.get('errors') or payload.get('error'):
@@ -153,6 +177,7 @@ async def read_ad_account_inventory(web, business, name, expected=''):
         alias_conflict=selected in conflicting_aliases)
     log.info('RK static inventory verification=%s', json.dumps(diag, separators=(',', ':')))
     return {'id': selected, 'ids': ids, 'account_rows': [accounts[key] for key in ids],
-        'named': named, 'complete': complete,
+        'named': named, 'complete': complete and not stop_gate,
         'asset_ui_id': asset_ui_id,
-        'source': 'static_http_exact_business_inventory', 'diagnostics': [diag]}
+        'source': 'static_http_exact_business_inventory', 'diagnostics': [diag],
+        'stop_gate': stop_gate}

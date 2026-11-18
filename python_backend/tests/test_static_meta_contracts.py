@@ -149,17 +149,17 @@ class StaticReadTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(web.business_read_verification_events[-1],
             ('mark', 'READ_BM', (), True))
 
-    async def test_prefix_pagination_does_not_treat_first_page_as_complete(self):
-        web=self.web(None);web.graphql.side_effect=[scopes([(BM,'BM')],next_page=True),scopes([(BM,'BM'),(RK,'Other')])]
+    async def test_prefix_pagination_does_not_treat_single_read_as_complete(self):
+        web=self.web(scopes([(BM,'BM')],next_page=True))
         proof=await read_business_inventory(web)
-        self.assertTrue(proof['complete']);self.assertEqual(len(proof['rows']),2)
-        self.assertEqual([call.args[1]['fetchNumberForBusinessScopes'] for call in web.graphql.call_args_list],[200,400])
+        self.assertFalse(proof['complete']);self.assertEqual(proof['rows'],{BM:'BM'})
+        self.assertEqual([call.args[1]['fetchNumberForBusinessScopes'] for call in web.graphql.call_args_list],[800])
 
-    async def test_fresh_complete_prefix_does_not_keep_disappeared_scope(self):
-        web=self.web(None)
-        web.graphql.side_effect=[scopes([(BM,'Old')],next_page=True),scopes([(RK,'Current')])]
+    async def test_incomplete_prefix_is_not_retried_or_merged(self):
+        web=self.web(scopes([(BM,'Old')],next_page=True))
         proof=await read_business_inventory(web)
-        self.assertTrue(proof['complete']);self.assertEqual(proof['rows'],{RK:'Current'})
+        self.assertFalse(proof['complete']);self.assertEqual(proof['rows'],{BM:'Old'})
+        self.assertEqual(web.graphql.call_count,1)
 
     async def test_complete_rk_inventory_records_only_the_exact_business_scope(self):
         web = self.web(connected_response(accounts=[RK]))

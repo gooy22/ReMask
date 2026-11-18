@@ -233,7 +233,7 @@ if ($applySnapshotPatchCount !== 1) {
 }
 
 $oldAttention = "function profileAttention(p){ const ps=String(p.proxy_health?.status||'').toUpperCase(); return !p.synced || !p.proxy_configured || (ps!==''&&ps!=='LIVE') || !p.ads_management_granted || p.bm_count===0 || p.rk_count===0; }";
-$newAttention = "function profileAttention(p){ const ps=String(p.proxy_health?.status||'').toUpperCase(); return !p.synced || p.proxy_configured===false || (p.proxy_configured===true && ps!==''&&ps!=='LIVE'); }";
+$newAttention = "function profileAttention(p){ const held=new Set((window.REMASK_RESTRICTION_HOLD_PROFILE_IDS||[]).map(String)); if(p && (p.restriction_hold===true || held.has(String(p.name||p.profile||p.id||''))))return true; const ps=String(p.proxy_health?.status||'').toUpperCase(); return !p.synced || p.proxy_configured===false || (p.proxy_configured===true && ps!==''&&ps!=='LIVE'); }";
 $count = 0;
 $js = str_replace($oldAttention, $newAttention, $js, $count);
 if ($count !== 1) {
@@ -250,6 +250,11 @@ $oldAccountStatus = "function accountStatus(a){ const s=Number(a.account_status|
 $newAccountStatus = <<<'JS'
 function accountStatus(a){
   /* REMASK_STATUS_TRUTH_V1 */
+  const heldProfiles=new Set((window.REMASK_RESTRICTION_HOLD_PROFILE_IDS||[]).map(String));
+  const profile=String(a && (a.profile||a.profile_id||a.profile_name)||'');
+  if(a && (a._restriction_hold===true || a.restriction_hold===true || heldProfiles.has(profile))){
+    return pill('META RESTRICTION · BLOCKED','bad')+'<div class="sub">Ads Manager restriction reported · ReMask blocks creation and Launch for this profile</div>';
+  }
   if(a && a._provisioned_only){
     return pill('CREATED','ok')+'<div class="sub">Worker confirmed · awaiting Meta inventory sync</div>';
   }
@@ -661,9 +666,22 @@ JS;
 $newSelectionUi = <<<'JS'
 function updateSelectionUi(){
   const n=state.selected[state.activeTab].size;
-  $('workspaceSelected').textContent=`Выбрано: ${n}`;
-  // A Meta sync must never freeze navigation/actions. Lock only the sync trigger.
+  const rows=selectedRows(state.activeTab);
+  const heldProfiles=new Set((window.REMASK_RESTRICTION_HOLD_PROFILE_IDS||[]).map(String));
+  const inventoryProfiles=state.inventory&&Array.isArray(state.inventory.profiles)?state.inventory.profiles:[];
+  inventoryProfiles.filter(p=>p && p.restriction_hold===true)
+    .forEach(p=>heldProfiles.add(String(p.name||p.profile||p.id||'')));
+  const held=rows.some(row=>row && (
+    row._restriction_hold===true || row.restriction_hold===true ||
+    heldProfiles.has(String(row.profile||row.profile_id||row.name||''))
+  ));
+  $('workspaceSelected').textContent=`Выбрано: ${n}${held?' · META-БЛОКИРОВКА':''}`;
+  // Keep read-only Sync available, but do not expose mutation actions for held profiles.
   $('workspaceActions').disabled=n===0;
+  if(held)$('workspaceActions').disabled=true;
+  $('workspaceActions').title=held
+    ? 'Создание BM/РК и запуск остановлены: ограничение РК подтверждено в Ads Manager.'
+    : '';
   $('syncSelected').disabled=n===0||state.running;
   if($('loadDelivery'))$('loadDelivery').style.display=deliveryTabs.has(state.activeTab)?'inline-flex':'none';
   buildActionMenu();
@@ -676,6 +694,34 @@ if ($selectionUiCount !== 1) {
 }
 
 file_put_contents($workspace, $js);
+
+
+// REMASK_RESTRICTION_HOLD_BOOT_V1
+$workspacePagePath = '/var/www/html/workspace.php';
+$workspacePage = file_get_contents($workspacePagePath);
+if ($workspacePage === false) {
+    throw new RuntimeException('workspace.php not found for restriction hold bootstrap');
+}
+if (strpos($workspacePage, 'REMASK_RESTRICTION_HOLD_BOOT_V1') === false) {
+    $boot = <<<'PHP_BOOT'
+<script>
+/* REMASK_RESTRICTION_HOLD_BOOT_V1 */
+window.REMASK_RESTRICTION_HOLD_PROFILE_IDS = <?php
+$ids = array_values(array_filter(array_map(
+    'trim',
+    explode(',', (string)(getenv('REMASK_RESTRICTION_HOLD_PROFILE_IDS') ?: ''))
+), static fn($value): bool => $value !== ''));
+echo json_encode($ids, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+?>;
+</script>
+PHP_BOOT;
+    $headClose = stripos($workspacePage, '</head>');
+    if ($headClose === false) {
+        throw new RuntimeException('workspace.php closing head tag not found');
+    }
+    $workspacePage = substr($workspacePage, 0, $headClose) . $boot . "\n" . substr($workspacePage, $headClose);
+    file_put_contents($workspacePagePath, $workspacePage);
+}
 fwrite(STDERR, "[workspace-sync-fix] workspace.js patched; sync no longer blocks whole Workspace; timeout=35s\n");
 
 $php = file_get_contents($hierarchy);
@@ -1567,6 +1613,45 @@ function hierarchy_profile_snapshot(string $profile, ?array $workspaceMeta = nul
     }
     $snapshot['personal_scope_id'] = $scope;
     $snapshot['profile']['personal_scope_id'] = $scope;
+
+    $heldProfiles = array_values(array_filter(array_map(
+        'trim',
+        explode(',', (string)(getenv('REMASK_RESTRICTION_HOLD_PROFILE_IDS') ?: ''))
+    ), static fn($value): bool => $value !== ''));
+    if (in_array((string)$profile, $heldProfiles, true)) {
+        $holdCode = 'META_RESTRICTION_HOLD';
+        $holdMessage = 'Ad-account restriction reported in Ads Manager. ReMask blocks BM/RK creation and Launch for this profile.';
+        $snapshot['restriction_hold'] = true;
+        $snapshot['restriction_hold_code'] = $holdCode;
+        $snapshot['restriction_hold_message'] = $holdMessage;
+        if (is_array($snapshot['profile'] ?? null)) {
+            $snapshot['profile']['restriction_hold'] = true;
+            $snapshot['profile']['restriction_hold_code'] = $holdCode;
+            $snapshot['profile']['restriction_hold_message'] = $holdMessage;
+        }
+        foreach ((array)($snapshot['profiles'] ?? []) as $index => $profileRow) {
+            if (!is_array($profileRow)) continue;
+            if ((string)($profileRow['name'] ?? '') !== (string)($snapshot['profile']['name'] ?? $profile)) continue;
+            $snapshot['profiles'][$index]['restriction_hold'] = true;
+            $snapshot['profiles'][$index]['restriction_hold_code'] = $holdCode;
+            $snapshot['profiles'][$index]['restriction_hold_message'] = $holdMessage;
+        }
+        foreach ((array)($snapshot['ad_accounts'] ?? []) as $index => $accountRow) {
+            if (!is_array($accountRow)) continue;
+            $snapshot['ad_accounts'][$index]['_restriction_hold'] = true;
+            $snapshot['ad_accounts'][$index]['_restriction_hold_code'] = $holdCode;
+            $snapshot['ad_accounts'][$index]['_restriction_hold_message'] = $holdMessage;
+        }
+        foreach ((array)($snapshot['businesses'] ?? []) as $businessIndex => $businessRow) {
+            if (!is_array($businessRow) || !is_array($businessRow['accounts'] ?? null)) continue;
+            foreach ($businessRow['accounts'] as $accountIndex => $accountRow) {
+                if (!is_array($accountRow)) continue;
+                $snapshot['businesses'][$businessIndex]['accounts'][$accountIndex]['_restriction_hold'] = true;
+                $snapshot['businesses'][$businessIndex]['accounts'][$accountIndex]['_restriction_hold_code'] = $holdCode;
+                $snapshot['businesses'][$businessIndex]['accounts'][$accountIndex]['_restriction_hold_message'] = $holdMessage;
+            }
+        }
+    }
     return hierarchy_asset_types_snapshot($snapshot);
 }
 PHP_WRAPPER;
@@ -1691,6 +1776,22 @@ $syncProfileReplacement = <<<'PHP'
             && !preg_match('/^\d{5,30}$/', $requestedBusinessId)
         ) {
             throw new InvalidArgumentException('invalid business_id');
+        }
+
+        $heldProfiles = array_values(array_filter(array_map(
+            'trim',
+            explode(',', (string)(getenv('REMASK_RESTRICTION_HOLD_PROFILE_IDS') ?: ''))
+        ), static fn($value): bool => $value !== ''));
+        if (in_array($profile, $heldProfiles, true)) {
+            $held = [
+                'profile_name' => $profile,
+                'request_id' => $requestId,
+                'sync_complete' => false,
+                'sync_error_kind' => 'META_RESTRICTION_HOLD',
+                'sync_error' => 'Ads Manager restriction confirmed; ReMask stopped before a Meta request.',
+            ];
+            hierarchy_sync_result_put($requestId, $profile, $held);
+            MetaEndpoint::ok($held);
         }
 
         // Auth/CSRF and input validation are complete. Release only the

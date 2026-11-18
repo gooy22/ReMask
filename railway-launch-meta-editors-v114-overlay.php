@@ -401,6 +401,16 @@ JS;
     $js.="\n".$addon."\n";
 }
 
+if(strpos($js,'REMASK_META_MODULE_CONTROLS_V1')===false){
+    $controlsPath=__DIR__.'/railway-meta-module-controls.js';
+    $controlsJs=is_file($controlsPath)?file_get_contents($controlsPath):false;
+    if(!is_string($controlsJs)||strpos($controlsJs,'REMASK_META_MODULE_CONTROLS_V1')===false){
+        fwrite(STDERR,"[meta-editors-v114] source-backed field controls missing\n");
+        exit(411);
+    }
+    $js.="\n".$controlsJs."\n";
+}
+
 $php=preg_replace(
     '#<script src="scripts/launch\.js(?:\?[^"]*)?" type="module"></script>#',
     '<script src="scripts/launch.js?v=20260921-meta-editors-v114" type="module"></script>',

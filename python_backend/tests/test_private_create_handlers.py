@@ -11,6 +11,7 @@ from app.provisioning import private_create_handlers as actions
 from app.provisioning.models import ProvisioningError, ProvisioningStep
 from app.provisioning.registry import get_handler
 from app.provisioning.service import ProvisioningService
+from app.provisioning.prepare import PrepareService
 from app.provisioning.state import ProvisioningStateStore
 from tests import test_ad_account_private_contract as fixtures
 from tests.test_ad_account_private_contract import BM, UID, RK, NAME
@@ -77,7 +78,7 @@ class ModuleDiscoveryTests(unittest.IsolatedAsyncioTestCase):
                 observer.observe(changed)
                 self.assertIsNone(observer.result())
 
-    async def test_current_meta_full_large_bundle_is_read_without_skipping_urls(self):
+    async def test_contract_discovery_stops_after_four_scripts(self):
         large = "/*" + "x" * 2_100_000 + "*/" + observed_create_modules()
         urls = ["https://static.xx.fbcdn.net/rsrc.php/v1/y/a%d.js" % i for i in range(12)]
         entry = "https://business.facebook.com/latest/settings/ad_accounts/?business_id=" + BM
@@ -87,14 +88,12 @@ class ModuleDiscoveryTests(unittest.IsolatedAsyncioTestCase):
             if url == entry:
                 return 200, "".join('<script src="' + u + '"></script>' for u in urls), url
             index = urls.index(url)
-            body = large if index == 7 else "/*" + "x" * (2_000_000 if index < 4 else 100) + "*/"
+            body = large if index == 7 else "/*" + "x" * 2_000_000 + "*/"
             return 200, body[:kwargs["max_bytes"]], url
         result = await discover_private_ad_account_contract(SimpleNamespace(fetch_text=fetch),
             business_id=BM, account_name=NAME, currency="USD", timezone_id=137, actor_id=UID)
-        self.assertIsNotNone(result)
-        self.assertIn(urls[7], calls)
-        self.assertEqual(calls[1:], urls[:len(calls)-1])
-        self.assertLess(len(calls), len(urls) + 1)
+        self.assertIsNone(result)
+        self.assertEqual(calls, [entry, *urls[:4]])
 
     def test_relay_hook_sender_binds_exact_artifact_and_typed_variables(self):
         source = modules().replace('return commitMutation(env,{mutation:d("BizKitSettingsCreateAdAccountMutation.graphql"),',
@@ -314,6 +313,107 @@ class RKActionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.meta.posts, [])
 
 
+    async def test_terminal_meta_rejection_evidence_is_safe_and_blocks_changed_rk_request(self):
+        class MetaRejected(Exception):
+            code = "REMOTE_REJECTED"
+            http_status = 403
+            request_may_have_been_sent = True
+            payload = {"errors": [{
+                "message": "Account is restricted from advertising",
+                "extensions": {
+                    "type": "OAuthException",
+                    "code": 200,
+                    "error_subcode": 1815793,
+                    "fbtrace_id": "trace-fixture-123",
+                    "access_token": "must-not-be-persisted",
+                },
+            }]}
+
+        async def reject_create(*args, **kwargs):
+            await kwargs["before_submit"]()
+            raise MetaRejected("Meta rejected the RK creation")
+
+        with patch.object(actions, "create_ad_account_with_docids", new=AsyncMock(side_effect=reject_create)):
+            with self.assertRaises(ProvisioningError) as first:
+                await self.run_action()
+
+        self.assertEqual(first.exception.code, "ACCOUNT_RESTRICTED")
+        saved = await self.state.step("job-1", ProvisioningStep.AD_ACCOUNT)
+        evidence = saved["result"]["meta_error_evidence"]
+        self.assertEqual(evidence["http_status"], 403)
+        self.assertEqual(evidence["errors"][0]["subcode"], 1815793)
+        self.assertEqual(evidence["errors"][0]["fbtrace_id"], "trace-fixture-123")
+        self.assertNotIn("access_token", json.dumps(evidence))
+
+        await self.state.set_running("job-2", "15", "bundle-1", ProvisioningStep.AD_ACCOUNT)
+        inventory = AsyncMock(wraps=actions._rk_inventory)
+        with patch.object(actions, "_rk_inventory", new=inventory):
+            with self.assertRaises(ProvisioningError) as second:
+                await self.run_action("job-2", name="Different RK", currency="EUR", timezone_id=138)
+
+        self.assertEqual(second.exception.code, "ACCOUNT_RESTRICTED")
+        inventory.assert_not_awaited()
+        blocked = await self.state.step("job-2", ProvisioningStep.AD_ACCOUNT)
+        self.assertEqual(blocked["result"]["phase"], "CREATE_BLOCKED_PRIOR_META_REJECTION")
+        self.assertEqual(blocked["result"]["blocked_by_meta_rejection_item_id"], "job-1")
+
+
+class PrepareBusinessEmailTests(unittest.IsolatedAsyncioTestCase):
+    async def test_prepare_does_not_generate_a_business_email(self):
+        class StopAfterBusiness(Exception):
+            pass
+
+        with tempfile.TemporaryDirectory() as temporary:
+            state = ProvisioningStateStore(str(Path(temporary) / "prepare-email.db"))
+            await state.init()
+            context = SimpleNamespace(
+                profile_id="15",
+                cookies={"c_user": UID},
+                pages=[],
+                businesses=[],
+                ad_accounts=[],
+                inventory_updated_at=0,
+                email="owner@example.com",
+                first_name="Owner",
+                last_name="Example",
+                display_name="Owner Example",
+            )
+            captured = []
+
+            async def capture_business(**kwargs):
+                captured.append(kwargs)
+                raise StopAfterBusiness()
+
+            service = PrepareService(state, SimpleNamespace(run=AsyncMock(side_effect=capture_business)))
+            payload = {
+                "scope_key": "prepare-email-test",
+                "desired": {
+                    "fan_page": False,
+                    "business": True,
+                    "ad_accounts": 1,
+                    "page_access": False,
+                    "payment": False,
+                },
+                "parameters": {"AD_ACCOUNT": {"currency": "USD", "timezone_id": 137}},
+            }
+
+            with self.assertRaises(StopAfterBusiness):
+                await service.run(
+                    item_id="prepare-email-item",
+                    profile_id="15",
+                    context=context,
+                    session=SimpleNamespace(context=context),
+                    payload=payload,
+                )
+
+            self.assertEqual(len(captured), 1)
+            self.assertEqual(captured[0]["payload"]["steps"], ["BUSINESS"])
+            business = captured[0]["payload"]["parameters"]["BUSINESS"]
+            self.assertNotIn("user_email", business)
+            self.assertNotIn("email", business)
+            self.assertEqual(captured[0]["context"].email, "owner@example.com")
+
+
 class BMActionTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -362,7 +462,13 @@ class BMActionTests(unittest.IsolatedAsyncioTestCase):
             profile_id="14", scope_key="bm-scope", item_id=item, provisioning_state=self.store)
 
     async def test_bm_http_post_is_independently_verified_before_commit(self):
-        result = await self.run_action()
+        with patch.object(
+            actions,
+            "create_business_with_docids",
+            wraps=actions.create_business_with_docids,
+        ) as create_business:
+            result = await self.run_action()
+        self.assertEqual(create_business.await_args.kwargs["user_email"], self.context.email)
         self.assertEqual(result["business_id"], BM)
         self.assertEqual(result["verification"]["exact_business_id"], BM)
         self.assertEqual(len(self.posts), 1)

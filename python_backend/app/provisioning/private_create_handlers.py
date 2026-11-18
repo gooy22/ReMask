@@ -18,12 +18,16 @@ from ..static_meta_inventory import read_business_inventory, read_ad_account_inv
 from ..private_inventory import (
     _auth_gate, _extract_business_inventory_rows, _json_payloads,
 )
+from .meta_errors import classify_meta_payload_error
 from .models import ProvisioningError, ProvisioningStep
 from .state import ProvisioningStateStore
 
 log = logging.getLogger("remask_worker")
 _PENDING = {"CREATE_CLICK_INTENT", "CREATE_PENDING_SUBMIT", "CREATE_SUBMIT_INTENT",
             "CREATE_SUBMITTED", "CREATE_RESULT_UNKNOWN", "CREATE_RESULT_UNVERIFIED", "RECONCILE_CREATE"}
+_TERMINAL_META_REJECTION_CODES = {
+    "ACCOUNT_RESTRICTED", "RATE_LIMITED", "AD_ACCOUNT_LIMIT_REACHED", "PERMISSION_DENIED",
+}
 
 
 def _clean(value: Any) -> str:
@@ -35,10 +39,77 @@ def _id(value: Any) -> str:
     return value if re.fullmatch(r"\d{5,30}", value) else ""
 
 
+def _safe_meta_error_evidence(payload: Any, http_status: Any = None) -> dict[str, Any]:
+    """Keep a small allowlisted Meta error record; never persist request secrets."""
+    if not isinstance(payload, dict):
+        return {}
+    evidence: dict[str, Any] = {}
+    try:
+        if http_status is not None:
+            evidence["http_status"] = int(http_status)
+    except (TypeError, ValueError):
+        pass
+
+    raw_errors = []
+    top_error = payload.get("error")
+    if isinstance(top_error, dict):
+        raw_errors.append(top_error)
+    graph_errors = payload.get("errors")
+    if isinstance(graph_errors, list):
+        raw_errors.extend(error for error in graph_errors if isinstance(error, dict))
+    if not raw_errors and any(
+        key in payload for key in ("message", "type", "code", "error_code", "error_subcode", "fbtrace_id")
+    ):
+        raw_errors.append(payload)
+
+    fields = {
+        "message": ("message", "description"),
+        "type": ("type",),
+        "code": ("code", "error_code", "errorCode"),
+        "subcode": ("error_subcode", "errorSubcode", "subcode"),
+        "user_title": ("error_user_title", "errorUserTitle"),
+        "user_message": ("error_user_msg", "errorUserMsg", "user_message"),
+        "is_transient": ("is_transient", "isTransient"),
+        "fbtrace_id": ("fbtrace_id", "fbtraceId"),
+    }
+    safe_errors = []
+    for error in raw_errors[:8]:
+        extensions = error.get("extensions")
+        sources = (extensions, error) if isinstance(extensions, dict) else (error,)
+        safe_error = {}
+        for output_key, input_keys in fields.items():
+            for source in sources:
+                value = next((source[key] for key in input_keys if key in source), None)
+                if value is None or not isinstance(value, (str, int, float, bool)):
+                    continue
+                safe_error[output_key] = value[:1200] if isinstance(value, str) else value
+                break
+        if safe_error:
+            safe_errors.append(safe_error)
+    if safe_errors:
+        evidence["errors"] = safe_errors
+    return evidence
+
+
 def _has_resume(saved):
     return (_clean(saved.get("phase")).upper() in _PENDING
         or any(_id(saved.get(key)) for key in ("business_id", "create_response_business_id",
             "ad_account_id", "create_response_ad_account_id")))
+
+
+def _same_rejected_rk_request(saved, business, name, currency, timezone):
+    if not isinstance(saved, dict) or _clean(saved.get("phase")).upper() != "CREATE_REJECTED":
+        return False
+    try:
+        saved_timezone = int(saved.get("timezone_id"))
+    except (TypeError, ValueError):
+        return False
+    return (
+        _id(saved.get("business_id")) == business
+        and _clean(saved.get("account_name") or saved.get("name")).casefold() == name.casefold()
+        and _clean(saved.get("currency")).upper() == currency
+        and saved_timezone == timezone
+    )
 
 
 class _Action:
@@ -249,6 +320,43 @@ async def ad_account_handler(session, params, state, *args, **kwargs):
         raise ProvisioningError("SESSION_EXPIRED", "Current profile actor is unavailable.", retryable=True)
     if business == actor:
         raise ProvisioningError("CREATED_BUSINESS_REQUIRED", "RK creation requires a Business Portfolio, not the personal profile scope.")
+    saved_phase = _clean(action.saved.get("phase")).upper()
+    saved_error_code = _clean(action.saved.get("last_error_code")).upper()
+    saved_business = _id(action.saved.get("business_id"))
+    if (saved_phase == "CREATE_REJECTED" and saved_business == business
+            and saved_error_code in _TERMINAL_META_REJECTION_CODES):
+        detail = _clean(action.saved.get("last_error"))
+        raise ProvisioningError(
+            saved_error_code,
+            (detail + " " if detail else "")
+            + "Meta explicitly rejected the prior CREATE for this profile and BM; this retry stopped before inventory or another POST.",
+            retryable=False,
+        )
+    prior_terminal_rejection = await action.store.latest_private_ad_account_terminal_rejection(
+        action.profile,
+        business,
+        tuple(_TERMINAL_META_REJECTION_CODES),
+    )
+    if prior_terminal_rejection:
+        prior_result = prior_terminal_rejection["result"]
+        code = _clean(prior_result.get("last_error_code")).upper() or "META_UNKNOWN_ERROR"
+        detail = _clean(prior_result.get("last_error"))
+        await action.checkpoint({
+            "phase": "CREATE_BLOCKED_PRIOR_META_REJECTION",
+            "business_id": business,
+            "account_name": name,
+            "currency": currency,
+            "timezone_id": timezone,
+            "blocked_by_meta_rejection_item_id": prior_terminal_rejection["item_id"],
+            "blocking_meta_error_code": code,
+            "blocking_meta_error": detail[:4000],
+        })
+        raise ProvisioningError(
+            code,
+            (detail + " " if detail else "A prior terminal Meta rejection exists. ")
+            + "CREATE stopped for this profile and BM before inventory or another POST.",
+            retryable=False,
+        )
     if not (_clean(action.saved.get("phase")).upper() in _PENDING
             or _id(action.saved.get("ad_account_id") or action.saved.get("create_response_ad_account_id"))):
         # All names matter: a different RK name must not evade a pending POST
@@ -331,6 +439,44 @@ async def ad_account_handler(session, params, state, *args, **kwargs):
         raise ProvisioningError("AD_ACCOUNT_ALREADY_EXISTS", "Selected BM already contains RK; no additional CREATE was sent.")
     if len(before["named"]) > 1 or not before["complete"]:
         raise ProvisioningError("PRIVATE_RK_INVENTORY_INCONCLUSIVE", "Exact-BM HTTP inventory did not confirm complete absence. No CREATE was sent.", retryable=True)
+
+    if _same_rejected_rk_request(action.saved, business, name, currency, timezone):
+        code = _clean(action.saved.get("last_error_code")).upper() or "META_UNKNOWN_ERROR"
+        detail = _clean(action.saved.get("last_error"))
+        raise ProvisioningError(
+            code,
+            (detail + " " if detail else "Meta explicitly rejected this RK request. ")
+            + "The identical request was stopped before another POST.",
+            retryable=False,
+        )
+    prior_rejection = await action.store.latest_private_ad_account_rejection(
+        action.profile,
+        business,
+        name,
+        currency,
+        timezone,
+        exclude_item_id=action.item,
+    )
+    if prior_rejection:
+        prior_result = prior_rejection["result"]
+        code = _clean(prior_result.get("last_error_code")).upper() or "META_UNKNOWN_ERROR"
+        detail = _clean(prior_result.get("last_error"))
+        await action.checkpoint({
+            "phase": "CREATE_REJECTED",
+            "business_id": business,
+            "account_name": name,
+            "currency": currency,
+            "timezone_id": timezone,
+            "last_error_code": code,
+            "last_error": detail[:4000],
+            "prior_rejected_item_id": prior_rejection["item_id"],
+        })
+        raise ProvisioningError(
+            code,
+            (detail + " " if detail else "Meta explicitly rejected this RK request before. ")
+            + "The identical request was stopped before another POST.",
+            retryable=False,
+        )
     await action.checkpoint({"phase": "CREATE_NOT_SUBMITTED", "business_id": business, "account_name": name,
         "baseline_account_ids": before["ids"], "baseline_complete": True, "currency": currency, "timezone_id": timezone})
     contract = rk_create_contract(business_id=business, account_name=name, currency=currency,
@@ -351,8 +497,33 @@ async def ad_account_handler(session, params, state, *args, **kwargs):
     except Exception as exc:
         payload = getattr(exc, "payload", getattr(exc, "meta_payload", {}))
         rejected = isinstance(payload, dict) and bool(payload.get("errors") or payload.get("error")) and not payload.get("data")
+        classified_code = ""
+        classified_message = ""
+        if rejected:
+            classified_code, _, classified_message = classify_meta_payload_error(
+                payload,
+                http_status=getattr(exc, "http_status", None),
+                entity="AD_ACCOUNT",
+                fallback_message=str(exc),
+            )
         if not submitted or getattr(exc, "request_may_have_been_sent", None) is False or rejected:
-            await action.checkpoint({"phase": "CREATE_REJECTED" if rejected else "CREATE_NOT_SUBMITTED"})
+            terminal_meta_rejection = rejected and classified_code in _TERMINAL_META_REJECTION_CODES
+            checkpoint = {"phase": "CREATE_REJECTED" if rejected else "CREATE_NOT_SUBMITTED"}
+            if rejected:
+                checkpoint.update({
+                    "last_error_code": classified_code or "META_UNKNOWN_ERROR",
+                    "last_error": (classified_message or str(exc))[:4000],
+                    "meta_error_http_status": getattr(exc, "http_status", None),
+                    "meta_error_evidence": _safe_meta_error_evidence(
+                        payload,
+                        http_status=getattr(exc, "http_status", None),
+                    ),
+                })
+            if terminal_meta_rejection:
+                checkpoint["resume_from"] = "STOP"
+            await action.checkpoint(checkpoint)
+            if terminal_meta_rejection:
+                raise ProvisioningError(classified_code, classified_message, retryable=False) from exc
             raise ProvisioningError(getattr(exc, "code", "PRIVATE_RK_NOT_SUBMITTED"), str(exc), retryable=bool(getattr(exc, "retryable", True))) from exc
         await action.checkpoint({"phase": "CREATE_RESULT_UNKNOWN"})
     proof = await _verify_rk(action, business, name, expected)

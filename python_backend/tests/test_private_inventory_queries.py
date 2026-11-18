@@ -129,16 +129,27 @@ class QueryCompilerTests(unittest.TestCase):
 
 class ReadInventoryTests(unittest.IsolatedAsyncioTestCase):
     def web(self, result=None, source=None):
-        owner = SimpleNamespace(profile=SimpleNamespace(name="15"), posts=[], gets=[])
+        owner = SimpleNamespace(profile=SimpleNamespace(name="15"), posts=[], gets=[], business_reads=[])
         source = artifact() if source is None else source
+        scope_result = {"data": {"viewer": {"meta_business_scoping": {"business_scopes": {
+            "nodes": [{"scope_id": BM, "scope_name": "ReMask BM", "scope_type": "BUSINESS"}],
+            "page_info": {"has_next_page": False, "has_previous_page": False},
+        }}}}}
         async def fetch(url, **kwargs):
             owner.gets.append(url)
             if ".js" in url:
                 return 200, source, url
             return 200, '<script type="application/json">{"data":{"business":{"id":"' + BM + '"}}}</script><script src="https://static.xx.fbcdn.net/runtime.js"></script>', url
         async def graphql(doc, variables, **kwargs):
-            await kwargs["before_submit"]()
-            owner.posts.append((doc, variables, kwargs))
+            if kwargs.get("friendly_name") == "NorthStarBusinessUnifiedScopingSelectorPopoverContainerAllFirstLevelScopesQuery":
+                owner.business_reads.append((doc, variables, kwargs))
+                return scope_result
+            before_submit = kwargs.get("before_submit")
+            if callable(before_submit):
+                await before_submit()
+                owner.posts.append((doc, variables, kwargs))
+            else:
+                owner.business_reads.append((doc, variables, kwargs))
             return response() if result is None else result
         owner.fetch_text, owner.graphql = fetch, graphql
         return owner
@@ -219,7 +230,7 @@ class ReadInventoryTests(unittest.IsolatedAsyncioTestCase):
             document='<script>' + artifact() + '</script>', entry_url="https://business.facebook.com/latest/settings/ad_accounts/")
         self.assertEqual(diag["query_posts"], 0)
         self.assertEqual(diag["query_attempts"], 1)
-        self.assertEqual(web._private_inventory_query_cache, {})
+        self.assertEqual(getattr(web, "_private_inventory_query_cache", {}), {})
 
 
 class QueryCreateFlowTests(unittest.IsolatedAsyncioTestCase):

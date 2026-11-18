@@ -142,18 +142,18 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls, [
             "https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=111111&business_id=222222"])
 
-    async def test_interrupted_account_read_retries_once_on_same_session(self):
+    async def test_interrupted_account_read_stops_without_replay(self):
         calls = []
         @asynccontextmanager
         async def request(method, url, **options):
             calls.append((method, url, options))
-            if len(calls) == 1:
-                raise httpx.ReadError('synthetic interrupted read')
-            yield SimpleNamespace(http_version='HTTP/2',status=200,content=Body(b'{"data":[]}'))
+            raise httpx.ReadError('synthetic interrupted read')
+            yield
         self.web.session.request = request
-        self.assertEqual(await self.client.get('/act_111111/campaigns', {'fields':['id']}), {'data':[]})
-        self.assertEqual(len(calls), 2)
-        self.assertEqual(calls[0], calls[1])
+        with self.assertRaises(ProvisioningError) as caught:
+            await self.client.get('/act_111111/campaigns', {'fields':['id']})
+        self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_HTTP_UNAVAILABLE')
+        self.assertEqual(len(calls), 1)
         self.assertEqual(self.claims, 0)
 
     async def test_timed_out_advertising_post_is_not_replayed_and_claims_once(self):
@@ -182,7 +182,7 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_HTTP_UNAVAILABLE')
         self.assertEqual((calls, self.claims), (['POST'], 1))
 
-    async def test_changed_profile_blocks_the_retry_before_network_dispatch(self):
+    async def test_changed_profile_on_interrupted_read_stops_without_retry(self):
         calls = []
         @asynccontextmanager
         async def request(method, url, **options):
@@ -193,7 +193,7 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.web.session.request = request
         with self.assertRaises(ProvisioningError) as caught:
             await self.client.get('/act_111111/campaigns', {'fields':['id']})
-        self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_PROFILE_CONTEXT_UNAVAILABLE')
+        self.assertEqual(caught.exception.code, 'PRIVATE_ADS_DRAFT_HTTP_UNAVAILABLE')
         self.assertEqual(calls, ['GET'])
 
     def test_literal_serverjs_initialization_with_module_hash(self):

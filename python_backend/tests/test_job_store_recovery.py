@@ -92,6 +92,105 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.provisioning_state.step(item,ProvisioningStep.BUSINESS))['status'],'SUCCESS')
         self.assertEqual((await self.provisioning_state.step(item,ProvisioningStep.AD_ACCOUNT))['result'],saved)
 
+    async def _seed_legacy_add_rk_page_access_failure(self, *, old_failed_state: bool = False):
+        job, item = self._seed(task_status='RUNNING')
+        task = (await self.store.tasks(item))[0]
+        business = '1118904174270971'
+        account_id = 'act_120250078457030576'
+        scope = 'add-rk-bm-' + business
+        payload = {
+            'steps': ['PROXY_CHECK', 'AD_ACCOUNT'],
+            'scope_key': scope,
+            'parameters': {
+                'AD_ACCOUNT': {
+                    'business_id': business,
+                    'use_common_page': True,
+                    'page_policies_accepted': True,
+                    'name': 'ReMask RK fixture',
+                    'currency': 'USD',
+                    'timezone_id': 137,
+                },
+            },
+        }
+        with self.store._connect() as con:
+            con.execute(
+                'UPDATE job_tasks SET payload_json=? WHERE id=?',
+                (json.dumps(payload), task['id']),
+            )
+
+        await self.provisioning_state.set_running(
+            item, '4', scope, ProvisioningStep.AD_ACCOUNT
+        )
+        await self.provisioning_state.complete(item, '4', scope, ProvisioningStep.AD_ACCOUNT, {
+            'business_id': business,
+            'ad_account_id': account_id,
+            'post_create_verified': True,
+            'phase': 'CREATE_CONFIRMED',
+        })
+        await self.provisioning_state.set_running(
+            item, '4', scope, ProvisioningStep.PAGE_ACCESS
+        )
+        await self.provisioning_state.fail(
+            item, '4', scope, ProvisioningStep.PAGE_ACCESS,
+            'PRIVATE_FAN_PAGE_CONTRACT_UNAVAILABLE',
+            'Page contract was unavailable before Page CREATE.',
+        )
+        await self.store.set_task_failed(
+            task['id'],
+            'PRIVATE_FAN_PAGE_CONTRACT_UNAVAILABLE',
+            'Page contract was unavailable before Page CREATE.',
+            retryable=True,
+        )
+
+        if old_failed_state:
+            now = int(time.time())
+            with self.store._connect() as con:
+                con.execute(
+                    "UPDATE job_items SET status='FAILED',error_code=?,error_message=?,"
+                    "retryable=1,updated_at=? WHERE id=?",
+                    (
+                        'PRIVATE_FAN_PAGE_CONTRACT_UNAVAILABLE',
+                        'Page contract was unavailable before Page CREATE.',
+                        now,
+                        item,
+                    ),
+                )
+                con.execute(
+                    "UPDATE jobs SET status='FAILED',updated_at=? WHERE id=?",
+                    (now, job),
+                )
+        else:
+            await self.store.finalize_item(item)
+        return job, item
+
+    async def test_legacy_add_rk_page_access_failure_is_partial_and_not_retryable(self):
+        job, item = await self._seed_legacy_add_rk_page_access_failure()
+        view = await self.store.job_view(job)
+        item_view = view['items'][0]
+        self.assertEqual(view['status'], 'PARTIAL')
+        self.assertEqual(item_view['status'], 'PARTIAL')
+        self.assertEqual(item_view['error_code'], 'RK_CREATED_PAGE_ACCESS_FAILED')
+        self.assertFalse(item_view['retryable'])
+        self.assertFalse(item_view['tasks'][0]['retryable'])
+        step_statuses = {step['step']: step['status'] for step in item_view['provisioning_steps']}
+        self.assertEqual(step_statuses['AD_ACCOUNT'], 'SUCCESS')
+        self.assertEqual(step_statuses['PAGE_ACCESS'], 'FAILED')
+        self.assertEqual(await self.store.retry_failed(job), 0)
+        self.assertEqual(await self.store.queue_count(), 0)
+
+    async def test_startup_repairs_legacy_add_rk_failure_without_requeueing(self):
+        job, item = await self._seed_legacy_add_rk_page_access_failure(old_failed_state=True)
+        await self.store.init()
+        view = await self.store.job_view(job)
+        item_view = view['items'][0]
+        self.assertEqual(view['status'], 'PARTIAL')
+        self.assertEqual(item_view['status'], 'PARTIAL')
+        self.assertEqual(item_view['error_code'], 'RK_CREATED_PAGE_ACCESS_FAILED')
+        self.assertFalse(item_view['retryable'])
+        self.assertFalse(item_view['tasks'][0]['retryable'])
+        self.assertEqual(await self.store.retry_failed(job), 0)
+        self.assertEqual(await self.store.queue_count(), 0)
+
     async def test_genuine_meta_quota_without_created_details_remains_terminal(self):
         job,item=await self._seed_quota_details(candidate=False)
         self.assertFalse((await self.store.job_view(job))['items'][0]['retryable'])

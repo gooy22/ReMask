@@ -921,13 +921,31 @@ function pythonWorkerAdAccountResult(item) {
   const adAccountId = String(result.ad_account_id || '').trim();
   if (!adAccountId) return null;
 
+  const verification = result.verification && typeof result.verification === 'object'
+    ? result.verification : {};
+  const verificationRows = Array.isArray(verification.account_rows)
+    ? verification.account_rows : [];
+  const accountIdDigits = adAccountId.replace(/^act_/i, '').trim();
+  const accountRow = verificationRows.find(function(row) {
+    const rowId = String(row && (row.account_id || row.id) || '')
+      .replace(/^act_/i, '').trim();
+    return rowId && rowId === accountIdDigits;
+  });
+  const accountStatus = accountRow && accountRow.account_status != null
+    ? String(accountRow.account_status).trim() : '';
+  const disableReason = accountRow && accountRow.disable_reason != null
+    ? String(accountRow.disable_reason).trim() : '';
+
   return {
     ad_account_id: adAccountId,
     business_id: String(result.business_id || '').trim(),
     currency: String(result.currency || '').trim(),
     timezone_id: String(result.timezone_id == null ? '' : result.timezone_id).trim(),
     transport: String(result.transport || '').trim(),
-    response_path: String(result.create_response_path || '').trim()
+    response_path: String(result.create_response_path || '').trim(),
+    restriction_status_available: Boolean(accountStatus || disableReason),
+    account_status: accountStatus,
+    disable_reason: disableReason
   };
 }
 
@@ -1104,6 +1122,9 @@ function pythonWorkerUserFailureText(item) {
   const code = pythonWorkerItemErrorCode(item);
   const message = pythonWorkerItemErrorMessage(item);
   const combined = (code + ' ' + message).toLowerCase();
+  if (code === 'RK_CREATED_PAGE_ACCESS_FAILED') {
+    return 'РК создана и проверена в инвентаре. После этого отдельный шаг Page Access завершился ошибкой; повторное создание РК не требуется.';
+  }
   if (/(?:^|_)CHECKPOINT_REQUIRED$/.test(code) || /checkpoint_required|checkpoint_redirect|facebook\.com\/checkpoint\//i.test(message)) {
     return 'Чекпоинт Meta: аккаунт остановлен. Повтор и новые задачи запрещены.';
   }
@@ -1480,6 +1501,13 @@ function pythonWorkerRenderJob(job) {
               if (actual.business_id) resultParts.push('BM ' + actual.business_id);
             }
             resultParts.push('РК ' + accounts.length + '/' + String(desired.ad_accounts || accounts.length));
+            if (accounts.length && accounts.some(function(account) {
+              const accountStatus = String(account && account.account_status != null ? account.account_status : '').trim();
+              const disableReason = String(account && account.disable_reason != null ? account.disable_reason : '').trim();
+              return !accountStatus && !disableReason;
+            })) {
+              resultParts.push('Статус ограничений РК не проверен инвентаризацией');
+            }
             if (prepareResult.reason) resultParts.push(pythonWorkerPrepareReasonLabel(prepareResult.reason) || 'Результат комплекта сохранён.');
             errorTd.className = 'pw-result';
             errorTd.textContent = resultParts.join(' · ');
@@ -1523,6 +1551,14 @@ function pythonWorkerRenderJob(job) {
             }
             if (adAccountResult.response_path) {
               resultParts.push('response ' + adAccountResult.response_path);
+            }
+            if (adAccountResult.restriction_status_available) {
+              const statusParts = [];
+              if (adAccountResult.account_status) statusParts.push('account_status ' + adAccountResult.account_status);
+              if (adAccountResult.disable_reason) statusParts.push('disable_reason ' + adAccountResult.disable_reason);
+              resultParts.push('Поля статуса Meta: ' + statusParts.join(', '));
+            } else {
+              resultParts.push('Статус ограничений не проверен инвентаризацией');
             }
             errorTd.className = 'pw-result';
             errorTd.textContent = resultParts.join(' · ');
@@ -2820,7 +2856,7 @@ async function pythonWorkerPoll() {
       pythonWorkerSetText(
         'pythonPwStatus',
         pythonWorkerAdvertisingSummary(items,status) || (isPrepareJob
-          ? 'Подготовка комплекта завершена. Фактическая готовность и ID показаны в результатах.'
+          ? 'Подготовка комплекта завершена. Фактическая готовность и ID показаны в результатах; статус ограничений РК не проверен инвентаризацией.'
           : isPageAccessJob
           ? 'Доступ PrgssTeam в выбранном BM настроен.'
           : isConfirmationJob
@@ -2837,10 +2873,10 @@ async function pythonWorkerPoll() {
           ? (
               unconfirmed.length
                 ? (
-                    'RK создан. ad_account_id сохранён в Job. Workspace sync не ' +
+                    'RK создан. ad_account_id сохранён в Job. Статус ограничений не проверен. Workspace sync не ' +
                     'подтвердил профили: ' + unconfirmed.join(', ') + '.'
                   )
-                : 'Рекламный кабинет создан и Workspace sync завершён.'
+                : 'Рекламный кабинет создан и Workspace sync завершён. Статус ограничений не проверен.'
             )
           : (
               unconfirmed.length
@@ -3335,8 +3371,6 @@ async function pythonWorkerStartAdAccounts(options) {
               parameters: {
                 AD_ACCOUNT: {
                   business_id: businessId,
-                  use_common_page: true,
-                  page_policies_accepted: true,
                   name: String(cfg.name || '').trim(),
                   currency: String(cfg.currency || '').trim().toUpperCase(),
                   timezone_id: Number(cfg.timezone_id)
@@ -3445,8 +3479,6 @@ async function pythonWorkerStartBusinessAdAccountTargets(targets, configs) {
               parameters: {
                 AD_ACCOUNT: {
                   business_id: businessId,
-                  use_common_page: true,
-                  page_policies_accepted: true,
                   name: String(cfg.name || '').trim(),
                   currency: String(cfg.currency || '').trim().toUpperCase(),
                   timezone_id: Number(cfg.timezone_id)
@@ -4391,7 +4423,7 @@ async function pythonWorkerPollAdAccountBatch() {
       isRkFpBatch
         ? (
             allSuccess
-              ? 'Все запущенные FP Jobs SUCCESS: ' + ids.length + ' RK.'
+              ? 'Все запущенные FP Jobs SUCCESS: ' + ids.length + ' RK. Статус ограничений не проверен инвентаризацией.'
               : onlyAuthBlockedFailures
               ? (
                   'FP batch приостановлен: Facebook-сессия заблокирована у ' +
@@ -4402,7 +4434,7 @@ async function pythonWorkerPollAdAccountBatch() {
           )
         : (
             allSuccess
-              ? 'RK созданы для всех выбранных BM.'
+              ? 'RK созданы для всех выбранных BM. Статус ограничений не проверен инвентаризацией.'
               : onlyAuthBlockedFailures
               ? 'Создание РК остановлено: Facebook требует проверку аккаунта. РК не создан. Повтор недоступен; Jobs сохранены.'
               : 'Add RK batch завершён: есть FAILED/PARTIAL Jobs. Повторный CREATE автоматически не отправляется.'
@@ -4925,7 +4957,7 @@ async function pythonWorkerOpenAutoModal() {
 
   const body = document.createElement('div'); body.className = 'pwbm-body';
   const note = document.createElement('div'); note.className = 'pwbm-note';
-  note.textContent = 'Для каждого комплекта — отдельная FP, BM и РК. Prepare сохраняет готовые связки и дополняет недостающие объекты и полные права. Payment проверяется отдельно перед Launch.';
+  note.textContent = 'Для каждого комплекта — отдельная FP, BM и РК. Укажи доступный контактный email для каждого профиля: он передаётся Meta при создании BM. Prepare сохраняет готовые связки и дополняет недостающие объекты и полные права.';
   body.appendChild(note);
 
   function field(label, input) {
@@ -4933,6 +4965,16 @@ async function pythonWorkerOpenAutoModal() {
     const text = document.createElement('span'); text.textContent = label;
     holder.append(text, input); body.appendChild(holder); return input;
   }
+
+  const businessEmails = {};
+  profiles.forEach(function(profileId) {
+    const email = document.createElement('input');
+    email.type = 'email';
+    email.autocomplete = 'email';
+    email.placeholder = 'Доступный email для связи с Business';
+    businessEmails[String(profileId)] = field('Контактный email BM · профиль ' + profileId, email);
+  });
+  let restoredRequestMissingEmail = false;
 
   const count = document.createElement('input');
   count.type = 'number'; count.min = '1'; count.max = '2'; count.value = '1';
@@ -4970,26 +5012,46 @@ async function pythonWorkerOpenAutoModal() {
     category.value = String((params.FAN_PAGES || {}).category || 'Digital creator');
     currency.value = String((params.AD_ACCOUNT || {}).currency || 'USD');
     timezone.value = String((params.AD_ACCOUNT || {}).timezone_id || 137);
+    profiles.forEach(function(profileId) {
+      const row = acceptedRequest.profiles.find(function(item) {
+        return String(item && item.profile_id || '') === String(profileId);
+      });
+      const savedTask = row && Array.isArray(row.tasks) ? row.tasks[0] : null;
+      const savedParameters = savedTask && savedTask.payload && savedTask.payload.parameters || {};
+      const savedEmail = String((savedParameters.BUSINESS || {}).user_email || '').trim();
+      businessEmails[String(profileId)].value = savedEmail;
+      businessEmails[String(profileId)].disabled = true;
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(savedEmail)) restoredRequestMissingEmail = true;
+    });
     [count, category, currency, timezone].forEach(function(input) { input.disabled = true; });
     create.textContent = 'Повторить отправку';
-    note.textContent = 'Восстанавливаем Prepare-запрос для профилей ' + profiles.join(', ') + '. Ключ сохранён; worker ограничивает создание максимум двумя BM + двумя РК на профиль.';
+    note.textContent = 'Восстанавливаем сохранённый Prepare-запрос. Его параметры не изменяются.';
   }
 
   function refresh() {
     const n = Number(count.value);
     const totalRk = profiles.length * n;
+    const missingEmailProfiles = profiles.filter(function(profileId) {
+      return !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(businessEmails[String(profileId)].value || '').trim());
+    });
     const valid = Number.isInteger(n) && n >= 1 && n <= (acceptedRequest ? 20 : 2) && totalRk <= 10000
       && category.value.trim()
       && /^[A-Z]{3}$/.test(currency.value.trim().toUpperCase())
       && Number.isInteger(Number(timezone.value)) && Number(timezone.value) >= 0
-      && timezone.value.trim();
+      && timezone.value.trim()
+      && missingEmailProfiles.length === 0
+      && !restoredRequestMissingEmail;
     create.disabled = pythonWorkerUiState.busy || !valid;
-    status.textContent = valid
-      ? 'Цель: ' + profiles.length + ' проф., ' + Math.min(n, 2) + ' FP + ' + Math.min(n, 2) + ' BM + ' + Math.min(n, 2) + ' РК на профиль (1 BM = 1 РК). Всего комплектов: ' + (profiles.length * Math.min(n, 2)) + '. Дополняются недостающие объекты и права.' + (n > 2 ? ' Прежний запрос ограничен двумя комплектами на профиль.' : '')
-      : 'Нужны категория, 1–2 РК на профиль, валюта и часовой пояс.';
+    status.textContent = restoredRequestMissingEmail
+      ? 'Сохранённый запрос не содержит email BM. Повтор не отправляю, чтобы не изменить уже сохранённое задание.'
+      : missingEmailProfiles.length
+      ? 'Укажи доступный email для BM у профилей: ' + missingEmailProfiles.join(', ') + '.'
+      : valid
+        ? 'Цель: ' + profiles.length + ' проф., ' + Math.min(n, 2) + ' FP + ' + Math.min(n, 2) + ' BM + ' + Math.min(n, 2) + ' РК на профиль (1 BM = 1 РК). Всего комплектов: ' + (profiles.length * Math.min(n, 2)) + '. Дополняются недостающие объекты и права.' + (n > 2 ? ' Прежний запрос ограничен двумя комплектами на профиль.' : '')
+        : 'Нужны категория, 1–2 РК на профиль, валюта и часовой пояс.';
   }
 
-  [count, category, currency, timezone].forEach(function(input) {
+  [count, category, currency, timezone].concat(Object.values(businessEmails)).forEach(function(input) {
     input.addEventListener('input', refresh);
     input.addEventListener('change', refresh);
   });
@@ -5027,6 +5089,9 @@ async function pythonWorkerOpenAutoModal() {
                     payment: true
                   },
                   parameters: {
+                    BUSINESS: {
+                      user_email: String(businessEmails[profile].value || '').trim()
+                    },
                     FAN_PAGES: {
                       category: category.value.trim(),
                       page_name: 'PrgssTeam',
@@ -5047,7 +5112,7 @@ async function pythonWorkerOpenAutoModal() {
         };
       }
 
-      [count, category, currency, timezone].forEach(function(input) { input.disabled = true; });
+      [count, category, currency, timezone].concat(Object.values(businessEmails)).forEach(function(input) { input.disabled = true; });
       localStorage.setItem(pendingKey, JSON.stringify(acceptedRequest));
       pythonWorkerUiState.jobNotice = '';
       const data = await pythonWorkerBridge(acceptedRequest);
@@ -5142,7 +5207,7 @@ async function pythonWorkerOpenAutoModal() {
         localStorage.removeItem(pendingKey);
         acceptedRequest = null;
         nonce = newPrepareNonce();
-        [count, category, currency, timezone].forEach(function(input) { input.disabled = false; });
+        [count, category, currency, timezone].concat(Object.values(businessEmails)).forEach(function(input) { input.disabled = false; });
         create.textContent = 'Prepare';
         refresh();
         status.textContent = 'Запрос отклонён: ' + errorMessage +

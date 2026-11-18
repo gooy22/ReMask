@@ -93,7 +93,8 @@ class PrivateInventoryTests(unittest.IsolatedAsyncioTestCase):
             known_business_ids=set(), execute_read_queries=True)
         self.assertFalse(result['ready'])
         self.assertFalse(result['business_inventory_confirmed_empty'])
-        self.assertEqual(web.graphql.await_count, 3)
+        self.assertEqual(web.graphql.await_count, 1)
+        self.assertEqual(web.graphql.await_args.args[1]["fetchNumberForBusinessScopes"], 800)
 
     async def test_profile_actor_mismatch_wins_over_later_business_loginpage(self):
         from fb_worker import AuthenticationError

@@ -17,6 +17,7 @@ from .registry import get_handler
 from .state import ProvisioningStateStore
 from .transport import ProvisioningTransport, TransportError
 from .meta_transport import MetaTransportRouter
+from ..restriction_hold import enforce_profile_restriction_hold, serialize_profile_activity
 
 
 _MUTATING_BROWSER_STEPS = {
@@ -124,6 +125,7 @@ class ProvisioningService:
         self.transport = transport or ProvisioningTransport()
         self.profile_resolver = profile_resolver
 
+    @serialize_profile_activity
     async def run(
         self,
         *,
@@ -142,21 +144,33 @@ class ProvisioningService:
         parameters = payload.get("parameters") or {}
         if not isinstance(parameters, dict):
             raise ProvisioningError("INVALID_INPUT", "parameters must be an object")
-        rk_params=parameters.get('AD_ACCOUNT',parameters.get('ad_account',{}))
-        if ProvisioningStep.AD_ACCOUNT in steps and isinstance(rk_params,dict) and rk_params.get('use_common_page') is True:
-            # Persisted jobs can contain PAGE_ACCESS before AD_ACCOUNT. Always
-            # enforce the dependency, including when resuming that old payload.
-            if ProvisioningStep.PAGE_ACCESS in steps:
-                steps.remove(ProvisioningStep.PAGE_ACCESS)
-            steps.insert(steps.index(ProvisioningStep.AD_ACCOUNT)+1,ProvisioningStep.PAGE_ACCESS)
-            if rk_params.get('page_policies_accepted') is True:
-                parameters.setdefault('PAGE_ACCESS',{})['policies_accepted']=True
-
         scope_key = str(
             payload.get("scope_key")
             or task_idempotency_key
             or "default"
         ).strip() or "default"
+        is_add_rk_scope = scope_key.lower().startswith("add-rk")
+        rk_params = parameters.get("AD_ACCOUNT", parameters.get("ad_account", {}))
+        if is_add_rk_scope and ProvisioningStep.AD_ACCOUNT in steps:
+            # A standalone Add-RK job creates the account only. Ignore legacy
+            # common-page flags so it cannot append a separate PAGE_ACCESS mutation.
+            steps = [step for step in steps if step != ProvisioningStep.PAGE_ACCESS]
+            parameters.pop("PAGE_ACCESS", None)
+            parameters.pop("page_access", None)
+            if isinstance(rk_params, dict):
+                rk_params.pop("use_common_page", None)
+                rk_params.pop("page_policies_accepted", None)
+        elif (
+            ProvisioningStep.AD_ACCOUNT in steps
+            and ProvisioningStep.PAGE_ACCESS in steps
+            and isinstance(rk_params, dict)
+            and rk_params.get("use_common_page") is True
+        ):
+            # Explicit PAGE_ACCESS for other flows remains ordered after RK creation.
+            steps.remove(ProvisioningStep.PAGE_ACCESS)
+            steps.insert(steps.index(ProvisioningStep.AD_ACCOUNT) + 1, ProvisioningStep.PAGE_ACCESS)
+            if rk_params.get("page_policies_accepted") is True:
+                parameters.setdefault("PAGE_ACCESS", {})["policies_accepted"] = True
 
         completed: list[dict[str, Any]] = []
         page_access = parameters.get('PAGE_ACCESS', parameters.get('page_access', {}))
@@ -170,6 +184,8 @@ class ProvisioningService:
         ))
 
         for step in steps:
+            if step in {ProvisioningStep.BUSINESS, ProvisioningStep.AD_ACCOUNT}:
+                enforce_profile_restriction_hold(profile_id, f"{step.value} provisioning")
             prior = await self.state.step(item_id, step)
             access_params = parameters.get("PAGE_ACCESS", parameters.get("page_access", {}))
             full_access = (step is ProvisioningStep.PAGE_ACCESS and isinstance(access_params, dict)

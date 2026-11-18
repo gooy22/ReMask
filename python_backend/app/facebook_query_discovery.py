@@ -8,7 +8,7 @@ import re
 import time
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 
 @dataclass(
@@ -872,6 +872,191 @@ def extract_doc_id_near_friendly_name(
     )
 
 
+_DISCOVERY_RESPONSE_CACHE_TTL_SECONDS = 30.0
+_DISCOVERY_RESPONSE_CACHE_MAX_ENTRIES = 16
+_DISCOVERY_RESPONSE_CACHE_MAX_BYTES = 16_000_000
+_DISCOVERY_MAX_ENTRY_URLS = 4
+_DISCOVERY_MAX_SCRIPTS_PER_SCAN = 4
+_DISCOVERY_MAX_SCRIPT_BYTES = 3_000_000
+_DISCOVERY_TRUSTED_HOSTS = {
+    "facebook.com", "www.facebook.com", "business.facebook.com",
+    "adsmanager.facebook.com",
+}
+
+
+def _session_actor(session: Any) -> str:
+    profile = getattr(session, "profile", None)
+    cookies = getattr(profile, "cookies", {})
+    return str(cookies.get("c_user") or "")[:64] if isinstance(cookies, dict) else ""
+
+
+def _trusted_discovery_host(url: str) -> bool:
+    try:
+        parts = urlsplit(str(url or ""))
+    except Exception:
+        return False
+    host = (parts.hostname or "").lower()
+    return (
+        parts.scheme == "https"
+        and not (parts.port or parts.username or parts.password)
+        and (
+            host in _DISCOVERY_TRUSTED_HOSTS
+            or host.endswith(".fbcdn.net")
+        )
+    )
+
+
+def _response_cache(session: Any) -> dict | None:
+    cache = getattr(session, "_meta_query_discovery_response_cache", None)
+    if isinstance(cache, dict):
+        return cache
+    cache = {}
+    try:
+        setattr(session, "_meta_query_discovery_response_cache", cache)
+    except (AttributeError, TypeError):
+        return None
+    return cache
+
+
+def _response_lock(session: Any):
+    lock = getattr(session, "_meta_query_discovery_response_lock", None)
+    if lock is not None and hasattr(lock, "__aenter__"):
+        return lock
+    lock = asyncio.Lock()
+    try:
+        setattr(session, "_meta_query_discovery_response_lock", lock)
+    except (AttributeError, TypeError):
+        return None
+    return lock
+
+
+async def _fetch_discovery_response(
+    session: Any,
+    url: str,
+    *,
+    max_bytes: int,
+    referer: str = "",
+) -> tuple[int, str, str, dict[str, str]]:
+    """Fetch a discovery source once per URL/session for a short in-memory window."""
+    size_limit = max(1, int(max_bytes))
+    actor = _session_actor(session)
+    # JavaScript bundle bytes are content-addressed by URL; omit the
+    # referring settings page so the same bundle is not downloaded once per BM.
+    cache_referer = str(referer or "")
+    if urlsplit(str(url or "")).path.lower().endswith(".js"):
+        cache_referer = ""
+    cache_key = (actor, str(url), cache_referer, size_limit)
+    cache = _response_cache(session)
+
+    async def fetch_once():
+        now = time.monotonic()
+        if cache is not None:
+            for key, (stamp, _size, _response) in list(cache.items()):
+                if now - float(stamp) > _DISCOVERY_RESPONSE_CACHE_TTL_SECONDS:
+                    cache.pop(key, None)
+            cached = cache.get(cache_key)
+            if cached is not None and now - float(cached[0]) <= _DISCOVERY_RESPONSE_CACHE_TTL_SECONDS:
+                return cached[2]
+
+        with_headers = getattr(session, "fetch_text_with_headers", None)
+        if callable(with_headers):
+            kwargs = {"max_bytes": size_limit}
+            if referer:
+                kwargs["referer"] = referer
+            response = await with_headers(url, **kwargs)
+            status, body, final_url, headers = response
+        else:
+            kwargs = {"max_bytes": size_limit}
+            if referer:
+                kwargs["referer"] = referer
+            status, body, final_url = await session.fetch_text(url, **kwargs)
+            headers = {}
+
+        normalized_headers = {
+            str(key): str(value)
+            for key, value in dict(headers or {}).items()
+            if str(key).casefold() not in {"cookie", "set-cookie", "authorization"}
+        }
+        normalized = (
+            int(status),
+            str(body or ""),
+            str(final_url or url),
+            normalized_headers,
+        )
+        body_size = len(normalized[1].encode("utf-8"))
+        if cache is not None and normalized[0] == 200 and body_size <= size_limit:
+            while cache:
+                total = sum(int(value[1]) for value in cache.values())
+                if (
+                    len(cache) < _DISCOVERY_RESPONSE_CACHE_MAX_ENTRIES
+                    and total + body_size <= _DISCOVERY_RESPONSE_CACHE_MAX_BYTES
+                ):
+                    break
+                oldest = min(cache, key=lambda key: float(cache[key][0]))
+                cache.pop(oldest, None)
+            if body_size <= _DISCOVERY_RESPONSE_CACHE_MAX_BYTES:
+                cache[cache_key] = (time.monotonic(), body_size, normalized)
+        return normalized
+
+    lock = _response_lock(session)
+    if lock is None:
+        return await fetch_once()
+    async with lock:
+        return await fetch_once()
+
+
+def _validate_discovery_response(
+    status: int,
+    body: str,
+    final_url: str,
+    *,
+    missing_is_skippable: bool = True,
+) -> bool:
+    from .meta_auth_document import auth_gate
+    from .provisioning.meta_errors import classify_meta_payload_error
+    from .provisioning.models import ProvisioningError
+
+    gate = auth_gate(final_url, body)
+    if gate:
+        raise ProvisioningError(
+            gate,
+            "Meta returned an authentication gate during persisted-query discovery; further profile requests stopped.",
+            retryable=False,
+        )
+    if not _trusted_discovery_host(final_url):
+        raise ProvisioningError(
+            "PRIVATE_QUERY_DISCOVERY_UNTRUSTED_RESPONSE",
+            "Persisted-query discovery stopped after an untrusted response URL.",
+            retryable=False,
+        )
+    try:
+        status = int(status)
+    except (TypeError, ValueError):
+        raise ProvisioningError(
+            "PRIVATE_QUERY_DISCOVERY_INVALID_STATUS",
+            "Persisted-query discovery stopped after an invalid HTTP status.",
+            retryable=False,
+        )
+    if status in {404, 410} and missing_is_skippable:
+        return False
+    if status != 200:
+        code, retryable, _diagnostic = classify_meta_payload_error(
+            {},
+            entity="BUSINESS",
+            http_status=status,
+            fallback_message=f"HTTP {status}",
+        )
+        if code == "META_UNKNOWN_ERROR":
+            code = "REMOTE_TIMEOUT" if status >= 500 else "PRIVATE_QUERY_DISCOVERY_HTTP_ERROR"
+            retryable = status >= 500
+        raise ProvisioningError(
+            code,
+            "Persisted-query discovery stopped after a non-success response; no further source requests were issued.",
+            retryable=bool(retryable),
+        )
+    return True
+
+
 async def discover_persisted_query(
     session: Any,
     *,
@@ -882,309 +1067,150 @@ async def discover_persisted_query(
     script_max_bytes: int = 0,
     cache_ttl_seconds: int = 0,
 ) -> PersistedQueryDiscovery | None:
-    max_scripts = max(0, int(max_scripts_per_entry or 0))
-    max_script_bytes = max(0, int(script_max_bytes or 0))
+    requested_scripts = max(0, int(max_scripts_per_entry or 0))
+    max_scripts = min(requested_scripts, _DISCOVERY_MAX_SCRIPTS_PER_SCAN)
+    max_script_bytes = min(
+        max(0, int(script_max_bytes or 0)),
+        _DISCOVERY_MAX_SCRIPT_BYTES,
+    )
+    max_document_bytes = min(
+        max(1, int(document_max_bytes or 0)),
+        3_000_000,
+    )
 
-    clean_name = str(
-        friendly_name
-        or ""
-    ).strip()
-
+    clean_name = str(friendly_name or "").strip()
     if not clean_name:
         return None
 
-    ttl = max(
-        0,
-        int(
-            cache_ttl_seconds
-        ),
-    )
-
-    cache_key = (
-        clean_name
-        + "|"
-        + "|".join(
-            str(
-                value
-                or ""
-            ).strip()
-            for value in entry_urls
+    bounded_entries = list(dict.fromkeys(
+        str(value or "").strip() for value in entry_urls if str(value or "").strip()
+    ))[:_DISCOVERY_MAX_ENTRY_URLS]
+    if not bounded_entries:
+        return None
+    if any(not _trusted_discovery_host(url) for url in bounded_entries):
+        from .provisioning.models import ProvisioningError
+        raise ProvisioningError(
+            "PRIVATE_QUERY_DISCOVERY_UNTRUSTED_ENTRY",
+            "Persisted-query discovery rejected an untrusted entry URL.",
+            retryable=False,
         )
-    )
 
+    ttl = max(0, int(cache_ttl_seconds or 0))
+    cache_key = clean_name + "|" + "|".join(bounded_entries)
     if ttl > 0:
-        cached = _DISCOVERY_CACHE.get(
-            cache_key
-        )
-
-        if (
-            cached
-            and time.monotonic()
-            - cached[0]
-            <= ttl
-        ):
+        cached = _DISCOVERY_CACHE.get(cache_key)
+        if cached and time.monotonic() - cached[0] <= ttl:
             return cached[1]
 
-    async with _discovery_lock(
-        cache_key
-    ):
+    async with _discovery_lock(cache_key):
         if ttl > 0:
-            cached = (
-                _DISCOVERY_CACHE.get(
-                    cache_key
-                )
-            )
-
-            if (
-                cached
-                and time.monotonic()
-                - cached[0]
-                <= ttl
-            ):
+            cached = _DISCOVERY_CACHE.get(cache_key)
+            if cached and time.monotonic() - cached[0] <= ttl:
                 return cached[1]
 
-        for entry_url in entry_urls:
-            try:
-                if hasattr(
-                    session,
-                    "fetch_text_with_headers",
-                ):
-                    (
-                        status,
-                        document,
-                        final_url,
-                        headers,
-                    ) = (
-                        await session.fetch_text_with_headers(
-                            entry_url,
-                            max_bytes=(
-                                document_max_bytes
-                            ),
-                        )
-                    )
-
-                else:
-                    (
-                        status,
-                        document,
-                        final_url,
-                    ) = await session.fetch_text(
-                        entry_url,
-                        max_bytes=(
-                            document_max_bytes
-                        ),
-                    )
-
-                    headers = {}
-
-            except Exception:
+        scripts_scanned = 0
+        for entry_url in bounded_entries:
+            status, document, final_url, headers = await _fetch_discovery_response(
+                session,
+                entry_url,
+                max_bytes=max_document_bytes,
+            )
+            if not _validate_discovery_response(status, document, final_url):
                 continue
 
-            if (
-                int(
-                    status
+            doc_id = extract_doc_id_from_relay_context(document, clean_name)
+            if doc_id:
+                result = PersistedQueryDiscovery(
+                    doc_id=doc_id,
+                    friendly_name=clean_name,
+                    source_url=final_url,
+                    source_kind="html",
                 )
-                >= 400
-            ):
+                if ttl > 0:
+                    _DISCOVERY_CACHE[cache_key] = (time.monotonic(), result)
+                return result
+
+            header_blob = "\n".join(f"{key}: {value}" for key, value in headers.items())
+            doc_id = extract_doc_id_near_friendly_name(header_blob, clean_name)
+            if doc_id:
+                result = PersistedQueryDiscovery(
+                    doc_id=doc_id,
+                    friendly_name=clean_name,
+                    source_url=final_url,
+                    source_kind="response_headers",
+                )
+                if ttl > 0:
+                    _DISCOVERY_CACHE[cache_key] = (time.monotonic(), result)
+                return result
+
+            if not max_scripts or not max_script_bytes or scripts_scanned >= max_scripts:
                 continue
 
-            doc_id = (
-                extract_doc_id_from_relay_context(
-                    document,
-                    clean_name,
-                )
+            script_urls: list[str] = []
+            seen_script_urls: set[str] = set()
+            script_patterns = (
+                r'<script[^>]+src=["\']([^"\']+)["\']',
+                r'["\']src["\']\s*:\s*["\']([^"\']+\.js(?:\?[^"\']*)?)["\']',
             )
-
-            if doc_id:
-                result = (
-                    PersistedQueryDiscovery(
-                        doc_id=doc_id,
-                        friendly_name=(
-                            clean_name
-                        ),
-                        source_url=str(
-                            final_url
-                            or entry_url
-                        ),
-                        source_kind="html",
-                    )
-                )
-
-                if ttl > 0:
-                    _DISCOVERY_CACHE[
-                        cache_key
-                    ] = (
-                        time.monotonic(),
-                        result,
-                    )
-
-                return result
-
-            header_blob = "\n".join(
-                (
-                    f"{key}: {value}"
-                )
-                for (
-                    key,
-                    value,
-                ) in dict(
-                    headers
-                    or {}
-                ).items()
-            )
-
-            doc_id = (
-                extract_doc_id_near_friendly_name(
-                    header_blob,
-                    clean_name,
-                )
-            )
-
-            if doc_id:
-                result = (
-                    PersistedQueryDiscovery(
-                        doc_id=doc_id,
-                        friendly_name=(
-                            clean_name
-                        ),
-                        source_url=str(
-                            final_url
-                            or entry_url
-                        ),
-                        source_kind=(
-                            "response_headers"
-                        ),
-                    )
-                )
-
-                if ttl > 0:
-                    _DISCOVERY_CACHE[
-                        cache_key
-                    ] = (
-                        time.monotonic(),
-                        result,
-                    )
-
-                return result
-
-            # Meta increasingly keeps Relay persisted-query metadata in JS
-            # bundles instead of the initial HTML. The old implementation
-            # accepted script-scan parameters but discarded them, which meant
-            # CREATE_BM discovery could never succeed unless the exact
-            # operation happened to be embedded in the first document.
-            if max_scripts > 0 and max_script_bytes > 0:
-                script_urls: list[str] = []
-                seen_script_urls: set[str] = set()
-                script_patterns = (
-                    r'<script[^>]+src=["\']([^"\']+)["\']',
-                    r'["\']src["\']\s*:\s*["\']([^"\']+\.js(?:\?[^"\']*)?)["\']',
-                )
-
-                for source in source_variants(document):
-                    for pattern in script_patterns:
-                        for match in re.finditer(
-                            pattern,
-                            source,
-                            flags=re.IGNORECASE,
-                        ):
-                            raw_url = html.unescape(
-                                str(match.group(1) or "")
-                            ).strip()
-                            if not raw_url:
-                                continue
-
-                            script_url = urljoin(
-                                str(final_url or entry_url),
-                                raw_url,
-                            )
-                            if script_url in seen_script_urls:
-                                continue
-
-                            seen_script_urls.add(script_url)
-                            script_urls.append(script_url)
-
-                            if len(script_urls) >= max_scripts:
-                                break
-                        if len(script_urls) >= max_scripts:
+            for source in source_variants(document):
+                for pattern in script_patterns:
+                    for match in re.finditer(pattern, source, flags=re.IGNORECASE):
+                        raw_url = html.unescape(str(match.group(1) or "")).strip()
+                        if not raw_url:
+                            continue
+                        script_url = urljoin(final_url, raw_url)
+                        if script_url in seen_script_urls:
+                            continue
+                        seen_script_urls.add(script_url)
+                        script_urls.append(script_url)
+                        if len(script_urls) >= max_scripts - scripts_scanned:
                             break
-                    if len(script_urls) >= max_scripts:
+                    if len(script_urls) >= max_scripts - scripts_scanned:
                         break
+                if len(script_urls) >= max_scripts - scripts_scanned:
+                    break
 
-                for script_url in script_urls[:max_scripts]:
-                    try:
-                        if hasattr(
-                            session,
-                            "fetch_text_with_headers",
-                        ):
-                            (
-                                script_status,
-                                script_body,
-                                script_final_url,
-                                script_headers,
-                            ) = await session.fetch_text_with_headers(
-                                script_url,
-                                max_bytes=max_script_bytes,
-                                referer=str(final_url or entry_url),
-                            )
-                        else:
-                            (
-                                script_status,
-                                script_body,
-                                script_final_url,
-                            ) = await session.fetch_text(
-                                script_url,
-                                max_bytes=max_script_bytes,
-                                referer=str(final_url or entry_url),
-                            )
-                            script_headers = {}
-                    except Exception:
-                        continue
-
-                    if int(script_status) >= 400:
-                        continue
-
-                    doc_id = extract_doc_id_near_friendly_name(
-                        script_body,
-                        clean_name,
+            for script_url in script_urls:
+                if not _trusted_discovery_host(script_url):
+                    from .provisioning.models import ProvisioningError
+                    raise ProvisioningError(
+                        "PRIVATE_QUERY_DISCOVERY_UNTRUSTED_SCRIPT",
+                        "Persisted-query discovery stopped before fetching an untrusted script URL.",
+                        retryable=False,
                     )
-                    if not doc_id:
-                        doc_id = extract_doc_id_from_relay_context(
-                            script_body,
-                            clean_name,
-                        )
+                scripts_scanned += 1
+                script_status, script_body, script_final_url, script_headers = await _fetch_discovery_response(
+                    session,
+                    script_url,
+                    max_bytes=max_script_bytes,
+                    referer=final_url,
+                )
+                if not _validate_discovery_response(
+                    script_status, script_body, script_final_url,
+                ):
+                    continue
 
-                    if not doc_id and script_headers:
-                        script_header_blob = "\n".join(
-                            f"{key}: {value}"
-                            for key, value in dict(
-                                script_headers or {}
-                            ).items()
-                        )
-                        doc_id = extract_doc_id_near_friendly_name(
-                            script_header_blob,
-                            clean_name,
-                        )
+                doc_id = extract_doc_id_near_friendly_name(script_body, clean_name)
+                if not doc_id:
+                    doc_id = extract_doc_id_from_relay_context(script_body, clean_name)
+                if not doc_id:
+                    header_blob = "\n".join(
+                        f"{key}: {value}" for key, value in script_headers.items()
+                    )
+                    doc_id = extract_doc_id_near_friendly_name(header_blob, clean_name)
+                if doc_id:
+                    result = PersistedQueryDiscovery(
+                        doc_id=doc_id,
+                        friendly_name=clean_name,
+                        source_url=script_final_url,
+                        source_kind="script" if script_body else "response_headers",
+                    )
+                    if ttl > 0:
+                        _DISCOVERY_CACHE[cache_key] = (time.monotonic(), result)
+                    return result
 
-                    if doc_id:
-                        result = PersistedQueryDiscovery(
-                            doc_id=doc_id,
-                            friendly_name=clean_name,
-                            source_url=str(
-                                script_final_url
-                                or script_url
-                            ),
-                            source_kind="script",
-                        )
-
-                        if ttl > 0:
-                            _DISCOVERY_CACHE[
-                                cache_key
-                            ] = (
-                                time.monotonic(),
-                                result,
-                            )
-
-                        return result
+            if scripts_scanned >= max_scripts:
+                break
 
     return None
 

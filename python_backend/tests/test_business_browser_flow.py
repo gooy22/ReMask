@@ -3457,20 +3457,19 @@ class LiveInventoryBusinessDiscoveryBudgetRegressionTests(unittest.TestCase):
             window,
         )
 
-    def test_auth_redirect_during_business_discovery_falls_back_to_confirmed_bms(self):
+    def test_auth_redirect_during_private_inventory_stops_before_browser_fallback(self):
         main_path = Path(__file__).resolve().parents[1] / "main.py"
         source = main_path.read_text(encoding="utf-8")
-        call_pos = source.index("browser.snapshot_businesses()")
-        fallback_pos = source.index(
-            "business_suite_auth_redirect_hint_fallback", call_pos
+        gate_pos = source.index(
+            "if private_auth_gate or private_inventory_stop_gate"
         )
-        probe_pos = source.index(
-            "business_key=str(business_id)", fallback_pos
+        return_pos = source.index(
+            "return {'ok':True,'profile_id':clean_profile,'live_ready':False",
+            gate_pos,
         )
-        self.assertLess(call_pos, fallback_pos)
-        self.assertLess(fallback_pos, probe_pos)
-        self.assertIn("if exc.code not in {", source[fallback_pos - 1000:fallback_pos])
-        self.assertIn("not known_business_ids", source[fallback_pos - 1000:fallback_pos])
+        fallback_pos = source.find("browser.snapshot_businesses()", gate_pos)
+        self.assertIn("REMASK_PRIVATE_ONLY_SYNC_V1", source[gate_pos:return_pos])
+        self.assertTrue(fallback_pos < 0 or return_pos < fallback_pos)
 
     def test_personal_facebook_scope_is_removed_from_all_sync_hint_sources(self):
         main_path = Path(__file__).resolve().parents[1] / "main.py"

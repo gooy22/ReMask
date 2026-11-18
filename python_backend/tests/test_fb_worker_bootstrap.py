@@ -1073,25 +1073,26 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
         collect.assert_not_awaited()
         self.assertEqual(len(client.calls), 1)
 
-    async def test_bootstrap_recovers_interrupted_text_on_same_route_with_document_budget(self):
+    async def test_bootstrap_body_disconnect_is_not_retried(self):
         for error in (httpx.ConnectError, httpx.ReadError, httpx.RemoteProtocolError):
-            session, _ = self.session('', '')
-            session.timeout_seconds = 15
-            calls = []
-            @asynccontextmanager
-            async def get(url, **kwargs):
-                calls.append((url, kwargs))
-                async def text():
-                    if len(calls) == 1:
+            with self.subTest(error=error.__name__):
+                session, _ = self.session('', '')
+                session.timeout_seconds = 15
+                calls = []
+                @asynccontextmanager
+                async def get(url, **kwargs):
+                    calls.append((url, kwargs))
+                    async def text():
                         raise error('SECRET connection failure')
-                    return '["DTSGInitialData",[],{"token":"fixture-token"}]'
-                yield SimpleNamespace(status=200, url=url, text=text)
-            session._ensure_session = AsyncMock(return_value=SimpleNamespace(get=get))
-            self.assertEqual((await session.bootstrap()).fb_dtsg, 'fixture-token')
-            self.assertEqual(len(calls), 2)
-            self.assertEqual(calls[0], calls[1])
-            self.assertEqual(calls[0][1]['request_timeout_seconds'], 30)
-            session._fetch_dtsg_refresh_token.assert_not_awaited()
+                    yield SimpleNamespace(status=200, url=url, text=text)
+                session._ensure_session = AsyncMock(return_value=SimpleNamespace(get=get))
+                with self.assertRaises(RemoteRequestError) as caught:
+                    await session.bootstrap()
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(calls[0][1]['request_timeout_seconds'], 30)
+                self.assertNotIn('SECRET', str(caught.exception))
+                session._fetch_dtsg_refresh_token.assert_not_awaited()
+                self.assertIsNone(session._bootstrap)
 
     async def test_bootstrap_keeps_a_larger_existing_document_budget(self):
         session, client = self.session('["DTSGInitialData",[],{"token":"fixture-token"}]',
@@ -1125,20 +1126,19 @@ class FacebookBootstrapAuthGateTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await session.fetch_text(url, document_navigation=navigation))[1], 'fixture')
             self.assertEqual(calls[0].get('request_timeout_seconds'), 30 if expected else None)
 
-    async def test_business_document_recovers_one_disconnect_without_a_post(self):
+    async def test_business_document_disconnect_is_not_retried(self):
         session, _ = self.session('', '')
         calls = []
         @asynccontextmanager
         async def get(url, **kwargs):
-            calls.append((url,kwargs))
-            if len(calls) == 1:
-                raise httpx.ConnectError('SECRET')
-            yield SimpleNamespace(status=200,url=url,charset='utf-8',headers={},
-                content=SimpleNamespace(read=AsyncMock(return_value=b'fixture')))
+            calls.append((url, kwargs))
+            raise httpx.ConnectError('SECRET')
+            yield
         session._ensure_session = AsyncMock(return_value=SimpleNamespace(get=get))
-        self.assertEqual((await session.fetch_text('https://business.facebook.com/latest/home'))[1], 'fixture')
-        self.assertEqual(len(calls), 2)
-        self.assertEqual(calls[0], calls[1])
+        with self.assertRaises(RemoteRequestError) as caught:
+            await session.fetch_text('https://business.facebook.com/latest/home')
+        self.assertEqual(len(calls), 1)
+        self.assertNotIn('SECRET', str(caught.exception))
 
     async def test_document_timeout_does_not_start_another_origin_or_csrf_refresh(self):
         from fb_worker import RemoteRequestError
@@ -1319,7 +1319,7 @@ class PreviousSessionReadRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(("READ_RK", "business", "account", actor, "fixture"),
                       session._business_read_proofs)
 
-    async def test_inventory_read_recovers_business_precheck_with_diagnostic_callback(self):
+    async def test_inventory_read_stops_after_business_precheck_auth_gate(self):
         session = FacebookWebSession(WebProfile(
             name="15", cookies={"c_user": "123456789", "xs": "fixture-current"},
             proxy="http://fixture-proxy:80", user_agent="Fixture",
@@ -1327,57 +1327,49 @@ class PreviousSessionReadRecoveryTests(unittest.IsolatedAsyncioTestCase):
         session._validate_business_loginpage_probe = Mock(return_value="PRIVATE_RK_INVENTORY")
         session.bootstrap = AsyncMock(side_effect=AuthenticationError("fixture auth gate"))
         callback = AsyncMock()
-        session._retry_scoped_read_with_previous_session = AsyncMock(
-            return_value={"data": {"business": {"id": "987654321"}}},
-        )
+        session._retry_scoped_read_with_previous_session = AsyncMock()
         session._ensure_session = AsyncMock()
 
-        result = await session.graphql(
-            "26033539376343649",
-            {"businessID": "987654321"},
-            friendly_name="ObservedBusinessAdAccounts",
-            endpoint_url="https://business.facebook.com/api/graphql/",
-            before_submit=callback,
-            business_context_id="987654321",
-            business_loginpage_probe="PRIVATE_RK_INVENTORY",
-            private_inventory_query_contract={
-                "operation_kind": "query", "business_id": "987654321",
-                "doc_id": "26033539376343649", "friendly_name": "ObservedBusinessAdAccounts",
-                "variables": {"businessID": "987654321"}, "asset_scope": True,
-                "response_collection": "",
-            },
-        )
-
-        self.assertEqual(result, {"data": {"business": {"id": "987654321"}}})
-        session._retry_scoped_read_with_previous_session.assert_awaited_once()
-        self.assertIs(session._retry_scoped_read_with_previous_session.await_args.kwargs["before_submit"], callback)
+        with self.assertRaises(AuthenticationError):
+            await session.graphql(
+                "26033539376343649",
+                {"businessID": "987654321"},
+                friendly_name="ObservedBusinessAdAccounts",
+                endpoint_url="https://business.facebook.com/api/graphql/",
+                before_submit=callback,
+                business_context_id="987654321",
+                business_loginpage_probe="PRIVATE_RK_INVENTORY",
+                private_inventory_query_contract={
+                    "operation_kind": "query", "business_id": "987654321",
+                    "doc_id": "26033539376343649", "friendly_name": "ObservedBusinessAdAccounts",
+                    "variables": {"businessID": "987654321"}, "asset_scope": True,
+                    "response_collection": "",
+                },
+            )
+        session._retry_scoped_read_with_previous_session.assert_not_awaited()
         callback.assert_not_awaited()
         session._ensure_session.assert_not_awaited()
 
-    async def test_scoped_read_recovers_an_auth_gate_before_sending_its_post(self):
+    async def test_scoped_read_stops_after_auth_gate_before_post(self):
         session = FacebookWebSession(WebProfile(
             name="15", cookies={"c_user": "123456789", "xs": "fixture-current"},
             proxy="http://fixture-proxy:80", user_agent="Fixture",
         ))
         session._validate_business_loginpage_probe = Mock(return_value="READ_RK")
         session.bootstrap = AsyncMock(side_effect=AuthenticationError("fixture auth gate"))
-        session._retry_scoped_read_with_previous_session = AsyncMock(
-            return_value={"data": {"adaccounts": []}},
-        )
+        session._retry_scoped_read_with_previous_session = AsyncMock()
         session._ensure_session = AsyncMock()
 
-        result = await session.graphql(
-            "fixture-doc-id",
-            {"businessID": "987654321"},
-            friendly_name="BusinessAdAccounts",
-            endpoint_url="https://business.facebook.com/api/graphql/",
-            business_context_id="987654321",
-            business_loginpage_probe="READ_RK",
-        )
-
-        self.assertEqual(result, {"data": {"adaccounts": []}})
-        session._retry_scoped_read_with_previous_session.assert_awaited_once()
-        self.assertIsNone(session._retry_scoped_read_with_previous_session.await_args.kwargs["read_timeout_seconds"])
+        with self.assertRaises(AuthenticationError):
+            await session.graphql(
+                "fixture-doc-id",
+                {"businessID": "987654321"},
+                friendly_name="BusinessAdAccounts",
+                endpoint_url="https://business.facebook.com/api/graphql/",
+                business_context_id="987654321",
+                business_loginpage_probe="READ_RK",
+            )
+        session._retry_scoped_read_with_previous_session.assert_not_awaited()
         session._ensure_session.assert_not_awaited()
 
     async def test_scoped_read_does_not_try_previous_session_after_auth_cookie_deletion(self):
@@ -1410,7 +1402,7 @@ class PreviousSessionReadRecoveryTests(unittest.IsolatedAsyncioTestCase):
         session._retry_scoped_read_with_previous_session.assert_not_awaited()
         session._ensure_session.assert_not_awaited()
 
-    async def test_scoped_read_recovers_graphql_auth_rejection_without_explicit_timeout(self):
+    async def test_scoped_read_stops_after_graphql_auth_rejection(self):
         actor = "123456789"
         session = FacebookWebSession(WebProfile(
             name="15", cookies={"c_user": actor, "xs": "fixture-current"},
@@ -1429,27 +1421,24 @@ class PreviousSessionReadRecoveryTests(unittest.IsolatedAsyncioTestCase):
 
         client = SimpleNamespace(post=Mock(side_effect=lambda *_args, **_kwargs: post()))
         session._ensure_session = AsyncMock(return_value=client)
-        session._retry_scoped_read_with_previous_session = AsyncMock(
-            return_value={"data": {"business": {"id": "987654321"}}},
-        )
+        session._retry_scoped_read_with_previous_session = AsyncMock()
 
-        result = await session.graphql(
-            "26033539376343649",
-            {"businessID": "987654321"},
-            friendly_name="BusinessAdAccounts",
-            endpoint_url="https://business.facebook.com/api/graphql/",
-            business_context_id="987654321",
-            business_loginpage_probe="READ_RK",
-        )
+        with self.assertRaises(AuthenticationError):
+            await session.graphql(
+                "26033539376343649",
+                {"businessID": "987654321"},
+                friendly_name="BusinessAdAccounts",
+                endpoint_url="https://business.facebook.com/api/graphql/",
+                business_context_id="987654321",
+                business_loginpage_probe="READ_RK",
+            )
 
-        self.assertEqual(result, {"data": {"business": {"id": "987654321"}}})
         session.bootstrap.assert_awaited_once_with()
-        session._retry_scoped_read_with_previous_session.assert_awaited_once()
-        self.assertIsNone(session._retry_scoped_read_with_previous_session.await_args.kwargs["read_timeout_seconds"])
+        session._retry_scoped_read_with_previous_session.assert_not_awaited()
         session._ensure_session.assert_awaited_once()
         client.post.assert_called_once()
 
-    async def test_inventory_read_retries_meta_auth_rejection_with_diagnostic_callback(self):
+    async def test_inventory_read_stops_after_meta_auth_rejection(self):
         actor = "123456789"
         session = FacebookWebSession(WebProfile(
             name="15", cookies={"c_user": actor, "xs": "fixture-current"},
@@ -1468,31 +1457,27 @@ class PreviousSessionReadRecoveryTests(unittest.IsolatedAsyncioTestCase):
 
         client = SimpleNamespace(post=Mock(side_effect=lambda *_args, **_kwargs: post()))
         session._ensure_session = AsyncMock(return_value=client)
-        session._retry_scoped_read_with_previous_session = AsyncMock(
-            return_value={"data": {"business": {"id": "987654321"}}},
-        )
+        session._retry_scoped_read_with_previous_session = AsyncMock()
         callback = AsyncMock()
 
-        result = await session.graphql(
-            "26033539376343649",
-            {"businessID": "987654321"},
-            friendly_name="ObservedBusinessAdAccounts",
-            endpoint_url="https://business.facebook.com/api/graphql/",
-            before_submit=callback,
-            business_context_id="987654321",
-            business_loginpage_probe="PRIVATE_RK_INVENTORY",
-            private_inventory_query_contract={
-                "operation_kind": "query", "business_id": "987654321",
-                "doc_id": "26033539376343649", "friendly_name": "ObservedBusinessAdAccounts",
-                "variables": {"businessID": "987654321"}, "asset_scope": True,
-                "response_collection": "",
-            },
-        )
-
-        self.assertEqual(result, {"data": {"business": {"id": "987654321"}}})
+        with self.assertRaises(AuthenticationError):
+            await session.graphql(
+                "26033539376343649",
+                {"businessID": "987654321"},
+                friendly_name="ObservedBusinessAdAccounts",
+                endpoint_url="https://business.facebook.com/api/graphql/",
+                before_submit=callback,
+                business_context_id="987654321",
+                business_loginpage_probe="PRIVATE_RK_INVENTORY",
+                private_inventory_query_contract={
+                    "operation_kind": "query", "business_id": "987654321",
+                    "doc_id": "26033539376343649", "friendly_name": "ObservedBusinessAdAccounts",
+                    "variables": {"businessID": "987654321"}, "asset_scope": True,
+                    "response_collection": "",
+                },
+            )
         callback.assert_awaited_once()
-        session._retry_scoped_read_with_previous_session.assert_awaited_once()
-        self.assertIs(session._retry_scoped_read_with_previous_session.await_args.kwargs["before_submit"], callback)
+        session._retry_scoped_read_with_previous_session.assert_not_awaited()
         client.post.assert_called_once()
 
     async def test_previous_session_cannot_recover_mutations_or_another_actor(self):
