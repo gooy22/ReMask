@@ -359,7 +359,7 @@ class RKActionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class PrepareBusinessEmailTests(unittest.IsolatedAsyncioTestCase):
-    async def test_prepare_uses_stable_gmail_address_for_business(self):
+    async def test_prepare_does_not_generate_a_business_email(self):
         class StopAfterBusiness(Exception):
             pass
 
@@ -409,10 +409,8 @@ class PrepareBusinessEmailTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(captured), 1)
             self.assertEqual(captured[0]["payload"]["steps"], ["BUSINESS"])
             business = captured[0]["payload"]["parameters"]["BUSINESS"]
-            token = PrepareService._stable_token(
-                "15", "prepare-email-test:bundle:1"
-            )
-            self.assertEqual(business["user_email"], f"{token}@gmail.com")
+            self.assertNotIn("user_email", business)
+            self.assertNotIn("email", business)
             self.assertEqual(captured[0]["context"].email, "owner@example.com")
 
 
