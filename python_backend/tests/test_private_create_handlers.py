@@ -462,7 +462,13 @@ class BMActionTests(unittest.IsolatedAsyncioTestCase):
             profile_id="14", scope_key="bm-scope", item_id=item, provisioning_state=self.store)
 
     async def test_bm_http_post_is_independently_verified_before_commit(self):
-        result = await self.run_action()
+        with patch.object(
+            actions,
+            "create_business_with_docids",
+            wraps=actions.create_business_with_docids,
+        ) as create_business:
+            result = await self.run_action()
+        self.assertEqual(create_business.await_args.kwargs["user_email"], self.context.email)
         self.assertEqual(result["business_id"], BM)
         self.assertEqual(result["verification"]["exact_business_id"], BM)
         self.assertEqual(len(self.posts), 1)
