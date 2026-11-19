@@ -28,8 +28,38 @@ from .private_session_wire import cookie_evidence
 log = logging.getLogger("remask_worker")
 
 # HTTPX's INFO messages include full redirect URLs (including session IDs).
-# This transport emits only method, host, status and negotiated protocol below.
+# Our request logs use a query-free path template with obvious IDs and tokens redacted.
 logging.getLogger("httpx").setLevel(logging.WARNING)
+
+_DYNAMIC_PATH_PARENTS = {"page", "profile", "user", "actor", "asset", "business", "businesses",
+                        "adaccount", "ad_account"}
+_STATIC_PATH_SEGMENTS = {"api", "graphql", "ajax", "latest", "home", "settings", "manage", "adsmanager",
+                         "campaigns", "login", "loginpage", "business", "businesses", "adaccounts", "ad_accounts",
+                         "create", "update", "delete", "assign", "claim", "access", "edit", "read", "view", "list",
+                         "permissions", "roles", "full_control", "fullcontrol"}
+
+
+def _safe_request_path(url: str) -> str:
+    """Return a query-free route template for diagnostics, without entity IDs."""
+    try:
+        raw_path = httpx.URL(url).path or "/"
+    except Exception:
+        return "/{invalid}"
+    raw_segments = [segment for segment in raw_path.split("/") if segment]
+    safe_segments = []
+    for index, segment in enumerate(raw_segments):
+        lowered = segment.lower()
+        after_dynamic_parent = (index > 0 and raw_segments[index - 1].lower() in _DYNAMIC_PATH_PARENTS
+                                and lowered not in _STATIC_PATH_SEGMENTS)
+        if (after_dynamic_parent or len(segment) > 80
+                or re.fullmatch(r"\d{4,30}", segment)
+                or re.fullmatch(r"[A-Za-z]{2,}_\d{4,30}", segment)
+                or re.fullmatch(r"[0-9a-fA-F]{24,}", segment)):
+            safe_segments.append("{id}")
+        else:
+            safe_segments.append(segment)
+    result = "/" + "/".join(safe_segments)
+    return result + ("/" if raw_path.endswith("/") and result != "/" else "")
 
 
 async def buffered_response(method, open_response, size, *, retry_read=False, retry_timeout=False,
@@ -518,8 +548,8 @@ class PrivateHttpClient:
         request_budget = max(0.001, min(float(request_budget), 300.0))
         if request_budget != self.timeout_seconds:
             kwargs["timeout"] = httpx.Timeout(request_budget)
-        log.info("[%s] private_http start method=%s host=%s", self.profile_name,
-                 method.upper(), httpx.URL(url).host)
+        log.info("[%s] private_http start method=%s host=%s path=%s", self.profile_name,
+                 method.upper(), httpx.URL(url).host, _safe_request_path(url))
         # HTTPX timeouts bound individual I/O phases. Preserve a whole-attempt
         # deadline too, including stream consumption. A second budget is needed
         # only when the trace proves the first attempt failed before HTTP/2 send.
@@ -544,9 +574,9 @@ class PrivateHttpClient:
                             method, url, follow_redirects=redirects, **request_kwargs,
                         ) as response:
                             log.info(
-                                "[%s] private_http method=%s host=%s status=%d protocol=%s",
+                                "[%s] private_http method=%s host=%s path=%s status=%d protocol=%s",
                                 self.profile_name, method.upper(), response.url.host,
-                                response.status_code, response.http_version,
+                                _safe_request_path(str(response.url)), response.status_code, response.http_version,
                             )
                             if cookie_jar_guard is not None:
                                 cookie_jar_guard()
@@ -568,14 +598,14 @@ class PrivateHttpClient:
                     if not retry_before_send:
                         raise
                     log.warning(
-                        '[%s] private_http_connect_retry method=%s host=%s phase=proxy.start_tls attempt=1',
-                        self.profile_name, method.upper(), httpx.URL(url).host,
+                        '[%s] private_http_connect_retry method=%s host=%s path=%s phase=proxy.start_tls attempt=1',
+                        self.profile_name, method.upper(), httpx.URL(url).host, _safe_request_path(url),
                     )
         except BaseException as exc:
             error = exc
             try:
-                log.warning('[%s] private_http_failure method=%s host=%s kind=%s error_type=%s stages=%s',
-                    self.profile_name, method.upper(), httpx.URL(url).host, error_kind(exc),
+                log.warning('[%s] private_http_failure method=%s host=%s path=%s kind=%s error_type=%s stages=%s',
+                    self.profile_name, method.upper(), httpx.URL(url).host, _safe_request_path(url), error_kind(exc),
                     type(exc).__name__,
                     json.dumps(stages.snapshot(), sort_keys=True, separators=(',', ':')))
             except Exception:
